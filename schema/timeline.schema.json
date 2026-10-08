@@ -1,0 +1,331 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/comfybear71/engine/schema/timeline.schema.json",
+  "title": "Timeline",
+  "description": "Shared contract between the Studio (which writes this file) and the render worker (which validates and renders it). All asset/audio paths in this document are relative to the folder that contains the timeline.json file itself (the \"project folder\"), never to the process current working directory.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["series", "episode", "fps", "scenes"],
+  "properties": {
+    "$schema": { "type": "string" },
+
+    "series": {
+      "type": "string",
+      "description": "Name of the series this episode belongs to, e.g. \"Sunny Banks\", \"Skidmarks\", \"Shorts\"."
+    },
+    "episode": {
+      "type": ["string", "integer"],
+      "description": "Episode identifier/number, or a short slug for one-off shorts and music videos."
+    },
+    "fps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120,
+      "description": "Frames per second for the whole render. All frame-based timing in the file is expressed in frames at this rate."
+    },
+    "canvas": {
+      "$ref": "#/definitions/canvas",
+      "description": "Fixed output canvas size. Every layer's x/y transform is in this canvas's pixel space, independent of any source asset's native resolution. Defaults to 1920x1080 if omitted."
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/scene" }
+    }
+  },
+
+  "definitions": {
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "default": 1920 },
+        "height": { "type": "integer", "minimum": 1, "default": 1080 }
+      }
+    },
+
+    "duration": {
+      "description": "How long a scene lasts. Exactly one of `frames` (hand-set) or `from_audio` (derived from an audio file's duration) must be given.",
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["frames"],
+          "properties": {
+            "frames": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["from_audio"],
+          "properties": {
+            "from_audio": {
+              "type": "string",
+              "description": "Path (relative to the project folder) to an audio file. The scene's frame count is round(duration_seconds * fps) + padding_frames."
+            },
+            "padding_frames": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "description": "Extra frames appended after the audio ends (e.g. for a held last frame)."
+            }
+          }
+        }
+      ]
+    },
+
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "duration", "background", "layers"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "duration": { "$ref": "#/definitions/duration" },
+        "background": { "$ref": "#/definitions/background" },
+        "audio": {
+          "type": "string",
+          "description": "Optional scene-wide audio bed (music/ambience), mixed into the final render starting at this scene's first frame."
+        },
+        "camera": { "$ref": "#/definitions/camera" },
+        "frame_step": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "1 = recompute every frame (normal). N > 1 = classic cut-out \"on Ns\" animation: the scene is only re-composited every N frames (including camera and slot/cue state), and the frames in between hold/re-emit the exact same rendered canvas instead of recomputing. This affects the picture's update cadence only -- audio is never stepped and always plays at full, continuous rate regardless of frame_step."
+        },
+        "layers": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/layer" }
+        }
+      }
+    },
+
+    "background": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset"],
+      "properties": {
+        "asset": {
+          "type": "string",
+          "description": "Path (relative to the project folder) to the background image. It is fitted to the output canvas; it is NOT assumed to already be canvas-sized."
+        },
+        "fit": {
+          "type": "string",
+          "enum": ["cover", "contain"],
+          "default": "cover",
+          "description": "cover: scale to fill the canvas, cropping overflow (no letterboxing). contain: scale to fit entirely inside the canvas, letterboxed with black bars."
+        }
+      }
+    },
+
+    "anchor": {
+      "type": "string",
+      "enum": [
+        "top-left", "top-center", "top-right",
+        "center-left", "center", "center-right",
+        "bottom-left", "bottom-center", "bottom-right"
+      ],
+      "default": "bottom-center",
+      "description": "Which point of the asset's (post-scale) bounding box is placed at transform.x/transform.y in canvas space."
+    },
+
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number", "description": "Canvas-space X of the anchor point, in pixels." },
+        "y": { "type": "number", "description": "Canvas-space Y of the anchor point, in pixels." },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "default": 1.0 },
+        "anchor": { "$ref": "#/definitions/anchor" },
+        "flip_x": { "type": "boolean", "default": false },
+        "rotation": {
+          "type": "number",
+          "default": 0,
+          "description": "Degrees, clockwise, applied around the anchor point after scaling/flipping."
+        },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0 }
+      }
+    },
+
+    "timing": {
+      "description": "When a layer is visible, in scene-relative frames. Omit entirely for a layer visible for the whole scene. `end_from_audio` derives the end frame from an audio file's duration instead of a hand-typed `end_frame`.",
+      "type": "object",
+      "properties": {
+        "start_frame": { "type": "integer", "minimum": 0, "default": 0 },
+        "end_frame": { "type": "integer", "minimum": 0 },
+        "end_from_audio": {
+          "type": "string",
+          "description": "Path (relative to the project folder) to an audio file. end_frame = start_frame + round(duration_seconds * fps)."
+        }
+      },
+      "not": { "required": ["end_frame", "end_from_audio"] },
+      "additionalProperties": false
+    },
+
+    "mouth_shape": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D", "E", "F", "G", "H", "X"],
+      "description": "Rhubarb Lip Sync mouth shape code. X is the closed/idle shape. This is the fixed drawing-name set a lipsync-driven slot must use as its `images` keys; non-lipsync slots (hands, blinks, etc.) use whatever drawing names make sense for them."
+    },
+
+    "offset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "number", "default": 0 },
+        "y": { "type": "number", "default": 0 }
+      }
+    },
+
+    "slot": {
+      "description": "A named drawing-swap slot (Toon Boom/Moho style): a single attachment point that shows exactly one named drawing at a time, held until the next change. A mouth driven by Rhubarb cues, a blinking pair of eyes, and a hand that swaps between fist/flat/point poses are all the same mechanism -- only the driver differs. Drawn on top of its owner (the parent layer, or a specific child -- see `layer.slots` / `child.slots`) at the owner's position plus `offset` (scaled/flipped with the owner).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["images"],
+      "oneOf": [
+        { "required": ["lipsync"] },
+        { "required": ["keyframes"] }
+      ],
+      "properties": {
+        "offset": {
+          "$ref": "#/definitions/offset",
+          "description": "Offset in the owner's local (pre-scale) pixel space, from the owner's anchor/pivot point to where this slot's drawing should be centered."
+        },
+        "images": {
+          "type": "object",
+          "description": "Map of drawing name -> image path (relative to the project folder). For a `lipsync`-driven slot these names must be Rhubarb mouth shapes (A-H, X); for a `keyframes`-driven slot they can be anything (\"fist\", \"open\", \"closed\", ...). At minimum provide one entry to use as the fallback; a missing drawing at render time falls back to \"X\" if present, else the first entry in `images`.",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string" }
+        },
+        "keyframes": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Held-until-changed drawing changes: sorted by `frame`, each keyframe's `drawing` stays active until the next keyframe's frame is reached. Frames are relative to this slot's owner's own start_frame (not the scene). Before the first keyframe, the first keyframe's drawing is used.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["frame", "drawing"],
+            "properties": {
+              "frame": { "type": "integer", "minimum": 0 },
+              "drawing": { "type": "string" }
+            }
+          }
+        },
+        "lipsync": {
+          "type": "object",
+          "additionalProperties": false,
+          "anyOf": [
+            { "required": ["cues"] },
+            { "required": ["audio"] }
+          ],
+          "properties": {
+            "cues": {
+              "type": "string",
+              "description": "Path (relative to the project folder) to a Rhubarb JSON cues file. A committed cues file is the primary source of truth: if it already exists on disk at render time it is used directly and Rhubarb is never invoked, which keeps renders deterministic and working with zero Rhubarb install. If omitted while `audio` is given, it defaults to \"<audio>.rhubarb.json\" and doubles as the cache Rhubarb writes to the first time it runs."
+            },
+            "audio": {
+              "type": "string",
+              "description": "Path (relative to the project folder) to a WAV file to run Rhubarb on, used only when the `cues` file does not already exist. If Rhubarb is not installed in that situation, the render does not fail: it warns and the slot falls back to its idle/closed shape for the affected range."
+            },
+            "dialogue_text": {
+              "type": "string",
+              "description": "Optional spoken line text passed to Rhubarb (--dialogFile) to improve recognition accuracy when generating cues from audio."
+            }
+          },
+          "description": "Resolution order: 1) if `cues` (or its default path next to `audio`) exists on disk, load it -- Rhubarb is not run. 2) else if Rhubarb is installed, run it on `audio` and cache the result at that path. 3) else warn and fall back to the idle shape; the render still completes."
+        }
+      }
+    },
+
+    "slots": {
+      "type": "object",
+      "description": "Map of slot name (e.g. \"mouth\", \"eyes\", \"right_hand\") -> slot definition. Slots on the same owner are drawn in the order given here, after that owner's own image.",
+      "additionalProperties": { "$ref": "#/definitions/slot" }
+    },
+
+    "child": {
+      "description": "A cut-out rig child part (head, arm, hand, ...), nested under a parent layer. The parent's transform (position, scale, flip_x) applies to every child, so flipping or walking the parent on/off-screen keeps all its parts aligned and clipped together; `offset`/`pivot`/`z` are the child's own placement relative to the parent root. Children are a single level deep (a child cannot itself have children) -- enough for \"head, arms, hands\" style rigs without open-ended recursion.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "asset", "z", "offset"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "Unique id of this child within its parent layer." },
+        "asset": { "type": "string", "description": "Path (relative to the project folder) to this part's image." },
+        "z": {
+          "type": "integer",
+          "description": "Draw order relative to the parent's own base image and sibling children (ascending; the parent's own base image is implicitly z = 0 among its children, so e.g. an arm behind the torso uses z < 0 and one in front uses z > 0). This stacking is local to the parent -- it does not interleave with other top-level scene layers' z."
+        },
+        "offset": {
+          "$ref": "#/definitions/offset",
+          "description": "In the parent's local (pre-scale) pixel space, from the parent's anchor point to this child's pivot point. Mirrored in x when the parent is flipped, so rig parts stay attached correctly when the whole character flips."
+        },
+        "pivot": {
+          "$ref": "#/definitions/anchor",
+          "default": "center",
+          "description": "Which point of this child's own (post-scale) bounding box sits at `offset` -- also the point rotation is applied around. Same enum as a top-level layer's `transform.anchor`."
+        },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "Multiplies the parent's own scale." },
+        "flip_x": { "type": "boolean", "default": false, "description": "Composed with the parent's flip_x (XOR): false (default) means this child simply mirrors along with the parent; true gives it an independent mirror on top of that." },
+        "rotation": { "type": "number", "default": 0, "description": "Degrees, clockwise, around this child's own pivot. Independent of the parent's own `transform.rotation` (a rotating parent's rotation is not currently composed into its children -- see docs/timeline-schema.md)." },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0, "description": "Multiplies the parent's own opacity." },
+        "slots": { "$ref": "#/definitions/slots", "description": "Drawing-swap slots attached to this child instead of to the parent root (e.g. a mouth slot on a head child, a pose slot on a hand child)." }
+      }
+    },
+
+    "layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "asset", "z", "transform"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "Unique id of this layer within the scene." },
+        "character_id": { "type": "string", "description": "Optional logical character this layer belongs to, for continuity across scenes and tooling (e.g. the future script.txt parser)." },
+        "asset": { "type": "string", "description": "Path (relative to the project folder) to the layer's own (root/base) image (PNG with alpha recommended)." },
+        "z": { "type": "integer", "description": "Explicit draw order within the scene. Layers are drawn back-to-front in ascending z order; the background is implicitly z = -infinity." },
+        "transform": { "$ref": "#/definitions/transform" },
+        "timing": { "$ref": "#/definitions/timing" },
+        "audio": { "type": "string", "description": "Optional path (relative to the project folder) to this layer's dialogue/sound audio, mixed into the final render starting at this layer's start_frame." },
+        "slots": { "$ref": "#/definitions/slots", "description": "Drawing-swap slots attached directly to this layer's own root image (e.g. a mouth on a single-image character with no separate head part)." },
+        "children": {
+          "type": "array",
+          "description": "Cut-out rig parts nested under this layer. Optional -- most layers are a single flat image with no children.",
+          "items": { "$ref": "#/definitions/child" }
+        }
+      }
+    },
+
+    "camera_keyframe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame"],
+      "properties": {
+        "frame": { "type": "integer", "minimum": 0, "description": "Scene-relative frame this keyframe applies at." },
+        "x": { "type": "number", "description": "Canvas-space X the camera is centered on. Defaults to canvas center." },
+        "y": { "type": "number", "description": "Canvas-space Y the camera is centered on. Defaults to canvas center." },
+        "zoom": { "type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "1.0 = no zoom (full canvas visible). >1 zooms in." }
+      }
+    },
+
+    "camera": {
+      "description": "Optional, minimal virtual camera applied to the fully-composited frame: pans/zooms between keyframes (linearly interpolated) and/or an additive shake. Deliberately simple so it can grow later.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keyframes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/camera_keyframe" }
+        },
+        "shake": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "amplitude_px": { "type": "number", "minimum": 0, "default": 0 },
+            "frequency_hz": { "type": "number", "exclusiveMinimum": 0, "default": 8 },
+            "start_frame": { "type": "integer", "minimum": 0, "default": 0 },
+            "end_frame": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}
