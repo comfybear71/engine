@@ -1,0 +1,18 @@
+{
+  "name": "@engine/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Render worker orchestrator: a thin Node process that validates timeline.json and spawns the Python compositor. All actual image/video work happens in worker/python.",
+  "main": "src/server.js",
+  "scripts": {
+    "render": "node src/cli.js",
+    "start": "node src/server.js",
+    "watch": "node src/cli.js --watch"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}

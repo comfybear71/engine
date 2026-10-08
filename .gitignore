@@ -1,0 +1,33 @@
+# Secrets - never commit real values; see .env.example
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Python
+worker/python/venv/
+worker/python/**/__pycache__/
+worker/python/**/*.pyc
+.pytest_cache/
+
+# Rendered output (per-project renders/ folders, e.g. projects/sample/renders/)
+renders/
+**/renders/
+
+# Rhubarb-generated cue caches (regeneratable; cues committed on purpose are
+# named explicitly, e.g. assets/cues/line1_cues.json, not *.rhubarb.json)
+*.rhubarb.json
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Future Studio (Next.js) build output
+studio/.next/
+studio/node_modules/

@@ -1,0 +1,105 @@
+{
+  "$schema": "../../schema/timeline.schema.json",
+  "series": "Sunny Banks",
+  "episode": "sample-01",
+  "fps": 24,
+  "canvas": { "width": 1920, "height": 1080 },
+  "scenes": [
+    {
+      "id": "scene-1-porch",
+      "duration": { "from_audio": "assets/audio/line1.wav", "padding_frames": 6 },
+      "background": { "asset": "assets/backgrounds/bg.png", "fit": "cover" },
+      "frame_step": 2,
+      "camera": {
+        "keyframes": [
+          { "frame": 0, "zoom": 1.0 },
+          { "frame": 65, "zoom": 1.08 }
+        ]
+      },
+      "layers": [
+        {
+          "id": "dana",
+          "character_id": "dana",
+          "asset": "assets/characters/dana_body.png",
+          "z": 5,
+          "transform": {
+            "x": 1800,
+            "y": 1080,
+            "scale": 1.0,
+            "anchor": "bottom-center",
+            "flip_x": true
+          }
+        },
+        {
+          "id": "stuart",
+          "character_id": "stuart",
+          "asset": "assets/characters/stuart_body.png",
+          "z": 10,
+          "transform": {
+            "x": 1650,
+            "y": 1080,
+            "scale": 1.3,
+            "anchor": "bottom-center",
+            "flip_x": false
+          },
+          "audio": "assets/audio/line1.wav",
+          "slots": {
+            "mouth": {
+              "offset": { "x": 0, "y": -558 },
+              "images": {
+                "A": "assets/mouths/stuart/A.png",
+                "B": "assets/mouths/stuart/B.png",
+                "C": "assets/mouths/stuart/C.png",
+                "D": "assets/mouths/stuart/D.png",
+                "E": "assets/mouths/stuart/E.png",
+                "F": "assets/mouths/stuart/F.png",
+                "G": "assets/mouths/stuart/G.png",
+                "H": "assets/mouths/stuart/H.png",
+                "X": "assets/mouths/stuart/X.png"
+              },
+              "lipsync": {
+                "cues": "assets/cues/line1_cues.json",
+                "audio": "assets/audio/line1.wav"
+              }
+            },
+            "eyes": {
+              "offset": { "x": 0, "y": -624 },
+              "images": {
+                "open": "assets/eyes/stuart/open.png",
+                "closed": "assets/eyes/stuart/closed.png"
+              },
+              "keyframes": [
+                { "frame": 0, "drawing": "open" },
+                { "frame": 34, "drawing": "closed" },
+                { "frame": 38, "drawing": "open" }
+              ]
+            }
+          },
+          "children": [
+            {
+              "id": "right_arm",
+              "asset": "assets/parts/stuart_arm.png",
+              "z": 1,
+              "offset": { "x": -170, "y": -480 },
+              "pivot": "top-center",
+              "slots": {
+                "hand": {
+                  "offset": { "x": 0, "y": 230 },
+                  "images": {
+                    "open": "assets/parts/stuart_hand_open.png",
+                    "fist": "assets/parts/stuart_hand_fist.png"
+                  },
+                  "keyframes": [
+                    { "frame": 0, "drawing": "open" },
+                    { "frame": 30, "drawing": "fist" },
+                    { "frame": 50, "drawing": "open" }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
