@@ -1,0 +1,94 @@
+{
+  "lines": [
+    {
+      "scene_id": "morning_argument",
+      "line_number": 1,
+      "character": "hicks",
+      "text": "Where's the rent money, Dana?",
+      "audio_path": "audio/morning_argument/001_hicks.wav",
+      "cues_path": "audio/morning_argument/001_hicks.wav.rhubarb.json",
+      "voice_id": null,
+      "status": "ok"
+    },
+    {
+      "scene_id": "morning_argument",
+      "line_number": 2,
+      "character": "dana",
+      "text": "I told you, it's coming Friday.",
+      "audio_path": "audio/morning_argument/002_dana.wav",
+      "cues_path": "audio/morning_argument/002_dana.wav.rhubarb.json",
+      "voice_id": null,
+      "status": "ok"
+    },
+    {
+      "scene_id": "morning_argument",
+      "line_number": 3,
+      "character": "hicks",
+      "text": "Friday was last Friday too.",
+      "audio_path": "audio/morning_argument/003_hicks.wav",
+      "cues_path": "audio/morning_argument/003_hicks.wav.rhubarb.json",
+      "voice_id": null,
+      "status": "ok"
+    },
+    {
+      "scene_id": "morning_argument",
+      "line_number": 4,
+      "character": "dana",
+      "text": "Don't start with me this early.",
+      "audio_path": "audio/morning_argument/004_dana.wav",
+      "cues_path": "audio/morning_argument/004_dana.wav.rhubarb.json",
+      "voice_id": null,
+      "status": "ok"
+    },
+    {
+      "scene_id": "morning_argument",
+      "line_number": 5,
+      "character": "hicks",
+      "text": "I'm not starting anything, I'm just asking.",
+      "audio_path": "audio/morning_argument/005_hicks.wav",
+      "cues_path": "audio/morning_argument/005_hicks.wav.rhubarb.json",
+      "voice_id": null,
+      "status": "ok"
+    },
+    {
+      "scene_id": "morning_argument",
+      "line_number": 6,
+      "character": "dana",
+      "text": "Then stop asking in that tone.",
+      "audio_path": "audio/morning_argument/006_dana.wav",
+      "cues_path": "audio/morning_argument/006_dana.wav.rhubarb.json",
+      "voice_id": null,
+      "status": "ok"
+    },
+    {
+      "scene_id": "hallway_standoff",
+      "line_number": 1,
+      "character": "hicks",
+      "text": "We are not done talking about this.",
+      "audio_path": "audio/hallway_standoff/001_hicks.wav",
+      "cues_path": "audio/hallway_standoff/001_hicks.wav.rhubarb.json",
+      "voice_id": null,
+      "status": "ok"
+    },
+    {
+      "scene_id": "hallway_standoff",
+      "line_number": 2,
+      "character": "dana",
+      "text": "Oh, we are so done.",
+      "audio_path": "audio/hallway_standoff/002_dana.wav",
+      "cues_path": "audio/hallway_standoff/002_dana.wav.rhubarb.json",
+      "voice_id": null,
+      "status": "ok"
+    },
+    {
+      "scene_id": "hallway_standoff",
+      "line_number": 3,
+      "character": "hicks",
+      "text": "Fine. Friday. I'm holding you to it.",
+      "audio_path": "audio/hallway_standoff/003_hicks.wav",
+      "cues_path": "audio/hallway_standoff/003_hicks.wav.rhubarb.json",
+      "voice_id": null,
+      "status": "ok"
+    }
+  ]
+}

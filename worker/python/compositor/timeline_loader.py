@@ -65,6 +65,24 @@ class Child:
 
 
 @dataclass(frozen=True)
+class DialogueClip:
+    """One spoken line's audio, placed at an explicit scene-relative frame.
+
+    A character layer carries a *list* of these (``Layer.dialogue``) so a
+    real scene can give one character many lines without a separate layer
+    per line. ``duration_frames`` and ``cues`` are both resolved once at
+    load time (ffprobe + the lipsync resolution order), not per render
+    frame.
+    """
+
+    audio: Path
+    start_frame: int
+    duration_frames: int
+    cues: list[lipsync.MouthCue]
+    text: str | None = None
+
+
+@dataclass(frozen=True)
 class Layer:
     id: str
     asset: Path
@@ -73,8 +91,7 @@ class Layer:
     start_frame: int = 0
     end_frame: int | None = None  # None => visible through end of scene
     character_id: str | None = None
-    audio: Path | None = None
-    audio_start_frame: int = 0
+    dialogue: list[DialogueClip] = field(default_factory=list)
     slots: dict[str, Slot] = field(default_factory=dict)
     children: list[Child] = field(default_factory=list)
 
@@ -131,9 +148,9 @@ class Timeline:
             if scene.audio is not None:
                 clips.append(AudioClip(path=scene.audio, start_seconds=scene_start_seconds))
             for layer in scene.layers:
-                if layer.audio is not None:
-                    layer_start_seconds = scene_start_seconds + layer.audio_start_frame / float(self.fps)
-                    clips.append(AudioClip(path=layer.audio, start_seconds=layer_start_seconds))
+                for dialogue_clip in layer.dialogue:
+                    clip_start_seconds = scene_start_seconds + dialogue_clip.start_frame / float(self.fps)
+                    clips.append(AudioClip(path=dialogue_clip.audio, start_seconds=clip_start_seconds))
             elapsed_frames += scene.total_frames
         return clips
 
@@ -158,14 +175,24 @@ def _build_transform(raw: dict) -> Transform:
     )
 
 
-def _build_slot(raw: dict, project_dir: Path) -> Slot:
+def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | None) -> Slot:
     images = {name: _resolve(project_dir, p) for name, p in raw["images"].items()}
     offset = raw.get("offset", {})
 
     cues = None
     keyframes = None
+    dialogue_ref = None
     if "lipsync" in raw:
-        cues = lipsync.get_cues(raw["lipsync"], project_dir)
+        lipsync_raw = raw["lipsync"]
+        if lipsync_raw.get("source") == "dialogue":
+            if not dialogue:
+                raise ValueError(
+                    "slot lipsync source 'dialogue' requires this layer to have a "
+                    "non-empty 'dialogue' (or legacy 'audio')"
+                )
+            dialogue_ref = dialogue
+        else:
+            cues = lipsync.get_cues(lipsync_raw, project_dir)
     else:
         raw_keyframes = sorted(raw["keyframes"], key=lambda k: k["frame"])
         keyframes = [SlotKeyframe(frame=int(k["frame"]), drawing=k["drawing"]) for k in raw_keyframes]
@@ -176,13 +203,14 @@ def _build_slot(raw: dict, project_dir: Path) -> Slot:
         offset_y=float(offset.get("y", 0.0)),
         keyframes=keyframes,
         cues=cues,
+        dialogue=dialogue_ref,
     )
 
 
-def _build_slots(raw: dict | None, project_dir: Path) -> dict[str, Slot]:
+def _build_slots(raw: dict | None, project_dir: Path, dialogue: list[DialogueClip] | None = None) -> dict[str, Slot]:
     if not raw:
         return {}
-    return {name: _build_slot(slot_raw, project_dir) for name, slot_raw in raw.items()}
+    return {name: _build_slot(slot_raw, project_dir, dialogue) for name, slot_raw in raw.items()}
 
 
 def _build_child(raw: dict, project_dir: Path) -> Child:
@@ -198,7 +226,41 @@ def _build_child(raw: dict, project_dir: Path) -> Child:
         flip_x=bool(raw.get("flip_x", False)),
         rotation=float(raw.get("rotation", 0.0)),
         opacity=float(raw.get("opacity", 1.0)),
-        slots=_build_slots(raw.get("slots"), project_dir),
+        slots=_build_slots(raw.get("slots"), project_dir, dialogue=None),
+    )
+
+
+def _raw_dialogue_clips(layer_raw: dict) -> list[dict]:
+    """Raw `dialogue` entries, plus the legacy single-`audio` shorthand
+    normalized into the same shape (one clip starting at the layer's own
+    timing.start_frame). Shared by `_scene_total_frames` (which only has
+    raw JSON to work with) and `_build_layer`."""
+
+    dialogue_raw = list(layer_raw.get("dialogue", []))
+    if "audio" in layer_raw and not dialogue_raw:
+        timing = layer_raw.get("timing", {})
+        start_frame = int(timing.get("start_frame", 0))
+        dialogue_raw = [{"audio": layer_raw["audio"], "start_frame": start_frame}]
+    return dialogue_raw
+
+
+def _build_dialogue_clip(raw: dict, project_dir: Path, fps: int) -> DialogueClip:
+    audio_path = _resolve(project_dir, raw["audio"])
+    duration_s = probe_duration_seconds(audio_path)
+
+    lipsync_config: dict = {"audio": raw["audio"]}
+    if "cues" in raw:
+        lipsync_config["cues"] = raw["cues"]
+    if "text" in raw:
+        lipsync_config["dialogue_text"] = raw["text"]
+    cues = lipsync.get_cues(lipsync_config, project_dir)
+
+    return DialogueClip(
+        audio=audio_path,
+        start_frame=int(raw["start_frame"]),
+        duration_frames=_frames_from_seconds(duration_s, fps),
+        cues=cues,
+        text=raw.get("text"),
     )
 
 
@@ -216,7 +278,10 @@ def _build_layer(raw: dict, project_dir: Path, fps: int) -> Layer:
     else:
         end_frame = None
 
-    audio_path = _resolve(project_dir, raw["audio"]) if "audio" in raw else None
+    dialogue = [
+        _build_dialogue_clip(d, project_dir, fps)
+        for d in sorted(_raw_dialogue_clips(raw), key=lambda d: d["start_frame"])
+    ]
 
     return Layer(
         id=raw["id"],
@@ -226,9 +291,8 @@ def _build_layer(raw: dict, project_dir: Path, fps: int) -> Layer:
         transform=_build_transform(raw["transform"]),
         start_frame=start_frame,
         end_frame=end_frame,
-        audio=audio_path,
-        audio_start_frame=start_frame,
-        slots=_build_slots(raw.get("slots"), project_dir),
+        dialogue=dialogue,
+        slots=_build_slots(raw.get("slots"), project_dir, dialogue=dialogue or None),
         children=[_build_child(c, project_dir) for c in raw.get("children", [])],
     )
 
@@ -259,17 +323,39 @@ def _build_camera(raw: dict | None) -> Camera | None:
     return Camera(keyframes=keyframes, shake=shake)
 
 
-def _scene_total_frames(raw_duration: dict, project_dir: Path, fps: int) -> int:
+def _scene_total_frames(raw_duration: dict, project_dir: Path, fps: int, layers_raw: list[dict]) -> int:
     if "frames" in raw_duration:
         return int(raw_duration["frames"])
-    audio_path = _resolve(project_dir, raw_duration["from_audio"])
-    duration_s = probe_duration_seconds(audio_path)
-    padding = int(raw_duration.get("padding_frames", 0))
-    return _frames_from_seconds(duration_s, fps) + padding
+
+    if "from_audio" in raw_duration:
+        audio_path = _resolve(project_dir, raw_duration["from_audio"])
+        duration_s = probe_duration_seconds(audio_path)
+        padding = int(raw_duration.get("padding_frames", 0))
+        return _frames_from_seconds(duration_s, fps) + padding
+
+    if raw_duration.get("from_dialogue"):
+        padding = int(raw_duration.get("padding_frames", 0))
+        max_end_frame = 0
+        found_any = False
+        for layer_raw in layers_raw:
+            for clip_raw in _raw_dialogue_clips(layer_raw):
+                found_any = True
+                audio_path = _resolve(project_dir, clip_raw["audio"])
+                duration_s = probe_duration_seconds(audio_path)
+                end_frame = int(clip_raw["start_frame"]) + _frames_from_seconds(duration_s, fps)
+                max_end_frame = max(max_end_frame, end_frame)
+        if not found_any:
+            raise ValueError(
+                "scene duration 'from_dialogue' requires at least one layer with "
+                "a non-empty 'dialogue' (or legacy 'audio')"
+            )
+        return max_end_frame + padding
+
+    raise ValueError(f"Unrecognized scene duration config: {raw_duration!r}")
 
 
 def _build_scene(raw: dict, project_dir: Path, fps: int) -> Scene:
-    total_frames = _scene_total_frames(raw["duration"], project_dir, fps)
+    total_frames = _scene_total_frames(raw["duration"], project_dir, fps, raw.get("layers", []))
     background = Background(
         asset=_resolve(project_dir, raw["background"]["asset"]),
         fit=raw["background"].get("fit", "cover"),

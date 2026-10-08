@@ -1,0 +1,37 @@
+{
+  "marks": {
+    "centre": {
+      "x": 960,
+      "y": 1080,
+      "scale": 0.85
+    },
+    "left": {
+      "x": 350,
+      "y": 1080,
+      "scale": 0.85
+    },
+    "right": {
+      "x": 1570,
+      "y": 1080,
+      "scale": 0.85,
+      "flip_x": true
+    },
+    "far_left": {
+      "x": 150,
+      "y": 1080,
+      "scale": 0.75
+    },
+    "far_right": {
+      "x": 1770,
+      "y": 1080,
+      "scale": 0.75,
+      "flip_x": true
+    }
+  },
+  "auto_order": [
+    "left",
+    "right",
+    "far_left",
+    "far_right"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "id": "dana",
+  "display_name": "Dana",
+  "aliases": [
+    "Dana"
+  ],
+  "asset": "body.png",
+  "z": 10,
+  "default_scale": 1.0,
+  "default_flip_x": false,
+  "voice_id": null,
+  "slots": {
+    "mouth": {
+      "offset": {
+        "x": 0,
+        "y": -558
+      },
+      "drawings_dir": "mouth"
+    },
+    "eyes": {
+      "offset": {
+        "x": 0,
+        "y": -624
+      },
+      "drawings_dir": "eyes",
+      "default_drawing": "open"
+    }
+  },
+  "children": []
+}

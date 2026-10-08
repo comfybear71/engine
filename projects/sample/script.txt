@@ -1,0 +1,29 @@
+# Sample episode for the engine's script.txt -> timeline.json parser.
+# Lines starting with "#" (or containing "//") are comments and ignored.
+# "===" lines are purely decorative scene dividers; they do nothing.
+
+===
+[Scene: Morning Argument]
+[Location: bedroom]
+[Cast: Hicks, Dana]
+
+Hicks: Where's the rent money, Dana?
+Dana: I told you, it's coming Friday.
+[Action: Hicks eyes=furious]
+Hicks: Friday was last Friday too.
+Dana: Don't start with me this early.
+[Pause: 0.5s]
+[Action: Hicks right_hand=point]
+Hicks: I'm not starting anything, I'm just asking.
+Dana: Then stop asking in that tone.
+
+===
+[Scene: Hallway Standoff]
+[Location: corridor]
+[Cast: Hicks, Dana]
+
+Hicks: We are not done talking about this.
+[Action: Dana at=far_right]
+Dana: Oh, we are so done.
+[Action: Hicks eyes=open]
+Hicks: Fine. Friday. I'm holding you to it.

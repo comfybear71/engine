@@ -45,7 +45,7 @@
     },
 
     "duration": {
-      "description": "How long a scene lasts. Exactly one of `frames` (hand-set) or `from_audio` (derived from an audio file's duration) must be given.",
+      "description": "How long a scene lasts. Exactly one of `frames` (hand-set), `from_audio` (derived from a single audio file's duration), or `from_dialogue` (derived from every layer's dialogue clips, for scenes built from a script with several lines per character) must be given.",
       "type": "object",
       "oneOf": [
         {
@@ -68,6 +68,22 @@
               "minimum": 0,
               "default": 0,
               "description": "Extra frames appended after the audio ends (e.g. for a held last frame)."
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["from_dialogue"],
+          "properties": {
+            "from_dialogue": {
+              "const": true,
+              "description": "The scene's frame count is the latest (start_frame + that clip's own audio duration) across every dialogue clip on every layer in the scene (plus padding_frames), i.e. it ends when the last line finishes. At least one layer in the scene must have a non-empty `dialogue` (or legacy single `audio`)."
+            },
+            "padding_frames": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "description": "Extra frames appended after the last line ends."
             }
           }
         }
@@ -215,11 +231,22 @@
         "lipsync": {
           "type": "object",
           "additionalProperties": false,
-          "anyOf": [
-            { "required": ["cues"] },
-            { "required": ["audio"] }
+          "oneOf": [
+            { "required": ["source"] },
+            {
+              "not": { "required": ["source"] },
+              "anyOf": [
+                { "required": ["cues"] },
+                { "required": ["audio"] }
+              ]
+            }
           ],
           "properties": {
+            "source": {
+              "type": "string",
+              "enum": ["dialogue"],
+              "description": "\"dialogue\": instead of a single cues/audio pair, this slot is driven by the owning layer's `dialogue` array (see `layer.dialogue`): each clip's own cues apply within that clip's [start_frame, start_frame + its audio duration) window, and the slot shows the idle shape (\"X\") in the gaps between lines. This is how a mouth slot handles \"many lines per character\" -- a single-line lipsync (`cues`/`audio` below) is still available for simpler, non-dialogue-list cases."
+            },
             "cues": {
               "type": "string",
               "description": "Path (relative to the project folder) to a Rhubarb JSON cues file. A committed cues file is the primary source of truth: if it already exists on disk at render time it is used directly and Rhubarb is never invoked, which keeps renders deterministic and working with zero Rhubarb install. If omitted while `audio` is given, it defaults to \"<audio>.rhubarb.json\" and doubles as the cache Rhubarb writes to the first time it runs."
@@ -233,7 +260,7 @@
               "description": "Optional spoken line text passed to Rhubarb (--dialogFile) to improve recognition accuracy when generating cues from audio."
             }
           },
-          "description": "Resolution order: 1) if `cues` (or its default path next to `audio`) exists on disk, load it -- Rhubarb is not run. 2) else if Rhubarb is installed, run it on `audio` and cache the result at that path. 3) else warn and fall back to the idle shape; the render still completes."
+          "description": "Resolution order (per cues/audio pair, whether it's this single pair or one of `layer.dialogue`'s clips): 1) if `cues` (or its default path next to `audio`) exists on disk, load it -- Rhubarb is not run. 2) else if Rhubarb is installed, run it on `audio` and cache the result at that path. 3) else warn and fall back to the idle shape; the render still completes."
         }
       }
     },
@@ -273,18 +300,36 @@
       }
     },
 
+    "dialogue_clip": {
+      "description": "One spoken line's audio, placed at an explicit frame. A character layer carries a *list* of these (see `layer.dialogue`) so a real scene can give one character many lines without a separate layer per line.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audio", "start_frame"],
+      "properties": {
+        "audio": { "type": "string", "description": "Path (relative to the project folder) to this line's audio file." },
+        "start_frame": { "type": "integer", "minimum": 0, "description": "Scene-relative frame this clip starts at. Typically computed by the script parser from the running total of prior lines/pauses in the scene, but may be hand-set." },
+        "cues": { "type": "string", "description": "Path (relative to the project folder) to this clip's Rhubarb cues JSON. Defaults to \"<audio>.rhubarb.json\" if omitted -- see the lipsync resolution order under `slot.lipsync`." },
+        "text": { "type": "string", "description": "The spoken line text. Used as Rhubarb's --dialogFile hint when cues must be generated from audio, and for the lines.json manifest / a future ElevenLabs generation step. Purely informational for rendering." }
+      }
+    },
+
     "layer": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "asset", "z", "transform"],
       "properties": {
         "id": { "type": "string", "minLength": 1, "description": "Unique id of this layer within the scene." },
-        "character_id": { "type": "string", "description": "Optional logical character this layer belongs to, for continuity across scenes and tooling (e.g. the future script.txt parser)." },
+        "character_id": { "type": "string", "description": "Optional logical character this layer belongs to, for continuity across scenes and tooling (e.g. the script.txt parser)." },
         "asset": { "type": "string", "description": "Path (relative to the project folder) to the layer's own (root/base) image (PNG with alpha recommended)." },
         "z": { "type": "integer", "description": "Explicit draw order within the scene. Layers are drawn back-to-front in ascending z order; the background is implicitly z = -infinity." },
         "transform": { "$ref": "#/definitions/transform" },
         "timing": { "$ref": "#/definitions/timing" },
-        "audio": { "type": "string", "description": "Optional path (relative to the project folder) to this layer's dialogue/sound audio, mixed into the final render starting at this layer's start_frame." },
+        "dialogue": {
+          "type": "array",
+          "description": "This character's spoken lines in the scene, each with its own audio/timing/cues. Every clip's audio is mixed into the final render at its own start_frame; a `slots.mouth` with `lipsync.source: \"dialogue\"` shows each clip's cues within that clip's window and the idle shape between lines.",
+          "items": { "$ref": "#/definitions/dialogue_clip" }
+        },
+        "audio": { "type": "string", "description": "Deprecated single-clip shorthand, kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: timing.start_frame }]`. Ignored if `dialogue` is also given. Prefer `dialogue` for anything with more than one line." },
         "slots": { "$ref": "#/definitions/slots", "description": "Drawing-swap slots attached directly to this layer's own root image (e.g. a mouth on a single-image character with no separate head part)." },
         "children": {
           "type": "array",

@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import json
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 
+@lru_cache(maxsize=None)
 def probe_duration_seconds(path: Path) -> float:
-    """Return the duration of a media file in seconds, via ffprobe."""
+    """Return the duration of a media file in seconds, via ffprobe.
+
+    Memoized: a single timeline load may probe the same audio file more
+    than once (e.g. a scene's `from_dialogue` duration calc and that same
+    clip's own duration_frames), and ffprobe is a real subprocess spawn per
+    call, so caching is worth it even within one process's lifetime.
+    """
 
     cmd = [
         "ffprobe",
