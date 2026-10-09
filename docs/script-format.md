@@ -218,4 +218,7 @@ Line 2: Unknown location "nowhere" (no backgrounds/nowhere/bg.png). Available: b
 
 `node src/cli.js lint <project>` runs the exact same parse + validation
 path as `render`/`parse`, without writing a (non-throwaway) `timeline.json`,
-so you can check a script for errors on its own.
+so you can check a script for errors on its own. It also warns if two
+characters share a staging mark at the same time with the same z, and
+errors if a used character's mouth folder is missing rest shape X or any
+Rhubarb shape A–H (listing what's there).
