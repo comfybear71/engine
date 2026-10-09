@@ -87,13 +87,15 @@ and it never touches `projects/_global_assets`. A **Trash** section on the
 home screen can **Restore** an item or **Empty trash** (that step is
 permanent and has its own confirm).
 
-Inside a project: **Assets**, **Stage**, **Script**, **Edit**, **Deliver**,
-a back-to-home link, the project name, and a **script picker**. A project
-may hold several `script*.txt` files (`script.txt`, `script_mcd.txt`, …).
-Stage, lanes, the Script page, preview, and Render all use the selected
-file. The orange **Render** button parses that script (temp files only)
-and writes `renders/<script-name>.mp4` so two scripts never overwrite
-each other's movie. Equivalent CLI:
+Inside a project the default tab is **Stage** (Resolve-style workspace).
+Top tabs stay **Assets**, **Stage**, **Script**, **Edit**, **Deliver** for
+the full pages, with a back-to-home link, the project name, and a
+**script picker**. A project may hold several `script*.txt` files
+(`script.txt`, `script_mcd.txt`, …). Stage, lanes, the Script page,
+preview, and Render all use the selected file. The orange **Render**
+button parses that script (temp files only) and writes
+`renders/<script-name>.mp4` so two scripts never overwrite each other's
+movie. Equivalent CLI:
 
 ```bash
 node src/cli.js render ../projects/sample --from-script --script script_mcd.txt --output ../projects/sample/renders/script_mcd.mp4
@@ -115,16 +117,31 @@ clobber the project's `timeline.json`.
   and need (templates in `studio/lib/assetNeeds.json`), then a drop zone
   ingests the PNG you generated in the browser — there is no image-generation
   API. See [Image assets](#image-assets-grok-imagine) below.
-- **Stage** — a large frame preview from
-  `POST /api/projects/:name/preview-frame?script=`, a time scrubber, the
-  current location's marks, a read-only layer list in z order, and
-  **read-only timeline lanes** at the bottom (Action, Dialogue, Audio, SFX,
-  Camera). The playhead follows the scrubber. Click a block to seek the
-  preview and highlight that script line. Lane editing by drag is a later PR.
-- **Script** — line-numbered editor for the selected `script*.txt` with
+- **Stage** — the main workspace. A large frame preview from
+  `POST /api/projects/:name/preview-frame?script=`, a transport bar under
+  the viewer (rewind / play / stop; timecode on the left; `frame N · fps ·
+  script` on the right), and **read-only timeline lanes** at the bottom
+  (Action, Dialogue, Audio, SFX, Camera). Space toggles play. Play steps
+  preview frames, or plays the latest `renders/<script-stem>.mp4` when
+  that file exists. The orange playhead handle sits on the scrub bar;
+  one vertical line continues down through every lane. Click or drag the
+  bar to seek; click a block to seek and highlight that script line.
+  **Assets / Media / Effects** are a left dock (library characters,
+  backgrounds, props) that slides in over the stage — not a full-page
+  switch. The right icon rail opens **Marks**, **Layers**, **Script**
+  (read-only, playhead line highlighted), and **Camera** drawers; they
+  are closed by default so the stage and timeline keep their space.
+  Camera lists `[Camera:]` moves for the shot and an **Add camera move**
+  form (zoom, pan, tilt, to, reset, over, ease) that inserts the tag
+  through the existing script save path. Splitters between the left
+  pool, stage, right drawer, and timeline are draggable; sizes persist
+  in `localStorage` (`engine.studio.stageLayout.v1`); double-click a
+  splitter to reset. Lane editing by drag is a later PR.
+- **Script** — full-page line-numbered editor for the selected `script*.txt` with
   Save (Ctrl/Cmd+S) and Lint. Insert Action buttons drop real tag templates
   from [script-format.md](script-format.md) at the cursor, using character
-  names from the project cast.
+  names from the project cast. The Stage Script drawer is the read-only
+  counterpart; edits still happen here.
 
 ## Worker API (`127.0.0.1:4100`)
 

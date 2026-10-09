@@ -99,11 +99,16 @@ export default function AssetsPanel({
   project,
   workerUp,
   onLibraryChange,
+  variant = "page",
+  poolSection = "assets",
 }: {
   project: string | null;
   workerUp: boolean;
   onLibraryChange?: () => void;
+  variant?: "page" | "pool";
+  poolSection?: "assets" | "media" | "effects";
 }) {
+  const pool = variant === "pool";
   const [characters, setCharacters] = useState<Character[]>([]);
   const [staging, setStaging] = useState<Staging | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -181,29 +186,47 @@ export default function AssetsPanel({
     return <EmptyState message="Pick a project to browse the library." />;
   }
 
+  const showCharacters = !pool || poolSection === "assets";
+  const showBackgrounds = !pool || poolSection === "media";
+  const showProps = !pool || poolSection === "effects";
+  const gridClass = pool
+    ? "grid grid-cols-2 gap-2"
+    : "grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
+
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
-      <div className="min-w-0 flex-1 overflow-y-auto p-5">
+      <div className={`min-w-0 flex-1 overflow-y-auto ${pool ? "p-3" : "p-5"}`}>
         {error ? <p className="mb-4 text-sm text-red-400">{error}</p> : null}
         {loading ? <p className="mb-4 text-sm text-studio-muted">Loading library…</p> : null}
 
-        <div className="mb-6 flex items-center justify-between">
-          <p className="text-sm text-studio-muted">Characters, backgrounds, and props this project uses.</p>
-          <button
-            type="button"
-            data-testid="library-open"
-            onClick={() => setLibraryOpen(true)}
-            className="rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white"
-          >
-            Library
-          </button>
+        <div className={`mb-4 flex items-center justify-between ${pool ? "gap-2" : "mb-6"}`}>
+          <p className="text-sm text-studio-muted">
+            {pool
+              ? poolSection === "assets"
+                ? "Library characters"
+                : poolSection === "media"
+                  ? "Backgrounds"
+                  : "Props"
+              : "Characters, backgrounds, and props this project uses."}
+          </p>
+          {showCharacters ? (
+            <button
+              type="button"
+              data-testid="library-open"
+              onClick={() => setLibraryOpen(true)}
+              className="rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white"
+            >
+              Library
+            </button>
+          ) : null}
         </div>
 
+        {showCharacters ? (
         <Section title="Characters" count={characters.length}>
           {characters.length === 0 ? (
             <p className="text-sm text-studio-muted">None in this project yet. Open Library to add a global character.</p>
           ) : (
-          <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          <div className={gridClass}>
             {characters.map((character) => (
               <Thumb
                 key={character.id}
@@ -217,8 +240,9 @@ export default function AssetsPanel({
           </div>
           )}
         </Section>
+        ) : null}
 
-        {selected ? (
+        {selected && !pool ? (
           <div className="mb-8">
             <AssetImaginePanel
               project={project}
@@ -231,19 +255,22 @@ export default function AssetsPanel({
           </div>
         ) : null}
 
+        {showBackgrounds ? (
         <Section title="Backgrounds" count={staging?.backgrounds.length ?? 0}>
-          <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          <div className={gridClass}>
             {(staging?.backgrounds || []).map((bg) => (
               <Thumb key={bg.id} src={assetUrl(project, bg.thumbRel, { thumb: true })} label={bg.id} />
             ))}
           </div>
         </Section>
+        ) : null}
 
+        {showProps ? (
         <Section title="Props" count={staging?.props.length ?? 0}>
           {(staging?.props || []).length === 0 ? (
             <p className="text-sm text-studio-muted">No props in this project&apos;s staging.json.</p>
           ) : (
-            <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+            <div className={gridClass}>
               {(staging?.props || []).map((prop) => (
                 <Thumb
                   key={`${prop.location}:${prop.id}`}
@@ -254,8 +281,10 @@ export default function AssetsPanel({
             </div>
           )}
         </Section>
+        ) : null}
       </div>
 
+      {pool ? null : (
       <aside className="w-[340px] shrink-0 overflow-y-auto border-l border-studio-border bg-studio-panel p-4">
         {selected ? (
           <div className="space-y-5">
@@ -278,6 +307,7 @@ export default function AssetsPanel({
           <p className="text-sm text-studio-muted">Click a character to see slots, drawings, and cycles.</p>
         )}
       </aside>
+      )}
 
       {libraryOpen ? (
         <div className="fixed inset-0 z-30 flex justify-end bg-black/50" onClick={() => setLibraryOpen(false)}>

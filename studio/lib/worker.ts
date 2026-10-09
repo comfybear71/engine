@@ -462,3 +462,15 @@ export function renderVideoUrl(name: string, bust?: number, script?: string | nu
   const qs = bust ? `?t=${bust}` : "";
   return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/renders/${encodeURIComponent(file)}${qs}`;
 }
+
+export async function renderExists(name: string, script?: string | null): Promise<boolean> {
+  try {
+    const res = await workerFetch(
+      `/api/projects/${encodeURIComponent(name)}/renders/${encodeURIComponent(renderOutputFile(script))}`,
+      { method: "HEAD" }
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

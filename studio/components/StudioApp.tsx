@@ -26,7 +26,7 @@ type TabId = (typeof TABS)[number]["id"];
 
 export default function StudioApp({ projectName }: { projectName: string }) {
   const project = projectName;
-  const [tab, setTab] = useState<TabId>("assets");
+  const [tab, setTab] = useState<TabId>("stage");
   const [scripts, setScripts] = useState<string[]>([]);
   const [script, setScript] = useState<string>("script.txt");
   const [workerUp, setWorkerUp] = useState<boolean | null>(null);
@@ -182,6 +182,8 @@ export default function StudioApp({ projectName }: { projectName: string }) {
             scriptEpoch={scriptEpoch}
             selectedLine={selectedScriptLine}
             onSelectLine={setSelectedScriptLine}
+            onSaved={() => setScriptEpoch((n) => n + 1)}
+            renderNonce={videoBust}
           />
         ) : null}
         {tab === "script" ? (
@@ -189,6 +191,7 @@ export default function StudioApp({ projectName }: { projectName: string }) {
             project={project}
             script={script}
             workerUp={workerUp === true}
+            scriptEpoch={scriptEpoch}
             selectedLine={selectedScriptLine}
             onSelectLine={setSelectedScriptLine}
             onSaved={() => setScriptEpoch((n) => n + 1)}
