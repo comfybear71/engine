@@ -1,0 +1,105 @@
+{
+  "needs": [
+    {
+      "id": "body_no_head",
+      "label": "Full body (no head / mouth)",
+      "description": "Standing body without a head or mouth, for attaching expression heads later.",
+      "split": "grid",
+      "grid": { "cols": 1, "rows": 1 },
+      "cells": [
+        { "name": "body", "dest": { "kind": "file", "rel": "body.png" } }
+      ],
+      "prompt": "Full-body character turnaround piece of {{name}}, {{style}}. Standing, feet planted, arms slightly off the torso so they can be cut out. Draw the body only: no head, no neck, no mouth, no face. A clean neck seam at the top, ready to attach a separate head. Plain #00FF00 green background. Same size and position if this is a sheet. No watermark, no caption, no text, no logo. Do not crop hands, feet, or clothing. Small empty margin inside the frame. One character only."
+    },
+    {
+      "id": "mouth_sheet",
+      "label": "Mouth / head sheet",
+      "description": "3×3 Rhubarb mouth shapes in order X, A–H.",
+      "split": "grid",
+      "grid": { "cols": 3, "rows": 3 },
+      "assignChoices": ["X", "A", "B", "C", "D", "E", "F", "G", "H"],
+      "cells": [
+        { "name": "X", "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" } },
+        { "name": "A", "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" } },
+        { "name": "B", "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" } },
+        { "name": "C", "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" } },
+        { "name": "D", "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" } },
+        { "name": "E", "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" } },
+        { "name": "F", "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" } },
+        { "name": "G", "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" } },
+        { "name": "H", "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" } }
+      ],
+      "prompt": "A 3x3 mouth-and-head sheet of {{name}}, {{style}}. Nine cells, left to right, top to bottom, in this exact Rhubarb order: X closed rest, A closed lips (M/B/P), B slight opening, C open, D wide open, E wider, F teeth on lower lip (F/V), G wide with teeth, H tongue up (L). Same head size, crop, and position in every cell — only the mouth changes. Neck included, no shoulders. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop the head, ears, or chin. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "expression_heads",
+      "label": "Expression heads",
+      "description": "Six head drawings: neutral, happy, angry, sad, surprised, skeptical.",
+      "split": "grid",
+      "grid": { "cols": 3, "rows": 2 },
+      "assignChoices": ["neutral", "happy", "angry", "sad", "surprised", "skeptical"],
+      "cells": [
+        { "name": "neutral", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "happy", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "angry", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "sad", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "surprised", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "skeptical", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } }
+      ],
+      "prompt": "A 2x3 sheet of expression heads of {{name}}, {{style}}. Six cells, left to right, top to bottom: neutral, happy, angry, sad, surprised, skeptical. Same head size, crop, and position in every cell — only the expression changes. Include the neck, no torso. Neutral closed mouth (the body sheet has no head). Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop hair, ears, or chin. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "arm_hand",
+      "label": "Arm / hand pieces",
+      "description": "Upper arm, forearm, fist, and point, as separate cut-out parts.",
+      "split": "grid",
+      "grid": { "cols": 2, "rows": 2 },
+      "assignChoices": ["upper_arm", "forearm", "fist", "point"],
+      "cells": [
+        { "name": "upper_arm", "dest": { "kind": "file", "rel": "parts/arm.png" } },
+        { "name": "forearm", "dest": { "kind": "file", "rel": "parts/forearm.png" } },
+        { "name": "fist", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "point", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } }
+      ],
+      "prompt": "A 2x2 sheet of separate right-arm pieces of {{name}}, {{style}}. Four cells, left to right, top to bottom: upper arm (shoulder to elbow, no hand), forearm (elbow to wrist, no hand), closed fist, pointing hand. Each piece floating on its own, not attached to a body. Same scale in every cell so they can be rigged together. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop the ends of any piece. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "walk_cycle",
+      "label": "Walk cycle sheet",
+      "description": "Side / front / back walk frames. Set the frame count, then copy the prompt.",
+      "split": "grid",
+      "frameParam": {
+        "default": 8,
+        "min": 2,
+        "max": 16,
+        "views": ["side", "front", "back"]
+      },
+      "cycleFps": 12,
+      "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" },
+      "prompt": "A walk-cycle sprite sheet of {{name}}, {{style}}. {{rows}} rows and {{frames}} columns. Row 1 is a side-view walk, row 2 front-view, row 3 back-view. {{frames}} evenly spaced frames per row (contact through passing and opposite contact). Same body size and ground line in every cell; the character stays in the same spot, only the pose changes. Full body including head. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop feet, hands, or hair. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "prop",
+      "label": "Prop on its own",
+      "description": "A single prop, keyed off green, saved into the project props/ folder.",
+      "split": "grid",
+      "grid": { "cols": 1, "rows": 1 },
+      "cells": [
+        { "name": "prop", "dest": { "kind": "prop" } }
+      ],
+      "prompt": "A single still prop in the world of {{name}}, {{style}}. Centered, complete object, no character holding it. Plain #00FF00 green background. No floor, no drop shadow on the green, no watermark, no caption, no text, no logo. Do not crop any part of the prop. Small empty margin inside the frame. One object only."
+    },
+    {
+      "id": "background",
+      "label": "Background plate",
+      "description": "A full establishing plate. Chroma key is skipped so the plate stays opaque.",
+      "split": "grid",
+      "key": false,
+      "grid": { "cols": 1, "rows": 1 },
+      "cells": [
+        { "name": "bg", "dest": { "kind": "background" } }
+      ],
+      "prompt": "A full establishing background plate in the world of {{name}}, {{style}}. 16:9 landscape, finished set, no characters, no watermark, no caption, no text, no logo. Even lighting, no letterbox bars. Do not crop architecture or furniture at the edges."
+    }
+  ]
+}

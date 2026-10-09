@@ -27,6 +27,7 @@ export type Character = {
   aliases: string[];
   source: "global" | "project";
   z: number;
+  style: string;
   thumbRel: string | null;
   slots: CharacterSlot[];
 };
@@ -195,12 +196,94 @@ export async function loadLibrary(name: string): Promise<LibraryResponse> {
   return res.json() as Promise<LibraryResponse>;
 }
 
+export type IngestCell = {
+  index: number;
+  suggestedName: string;
+  empty: boolean;
+  width: number;
+  height: number;
+  pngBase64: string;
+};
+
+export type IngestPreview = {
+  ok: boolean;
+  sessionId: string;
+  libraryRel: string;
+  needId: string;
+  grid: { cols: number; rows: number } | null;
+  cells: IngestCell[];
+};
+
+export type IngestConfirmResult = {
+  ok: boolean;
+  written: { name: string; rel: string }[];
+  characterId: string;
+};
+
 export async function addLibraryCharacter(name: string, characterId: string): Promise<void> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/library`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ characterId }),
   });
+  if (!res.ok) throw new Error(await readError(res));
+}
+
+export async function saveCharacterStyle(name: string, characterId: string, style: string): Promise<void> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ style }),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+}
+
+export async function previewCharacterIngest(
+  name: string,
+  characterId: string,
+  body: { needId: string; imageBase64: string; filename?: string; frames?: number }
+): Promise<IngestPreview> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/ingest`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<IngestPreview>;
+}
+
+export async function confirmCharacterIngest(
+  name: string,
+  characterId: string,
+  body: { sessionId: string; assignments: { index: number; name: string }[] }
+): Promise<IngestConfirmResult> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/ingest/confirm`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<IngestConfirmResult>;
+}
+
+export async function cancelCharacterIngest(name: string, characterId: string, sessionId: string): Promise<void> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/ingest/cancel`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    }
+  );
   if (!res.ok) throw new Error(await readError(res));
 }
 

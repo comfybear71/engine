@@ -109,6 +109,7 @@ describe("studio worker API", () => {
     const alice = body.characters.find((c) => c.id === "alice");
     assert.equal(alice.display_name, "Alice");
     assert.equal(alice.source, "global");
+    assert.equal(alice.style, "");
     assert.equal(alice.thumbRel, "characters/alice/body.png");
     const eyes = alice.slots.find((s) => s.name === "eyes");
     assert.ok(eyes);
@@ -503,5 +504,39 @@ describe("studio worker API", () => {
     assert.equal(body.project.name, "ren_dst");
     assert.equal(fs.existsSync(path.join(fixture.root, "ren_src")), false);
     assert.equal(fs.existsSync(path.join(fixture.root, "ren_dst", "script.txt")), true);
+  });
+
+  test("PUT character style writes a project-local character.json without dropping slots", async () => {
+    const res = await fetch(`${ctx.url}/api/projects/project/characters/alice`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ style: "painted semi-real" }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.style, "painted semi-real");
+
+    const localJson = path.join(fixture.projectDir, "characters", "alice", "character.json");
+    assert.equal(fs.existsSync(localJson), true);
+    const saved = JSON.parse(fs.readFileSync(localJson, "utf8"));
+    assert.equal(saved.style, "painted semi-real");
+    assert.ok(saved.slots.mouth);
+    assert.ok(saved.slots.eyes);
+
+    const listed = await fetch(`${ctx.url}/api/projects/project/characters`);
+    const alice = (await listed.json()).characters.find((c) => c.id === "alice");
+    assert.equal(alice.style, "painted semi-real");
+    assert.equal(alice.source, "project");
+  });
+
+  test("POST ingest without an image is 400", async () => {
+    const res = await fetch(`${ctx.url}/api/projects/project/characters/alice/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ needId: "mouth_sheet" }),
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.match(body.error, /imageBase64/);
   });
 });

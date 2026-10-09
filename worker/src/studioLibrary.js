@@ -84,6 +84,7 @@ function describeCharacter(projectDir, globalAssetsDir, id) {
     aliases: character.aliases || [],
     source: resolved.source,
     z: character.z,
+    style: typeof character.style === "string" ? character.style : "",
     thumbRel: characterThumbRel(character, projectDir, globalAssetsDir, id),
     slots: collectSlots(character, projectDir, globalAssetsDir, id),
   };
