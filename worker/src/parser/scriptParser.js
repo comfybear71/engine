@@ -727,6 +727,27 @@ class ScriptParser {
     this._applyPropPose(scene, propState, this._resolvePropPose(scene, propState, { z: String(newZ) }, token.lineNumber), token.lineNumber);
   }
 
+  _handleActionOnProp(scene, state, kv, note, lineNumber) {
+    this._warnNoteLooksLikeAssignments(lineNumber, "Action", note);
+    const allowed = new Set(["at", "scale", "z"]);
+    const extra = Object.keys(kv).filter((key) => !allowed.has(key));
+    if (extra.length > 0) {
+      throw new ScriptError(
+        lineNumber,
+        `Prop "${state.propId}" has no slots. Unexpected: ${extra.join(", ")}. Use [Prop: ...] or [Layer: ... z=].`
+      );
+    }
+    if (kv.at === undefined && kv.scale === undefined && kv.z === undefined) {
+      return;
+    }
+    const pose = this._resolvePropPose(scene, state, kv, lineNumber);
+    if (!state.current) {
+      this._openPropSegment(scene, state, pose, lineNumber);
+      return;
+    }
+    this._applyPropPose(scene, state, pose, lineNumber);
+  }
+
   _applyCharacterZ(scene, state, newZ, lineNumber) {
     const current = state.current;
     if (!current) return;
@@ -749,6 +770,13 @@ class ScriptParser {
     const scene = this._requireScene(token.lineNumber, "Action");
     const { character: scriptName, kv, note } = parseActionTag(token.body);
     if (!scriptName) throw new ScriptError(token.lineNumber, "[Action: ...] needs a character name.");
+    if (!this.characterLibrary.resolveIdByScriptName(scriptName)) {
+      const propState = this._findPropState(scene, scriptName);
+      if (propState) {
+        this._handleActionOnProp(scene, propState, kv, note, token.lineNumber);
+        return;
+      }
+    }
     const characterId = this._resolveCharacterIdOrThrow(scriptName, token.lineNumber);
 
     if (!scene.castOrder.includes(characterId)) {

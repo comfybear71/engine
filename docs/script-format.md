@@ -155,8 +155,8 @@ forking a new layer (same `character_id` / `prop_id`, back-to-back in
 time) when `z` actually differs. `<Name>` is resolved as a character
 first (same aliases as `[Cast: ...]` / `[Action: ...]`), then as a
 declared prop. `[Layer: ...]` only accepts `z=`; use `[Action: ...]` or
-`[Prop: ...]` to move. `z=` inside `[Action: ...]` (characters) or
-`[Prop: ...]` (props) does the same thing.
+`[Prop: ...]` to move. `z=` inside `[Action: ...]` does the same
+thing for a character or a declared prop (`[Prop: ... z=]` also works).
 
 ### `[Pause: <N>]` or `[Pause: <N>s]`
 
