@@ -447,7 +447,13 @@
         "frame": { "type": "integer", "minimum": 0, "description": "Scene-relative frame this keyframe applies at." },
         "x": { "type": "number", "description": "Canvas-space X the camera is centered on. Defaults to canvas center." },
         "y": { "type": "number", "description": "Canvas-space Y the camera is centered on. Defaults to canvas center." },
-        "zoom": { "type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "1.0 = no zoom (full canvas visible). >1 zooms in." }
+        "zoom": { "type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "1.0 = no zoom (full canvas visible). >1 zooms in." },
+        "ease": {
+          "type": "string",
+          "enum": ["linear", "inout"],
+          "default": "linear",
+          "description": "How to interpolate from this keyframe to the next. Default linear (same lerp as before). inout is a smoothstep ease-in-out."
+        }
       }
     },
 

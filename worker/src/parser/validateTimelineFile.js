@@ -14,10 +14,14 @@ const path = require("path");
 
 const { resolvePythonBin, PYTHON_DIR } = require("../pythonRuntime");
 
-function validateTimelineFile(timelinePath) {
+function validateTimelineFile(timelinePath, options = {}) {
   return new Promise((resolve) => {
     const pythonBin = resolvePythonBin();
-    const proc = spawn(pythonBin, ["-m", "compositor.validate_cli", path.resolve(timelinePath)], {
+    const args = ["-m", "compositor.validate_cli", path.resolve(timelinePath)];
+    if (options.projectDir) {
+      args.push("--project-dir", path.resolve(options.projectDir));
+    }
+    const proc = spawn(pythonBin, args, {
       cwd: PYTHON_DIR,
     });
 

@@ -15,7 +15,7 @@ const path = require("path");
 const express = require("express");
 
 const { renderProject, previewFrame, parseEstimatedSilent } = require("./render");
-const { parseProjectToFiles, resolveGlobalAssetsDir, ScriptError } = require("./parser");
+const { parseProjectToFiles, parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
 const { resolveAsset } = require("./parser/assetLibrary");
 const { listCharacters, listStaging, summarizeStage } = require("./studioLibrary");
 
@@ -101,6 +101,12 @@ async function parseOrFail(projectDir, skipValidate) {
   return parseProjectToFiles(projectDir, { skipValidate });
 }
 
+function cleanupTempParse(result) {
+  if (result && result.tmpDir) {
+    fs.rmSync(result.tmpDir, { recursive: true, force: true });
+  }
+}
+
 function createApp(options = {}) {
   const projectsDir = path.resolve(options.projectsDir || process.env.ENGINE_PROJECTS_DIR || DEFAULT_PROJECTS_DIR);
   const skipValidate = options.skipValidate === true;
@@ -184,18 +190,22 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     let result;
     try {
-      result = await parseOrFail(projectDir, skipValidate);
+      result = await parseProjectToTemp(projectDir, { skipValidate });
     } catch (err) {
       return res.status(400).json(parseErrorPayload(err));
     }
-    if (result.validation && result.validation.ok === false) {
-      return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
+    try {
+      if (result.validation && result.validation.ok === false) {
+        return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
+      }
+      const staging = listStaging(projectDir, globalAssetsDir);
+      res.json({
+        ...summarizeStage(result.timeline),
+        marksByLocation: staging.marksByLocation,
+      });
+    } finally {
+      cleanupTempParse(result);
     }
-    const staging = listStaging(projectDir, globalAssetsDir);
-    res.json({
-      ...summarizeStage(result.timeline),
-      marksByLocation: staging.marksByLocation,
-    });
   });
 
   app.post("/api/projects/:name/preview-frame", async (req, res) => {
@@ -204,11 +214,12 @@ function createApp(options = {}) {
 
     let result;
     try {
-      result = await parseOrFail(projectDir, skipValidate);
+      result = await parseProjectToTemp(projectDir, { skipValidate });
     } catch (err) {
       return res.status(400).json(parseErrorPayload(err));
     }
     if (result.validation && result.validation.ok === false) {
+      cleanupTempParse(result);
       return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
     }
 
@@ -221,6 +232,7 @@ function createApp(options = {}) {
     if (frame == null) frame = 0;
     frame = Number(frame);
     if (!Number.isFinite(frame) || frame < 0) {
+      cleanupTempParse(result);
       return res.status(400).json({ error: "frame must be a non-negative number (or pass time in seconds)" });
     }
     frame = Math.floor(frame);
@@ -230,7 +242,9 @@ function createApp(options = {}) {
       `engine-preview-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.png`
     );
     try {
-      const preview = await previewFrame(projectDir, frame, tmp, options.pythonBin ? { pythonBin: options.pythonBin } : {});
+      const previewOpts = options.pythonBin ? { pythonBin: options.pythonBin } : {};
+      previewOpts.timeline = result.timelinePath;
+      const preview = await previewFrame(projectDir, frame, tmp, previewOpts);
       const meta = preview.meta || {};
       if (meta.frame != null) res.setHeader("X-Engine-Frame", String(meta.frame));
       if (meta.totalFrames != null) res.setHeader("X-Engine-Total-Frames", String(meta.totalFrames));
@@ -249,6 +263,8 @@ function createApp(options = {}) {
       fs.unlink(tmp, () => {});
       const status = /past the end|must be >= 0/.test(err.message) ? 400 : 500;
       res.status(status).json({ error: err.message });
+    } finally {
+      cleanupTempParse(result);
     }
   });
 

@@ -102,11 +102,10 @@ function renderProject(projectDir, options = {}) {
  * @param {{pythonBin?: string}} [options]
  */
 async function previewFrame(projectDir, frame, outputPath, options = {}) {
-  const result = await spawnCompositor(
-    projectDir,
-    ["--preview-frame", String(frame), "--output", path.resolve(outputPath)],
-    { ...options, echo: false }
-  );
+  const extra = [];
+  if (options.timeline) extra.push("--timeline", path.resolve(options.timeline));
+  extra.push("--preview-frame", String(frame), "--output", path.resolve(outputPath));
+  const result = await spawnCompositor(projectDir, extra, { ...options, echo: false });
   let meta = null;
   const trimmed = result.stdout.trim();
   if (trimmed) {

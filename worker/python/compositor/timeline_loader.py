@@ -585,6 +585,7 @@ def _build_camera(raw: dict | None) -> Camera | None:
             x=k.get("x"),
             y=k.get("y"),
             zoom=float(k.get("zoom", 1.0)),
+            ease=k.get("ease", "linear"),
         )
         for k in raw.get("keyframes", [])
     ]
@@ -664,11 +665,21 @@ def _build_scene(raw: dict, project_dir: Path, fps: int, lines_by_audio: dict[st
     )
 
 
-def load_timeline(timeline_path: Path, schema_path: Path | None = None) -> Timeline:
-    """Load, schema-validate, and resolve a timeline.json into a Timeline."""
+def load_timeline(
+    timeline_path: Path,
+    schema_path: Path | None = None,
+    project_dir: Path | None = None,
+) -> Timeline:
+    """Load, schema-validate, and resolve a timeline.json into a Timeline.
+
+    Asset/audio paths inside the JSON are relative to ``project_dir`` (the
+    folder that contains the project's ``script.txt``), not to wherever the
+    timeline file happens to sit. Preview writes a throwaway copy under
+    ``/tmp`` and must still resolve against the real project.
+    """
 
     timeline_path = Path(timeline_path).resolve()
-    project_dir = timeline_path.parent
+    project_dir = Path(project_dir).resolve() if project_dir is not None else timeline_path.parent
 
     with open(timeline_path, "r", encoding="utf-8") as fh:
         raw = json.load(fh)

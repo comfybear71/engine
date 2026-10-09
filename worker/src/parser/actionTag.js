@@ -2,7 +2,7 @@
 
 /**
  * Parses an `[Action: Name key=value key=value free text note]` tag body
- * (same key=value grammar is reused for [Move]/[Pose]/[Swing]).
+ * (same key=value grammar is reused for [Move]/[Pose]/[Swing]/[Camera]).
  *
  * Grammar: the first word is the character name. Then zero or more
  * `key=value` tokens (no spaces inside a value) are consumed, with bare
@@ -49,6 +49,33 @@ function parseActionTag(body, options = {}) {
 
   const note = words.slice(i).join(" ");
   return { character, kv, note };
+}
+
+/**
+ * Same key=value / bare-flag grammar as parseActionTag, but with no
+ * leading character name -- used by [Camera: zoom=1.3 over=8s].
+ */
+function parseKvTag(body, options = {}) {
+  const extraBare = new Set((options.bareFlags || []).map((flag) => String(flag).toLowerCase()));
+  const words = body.trim().split(/\s+/).filter(Boolean);
+  const kv = {};
+  let i = 0;
+  for (; i < words.length; i++) {
+    const match = words[i].match(KEY_VALUE_RE);
+    if (match) {
+      const [, key, value] = match;
+      kv[key.toLowerCase()] = value;
+      continue;
+    }
+    const word = words[i].toLowerCase();
+    if (extraBare.has(word)) {
+      kv[word] = "true";
+      continue;
+    }
+    break;
+  }
+  const note = words.slice(i).join(" ");
+  return { kv, note };
 }
 
 /** True if a free-text note contains a token that looks like `key=value`. */
@@ -133,6 +160,7 @@ function parseXyPair(value) {
 
 module.exports = {
   parseActionTag,
+  parseKvTag,
   noteHasKeyValue,
   parseCastList,
   parsePauseValue,

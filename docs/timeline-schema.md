@@ -472,12 +472,17 @@ Deliberately minimal, structured so it can grow:
 }
 ```
 
-- `keyframes`: `{ frame, x?, y?, zoom? }`, linearly interpolated between
+- `keyframes`: `{ frame, x?, y?, zoom?, ease? }`, interpolated between
   consecutive keyframes by frame number. `x`/`y` default to canvas center;
   `zoom` defaults to `1.0` (no zoom; the full canvas is visible). `zoom > 1`
-  zooms in.
+  zooms in. `ease` is `"linear"` (default, same lerp as before) or
+  `"inout"` (smoothstep), taken from the departing keyframe -- same as
+  [transform keyframes](#transform-keyframes). The script parser writes
+  these from `[Camera:]` tags (see [docs/script-format.md](script-format.md));
+  omit the whole `camera` object when the scene never moves the camera.
 - `shake`: a simple additive sine-based jitter, active between
-  `start_frame`/`end_frame` (default: whole scene).
+  `start_frame`/`end_frame` (default: whole scene). Not authored by
+  `[Camera:]` tags.
 
 **Known limitation:** the camera is applied as a post-process crop + resize
 on the already-composited, canvas-resolution frame (there's no separate

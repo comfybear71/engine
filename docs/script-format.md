@@ -196,6 +196,48 @@ Writes `{ frame, rotation, ease? }` onto that child's `rotation_keyframes`.
 The new angle becomes the current pose, so a later `[Pose]` or `[Swing]`
 continues from there (and a flipped new layer keeps the posed angle).
 
+### `[Camera: zoom=<n> | pan=x,y | tilt=<dy> | to=x,y zoom=<n> | reset over=<secs>s ease=linear|inout wait=true|false]`
+
+Tweens the scene's **virtual camera** (the compositor's post-process pan/zoom
+on `camera.py`) from wherever it is now. Same `over` / `ease` / `wait` clock
+as `[Move:]`: `wait=true` (default) advances the scene cursor; `wait=false`
+leaves it so following lines/tags run during the move. Does not fork layers.
+
+The parser writes `{ frame, x, y, zoom, ease? }` onto the scene's
+`camera.keyframes`. `x`/`y` are the canvas-space centre of the visible
+window (default: canvas centre, 960,540 on 1920x1080). `zoom` is absolute
+(`1.0` = full canvas). Interpolation is linear unless `ease=inout`.
+
+| Form | Meaning |
+|---|---|
+| `zoom=<n> over=<secs>s` | Push-in/out to that zoom, keeping the current centre. |
+| `pan=<x,y> over=<secs>s` | Move the centre to those canvas coordinates, keeping the current zoom. |
+| `tilt=<dy> over=<secs>s` | Vertical shift: add `dy` pixels to the current centre `y` (positive is down). |
+| `to=<x,y> zoom=<n> over=<secs>s` | Combined pan + zoom in one tween. `zoom=` may be omitted to keep the current zoom; `to=` may be omitted if only `zoom=` is given. |
+| `reset over=<secs>s` | Return to canvas centre, zoom 1.0. Cannot combine with `zoom`/`pan`/`tilt`/`to`. |
+
+`ease=linear` (default) or `ease=inout`. Unknown keys, a missing `over=`,
+`reset` mixed with a target, `to=`+`pan=`, or a non-`x,y` `pan=`/`to=` are
+line-numbered errors.
+
+A scene with no `[Camera:]` tags omits `camera` from the timeline (the
+compositor then leaves the frame alone). After a camera move, the current
+pose *is* the target -- the next `[Camera:]` continues from there.
+
+This is how a project like `worms_eye` should author camera, instead of a
+post-parse `add_camera.py` patching `timeline.json`:
+
+```text
+[Scene: Worms Eye]
+[Location: bedroom]
+[Cast: Hicks]
+
+[Camera: to=960,820 zoom=1.4 over=8s ease=inout]
+Hicks: The floor's closer than it looks.
+[Camera: pan=960,540 over=3s]
+[Camera: reset over=1s]
+```
+
 ### `[Swing: Name part=±deg ... period=<secs>s for=<secs>s wait=true|false]`
 
 Generates a back-and-forth rotation around each part's **current** angle,
@@ -264,6 +306,9 @@ character default > canvas/library default).
   new layer there (not back at the original mark).
 - **`[Pose:]` / `[Swing:]` never fork a layer.** They write
   `rotation_keyframes` on the named rig children.
+- **`[Camera:]` never forks a layer.** It writes scene-level
+  `camera.keyframes` (see [docs/timeline-schema.md#camera](timeline-schema.md#camera)).
+  `wait=true` advances the shared cursor like `[Move:]`.
 - **Slot changes never fork a layer.** `[Action: ... eyes=furious]` or
   `[Action: ... body=walk_side]` becomes a keyframe (drawing or named
   cycle) on the existing layer -- see

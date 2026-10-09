@@ -607,6 +607,99 @@ describe("line-numbered errors for motion / cycles", () => {
   });
 });
 
+describe("[Camera:]", () => {
+  test("writes scene camera keyframes; wait=true advances the clock", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Camera: zoom=1.3 over=2s ease=inout]",
+      "[Camera: pan=800,400 over=1s]",
+      "[Camera: tilt=-40 over=0.5s]",
+      "[Camera: to=1000,500 zoom=1.5 over=1s]",
+      "[Camera: reset over=1s]",
+      "Alice: After the cameras.",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const scene = timeline.scenes[0];
+    const keys = scene.camera.keyframes;
+    assert.equal(keys.length, 6);
+    assert.equal(keys[0].frame, 0);
+    assert.equal(keys[0].x, 960);
+    assert.equal(keys[0].y, 540);
+    assert.equal(keys[0].zoom, 1);
+    assert.equal(keys[0].ease, "inout");
+    assert.equal(keys[1].frame, 48);
+    assert.equal(keys[1].zoom, 1.3);
+    assert.equal(keys[1].x, 960);
+    assert.equal(keys[2].frame, 72);
+    assert.equal(keys[2].x, 800);
+    assert.equal(keys[2].y, 400);
+    assert.equal(keys[2].zoom, 1.3);
+    assert.equal(keys[3].frame, 84);
+    assert.equal(keys[3].y, 360);
+    assert.equal(keys[4].frame, 108);
+    assert.equal(keys[4].x, 1000);
+    assert.equal(keys[4].y, 500);
+    assert.equal(keys[4].zoom, 1.5);
+    assert.equal(keys[5].frame, 132);
+    assert.equal(keys[5].x, 960);
+    assert.equal(keys[5].y, 540);
+    assert.equal(keys[5].zoom, 1);
+    assert.equal(scene.layers[0].dialogue[0].start_frame, 132);
+
+    const waitFalse = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Camera: zoom=1.3 over=1s wait=false]",
+      "Alice: During the zoom.",
+    ].join("\n");
+    const during = await parseScript(fixture.projectDir, fixture.globalAssetsDir, waitFalse, { fps: 24 });
+    assert.equal(during.timeline.scenes[0].layers[0].dialogue[0].start_frame, 0);
+    assert.equal(during.timeline.scenes[0].camera.keyframes[1].frame, 24);
+  });
+
+  test("invalid [Camera:] args are line-numbered errors", async () => {
+    await assert.rejects(
+      () =>
+        parseScript(
+          fixture.projectDir,
+          fixture.globalAssetsDir,
+          ["[Scene: Intro]", "[Location: room_a]", "[Camera: zoom=1.3 over=nope]"].join("\n")
+        ),
+      (err) => err instanceof ScriptError && err.lineNumber === 3 && /Invalid over/.test(err.message)
+    );
+    await assert.rejects(
+      () =>
+        parseScript(
+          fixture.projectDir,
+          fixture.globalAssetsDir,
+          ["[Scene: Intro]", "[Location: room_a]", "[Camera: wobble=1 over=1s]"].join("\n")
+        ),
+      (err) => err instanceof ScriptError && err.lineNumber === 3 && /Unknown \[Camera/.test(err.message)
+    );
+    await assert.rejects(
+      () =>
+        parseScript(
+          fixture.projectDir,
+          fixture.globalAssetsDir,
+          ["[Scene: Intro]", "[Location: room_a]", "[Camera: reset zoom=1.2 over=1s]"].join("\n")
+        ),
+      (err) => err instanceof ScriptError && err.lineNumber === 3 && /cannot combine/.test(err.message)
+    );
+    await assert.rejects(
+      () =>
+        parseScript(
+          fixture.projectDir,
+          fixture.globalAssetsDir,
+          ["[Scene: Intro]", "[Location: room_a]", "[Camera: pan=left over=1s]"].join("\n")
+        ),
+      (err) => err instanceof ScriptError && err.lineNumber === 3 && /Invalid pan/.test(err.message)
+    );
+  });
+});
+
 describe("lines.json manifest shape", () => {
   test("includes scene, line number, character, text, audio/cues paths and status", async () => {
     const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hello there friend."].join("\n");

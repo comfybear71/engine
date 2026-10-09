@@ -140,6 +140,31 @@ describe("studio worker API", () => {
     assert.equal(bad.status, 400);
   });
 
+  test("GET /stage and POST preview-frame do not overwrite timeline.json", async () => {
+    fixture.writeScript(
+      ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi."].join("\n")
+    );
+    const timelinePath = path.join(fixture.projectDir, "timeline.json");
+    const linesPath = path.join(fixture.projectDir, "lines.json");
+    const sentinelTimeline = { sentinel: true, series: "keep-me" };
+    const sentinelLines = { sentinel: "lines" };
+    fs.writeFileSync(timelinePath, JSON.stringify(sentinelTimeline));
+    fs.writeFileSync(linesPath, JSON.stringify(sentinelLines));
+
+    const stage = await fetch(`${ctx.url}/api/projects/project/stage`);
+    assert.equal(stage.status, 200, await stage.text());
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
+    assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
+
+    await fetch(`${ctx.url}/api/projects/project/preview-frame`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ frame: 0 }),
+    });
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
+    assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
+  });
+
   test("path traversal and reserved names are rejected", async () => {
     assert.equal(isSafeProjectName(".."), false);
     assert.equal(isSafeProjectName("_global_assets"), false);
