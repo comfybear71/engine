@@ -48,6 +48,7 @@ function createFixtureLibrary() {
   }
 
   writePng(path.join(globalAssetsDir, "characters", "alice", "parts", "arm.png"));
+  writePng(path.join(globalAssetsDir, "characters", "alice", "parts", "forearm.png"));
   writePng(path.join(globalAssetsDir, "characters", "alice", "right_hand", "fist.png"));
   writePng(path.join(globalAssetsDir, "characters", "alice", "right_hand", "point.png"));
 
@@ -61,7 +62,14 @@ function createFixtureLibrary() {
     voice_id: null,
     slots: {
       mouth: { offset: { x: 0, y: -10 }, drawings_dir: "mouth" },
-      eyes: { offset: { x: 0, y: -12 }, drawings_dir: "eyes", default_drawing: "open" },
+      eyes: {
+        offset: { x: 0, y: -12 },
+        drawings_dir: "eyes",
+        default_drawing: "open",
+        cycles: {
+          blink_loop: { drawings: ["open", "closed"], fps: 6 },
+        },
+      },
     },
     children: [
       {
@@ -73,6 +81,14 @@ function createFixtureLibrary() {
         slots: {
           right_hand: { offset: { x: 0, y: 4 }, drawings_dir: "right_hand", default_drawing: "fist" },
         },
+      },
+      {
+        id: "forearm",
+        asset: "parts/forearm.png",
+        z: 2,
+        parent: "right_arm",
+        offset: { x: 0, y: 4 },
+        pivot: "top-center",
       },
     ],
   });

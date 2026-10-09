@@ -82,13 +82,72 @@ beyond the generated PNGs/WAVs themselves).
 | `z` | This character's default draw order (can be overridden per `[Action: ... z=N]`). |
 | `default_scale` / `default_flip_x` | Used when neither an `[Action: ...]` tag nor the resolved staging mark specifies that field -- see [mark resolution order](script-format.md#mark-resolution-order) in the script format doc. |
 | `voice_id` | Optional identifier for `node src/cli.js voices`. **Never a secret** -- it's a voice *identifier* (e.g. `"EXAVITQu4vr4xnSDxMaL"`), not an API key. `null` means "not assigned yet"; the real API key lives in `.env` as `ELEVENLABS_API_KEY`, never here. See [docs/voices.md](voices.md). |
-| `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). |
-| `children` | Rig parts, in the same shape as `schema/timeline.schema.json`'s `child` definition (`id`, `asset`, `z`, `offset`, `pivot`, `scale`, `flip_x`, `rotation`), plus their own optional `slots` (same shape as above). See [docs/timeline-schema.md#cut-out-rig-nesting](timeline-schema.md#cut-out-rig-nesting). |
+| `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing?, cycles?, visible_when? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). `cycles` is an optional map of cycle name -> `{ drawings: [drawing, ...], fps }` -- `[Action: Name slot=cycle_name]` emits a looping cycle keyframe; a plain drawing name still emits a held drawing. `visible_when` is copied onto the timeline slot as-is (e.g. hide a mouth unless `body` is showing `"front"`). |
+| `children` | Rig parts, in the same shape as `schema/timeline.schema.json`'s `child` definition (`id`, `asset`, `z`, `offset`, `pivot`, `scale`, `flip_x`, `rotation`, `parent`), plus their own optional `slots` (same shape as above). `parent` and `pivot` are passed through to the generated timeline. `parent` names one other child on the same character (one nesting level, e.g. `forearm` under `upper_arm`). See [docs/timeline-schema.md#cut-out-rig-nesting](timeline-schema.md#cut-out-rig-nesting). |
 
 The `mouth` slot is special: it's always driven by the character's dialogue
 (`lipsync.source: "dialogue"`), so it never has a `default_drawing` and
 can't be set via `[Action: ...]` -- see
 [docs/script-format.md](script-format.md).
+
+### Named cycles
+
+A slot may declare reusable loops so a script can say `body=walk_side`
+instead of listing every drawing:
+
+```json
+"slots": {
+  "body": {
+    "offset": { "x": 0, "y": 0 },
+    "drawings_dir": "body",
+    "default_drawing": "stand_side",
+    "cycles": {
+      "walk_side": {
+        "drawings": ["ws01", "ws02", "ws03", "ws04", "ws05", "ws06", "ws07", "ws08"],
+        "fps": 12
+      }
+    }
+  }
+}
+```
+
+Each name in `drawings` must exist as a file in that slot's folder. The
+parser expands the cycle name into a timeline keyframe
+`{ "frame": N, "cycle": ["ws01", ...], "fps": 12 }`. `[Action: Bill body=stand_side]`
+(a plain drawing) still works as a held-until-changed swap.
+
+### The body as a slot
+
+The layer still needs a root `asset` (the schema requires one). To make the
+**body itself** a drawing-swap -- walk cycles, front/back views -- use a
+blank/transparent PNG as the base image and put the real drawings on
+`slots.body`:
+
+```json
+{
+  "id": "bill",
+  "asset": "blank.png",
+  "slots": {
+    "body": {
+      "offset": { "x": 0, "y": 0 },
+      "drawings_dir": "body",
+      "default_drawing": "front",
+      "cycles": { "walk_side": { "drawings": ["ws01", "ws02"], "fps": 12 } }
+    },
+    "mouth": {
+      "offset": { "x": 0, "y": -200 },
+      "drawings_dir": "mouth",
+      "visible_when": { "body": ["front"] }
+    }
+  }
+}
+```
+
+The parser already emits every `character.json` slot onto the layer
+(including `body`); it only needs the blank file to exist. `visible_when`
+is passed through so a mouth can hide while the body shows a back view.
+If the base asset file is missing, the parser raises a line-numbered
+error that points at this pattern.
 
 ## Staging
 

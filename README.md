@@ -66,9 +66,9 @@ engine/
 │   │   ├── voices/              # ElevenLabs TTS + credit-guard sidecars + Rhubarb
 │   │   └── parser/              # script.txt -> timeline.json
 │   │       ├── tokenizer.js     # lexes script.txt into kind-tagged lines
-│   │       ├── actionTag.js     # parses [Action: ...] key=value + Cast/Pause bodies
+│   │       ├── actionTag.js     # parses [Action/Move/Pose/Swing: ...] key=value + Cast/Pause bodies
 │   │       ├── assetLibrary.js  # resolves characters/slots/drawings/staging, with overrides
-│   │       ├── scriptParser.js  # the stateful walk: timing, marks, layers, slots
+│   │       ├── scriptParser.js  # the stateful walk: timing, marks, layers, slots, Move/Pose/Swing
 │   │       ├── ffprobeDuration.js
 │   │       ├── validateTimelineFile.js  # spawns the Python validator
 │   │       └── index.js         # parseProject / parseProjectToFiles

@@ -12,20 +12,34 @@
  * (real, via ffprobe, if its audio file already exists; otherwise estimated
  * from word count). [Pause: ...] advances the cursor without emitting a
  * dialogue clip. [Action: ...] takes effect *at* the current cursor
- * position (it doesn't advance it).
+ * position (it doesn't advance it). [Move:]/[Pose:]/[Swing:] write
+ * keyframes on the current layer; wait=true (default) advances the cursor
+ * like [Pause], wait=false leaves it so following lines run during the motion.
  *
- * A character gets exactly one Layer per *position* they hold in a scene:
- * repositioning (a later [Action: ... at=...]/scale=/flip=/z= that actually
- * changes their resolved transform) closes the current layer "segment" and
- * opens a new one with the same character_id, back-to-back in time -- never
- * a duplicate layer for a dialogue line, per the brief.
+ * A character gets exactly one Layer per *cut* they hold in a scene:
+ * an [Action: ... at=/flip=/scale=/z=] that actually changes their resolved
+ * transform closes the current layer "segment" and opens a new one with the
+ * same character_id, back-to-back in time. [Move:] does *not* fork a layer --
+ * it adds transform_keyframes on the current one. Flip still forks (flip_x
+ * is not keyframed); the new layer starts at the post-Move position.
  */
 
 const fs = require("fs");
 const path = require("path");
 
 const { tokenize } = require("./tokenizer");
-const { parseActionTag, parseCastList, parsePauseValue } = require("./actionTag");
+const {
+  parseActionTag,
+  noteHasKeyValue,
+  parseCastList,
+  parsePauseValue,
+  parseSecondsSpec,
+  parseEaseValue,
+  parseWaitValue,
+  parseNumberValue,
+  parseXyPair,
+  KEY_VALUE_RE,
+} = require("./actionTag");
 const { ScriptError } = require("./errors");
 const assetLibrary = require("./assetLibrary");
 const { probeDurationSeconds } = require("./ffprobeDuration");
@@ -53,6 +67,52 @@ function estimateDurationSeconds(text) {
 
 function framesFromSeconds(seconds, fps) {
   return Math.max(0, Math.round(seconds * fps));
+}
+
+function slotStateKey(owner, slotName) {
+  return owner.ownerType === "child" ? `${owner.childId}:${slotName}` : slotName;
+}
+
+/** Timeline keyframe at local frame 0 that continues `active` at `scene`'s cursor. */
+function keyframeFromActive(active, scene) {
+  if (active.cycle && active.cycle.length > 0) {
+    const elapsed = Math.max(0, scene.cursorFrames - (active.startedAtSceneFrame || 0));
+    const index = Math.floor((elapsed / scene.fps) * active.fps) % active.cycle.length;
+    const rotated = active.cycle.slice(index).concat(active.cycle.slice(0, index));
+    return { frame: 0, cycle: rotated, fps: active.fps };
+  }
+  return { frame: 0, drawing: active.drawing };
+}
+
+/**
+ * Back-and-forth rotation samples around `center`, amplitude `amplitude`
+ * (sign = first-swing direction). Quarter-period keys: center, +amp,
+ * center, -amp, ... and a final key at `durationFrames` back at center.
+ * Frames are offset by `startRel`. Ease is inout on every departing key.
+ */
+function swingRotationKeyframes(center, amplitude, periodFrames, durationFrames, startRel) {
+  const quarter = periodFrames / 4;
+  const sequence = [center, center + amplitude, center, center - amplitude];
+  const keys = [];
+  let step = 0;
+  while (true) {
+    const frame = Math.round(step * quarter);
+    if (frame > durationFrames) break;
+    if (frame === durationFrames) {
+      keys.push({ frame: startRel + frame, rotation: center });
+      break;
+    }
+    keys.push({ frame: startRel + frame, rotation: sequence[step % 4], ease: "inout" });
+    step += 1;
+  }
+  const lastFrame = startRel + durationFrames;
+  if (keys.length === 0 || keys[keys.length - 1].frame !== lastFrame) {
+    keys.push({ frame: lastFrame, rotation: center });
+  } else {
+    keys[keys.length - 1].rotation = center;
+    delete keys[keys.length - 1].ease;
+  }
+  return keys;
 }
 
 /** Loads + caches character.json by id, building an alias -> id index as it goes. */
@@ -95,6 +155,7 @@ class SceneContext {
     this.castOrder = []; // character ids, in [Cast: ...]/first-appearance order
     this.characters = new Map(); // character_id -> CharacterSceneState
     this.cursorFrames = 0;
+    this.horizonFrames = 0; // latest animation end, including wait=false motions
     this.lineCounter = 0; // for audio/<scene>/<nnn>_<char>.wav naming
   }
 }
@@ -105,6 +166,10 @@ class CharacterSceneState {
     this.config = config;
     this.segments = []; // finished segments (plain JSON layer objects)
     this.current = null; // the open segment draft, or null
+    this.childRotations = new Map(); // childId -> current degrees (survives layer forks)
+    // Last Action-set drawing/cycle per slot, so a forked layer can continue
+    // it instead of snapping back to default_drawing.
+    this.activeSlots = new Map(); // slotStateKey -> { ownerType, childId?, slotName, drawing?, cycle?, fps?, startedAtSceneFrame? }
   }
 }
 
@@ -116,8 +181,11 @@ function newSegmentDraft(layerId, startFrame, transform, z, markName) {
     z,
     markName,
     dialogue: [],
-    slotKeyframes: new Map(), // slotName -> [{frame, drawing}]
-    childSlotKeyframes: new Map(), // childId -> Map(slotName -> [{frame, drawing}])
+    slotKeyframes: new Map(), // slotName -> [{frame, drawing|cycle}]
+    childSlotKeyframes: new Map(), // childId -> Map(slotName -> [{frame, drawing|cycle}])
+    transformKeyframes: [], // [{frame, x?, y?, scale?, rotation?, ease?}]
+    childRotationKeyframes: new Map(), // childId -> [{frame, rotation, ease?}]
+    openingTransform: { ...transform },
   };
 }
 
@@ -179,6 +247,15 @@ class ScriptParser {
         return;
       case "action":
         this._handleAction(token);
+        return;
+      case "move":
+        this._handleMove(token);
+        return;
+      case "pose":
+        this._handlePose(token);
+        return;
+      case "swing":
+        this._handleSwing(token);
         return;
       case "pause":
         this._handlePause(token);
@@ -323,17 +400,35 @@ class ScriptParser {
     return { transform: { x, y, scale, flip_x: flipX, anchor: "bottom-center" }, z };
   }
 
-  _openSegment(scene, state, { mark, markName, actionKv }, lineNumber) {
-    const { transform, z } = this._resolveTransformAndZ(state, mark, actionKv || {});
+  _openSegment(scene, state, { mark, markName, actionKv, transform, z }, lineNumber) {
+    let resolvedTransform = transform;
+    let resolvedZ = z;
+    if (resolvedTransform === undefined) {
+      const resolved = this._resolveTransformAndZ(state, mark, actionKv || {});
+      resolvedTransform = resolved.transform;
+      resolvedZ = resolved.z;
+    }
     const segmentIndex = state.segments.length + 1;
     const layerId = segmentIndex === 1 ? state.characterId : `${state.characterId}_${segmentIndex}`;
-    state.current = newSegmentDraft(layerId, scene.cursorFrames, transform, z, markName);
+    state.current = newSegmentDraft(layerId, scene.cursorFrames, resolvedTransform, resolvedZ, markName);
     state.current._lineNumber = lineNumber;
+  }
+
+  _noteHorizon(scene, absFrame) {
+    if (absFrame > scene.horizonFrames) scene.horizonFrames = absFrame;
+  }
+
+  _applyWait(scene, durationFrames, wait) {
+    this._noteHorizon(scene, scene.cursorFrames + durationFrames);
+    if (wait) scene.cursorFrames += durationFrames;
   }
 
   _closeCurrentSegment(state, endFrame) {
     if (!state.current) return;
     state.current.endFrame = endFrame;
+    // Snapshot pose at close so a later [Pose] on the next layer cannot
+    // rewrite this segment's static child rotations.
+    state.current.closingChildRotations = new Map(state.childRotations);
     state.segments.push(state.current);
     state.current = null;
   }
@@ -350,30 +445,87 @@ class ScriptParser {
       scene.castOrder.push(characterId);
     }
     const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
-    void note; // free-text note: intentionally not an error, not otherwise used yet
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "Action", note);
 
     const positionKeys = ["at", "scale", "flip", "z"];
     const hasPositionChange = positionKeys.some((k) => kv[k] !== undefined);
 
     if (hasPositionChange) {
-      const markName = kv.at !== undefined ? kv.at : this._autoAssignMark(scene, characterId);
-      const mark = this._resolveMark(scene, markName, token.lineNumber);
-      const { transform: newTransform, z: newZ } = this._resolveTransformAndZ(state, mark, kv);
       const current = state.current;
-      const noTimeHasPassedSinceSegmentOpened = current && current.startFrame === scene.cursorFrames;
+      let newTransform;
+      let newZ;
+      let markName;
 
-      if (current && noTimeHasPassedSinceSegmentOpened) {
-        // This is still "the same moment" the current segment opened at (e.g.
-        // [Cast: ...] auto-assigned a mark and this [Action: ... at=...] is
-        // immediately correcting it before any dialogue/pause has happened) --
-        // update it in place rather than forking a pointless extra segment.
-        current.transform = newTransform;
-        current.z = newZ;
-        current.markName = markName;
+      if (kv.at !== undefined) {
+        markName = kv.at;
+        const mark = this._resolveMark(scene, markName, token.lineNumber);
+        ({ transform: newTransform, z: newZ } = this._resolveTransformAndZ(state, mark, kv));
+      } else if (current) {
+        // flip / scale / z only: stay at the current (possibly moved-to) position
+        // rather than re-resolving the original auto-assigned mark.
+        markName = current.markName;
+        newTransform = { ...current.transform };
+        if (kv.scale !== undefined) {
+          const scale = parseNumberValue(kv.scale, token.lineNumber, "scale");
+          if (scale <= 0) {
+            throw new ScriptError(token.lineNumber, `Invalid scale "${kv.scale}" -- must be greater than 0.`);
+          }
+          newTransform.scale = scale;
+        }
+        if (kv.flip !== undefined) newTransform.flip_x = kv.flip === "true" || kv.flip === "1";
+        if (kv.z !== undefined) {
+          const z = parseInt(kv.z, 10);
+          if (!Number.isFinite(z)) {
+            throw new ScriptError(token.lineNumber, `Invalid z "${kv.z}" -- expected an integer.`);
+          }
+          newZ = z;
+        } else {
+          newZ = current.z;
+        }
+      } else {
+        markName = this._autoAssignMark(scene, characterId);
+        const mark = this._resolveMark(scene, markName, token.lineNumber);
+        ({ transform: newTransform, z: newZ } = this._resolveTransformAndZ(state, mark, kv));
+      }
+
+      const sameFrameAsSegmentStart = current && current.startFrame === scene.cursorFrames;
+      const hasMotionKeyframes = current && current.transformKeyframes && current.transformKeyframes.length > 0;
+
+      if (current && sameFrameAsSegmentStart) {
+        // Same moment the current segment opened (Cast auto-mark then
+        // [Action: at=...], or a wait=false [Move] then [Action: flip]).
+        // Never fork a zero-length layer. If a Move already wrote keyframes,
+        // keep them and only apply flip/scale/z -- an explicit at= still
+        // replaces the pose (instant cut).
+        if (hasMotionKeyframes && kv.at === undefined) {
+          current.transform = { ...current.transform, flip_x: newTransform.flip_x };
+          current.openingTransform = { ...current.openingTransform, flip_x: newTransform.flip_x };
+          if (kv.scale !== undefined) {
+            current.transform.scale = newTransform.scale;
+            current.openingTransform.scale = newTransform.scale;
+          }
+          current.z = newZ;
+        } else {
+          current.transform = newTransform;
+          current.openingTransform = { ...newTransform };
+          current.z = newZ;
+          current.markName = markName;
+          if (kv.at !== undefined) current.transformKeyframes = [];
+        }
         current._lineNumber = token.lineNumber;
       } else if (!current || transformsDiffer(current.transform, newTransform) || current.z !== newZ) {
+        const hadOpenSegment = !!current;
         this._closeCurrentSegment(state, scene.cursorFrames);
-        this._openSegment(scene, state, { mark, markName, actionKv: kv }, token.lineNumber);
+        this._openSegment(
+          scene,
+          state,
+          { markName, actionKv: kv, transform: newTransform, z: newZ },
+          token.lineNumber
+        );
+        if (hadOpenSegment) {
+          const skipSlots = new Set(Object.keys(kv).filter((k) => !positionKeys.includes(k)));
+          this._carryActiveSlots(state, scene, skipSlots);
+        }
       }
     }
 
@@ -416,17 +568,60 @@ class ScriptParser {
 
     const drawingsDir = `characters/${characterId}/${owner.slotConfig.drawings_dir}`;
     const drawings = assetLibrary.scanDrawingsDir(this.projectDir, this.globalAssetsDir, drawingsDir);
-    if (!drawings.has(drawing)) {
+    const cycles = (owner.slotConfig && owner.slotConfig.cycles) || {};
+    const namedCycle = cycles[drawing];
+    const displayName = config.display_name || characterId;
+
+    let keyframe;
+    const segment = state.current;
+    const relativeFrame = scene.cursorFrames - segment.startFrame;
+
+    if (namedCycle) {
+      const cycleDrawings = namedCycle.drawings || [];
+      if (cycleDrawings.length === 0) {
+        throw new ScriptError(lineNumber, `${displayName} cycle "${drawing}" on ${slotName} has no drawings.`);
+      }
+      const missing = cycleDrawings.filter((d) => !drawings.has(d));
+      if (missing.length > 0) {
+        throw new ScriptError(
+          lineNumber,
+          `${displayName} cycle "${drawing}" on ${slotName} references missing drawing(s) ${missing.join(", ")}. Available: ${[...drawings.keys()].join(", ") || "(none)"}`
+        );
+      }
+      const cycleFps = namedCycle.fps;
+      if (!Number.isFinite(cycleFps) || cycleFps <= 0) {
+        throw new ScriptError(lineNumber, `${displayName} cycle "${drawing}" on ${slotName} has an invalid fps.`);
+      }
+      keyframe = { frame: relativeFrame, cycle: [...cycleDrawings], fps: cycleFps };
+    } else if (drawings.has(drawing)) {
+      keyframe = { frame: relativeFrame, drawing };
+    } else {
+      const cycleNames = Object.keys(cycles);
+      if (cycleNames.length > 0) {
+        throw new ScriptError(
+          lineNumber,
+          `${displayName} has no ${slotName} drawing or cycle "${drawing}". Available drawings: ${[...drawings.keys()].join(", ") || "(none)"}. Available cycles: ${cycleNames.join(", ")}`
+        );
+      }
       throw new ScriptError(
         lineNumber,
-        `${config.display_name || characterId} has no ${slotName} drawing "${drawing}". Available: ${[...drawings.keys()].join(", ") || "(none)"}`
+        `${displayName} has no ${slotName} drawing "${drawing}". Available: ${[...drawings.keys()].join(", ") || "(none)"}`
       );
     }
 
-    const segment = state.current;
-    const relativeFrame = scene.cursorFrames - segment.startFrame;
-    const keyframe = { frame: relativeFrame, drawing };
+    this._writeSlotKeyframe(segment, owner, slotName, keyframe);
+    state.activeSlots.set(slotStateKey(owner, slotName), {
+      ownerType: owner.ownerType,
+      childId: owner.childId,
+      slotName,
+      drawing: keyframe.drawing,
+      cycle: keyframe.cycle ? [...keyframe.cycle] : undefined,
+      fps: keyframe.fps,
+      startedAtSceneFrame: keyframe.cycle ? scene.cursorFrames : undefined,
+    });
+  }
 
+  _writeSlotKeyframe(segment, owner, slotName, keyframe) {
     let bucket;
     if (owner.ownerType === "layer") {
       bucket = segment.slotKeyframes.get(slotName) || [];
@@ -440,10 +635,248 @@ class ScriptParser {
       bucket = childMap.get(slotName) || [];
       childMap.set(slotName, bucket);
     }
-    // Replace any keyframe already at this exact frame (re-setting the same slot twice at once) instead of duplicating it.
-    const existingIdx = bucket.findIndex((k) => k.frame === relativeFrame);
+    const existingIdx = bucket.findIndex((k) => k.frame === keyframe.frame);
     if (existingIdx !== -1) bucket[existingIdx] = keyframe;
     else bucket.push(keyframe);
+  }
+
+  /**
+   * Seed a newly opened layer with the character's last active drawing/cycle
+   * for every slot the forking tag did not itself set. Cycles are rotated so
+   * the drawing that was showing at the cut is first (phase-continuous at
+   * the drawing boundary; intra-drawing leftover cannot be encoded because
+   * keyframe frames cannot be negative).
+   */
+  _carryActiveSlots(state, scene, skipSlotNames) {
+    for (const active of state.activeSlots.values()) {
+      if (skipSlotNames.has(active.slotName)) continue;
+      const owner = { ownerType: active.ownerType, childId: active.childId };
+      this._writeSlotKeyframe(state.current, owner, active.slotName, keyframeFromActive(active, scene));
+    }
+  }
+
+  _warnNoteLooksLikeAssignments(lineNumber, tagName, note) {
+    if (!noteHasKeyValue(note)) return;
+    const extras = note.split(/\s+/).filter((word) => KEY_VALUE_RE.test(word));
+    this.warnings.push(
+      `Line ${lineNumber}: [${tagName}: ...] free-text note contains key=value (${extras.join(", ")}) which was ignored. Bare flags like "flip" can sit anywhere among key=value tokens; only text after the first non-flag word is a note.`
+    );
+  }
+
+  _findChild(config, partName) {
+    const children = (config && config.children) || [];
+    return (
+      children.find((c) => c.id === partName) ||
+      children.find((c) => c.id.toLowerCase() === String(partName).toLowerCase()) ||
+      null
+    );
+  }
+
+  _availableParts(config) {
+    return ((config && config.children) || []).map((c) => c.id);
+  }
+
+  _getChildRotation(state, childId) {
+    if (state.childRotations.has(childId)) return state.childRotations.get(childId);
+    const child = this._findChild(state.config, childId);
+    const rotation = child && child.rotation !== undefined ? child.rotation : 0;
+    state.childRotations.set(childId, rotation);
+    return rotation;
+  }
+
+  _addTransformKeyframe(segment, keyframe) {
+    const existing = segment.transformKeyframes.find((k) => k.frame === keyframe.frame);
+    if (existing) {
+      Object.assign(existing, keyframe);
+      return;
+    }
+    segment.transformKeyframes.push(keyframe);
+  }
+
+  _addRotationKeyframe(segment, childId, keyframe) {
+    let list = segment.childRotationKeyframes.get(childId);
+    if (!list) {
+      list = [];
+      segment.childRotationKeyframes.set(childId, list);
+    }
+    const existing = list.find((k) => k.frame === keyframe.frame);
+    if (existing) {
+      Object.assign(existing, keyframe);
+      return;
+    }
+    list.push(keyframe);
+  }
+
+  _requireCharacterForMotion(token, tagName) {
+    const scene = this._requireScene(token.lineNumber, tagName);
+    const { character: scriptName, kv, note } = parseActionTag(token.body);
+    this._warnNoteLooksLikeAssignments(token.lineNumber, tagName, note);
+    if (!scriptName) throw new ScriptError(token.lineNumber, `[${tagName}: ...] needs a character name.`);
+    const characterId = this._resolveCharacterIdOrThrow(scriptName, token.lineNumber);
+    if (!scene.castOrder.includes(characterId)) {
+      scene.castOrder.push(characterId);
+    }
+    const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
+    return { scene, state, characterId, kv };
+  }
+
+  _collectPartAngles(kv, reservedKeys, state, lineNumber, tagName) {
+    const parts = [];
+    for (const [key, value] of Object.entries(kv)) {
+      if (reservedKeys.has(key)) continue;
+      const child = this._findChild(state.config, key);
+      if (!child) {
+        throw new ScriptError(
+          lineNumber,
+          `Unknown part "${key}" on ${state.config.display_name || state.characterId}. Available: ${this._availableParts(state.config).join(", ") || "(none)"}`
+        );
+      }
+      const degrees = parseNumberValue(value, lineNumber, `${tagName} ${key}`);
+      parts.push({ childId: child.id, degrees });
+    }
+    if (parts.length === 0) {
+      throw new ScriptError(
+        lineNumber,
+        `[${tagName}: ...] needs at least one part angle (e.g. right_arm=30). Available: ${this._availableParts(state.config).join(", ") || "(none)"}`
+      );
+    }
+    return parts;
+  }
+
+  // ---- [Move: ...] -------------------------------------------------------
+
+  _handleMove(token) {
+    const { scene, state, kv } = this._requireCharacterForMotion(token, "Move");
+    if (kv.to === undefined) {
+      throw new ScriptError(token.lineNumber, `[Move: ...] needs to=<mark> or to=<x,y>.`);
+    }
+
+    const overSeconds = parseSecondsSpec(kv.over, token.lineNumber, "over");
+    const ease = parseEaseValue(kv.ease, token.lineNumber);
+    const wait = parseWaitValue(kv.wait, token.lineNumber);
+    const durationFrames = framesFromSeconds(overSeconds, this.fps);
+    if (durationFrames <= 0) {
+      throw new ScriptError(token.lineNumber, `Invalid over "${kv.over}" -- duration rounds to 0 frames at ${this.fps} fps.`);
+    }
+
+    const segment = state.current;
+    const from = segment.transform;
+    let toX;
+    let toY;
+    let toScale;
+    let markName = segment.markName;
+
+    const xy = parseXyPair(kv.to);
+    if (xy) {
+      toX = xy.x;
+      toY = xy.y;
+      if (kv.scale !== undefined) {
+        toScale = parseNumberValue(kv.scale, token.lineNumber, "scale");
+        if (toScale <= 0) {
+          throw new ScriptError(token.lineNumber, `Invalid scale "${kv.scale}" -- must be greater than 0.`);
+        }
+      } else {
+        toScale = from.scale;
+      }
+      markName = null; // no longer standing on a named mark
+    } else {
+      const mark = this._resolveMark(scene, kv.to, token.lineNumber);
+      toX = mark.x;
+      toY = mark.y;
+      if (kv.scale !== undefined) {
+        toScale = parseNumberValue(kv.scale, token.lineNumber, "scale");
+        if (toScale <= 0) {
+          throw new ScriptError(token.lineNumber, `Invalid scale "${kv.scale}" -- must be greater than 0.`);
+        }
+      } else if (mark.scale !== undefined) {
+        toScale = mark.scale;
+      } else {
+        toScale = from.scale;
+      }
+      markName = kv.to;
+    }
+
+    const startRel = scene.cursorFrames - segment.startFrame;
+    const endRel = startRel + durationFrames;
+
+    this._addTransformKeyframe(segment, {
+      frame: startRel,
+      x: from.x,
+      y: from.y,
+      scale: from.scale,
+      ease,
+    });
+    this._addTransformKeyframe(segment, {
+      frame: endRel,
+      x: toX,
+      y: toY,
+      scale: toScale,
+    });
+
+    segment.transform = { ...from, x: toX, y: toY, scale: toScale };
+    segment.markName = markName;
+    this._applyWait(scene, durationFrames, wait);
+  }
+
+  // ---- [Pose: ...] -------------------------------------------------------
+
+  _handlePose(token) {
+    const { scene, state, kv } = this._requireCharacterForMotion(token, "Pose");
+    const reserved = new Set(["over", "ease", "wait"]);
+    const parts = this._collectPartAngles(kv, reserved, state, token.lineNumber, "Pose");
+    const overSeconds = parseSecondsSpec(kv.over, token.lineNumber, "over");
+    const ease = parseEaseValue(kv.ease, token.lineNumber);
+    const wait = parseWaitValue(kv.wait, token.lineNumber);
+    const durationFrames = framesFromSeconds(overSeconds, this.fps);
+    if (durationFrames <= 0) {
+      throw new ScriptError(token.lineNumber, `Invalid over "${kv.over}" -- duration rounds to 0 frames at ${this.fps} fps.`);
+    }
+
+    const segment = state.current;
+    const startRel = scene.cursorFrames - segment.startFrame;
+    const endRel = startRel + durationFrames;
+
+    for (const part of parts) {
+      const from = this._getChildRotation(state, part.childId);
+      this._addRotationKeyframe(segment, part.childId, { frame: startRel, rotation: from, ease });
+      this._addRotationKeyframe(segment, part.childId, { frame: endRel, rotation: part.degrees });
+      state.childRotations.set(part.childId, part.degrees);
+    }
+
+    this._applyWait(scene, durationFrames, wait);
+  }
+
+  // ---- [Swing: ...] ------------------------------------------------------
+
+  _handleSwing(token) {
+    const { scene, state, kv } = this._requireCharacterForMotion(token, "Swing");
+    const reserved = new Set(["period", "for", "wait", "ease"]);
+    const parts = this._collectPartAngles(kv, reserved, state, token.lineNumber, "Swing");
+    const periodSeconds = parseSecondsSpec(kv.period, token.lineNumber, "period");
+    const forSeconds = parseSecondsSpec(kv.for, token.lineNumber, "for");
+    const wait = parseWaitValue(kv.wait, token.lineNumber);
+    if (kv.ease !== undefined) parseEaseValue(kv.ease, token.lineNumber); // validate if given; swings always use inout
+
+    const periodFrames = framesFromSeconds(periodSeconds, this.fps);
+    const durationFrames = framesFromSeconds(forSeconds, this.fps);
+    if (periodFrames <= 0) {
+      throw new ScriptError(token.lineNumber, `Invalid period "${kv.period}" -- duration rounds to 0 frames at ${this.fps} fps.`);
+    }
+    if (durationFrames <= 0) {
+      throw new ScriptError(token.lineNumber, `Invalid for "${kv.for}" -- duration rounds to 0 frames at ${this.fps} fps.`);
+    }
+
+    const segment = state.current;
+    const startRel = scene.cursorFrames - segment.startFrame;
+
+    for (const part of parts) {
+      const current = this._getChildRotation(state, part.childId);
+      const keys = swingRotationKeyframes(current, part.degrees, periodFrames, durationFrames, startRel);
+      for (const key of keys) this._addRotationKeyframe(segment, part.childId, key);
+      state.childRotations.set(part.childId, current); // ends back at the start angle
+    }
+
+    this._applyWait(scene, durationFrames, wait);
   }
 
   // ---- [Pause: ...] ----------------------------------------------------
@@ -567,10 +1000,12 @@ class ScriptParser {
       }
     }
 
+    const endFrames = Math.max(scene.cursorFrames, scene.horizonFrames);
+    const extraHold = Math.max(0, endFrames - scene.cursorFrames);
     const duration =
       anyDialogue
-        ? { from_dialogue: true, padding_frames: DEFAULT_SCENE_PADDING_FRAMES }
-        : { frames: Math.max(scene.cursorFrames, this.fps) }; // at least 1s for a silent/establishing scene
+        ? { from_dialogue: true, padding_frames: DEFAULT_SCENE_PADDING_FRAMES + extraHold }
+        : { frames: Math.max(endFrames, this.fps) }; // at least 1s for a silent/establishing scene
 
     this.scenes.push({
       id: scene.sceneId,
@@ -584,15 +1019,26 @@ class ScriptParser {
 
   _buildLayerJson(state, segment) {
     const config = state.config || {};
-    const bodyAsset = assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, `characters/${state.characterId}/${config.asset || "body.png"}`);
+    const assetRel = `characters/${state.characterId}/${config.asset || "body.png"}`;
+    const bodyAsset = assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, assetRel);
+    if (!bodyAsset) {
+      const name = config.display_name || state.characterId;
+      throw new ScriptError(
+        segment._lineNumber,
+        `${name} is missing base asset "${config.asset || "body.png"}". For a body-as-slot character, use a blank/transparent PNG as the base asset and put the drawings on slots.body.`
+      );
+    }
 
     const layer = {
       id: segment.layerId,
       character_id: state.characterId,
       asset: bodyAsset.timelinePath,
       z: segment.z,
-      transform: segment.transform,
+      transform: segment.openingTransform || segment.transform,
     };
+    if (segment.transformKeyframes && segment.transformKeyframes.length > 0) {
+      layer.transform_keyframes = [...segment.transformKeyframes].sort((a, b) => a.frame - b.frame);
+    }
     if (segment.startFrame !== 0 || segment.endFrame !== undefined) {
       layer.timing = { start_frame: segment.startFrame };
       if (segment.endFrame !== undefined) layer.timing.end_frame = segment.endFrame;
@@ -610,7 +1056,16 @@ class ScriptParser {
     if (Object.keys(slots).length > 0) layer.slots = slots;
 
     if ((config.children || []).length > 0) {
-      layer.children = config.children.map((child) => this._buildChildJson(state.characterId, child, segment.childSlotKeyframes.get(child.id)));
+      const rotMap = segment.closingChildRotations || state.childRotations;
+      layer.children = config.children.map((child) =>
+        this._buildChildJson(
+          state.characterId,
+          child,
+          segment.childSlotKeyframes.get(child.id),
+          segment.childRotationKeyframes.get(child.id),
+          rotMap.has(child.id) ? rotMap.get(child.id) : child.rotation
+        )
+      );
     }
 
     return layer;
@@ -619,14 +1074,18 @@ class ScriptParser {
   _buildSlotJson(characterId, slotName, slotConfig, keyframes) {
     if (slotName === "mouth") {
       const images = this._scanSlotImages(characterId, slotConfig);
-      return { offset: slotConfig.offset || { x: 0, y: 0 }, images, lipsync: { source: "dialogue" } };
+      const mouth = { offset: slotConfig.offset || { x: 0, y: 0 }, images, lipsync: { source: "dialogue" } };
+      if (slotConfig.visible_when) mouth.visible_when = slotConfig.visible_when;
+      return mouth;
     }
     const sorted = [...keyframes].sort((a, b) => a.frame - b.frame);
     if (sorted.length === 0 || sorted[0].frame !== 0) {
       sorted.unshift({ frame: 0, drawing: slotConfig.default_drawing });
     }
     const images = this._scanSlotImages(characterId, slotConfig);
-    return { offset: slotConfig.offset || { x: 0, y: 0 }, images, keyframes: sorted };
+    const slot = { offset: slotConfig.offset || { x: 0, y: 0 }, images, keyframes: sorted };
+    if (slotConfig.visible_when) slot.visible_when = slotConfig.visible_when;
+    return slot;
   }
 
   _scanSlotImages(characterId, slotConfig) {
@@ -637,18 +1096,26 @@ class ScriptParser {
     return images;
   }
 
-  _buildChildJson(characterId, childConfig, slotKeyframesMap) {
+  _buildChildJson(characterId, childConfig, slotKeyframesMap, rotationKeyframes, liveRotation) {
     const asset = assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, `characters/${characterId}/${childConfig.asset}`);
+    if (!asset) {
+      throw new ScriptError(null, `Character "${characterId}" child "${childConfig.id}" is missing asset "${childConfig.asset}".`);
+    }
     const child = {
       id: childConfig.id,
       asset: asset.timelinePath,
       z: childConfig.z,
       offset: childConfig.offset || { x: 0, y: 0 },
     };
+    if (childConfig.parent) child.parent = childConfig.parent;
     if (childConfig.pivot) child.pivot = childConfig.pivot;
     if (childConfig.scale !== undefined) child.scale = childConfig.scale;
     if (childConfig.flip_x !== undefined) child.flip_x = childConfig.flip_x;
-    if (childConfig.rotation !== undefined) child.rotation = childConfig.rotation;
+    const rotation = liveRotation !== undefined ? liveRotation : childConfig.rotation;
+    if (rotation !== undefined) child.rotation = rotation;
+    if (rotationKeyframes && rotationKeyframes.length > 0) {
+      child.rotation_keyframes = [...rotationKeyframes].sort((a, b) => a.frame - b.frame);
+    }
 
     if (childConfig.slots) {
       const slots = {};
@@ -667,4 +1134,11 @@ async function parseScript(projectDir, globalAssetsDir, scriptText, options = {}
   return parser.parse(scriptText);
 }
 
-module.exports = { parseScript, ScriptParser, slugify, estimateDurationSeconds, framesFromSeconds };
+module.exports = {
+  parseScript,
+  ScriptParser,
+  slugify,
+  estimateDurationSeconds,
+  framesFromSeconds,
+  swingRotationKeyframes,
+};

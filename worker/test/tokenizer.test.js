@@ -14,13 +14,16 @@ describe("tokenizer", () => {
         "[Location: corridor]",
         "[Cast: Alice, Bob]",
         "[Action: Alice at=left]",
+        "[Move: Alice to=right over=1s]",
+        "[Pose: Alice right_arm=20 over=0.5s]",
+        "[Swing: Alice right_arm=15 period=0.4s for=1s]",
         "[Pause: 12]",
         "Alice: Hello there.",
       ].join("\n")
     );
     assert.deepEqual(
       tokens.map((t) => t.kind),
-      ["scene", "location", "cast", "action", "pause", "dialogue"]
+      ["scene", "location", "cast", "action", "move", "pose", "swing", "pause", "dialogue"]
     );
   });
 
