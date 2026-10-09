@@ -2,7 +2,8 @@
 
 Estimates the screen colour per sheet, keys pixels that are greener than
 red/blue (relative to that screen), despills edge fringe, drops tiny specks
-and an optional Grok-style corner watermark, then trims and splits. Invoked
+and an optional Grok-style corner watermark, then splits. Each grid cell
+keeps the main figure (plus nearby detached parts) and is trimmed. Invoked
 by the Node worker as ``python -m compositor.cutout``.
 """
 
@@ -27,6 +28,8 @@ ALPHA_FLOOR = 16
 TRIM_MARGIN = 2
 MIN_SPECK_AREA = 32
 MIN_SCREEN_EXCESS = 24.0
+# Keep detached sunglasses/hat parts whose bbox sits this close to the main figure.
+MAIN_FIGURE_GAP = 8
 
 
 def bgr_to_bgra(bgr: np.ndarray) -> np.ndarray:
@@ -209,6 +212,52 @@ def remove_watermark(
     return out
 
 
+def keep_main_figure(bgra: np.ndarray, gap: int = MAIN_FIGURE_GAP) -> np.ndarray:
+    """Keep the largest alpha blob and nearby parts; drop other cell-edge junk.
+
+    After a grid split, the top of a hat from the row below can sit on the
+    cell edge as its own component. Sunglasses or a hat brim that belong to
+    *this* figure are usually a small gap away: keep a component if it
+    overlaps the largest blob's bbox expanded by ``gap``, or if its bbox
+    centre lies inside that expanded box. Everything else is cleared.
+    """
+    num, labels, stats, centroids = _label_alpha(bgra)
+    if num <= 2:
+        return bgra
+
+    largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    x = int(stats[largest, cv2.CC_STAT_LEFT])
+    y = int(stats[largest, cv2.CC_STAT_TOP])
+    width = int(stats[largest, cv2.CC_STAT_WIDTH])
+    height = int(stats[largest, cv2.CC_STAT_HEIGHT])
+    x0 = x - gap
+    y0 = y - gap
+    x1 = x + width + gap
+    y1 = y + height + gap
+
+    keep = np.zeros(num, dtype=bool)
+    keep[largest] = True
+    for i in range(1, num):
+        if i == largest:
+            continue
+        ix = int(stats[i, cv2.CC_STAT_LEFT])
+        iy = int(stats[i, cv2.CC_STAT_TOP])
+        iw = int(stats[i, cv2.CC_STAT_WIDTH])
+        ih = int(stats[i, cv2.CC_STAT_HEIGHT])
+        cx, cy = float(centroids[i][0]), float(centroids[i][1])
+        overlaps = not (ix + iw <= x0 or ix >= x1 or iy + ih <= y0 or iy >= y1)
+        centre_inside = x0 <= cx < x1 and y0 <= cy < y1
+        if overlaps or centre_inside:
+            keep[i] = True
+
+    if bool(keep[1:].all()):
+        return bgra
+
+    out = bgra.copy()
+    out[~keep[labels], 3] = 0
+    return out
+
+
 def split_grid(bgra: np.ndarray, cols: int, rows: int) -> list[np.ndarray]:
     if cols < 1 or rows < 1:
         raise ValueError("grid cols and rows must be >= 1")
@@ -252,7 +301,10 @@ def process_image(
     split: str = "grid",
     trim: bool = True,
 ) -> list[np.ndarray]:
-    """Key, despill, split, and trim. ``grid`` is ``(cols, rows)``."""
+    """Key, despill, split, keep the main figure per grid cell, and trim.
+
+    ``grid`` is ``(cols, rows)``.
+    """
     img = bgr
     if img.ndim == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -273,6 +325,7 @@ def process_image(
         cells = split_grid(keyed, cols, rows)
         if key:
             cells = [remove_watermark(cell) for cell in cells]
+        cells = [keep_main_figure(cell) for cell in cells]
 
     if trim:
         cells = [trim_alpha(cell) for cell in cells]
