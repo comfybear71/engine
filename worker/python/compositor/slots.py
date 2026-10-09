@@ -6,7 +6,9 @@ hand that swaps between "fist"/"flat"/"point" poses are all the *same*
 mechanism here -- only the driver differs:
 
 - A ``keyframes``-driven slot holds its drawing until the next keyframe
-  ("held until changed"), e.g. a blink or a hand pose change.
+  ("held until changed"), e.g. a blink or a hand pose change. A keyframe
+  may instead give ``cycle`` + ``fps`` to loop a list of drawings from
+  that frame until the next keyframe.
 - A ``cues``-driven slot is fed by a single Rhubarb cue timeline (see
   :mod:`compositor.lipsync`) -- a one-off lip-synced line with no need for
   the full dialogue-list machinery below.
@@ -22,7 +24,7 @@ All three resolve to the same question -- "what drawing is active at this
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
@@ -34,7 +36,9 @@ FALLBACK_SHAPE = lipsync.DEFAULT_SHAPE  # "X": used as the generic idle fallback
 @dataclass(frozen=True)
 class SlotKeyframe:
     frame: int
-    drawing: str
+    drawing: str | None = None
+    cycle: list[str] | None = None
+    fps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -42,13 +46,15 @@ class Slot:
     images: dict[str, Path]
     offset_x: float = 0.0
     offset_y: float = 0.0
-    keyframes: list[SlotKeyframe] | None = None  # held-until-changed driver
+    keyframes: list[SlotKeyframe] | None = None  # held-until-changed / cycle driver
     cues: list[lipsync.MouthCue] | None = None  # single-clip lipsync driver
     # Dialogue-list driver: a sequence of objects each exposing
     # .start_frame (int), .duration_frames (int) and .cues (list[MouthCue]).
     # Typed loosely (not as timeline_loader.DialogueClip) to avoid a circular
     # import -- timeline_loader already imports this module.
     dialogue: Sequence[object] | None = None
+    # Slot only draws when each named slot's active drawing is in the list.
+    visible_when: dict[str, list[str]] = field(default_factory=dict)
 
     def resolve_image(self, drawing: str | None) -> Path | None:
         if drawing is not None and drawing in self.images:
@@ -83,12 +89,35 @@ def active_drawing(slot: Slot, owner_local_frame_idx: int, fps: int) -> str | No
         return lipsync.shape_at_time(slot.cues, t_seconds)
 
     if slot.keyframes:
-        held: str | None = None
+        held_kf: SlotKeyframe | None = None
         for kf in slot.keyframes:  # pre-sorted ascending by frame
             if kf.frame <= owner_local_frame_idx:
-                held = kf.drawing
+                held_kf = kf
             else:
                 break
-        return held if held is not None else slot.keyframes[0].drawing
+        if held_kf is None:
+            held_kf = slot.keyframes[0]
+        if held_kf.cycle:
+            # Loop from this keyframe's frame until the next keyframe takes
+            # over. The compositor only asks about recomputed frames, so a
+            # scene ``frame_step`` of N>1 already holds the drawing on the
+            # frames in between.
+            elapsed = max(0, owner_local_frame_idx - held_kf.frame)
+            cycle_fps = held_kf.fps if held_kf.fps is not None else float(fps)
+            index = int((elapsed / float(fps)) * cycle_fps) % len(held_kf.cycle)
+            return held_kf.cycle[index]
+        return held_kf.drawing
 
     return None
+
+
+def slot_is_visible(slot: Slot, active_drawings: dict[str, str | None]) -> bool:
+    """True unless ``visible_when`` names a slot whose current drawing is
+    not in the allowed list."""
+
+    if not slot.visible_when:
+        return True
+    for other_name, allowed in slot.visible_when.items():
+        if active_drawings.get(other_name) not in allowed:
+            return False
+    return True

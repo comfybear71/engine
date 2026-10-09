@@ -6,6 +6,7 @@ All coordinates are in canvas pixel space unless noted otherwise.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 ANCHORS = (
@@ -140,3 +141,19 @@ def mouth_center(
         parent_x + mirrored_offset_x * scale,
         parent_y + offset_y * scale,
     )
+
+
+def rotate_offset_clockwise(x: float, y: float, degrees: float) -> tuple[float, float]:
+    """Rotate a 2D offset clockwise by ``degrees`` in Y-down canvas space.
+
+    ``(0, 100)`` (straight down) rotated 90° clockwise becomes ``(-100, 0)``
+    (straight left). Used to swing a child/slot offset around its owner's
+    pivot when that owner is rotated.
+    """
+
+    if abs(degrees) < 1e-9:
+        return x, y
+    theta = math.radians(degrees)
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+    return x * cos_t - y * sin_t, x * sin_t + y * cos_t

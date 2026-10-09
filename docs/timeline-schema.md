@@ -154,6 +154,7 @@ frame briefly after the audio/dialogue ends.
     "anchor": "bottom-center", "flip_x": false,
     "rotation": 0, "opacity": 1.0
   },
+  "transform_keyframes": [ /* optional, see Transform keyframes */ ],
   "timing": { "start_frame": 24, "end_from_audio": "audio/scene1/004_hicks.wav" },
   "dialogue": [ /* optional, see Multi-line dialogue per character */ ],
   "slots": { /* optional, see Slots */ },
@@ -168,6 +169,7 @@ frame briefly after the audio/dialogue ends.
 | `asset` | string | yes | This layer's own root/base image. PNG with alpha recommended; non-alpha images still work (treated as fully opaque). |
 | `z` | integer | yes | **Explicit** draw order, ascending (higher `z` draws on top). The background is implicitly behind every layer. |
 | `transform` | object | yes | See below. |
+| `transform_keyframes` | array | no | Optional per-property animation of `x`/`y`/`scale`/`rotation`. See [Transform keyframes](#transform-keyframes). |
 | `timing` | object | no | See below. Omit entirely for "visible for the whole scene". |
 | `dialogue` | array of [dialogue clip](#multi-line-dialogue-per-character) | no | This character's spoken lines in the scene. See below. |
 | `audio` | string | no, **deprecated** | Single-clip shorthand kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: 0 }]` (the clip begins when the layer becomes visible). Ignored if `dialogue` is also given; prefer `dialogue` for anything with more than one line. |
@@ -215,13 +217,38 @@ on one layer is undefined behavior you shouldn't rely on.
 | `scale` | number > 0 | `1.0` | Uniform scale. |
 | `anchor` | enum | `"bottom-center"` | One of `top-left`, `top-center`, `top-right`, `center-left`, `center`, `center-right`, `bottom-left`, `bottom-center`, `bottom-right`. `bottom-center` is the default because it's the natural "feet on the ground" anchor for a standing character. |
 | `flip_x` | boolean | `false` | Mirrors the asset horizontally. Flipping does **not** change anchor semantics -- the anchor box doesn't move, only the pixel content inside it mirrors. |
-| `rotation` | number (degrees) | `0` | Clockwise, around the anchor point. |
+| `rotation` | number (degrees) | `0` | Clockwise, around the anchor point. The pivot stays fixed: after the image is rotated (the canvas expands so nothing is clipped) the compositor places the result so the original anchor still sits at `x`/`y`. |
 | `opacity` | number 0-1 | `1.0` | Multiplies the asset's own per-pixel alpha. |
+
+`flip_x` is **not** keyframed. To turn a character around, add a second
+layer (same `character_id`, back-to-back `timing`) with `flip_x: true`.
 
 **Off-screen layers are clipped, not skipped.** A character walking in from
 off-frame, or a tall layer that extends above/below the canvas, renders
 whatever portion of it overlaps the canvas. Only a layer that is *entirely*
 outside the canvas draws nothing.
+
+### Transform keyframes
+
+```json
+"transform": { "x": 400, "y": 1080, "anchor": "bottom-center" },
+"transform_keyframes": [
+  { "frame": 0, "x": 400 },
+  { "frame": 48, "x": 1200, "ease": "inout" },
+  { "frame": 48, "rotation": 0 },
+  { "frame": 72, "rotation": 12 }
+]
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `frame` | integer | yes | Layer-local (relative to this layer's `timing.start_frame`), same clock as slots. |
+| `x`, `y`, `scale`, `rotation` | number | no | Each keyframe may specify any subset. A property is interpolated only between keyframes that mention it. Properties never mentioned keep the static `transform` value. |
+| `ease` | `"linear"` or `"inout"` | no | How to interpolate **from this keyframe to the next one that specifies the same property**. Default `"linear"` (same lerp as [camera](#camera) keyframes). `"inout"` is a smoothstep ease-in-out. |
+
+Held before the first keyframe that specifies a property and after the last
+-- same hold-ends rule as the camera interpolator. Omit the whole array for
+a pose that never moves (existing timelines keep rendering identically).
 
 ### Timing
 
@@ -242,7 +269,8 @@ change. **This is one unified mechanism for mouths, blinks and hand poses**
 -- only the *driver* differs:
 
 - a `keyframes`-driven slot holds a drawing until the next keyframe (a
-  blink, a hand changing from an open palm to a fist, ...);
+  blink, a hand changing from an open palm to a fist, ...), or loops a
+  `cycle` of drawings at a given `fps` until the next keyframe;
 - a `lipsync`-driven slot is fed by Rhubarb cue timings. Two forms:
   - `lipsync.source: "dialogue"` -- the normal case for a character's mouth:
     pulls its cue timeline from the owning layer's `dialogue` list (see
@@ -255,6 +283,14 @@ change. **This is one unified mechanism for mouths, blinks and hand poses**
 
 ```json
 "slots": {
+  "body": {
+    "offset": { "x": 0, "y": 0 },
+    "images": { "front": ".../body_front.png", "back": ".../body_back.png" },
+    "keyframes": [
+      { "frame": 0, "drawing": "front" },
+      { "frame": 120, "drawing": "back" }
+    ]
+  },
   "mouth": {
     "offset": { "x": 0, "y": -558 },
     "images": {
@@ -263,7 +299,8 @@ change. **This is one unified mechanism for mouths, blinks and hand poses**
       "...": "...",
       "X": "../_global_assets/characters/hicks/mouth/X.png"
     },
-    "lipsync": { "source": "dialogue" }
+    "lipsync": { "source": "dialogue" },
+    "visible_when": { "body": ["front"] }
   },
   "eyes": {
     "offset": { "x": 0, "y": -624 },
@@ -273,15 +310,24 @@ change. **This is one unified mechanism for mouths, blinks and hand poses**
       { "frame": 34, "drawing": "closed" },
       { "frame": 38, "drawing": "open" }
     ]
+  },
+  "walk": {
+    "offset": { "x": 0, "y": 0 },
+    "images": { "s1": ".../step1.png", "s2": ".../step2.png", "s3": ".../step3.png" },
+    "keyframes": [
+      { "frame": 0, "cycle": ["s1", "s2", "s3"], "fps": 8 },
+      { "frame": 48, "drawing": "s1" }
+    ]
   }
 }
 ```
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `offset.x` / `offset.y` | number | no (default 0,0) | Where this slot's drawing sits, relative to its owner's anchor/pivot point, in the owner's **local (pre-scale) pixel space**. Automatically scaled with the owner and mirrored in `x` when the owner is flipped, so it tracks the face/part through scale/flip changes. |
+| `offset.x` / `offset.y` | number | no (default 0,0) | Where this slot's drawing sits, relative to its owner's anchor/pivot point, in the owner's **local (pre-scale) pixel space**. Automatically scaled with the owner, mirrored in `x` when the owner is flipped, and rotated about the owner's pivot by the owner's current rotation, so it tracks the face/part through scale/flip/swing. |
 | `images` | object | yes | Map of drawing name -> image path. A `lipsync`-driven slot's names must be Rhubarb shapes (`A`-`H`, `X`); a `keyframes`-driven slot's names can be anything (`"fist"`, `"open"`, ...). A missing drawing at render time falls back to `"X"` if present, else the first entry. |
-| `keyframes` | array | exactly one of `keyframes`/`lipsync` | `{ frame, drawing }`, sorted ascending by `frame`. The drawing is **held until the next keyframe's frame is reached**. Frames are relative to the slot's owner's own `start_frame`. Before the first keyframe, the first keyframe's drawing is used. |
+| `keyframes` | array | exactly one of `keyframes`/`lipsync` | Sorted ascending by `frame`. Each entry is either `{ frame, drawing }` (held until the next keyframe) or `{ frame, cycle: [drawing, ...], fps }` (loops those drawings from this frame until the next keyframe). Cycle index is `floor((frame - keyframe.frame) / document_fps * cycle.fps) % len(cycle)`. A scene `frame_step` of N>1 already holds the picture on in-between frames, so the cycle is only evaluated on recomputed frames. Frames are relative to the slot's owner's own `start_frame`. Before the first keyframe, the first keyframe's drawing/cycle is used. |
+| `visible_when` | object | no | Map of `<slot name>` -> list of drawings. This slot only draws when each named slot's *currently active* drawing is in that list. Names are resolved on the same layer (the layer's own slots and every child's slots). Example: `"visible_when": { "body": ["front"] }` hides a mouth while the body slot is showing the back view. |
 | `lipsync` | object | exactly one of `keyframes`/`lipsync` | See [Lip-sync cue resolution order](#lip-sync-cue-resolution-order) below. |
 
 Slots on the same owner are drawn in the order given in the JSON, after
@@ -345,14 +391,30 @@ one unit.
 ```json
 "children": [
   {
-    "id": "right_arm",
-    "asset": "../_global_assets/characters/hicks/parts/arm.png",
+    "id": "upper_arm",
+    "asset": "../_global_assets/characters/hicks/parts/upper_arm.png",
     "z": 1,
     "offset": { "x": -170, "y": -480 },
     "pivot": "top-center",
+    "rotation_keyframes": [
+      { "frame": 0, "rotation": 0 },
+      { "frame": 24, "rotation": 40, "ease": "inout" }
+    ]
+  },
+  {
+    "id": "forearm",
+    "asset": "../_global_assets/characters/hicks/parts/forearm.png",
+    "z": 2,
+    "parent": "upper_arm",
+    "offset": { "x": 0, "y": 180 },
+    "pivot": "top-center",
+    "rotation_keyframes": [
+      { "frame": 0, "rotation": 0 },
+      { "frame": 24, "rotation": 25 }
+    ],
     "slots": {
       "right_hand": {
-        "offset": { "x": 0, "y": 230 },
+        "offset": { "x": 0, "y": 160 },
         "images": { "flat": "../_global_assets/characters/hicks/right_hand/flat.png", "point": "../_global_assets/characters/hicks/right_hand/point.png" },
         "keyframes": [
           { "frame": 0, "drawing": "flat" },
@@ -369,30 +431,31 @@ one unit.
 | `id` | string | yes | Unique within the parent layer. |
 | `asset` | string | yes | This part's image. |
 | `z` | integer | yes | Draw order **relative to the parent's own base image and sibling children only** -- the parent's own image is implicitly `z = 0` among its children (e.g. an arm behind the torso uses `z < 0`; one in front uses `z > 0`). This stacking is local to the parent; it does not interleave with other top-level scene layers' `z`. |
-| `offset.x` / `offset.y` | number | no (default 0,0) | In the parent's local (pre-scale) pixel space, from the parent's anchor point to this child's pivot point. Mirrored in `x` when the parent is flipped. |
-| `pivot` | enum | no (default `"center"`) | Which point of this child's own (post-scale) bounding box sits at `offset` -- also the rotation center. Same enum as a layer's `transform.anchor`. |
+| `offset.x` / `offset.y` | number | no (default 0,0) | In the parent's local (pre-scale) pixel space, from the parent's pivot (the layer anchor, or the named `parent` child's pivot) to this child's pivot. Mirrored in `x` when that parent is flipped. When `parent` is another child, this offset is also rotated about that parent's pivot by the parent's current rotation. |
+| `parent` | string | no | Id of another child on the same layer that this child hangs off (e.g. `forearm` of `upper_arm`). The named parent must exist, must not itself have a `parent` (only one level of nesting), and must not create a cycle -- the loader rejects all three. Slots on this child (e.g. `right_hand` on `forearm`) follow the nested placement. |
+| `pivot` | enum | no (default `"center"`) | Which point of this child's own (post-scale) bounding box sits at `offset` -- also the rotation center. Same enum as a layer's `transform.anchor`. After rotate+canvas-expand, this point stays fixed at `offset`. |
 | `scale` | number > 0 | no (default `1.0`) | Multiplies the **parent's own** scale. |
 | `flip_x` | boolean | no (default `false`) | Composed with the parent's `flip_x` via XOR: `false` (default) means this part simply mirrors along with the parent (the common case); `true` gives it an *independent* mirror on top of that (e.g. a hand drawn facing the "wrong" way in its source art). |
-| `rotation` | number (degrees) | no (default `0`) | Clockwise, around this child's own `pivot`. |
+| `rotation` | number (degrees) | no (default `0`) | Clockwise, around this child's own `pivot`. Used when `rotation_keyframes` is omitted. Independent of the *layer's* `transform.rotation`. When this child is someone else's `parent`, rotations accumulate (grandchild world rotation = parent rotation + own rotation). |
+| `rotation_keyframes` | array | no | `{ frame, rotation, ease? }`, layer-local frames, same interpolation as [transform keyframes](#transform-keyframes). |
 | `opacity` | number 0-1 | no (default `1.0`) | Multiplies the **parent's own** opacity. |
-| `slots` | object | no | Drawing-swap slots attached to this specific child instead of the parent root (e.g. a hand-pose slot on an arm, or a mouth slot on a head). |
+| `slots` | object | no | Drawing-swap slots attached to this specific child instead of the parent root (e.g. a hand-pose slot on a forearm, or a mouth slot on a head). Slot offsets rotate with this child's current (accumulated) rotation. |
 
-**Known limitations, by design** (documented rather than solved here, to
-keep this PR's scope sensible):
+**Known limitations, by design:**
 
-- **Children are a single level deep.** A child cannot itself have
-  children. One level covers "head, arms, hands" style rigs; deeper
-  recursion (fingers on a hand on an arm on a body) would need a proper
-  scene-graph/transform-stack rewrite.
-- **A rotating parent's `transform.rotation` is not composed into its
-  children's placement.** The parent's own base image still rotates
-  correctly around its own anchor; each child also rotates correctly around
-  its own `pivot`. What's *not* done is rotating each child's `offset`
-  vector together with the parent -- so if the parent layer itself spins,
-  its children stay at their unrotated offset instead of swinging around
-  with it. Composing the two correctly needs a real 2D affine transform
-  chain (rotate-then-translate order matters), which is more machinery than
-  this PR's "simplest working version" scope called for.
+- **Child-to-child nesting is one level only.** `forearm` may name
+  `upper_arm` as `parent`, but `hand` may not then name `forearm` -- that
+  would be two levels. Deeper chains (fingers on a hand on an arm) would
+  need a proper scene-graph/transform-stack rewrite.
+- **A rotating layer's `transform.rotation` is not composed into its
+  children's placement.** The layer's own base image still rotates
+  correctly around its own anchor (pivot stays fixed); each child also
+  rotates correctly around its own `pivot`. What's *not* done is rotating
+  each top-level child's `offset` vector together with the layer -- so if
+  the layer itself spins, its direct children stay at their unrotated
+  offset instead of swinging around with it. Child-to-child `parent`
+  nesting *does* rotate the grandchild offset around the parent child's
+  pivot.
 
 ## Camera
 
