@@ -363,16 +363,145 @@ describe("studio worker API", () => {
   test("path traversal and reserved names are rejected", async () => {
     assert.equal(isSafeProjectName(".."), false);
     assert.equal(isSafeProjectName("_global_assets"), false);
+    assert.equal(isSafeProjectName("_trash"), false);
     assert.equal(resolveProjectDir(fixture.root, ".."), null);
     assert.equal(resolveProjectDir(fixture.root, "../project"), null);
     assert.equal(resolveProjectDir(fixture.root, "_global_assets"), null);
+    assert.equal(resolveProjectDir(fixture.root, "_trash"), null);
 
-    const names = ["_global_assets", encodeURIComponent("../project"), encodeURIComponent("..\\project")];
+    const names = [
+      "_global_assets",
+      "_trash",
+      encodeURIComponent("../project"),
+      encodeURIComponent("..\\project"),
+    ];
     for (const name of names) {
       const res = await fetch(`${ctx.url}/api/projects/${name}/characters`);
       assert.equal(res.status, 400, `expected 400 for name ${JSON.stringify(name)}, got ${res.status}`);
       const body = await res.json();
       assert.match(body.error, /Invalid project name/);
     }
+  });
+
+  test("POST /trash moves the folder into _trash and rejects traversal", async () => {
+    const created = await fetch(`${ctx.url}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "doomed_del" }),
+    });
+    assert.equal(created.status, 201, await created.text());
+    const doomed = path.join(fixture.root, "doomed_del");
+    fs.mkdirSync(path.join(doomed, "audio"), { recursive: true });
+    fs.writeFileSync(path.join(doomed, "audio", "line.wav"), Buffer.alloc(16));
+    const globalBefore = fs.readdirSync(fixture.globalAssetsDir);
+
+    const missingConfirm = await fetch(`${ctx.url}/api/projects/doomed_del/trash`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missingConfirm.status, 400);
+    assert.equal(fs.existsSync(doomed), true);
+
+    const wrongConfirm = await fetch(`${ctx.url}/api/projects/doomed_del/trash`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmName: "other" }),
+    });
+    assert.equal(wrongConfirm.status, 400);
+    assert.equal(fs.existsSync(doomed), true);
+
+    const trashed = await fetch(`${ctx.url}/api/projects/doomed_del/trash`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmName: "doomed_del" }),
+    });
+    const trashBody = await trashed.json();
+    assert.equal(trashed.status, 200, JSON.stringify(trashBody));
+    assert.equal(fs.existsSync(doomed), false);
+    const trashDir = path.join(fixture.root, "_trash");
+    assert.equal(fs.existsSync(path.join(trashDir, trashBody.trash.id)), true);
+    assert.match(trashBody.trash.id, /^doomed_del-\d+$/);
+    assert.deepEqual(fs.readdirSync(fixture.globalAssetsDir), globalBefore);
+
+    const listed = await fetch(`${ctx.url}/api/projects`);
+    const names = (await listed.json()).projects.map((p) => p.name);
+    assert.equal(names.includes("doomed_del"), false);
+    assert.equal(names.includes("_trash"), false);
+
+    const trashList = await fetch(`${ctx.url}/api/trash`);
+    const trashItems = (await trashList.json()).trash;
+    assert.ok(trashItems.some((item) => item.id === trashBody.trash.id));
+
+    const forbidden = ["_global_assets", "_trash", encodeURIComponent("../project"), encodeURIComponent("..")];
+    for (const name of forbidden) {
+      const res = await fetch(`${ctx.url}/api/projects/${name}/trash`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmName: decodeURIComponent(name) }),
+      });
+      assert.equal(res.status, 400, `expected 400 for trash ${name}, got ${res.status}`);
+    }
+    assert.equal(fs.existsSync(fixture.globalAssetsDir), true);
+  });
+
+  test("POST /duplicate copies the folder to name-copy, incrementing", async () => {
+    const created = await fetch(`${ctx.url}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "dup_src" }),
+    });
+    assert.equal(created.status, 201, await created.text());
+    fs.writeFileSync(path.join(fixture.root, "dup_src", "script.txt"), "[Scene: Copy me]\n");
+
+    const first = await fetch(`${ctx.url}/api/projects/dup_src/duplicate`, { method: "POST" });
+    const firstBody = await first.json();
+    assert.equal(first.status, 201, JSON.stringify(firstBody));
+    assert.equal(firstBody.project.name, "dup_src-copy");
+    assert.equal(fs.existsSync(path.join(fixture.root, "dup_src", "script.txt")), true);
+    assert.equal(
+      fs.readFileSync(path.join(fixture.root, "dup_src-copy", "script.txt"), "utf8"),
+      "[Scene: Copy me]\n"
+    );
+
+    const second = await fetch(`${ctx.url}/api/projects/dup_src/duplicate`, { method: "POST" });
+    const secondBody = await second.json();
+    assert.equal(second.status, 201, JSON.stringify(secondBody));
+    assert.equal(secondBody.project.name, "dup_src-copy-2");
+  });
+
+  test("POST /rename validates the name and renames the folder", async () => {
+    const created = await fetch(`${ctx.url}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "ren_src" }),
+    });
+    assert.equal(created.status, 201, await created.text());
+
+    const bad = await fetch(`${ctx.url}/api/projects/ren_src/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "../nope" }),
+    });
+    assert.equal(bad.status, 400);
+    assert.equal(fs.existsSync(path.join(fixture.root, "ren_src")), true);
+
+    const reserved = await fetch(`${ctx.url}/api/projects/ren_src/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "_global_assets" }),
+    });
+    assert.equal(reserved.status, 400);
+
+    const ok = await fetch(`${ctx.url}/api/projects/ren_src/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "ren_dst" }),
+    });
+    const body = await ok.json();
+    assert.equal(ok.status, 200, JSON.stringify(body));
+    assert.equal(body.project.name, "ren_dst");
+    assert.equal(fs.existsSync(path.join(fixture.root, "ren_src")), false);
+    assert.equal(fs.existsSync(path.join(fixture.root, "ren_dst", "script.txt")), true);
   });
 });

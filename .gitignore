@@ -18,6 +18,9 @@ worker/python/**/*.pyc
 renders/
 **/renders/
 
+# Studio trash (soft-deleted project folders)
+projects/_trash/
+
 # Note: Rhubarb cue caches are named "<audio>.rhubarb.json" and are
 # deliberately NOT gitignored -- a committed cues file is the primary
 # source of truth for lip-sync (see docs/timeline-schema.md), so e.g.

@@ -220,7 +220,7 @@ export default function AssetsPanel({
         <Section title="Backgrounds" count={staging?.backgrounds.length ?? 0}>
           <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
             {(staging?.backgrounds || []).map((bg) => (
-              <Thumb key={bg.id} src={assetUrl(project, bg.thumbRel)} label={bg.id} />
+              <Thumb key={bg.id} src={assetUrl(project, bg.thumbRel, { thumb: true })} label={bg.id} />
             ))}
           </div>
         </Section>
