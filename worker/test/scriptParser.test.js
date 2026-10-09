@@ -398,6 +398,26 @@ describe("[Move:] / [Pose:] / [Swing:] / cycle actions", () => {
     assert.equal(first.transform.x, 450);
   });
 
+  test("[Pose] after [Action: flip] does not rewrite the previous layer's rest pose", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Move: Alice to=right over=1s]",
+      "[Action: Alice flip]",
+      "[Pose: Alice right_arm=40 over=0.5s]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const [first, second] = layersFor(timeline).filter((l) => l.character_id === "alice");
+    const firstArm = first.children.find((c) => c.id === "right_arm");
+    const secondArm = second.children.find((c) => c.id === "right_arm");
+    assert.equal(firstArm.rotation_keyframes, undefined);
+    assert.equal(firstArm.rotation || 0, 0);
+    assert.equal(secondArm.rotation_keyframes[0].rotation, 0);
+    assert.equal(secondArm.rotation_keyframes[1].rotation, 40);
+    assert.equal(secondArm.rotation, 40);
+  });
+
   test("[Pose] writes rotation keyframes from the current angle to the target", async () => {
     const script = [
       "[Scene: Intro]",

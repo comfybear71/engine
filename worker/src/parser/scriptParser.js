@@ -406,6 +406,9 @@ class ScriptParser {
   _closeCurrentSegment(state, endFrame) {
     if (!state.current) return;
     state.current.endFrame = endFrame;
+    // Snapshot pose at close so a later [Pose] on the next layer cannot
+    // rewrite this segment's static child rotations.
+    state.current.closingChildRotations = new Map(state.childRotations);
     state.segments.push(state.current);
     state.current = null;
   }
@@ -993,13 +996,14 @@ class ScriptParser {
     if (Object.keys(slots).length > 0) layer.slots = slots;
 
     if ((config.children || []).length > 0) {
+      const rotMap = segment.closingChildRotations || state.childRotations;
       layer.children = config.children.map((child) =>
         this._buildChildJson(
           state.characterId,
           child,
           segment.childSlotKeyframes.get(child.id),
           segment.childRotationKeyframes.get(child.id),
-          state.childRotations.has(child.id) ? state.childRotations.get(child.id) : child.rotation
+          rotMap.has(child.id) ? rotMap.get(child.id) : child.rotation
         )
       );
     }
