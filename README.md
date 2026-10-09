@@ -128,6 +128,14 @@ Highlights:
   with its own audio and its own lip-sync cues -- not just one `audio`
   field. A `mouth` slot with `lipsync.source: "dialogue"` shows each
   clip's cues within that clip's window and the idle shape between lines.
+- **Silent previews for missing dialogue audio**: a line with no WAV yet
+  still renders at the estimated length already stored on the clip (or in
+  `lines.json`). Those clips are marked `estimated` in `timeline.json`,
+  the mouth stays on the rest shape (`X`), and the mix is silence for
+  that line. Every render always has one audio stream covering the full
+  scene length (generated silence if needed) so drafts and finished cuts
+  line up the same way in DaVinci Resolve. The compositor prints
+  `N of M lines are estimated/silent` at render time.
 - **Scene duration can be derived from audio** -- a single file
   (`from_audio`), or the sum/sequence of every layer's dialogue clips
   (`from_dialogue`, what the script parser emits) -- instead of only a
@@ -301,8 +309,9 @@ ffprobe -v error -show_entries stream=codec_type,codec_name -of csv=p=0 ../proje
 ```bash
 # Python (compositor): off-screen clipping, z-order, anchor/flip math,
 # cue-to-mouth frame mapping, multi-line dialogue, audio-derived duration,
-# the Rhubarb missing-binary fallback, frame_step, rig nesting, and two full
-# end-to-end renders of the sample project verified via ffprobe.
+# silent/estimated missing-audio previews, the Rhubarb missing-binary
+# fallback, frame_step, rig nesting, and two full end-to-end renders of
+# the sample project verified via ffprobe.
 cd worker/python
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pytest -q

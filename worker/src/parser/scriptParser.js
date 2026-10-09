@@ -481,11 +481,18 @@ class ScriptParser {
     const durationFrames = framesFromSeconds(durationSeconds, this.fps);
     const startFrame = scene.cursorFrames;
 
-    state.current.dialogue.push({
+    const clip = {
       audio: audioRelPath,
       start_frame: startFrame - state.current.startFrame,
       text: token.text,
-    });
+    };
+    if (status === "missing") {
+      // Marked on the clip itself (not only in lines.json) so a silent
+      // preview render can use the estimate without re-reading the manifest.
+      clip.estimated = true;
+      clip.estimated_duration_seconds = Math.round(durationSeconds * 100) / 100;
+    }
+    state.current.dialogue.push(clip);
 
     this.lines.push({
       scene_id: scene.sceneId,
