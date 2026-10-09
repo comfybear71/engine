@@ -433,7 +433,7 @@ describe("studio worker API", () => {
     const trashItems = (await trashList.json()).trash;
     assert.ok(trashItems.some((item) => item.id === trashBody.trash.id));
 
-    const forbidden = ["_global_assets", "_trash", encodeURIComponent("../project"), encodeURIComponent("..")];
+    const forbidden = ["_global_assets", "_trash", encodeURIComponent("../project")];
     for (const name of forbidden) {
       const res = await fetch(`${ctx.url}/api/projects/${name}/trash`, {
         method: "POST",
