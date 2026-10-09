@@ -4,7 +4,8 @@ export type AssetDest =
   | { kind: "file"; rel: string }
   | { kind: "slot"; slot: string; drawings_dir: string; child?: string }
   | { kind: "prop" }
-  | { kind: "background" };
+  | { kind: "background" }
+  | { kind: "reference" };
 
 export type AssetNeedCell = {
   name: string;
@@ -29,6 +30,7 @@ export type AssetNeed = {
   };
   cycleFps?: number;
   dest?: AssetDest;
+  ingest?: boolean;
   prompt: string;
 };
 

@@ -22,8 +22,10 @@ projects/
 │   │           └── <name>.png
 │   └── characters/
 │       └── <character_id>/
-│           ├── character.json         # display name, aliases, slots, rig children, voice_id
+│           ├── character.json         # display name, aliases, slots, rig children, voice_id, optional reference
 │           ├── body.png               # the character's root/base image
+│           ├── _reference/            # optional full-body likeness guide (original file, not cut out)
+│           │   └── full.png
 │           ├── parts/                 # rig child images, if any (e.g. parts/arm.png)
 │           │   └── <part>.png
 │           ├── <slot_name>/           # one folder per drawing-swap slot
@@ -56,8 +58,9 @@ beyond the generated PNGs/WAVs themselves).
   "default_scale": 1.0,
   "default_flip_x": false,
   "voice_id": null,
+  "reference": "_reference/full.png",
   "slots": {
-    "mouth": { "offset": { "x": 0, "y": -558 }, "drawings_dir": "mouth" },
+    "mouth": { "offset": { "x": 0, "y": -558 }, "drawings_dir": "mouth", "scale": 1.0, "rotation": 0 },
     "eyes": { "offset": { "x": 0, "y": -624 }, "drawings_dir": "eyes", "default_drawing": "open" }
   },
   "children": [
@@ -85,7 +88,8 @@ beyond the generated PNGs/WAVs themselves).
 | `default_scale` / `default_flip_x` | Used when neither an `[Action: ...]` tag nor the resolved staging mark specifies that field -- see [mark resolution order](script-format.md#mark-resolution-order) in the script format doc. |
 | `voice_id` | Optional identifier for `node src/cli.js voices`. **Never a secret** -- it's a voice *identifier* (e.g. `"EXAVITQu4vr4xnSDxMaL"`), not an API key. `null` means "not assigned yet"; the real API key lives in `.env` as `ELEVENLABS_API_KEY`, never here. See [docs/voices.md](voices.md). |
 | `style` | Optional free-text art direction for the Studio Grok Imagine prompt builder (e.g. `"painted semi-real"`, `"flat cartoon"`). Empty or omitted means the prompt falls back to "a consistent character style". See [docs/studio.md](studio.md#image-assets-grok-imagine). |
-| `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing?, cycles?, visible_when? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). `cycles` is an optional map of cycle name -> `{ drawings: [drawing, ...], fps }` -- `[Action: Name slot=cycle_name]` emits a looping cycle keyframe; a plain drawing name still emits a held drawing. `visible_when` is copied onto the timeline slot as-is (e.g. hide a mouth unless `body` is showing `"front"`). |
+| `reference` | Optional path, relative to the character folder, to a full-body likeness image (typically `_reference/full.png`). Studio stores the original file — no chroma key or cut-out. Used as a Grok Imagine attach reminder and as the background in **Align head**. |
+| `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing?, cycles?, visible_when?, scale?, rotation? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). `cycles` is an optional map of cycle name -> `{ drawings: [drawing, ...], fps }` -- `[Action: Name slot=cycle_name]` emits a looping cycle keyframe; a plain drawing name still emits a held drawing. `visible_when` is copied onto the timeline slot as-is (e.g. hide a mouth unless `body` is showing `"front"`). `scale` (default `1.0`) multiplies the owner's scale around the slot center (the offset point). `rotation` (default `0`, clockwise degrees) is added to the owner's rotation around that same center. The parser copies both onto the timeline slot. Studio **Align head** writes `offset` / `scale` / `rotation` into a **project-local** `character.json` and never into `_global_assets`. |
 | `children` | Rig parts, in the same shape as `schema/timeline.schema.json`'s `child` definition (`id`, `asset`, `z`, `offset`, `pivot`, `scale`, `flip_x`, `rotation`, `parent`), plus their own optional `slots` (same shape as above). `parent` and `pivot` are passed through to the generated timeline. `parent` names one other child on the same character (one nesting level, e.g. `forearm` under `upper_arm`). See [docs/timeline-schema.md#cut-out-rig-nesting](timeline-schema.md#cut-out-rig-nesting). |
 
 The `mouth` slot is special: it's always driven by the character's dialogue

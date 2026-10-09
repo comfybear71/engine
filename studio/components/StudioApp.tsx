@@ -172,7 +172,12 @@ export default function StudioApp({ projectName }: { projectName: string }) {
 
       <main className="flex min-h-0 flex-1 flex-col">
         {tab === "assets" ? (
-          <AssetsPanel project={project} workerUp={workerUp === true} onLibraryChange={() => void refresh()} />
+          <AssetsPanel
+            project={project}
+            script={script}
+            workerUp={workerUp === true}
+            onLibraryChange={() => void refresh()}
+          />
         ) : null}
         {tab === "stage" ? (
           <StagePanel

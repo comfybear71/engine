@@ -20,6 +20,9 @@ export type CharacterSlot = {
   default_drawing: string | null;
   drawings: Drawing[];
   cycles: Record<string, SlotCycle>;
+  offset: { x: number; y: number };
+  scale: number;
+  rotation: number;
 };
 export type Character = {
   id: string;
@@ -28,7 +31,11 @@ export type Character = {
   source: "global" | "project";
   z: number;
   style: string;
+  asset: string | null;
   thumbRel: string | null;
+  bodyRel: string | null;
+  reference: string | null;
+  referenceRel: string | null;
   slots: CharacterSlot[];
 };
 export type Background = { id: string; source: "global" | "project"; thumbRel: string | null };
@@ -239,6 +246,49 @@ export async function saveCharacterStyle(name: string, characterId: string, styl
     }
   );
   if (!res.ok) throw new Error(await readError(res));
+}
+
+export type CharacterReferenceResult = { ok: boolean; reference: string; referenceRel: string };
+
+export async function saveCharacterReference(
+  name: string,
+  characterId: string,
+  body: { imageBase64: string; filename?: string }
+): Promise<CharacterReferenceResult> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/reference`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<CharacterReferenceResult>;
+}
+
+export type SlotAlignment = {
+  offset: { x: number; y: number };
+  scale: number;
+  rotation: number;
+};
+
+export async function saveSlotAlignment(
+  name: string,
+  characterId: string,
+  slotName: string,
+  body: Partial<SlotAlignment>
+): Promise<SlotAlignment & { ok: boolean; slot: string }> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/slots/${encodeURIComponent(slotName)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<SlotAlignment & { ok: boolean; slot: string }>;
 }
 
 export async function previewCharacterIngest(

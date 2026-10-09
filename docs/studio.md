@@ -110,11 +110,16 @@ clobber the project's `timeline.json`.
   props from those locations' `staging.json`. **Library** opens a drawer of
   global characters from `projects/_global_assets` and **Add** records a
   reference in `library.json` without copying art. Click a character to see
-  its slots (mouth, eyes, hands, …), drawings, and named cycles. On the
-  same page, **Grok Imagine** builds a ready-to-copy prompt per character
-  and need (templates in `studio/lib/assetNeeds.json`), then a drop zone
-  ingests the PNG you generated in the browser — there is no image-generation
-  API. See [Image assets](#image-assets-grok-imagine) below.
+  its slots (mouth, eyes, hands, …), drawings, named cycles, an optional
+  **full-body reference** (drop/paste, stored as-is under
+  `characters/<id>/_reference/`), and **Align head** (overlay the current
+  head/mouth on the body or reference, then save slot offset/scale/rotation
+  into a project-local `character.json`). On the same page, **Grok Imagine**
+  builds a ready-to-copy prompt per character and need (templates in
+  `studio/lib/assetNeeds.json`; includes **Full body reference** and an
+  **Attach reference to prompt** reminder), then a drop zone ingests the PNG
+  you generated in the browser — there is no image-generation API. See
+  [Image assets](#image-assets-grok-imagine) below.
 - **Stage** — a large frame preview from
   `POST /api/projects/:name/preview-frame?script=`, a time scrubber, the
   current location's marks, a read-only layer list in z order, and
@@ -147,10 +152,12 @@ project root). Those paths parse to **temp** files and never write
 | `POST` | `/api/trash/:id/restore` | Move that trash folder back to `projects/<originalName>`. 409 if that name exists. |
 | `POST` | `/api/trash/empty` | Permanently delete everything in `_trash`. JSON `{ "confirm": "empty" }`. |
 | `GET` | `/api/projects/:name/scripts` | `script*.txt` files in that folder. |
-| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots, drawings, cycles, thumbnail paths, and `style`. |
+| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`), drawings, cycles, thumbnail paths, `style`, and `reference` / `referenceRel`. |
 | `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. |
 | `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Appends to `library.json`; does not copy art. |
 | `PUT` | `/api/projects/:name/characters/:id` | JSON `{ "style": "painted semi-real" }`. Writes a project-local `character.json` (copied from global if needed) with that free-text style field. Does not touch `_global_assets`. |
+| `POST` | `/api/projects/:name/characters/:id/reference` | JSON `{ "imageBase64", "filename?" }`. Stores the original image under `characters/<id>/_reference/full.<ext>` (no cut-out) and sets `reference` on a project-local `character.json`. |
+| `PUT` | `/api/projects/:name/characters/:id/slots/:slot` | JSON `{ "offset"?: {x,y}, "scale"?: number, "rotation"?: number }`. Copy-on-write into project-local `character.json`. Used by **Align head**. |
 | `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64", "filename?", "frames?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. |
 | `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }] }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames), backs up overwritten **local** files to `_backup/<timestamp>/`, merges new slots/cycles into project-local `character.json` without deleting other entries. |
 | `POST` | `/api/projects/:name/characters/:id/ingest/cancel` | JSON `{ "sessionId" }`. Deletes the preview session dir. |
@@ -183,12 +190,17 @@ the prompt and cuts the resulting PNG.
 
 1. On **Assets**, pick a character. **Grok Imagine** lists needs from
    `studio/lib/assetNeeds.json` (edit that file to change copy or grids):
-   full body without head/mouth, mouth/head sheet (3×3 Rhubarb `X,A–H`),
-   expression heads, arm/hand pieces, walk cycle sheet (side/front/back,
-   N frames), prop on its own, background plate.
+   full-body reference (stored original, no cut-out), full body without
+   head/mouth, mouth/head sheet (3×3 Rhubarb `X,A–H`), expression heads,
+   arm/hand pieces, walk cycle sheet (side/front/back, N frames), prop on
+   its own, background plate. **Attach reference to prompt** reminds you to
+   attach the full-body reference in Grok Imagine and appends a match-the-
+   attached-image sentence to the copied prompt.
 2. Style notes come from `character.json` `style` (free text, e.g.
    `painted semi-real` or `flat cartoon`). Save writes a **project-local**
-   `character.json`; shared `_global_assets` is never modified.
+   `character.json`; shared `_global_assets` is never modified. The same
+   copy-on-write path stores `reference` and slot `offset` / `scale` /
+   `rotation` from the character panel.
 3. **Copy prompt**, paste into Grok Imagine. Character/prop prompts always
    ask for a plain `#00FF00` green background, the same size/position in
    each cell, no watermark text, and no cropped body parts. Background
@@ -211,3 +223,12 @@ Walk-cycle ingest adds `slots.body.cycles` (`walk_side`, `walk_front`,
 body-as-a-slot pattern in [docs/assets.md](assets.md#the-body-as-a-slot)
 — a transparent root `asset` is still something you set by hand if the
 character currently uses an opaque `body.png`.
+
+**Align head** (character detail panel) overlays the current mouth/head
+drawing on the body drawing or the full-body reference. Drag to move,
+corner handles or the slider to scale around the head center, and a
+rotation slider for clockwise degrees. A dropdown previews each mouth
+drawing. Save writes the slot into project-local `character.json` and
+re-renders a preview frame to confirm. Slot `scale` / `rotation` are
+optional on the timeline slot and are applied around the attachment
+point (see [docs/timeline-schema.md](timeline-schema.md)).

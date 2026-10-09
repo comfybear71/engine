@@ -248,6 +248,17 @@
           "$ref": "#/definitions/offset",
           "description": "Offset in the owner's local (pre-scale) pixel space, from the owner's anchor/pivot point to where this slot's drawing should be centered. Mirrored in x when the owner is flipped, scaled with the owner, and rotated about the owner's pivot by the owner's current rotation so the slot stays attached when the owner swings."
         },
+        "scale": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1.0,
+          "description": "Uniform scale of this slot's drawing around its center (the offset point). Multiplies the owner's scale. Omitted: 1.0."
+        },
+        "rotation": {
+          "type": "number",
+          "default": 0,
+          "description": "Degrees, clockwise, around this slot's center (the offset point). Added to the owner's current rotation. Omitted: 0."
+        },
         "images": {
           "type": "object",
           "description": "Map of drawing name -> image path (relative to the project folder). For a `lipsync`-driven slot these names must be Rhubarb mouth shapes (A-H, X); for a `keyframes`-driven slot they can be anything (\"fist\", \"open\", \"closed\", ...). At minimum provide one entry to use as the fallback; a missing drawing at render time falls back to \"X\" if present, else the first entry in `images`.",

@@ -12,6 +12,7 @@ import {
   cancelCharacterIngest,
   confirmCharacterIngest,
   previewCharacterIngest,
+  saveCharacterReference,
   saveCharacterStyle,
   type Character,
   type IngestPreview,
@@ -46,6 +47,7 @@ export default function AssetImaginePanel({
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<IngestPreview | null>(null);
   const [names, setNames] = useState<Record<number, string>>({});
+  const [attachReference, setAttachReference] = useState(false);
 
   useEffect(() => {
     setStyle(character.style || "");
@@ -59,10 +61,13 @@ export default function AssetImaginePanel({
   }, [need]);
 
   const expanded = useMemo(() => (need ? expandNeed(need, frames) : null), [need, frames]);
-  const prompt = useMemo(
-    () => (need ? fillNeedPrompt(need, { name: character.display_name, style, frames }) : ""),
-    [need, character.display_name, style, frames]
-  );
+  const isReferenceNeed = need?.id === "full_body_reference" || need?.dest?.kind === "reference" || need?.ingest === false;
+  const prompt = useMemo(() => {
+    if (!need) return "";
+    const base = fillNeedPrompt(need, { name: character.display_name, style, frames });
+    if (!attachReference) return base;
+    return `${base} Match the attached full-body reference image for likeness, costume, proportions, pose, and crop.`;
+  }, [need, character.display_name, style, frames, attachReference]);
 
   async function copyPrompt() {
     try {
@@ -88,11 +93,36 @@ export default function AssetImaginePanel({
     }
   }
 
+  const saveReferenceFile = useCallback(
+    async (file: File) => {
+      if (!file.type.startsWith("image/")) {
+        setError("Drop a PNG or JPEG. It is stored as-is, not cut out.");
+        return;
+      }
+      setBusy("Saving reference…");
+      setError(null);
+      try {
+        const imageBase64 = await fileToBase64(file);
+        await saveCharacterReference(project, character.id, { imageBase64, filename: file.name });
+        onChanged();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not save reference");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [project, character.id, onChanged]
+  );
+
   const ingestFile = useCallback(
     async (file: File) => {
       if (!need) return;
       if (!file.type.startsWith("image/")) {
         setError("Drop a PNG or JPEG from Grok Imagine.");
+        return;
+      }
+      if (isReferenceNeed) {
+        await saveReferenceFile(file);
         return;
       }
       setBusy("Cutting out…");
@@ -115,13 +145,14 @@ export default function AssetImaginePanel({
         setBusy(null);
       }
     },
-    [need, project, character.id, frames]
+    [need, isReferenceNeed, saveReferenceFile, project, character.id, frames]
   );
 
   useEffect(() => {
     function onPaste(event: ClipboardEvent) {
       const target = event.target as HTMLElement | null;
       if (target && target.closest("textarea, input, select")) return;
+      if (target && target.closest("[data-reference-drop]")) return;
       const item = [...(event.clipboardData?.items || [])].find((entry) => entry.type.startsWith("image/"));
       if (!item) return;
       const file = item.getAsFile();
@@ -239,6 +270,26 @@ export default function AssetImaginePanel({
         className="w-full resize-y rounded-md border border-studio-border bg-studio-raised px-3 py-2 font-mono text-[11px] leading-relaxed text-neutral-200"
         data-testid="asset-prompt"
       />
+      <label className="mb-3 flex items-start gap-2 text-[12px] text-neutral-300">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={attachReference}
+          onChange={(event) => setAttachReference(event.target.checked)}
+          data-testid="attach-reference"
+        />
+        <span>
+          Attach reference to prompt
+          {attachReference ? (
+            <span className="mt-1 block text-[11px] text-amber-200/90">
+              {character.referenceRel
+                ? "Attach this character's full-body reference in Grok Imagine (image input) before you generate."
+                : "Save a full-body reference on the character panel, then attach that file in Grok Imagine before you generate."}
+            </span>
+          ) : null}
+        </span>
+      </label>
+
       <div className="mt-2 flex items-center justify-between gap-2">
         <button
           type="button"
@@ -249,8 +300,11 @@ export default function AssetImaginePanel({
           {copied ? "Copied" : "Copy prompt"}
         </button>
         <span className="text-[11px] text-studio-muted">
-          {expanded?.grid ? `${expanded.grid.cols}×${expanded.grid.rows} grid` : "connected components"}
-          {need.key === false ? " · no chroma key" : " · key #00FF00"}
+          {isReferenceNeed
+            ? "stored original · no cut-out"
+            : `${expanded?.grid ? `${expanded.grid.cols}×${expanded.grid.rows} grid` : "connected components"}${
+                need.key === false ? " · no chroma key" : " · key #00FF00"
+              }`}
         </span>
       </div>
 
@@ -258,7 +312,12 @@ export default function AssetImaginePanel({
         dragging={dragging}
         setDragging={setDragging}
         disabled={busy != null}
-        label={busy || `Drop or paste a Grok Imagine image for ${need.label}`}
+        label={
+          busy ||
+          (isReferenceNeed
+            ? `Drop or paste a full-body reference for ${character.display_name} (stored as-is)`
+            : `Drop or paste a Grok Imagine image for ${need.label}`)
+        }
         onFile={(file) => void ingestFile(file)}
       />
 
