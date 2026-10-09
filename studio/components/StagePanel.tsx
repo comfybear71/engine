@@ -136,6 +136,13 @@ export default function StagePanel({
 
   const layers: StageLayer[] = currentScene?.layers || [];
   const maxFrame = Math.max(0, totalFrames - 1);
+  const scriptListRef = useRef<HTMLOListElement | null>(null);
+
+  useEffect(() => {
+    if (selectedLine == null || !scriptListRef.current) return;
+    const el = scriptListRef.current.querySelector(`[data-script-line="${selectedLine}"]`);
+    el?.scrollIntoView({ block: "center" });
+  }, [selectedLine]);
 
   if (!project) {
     return <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">Pick a project to open the stage.</div>;
@@ -255,7 +262,7 @@ export default function StagePanel({
         <div className="min-h-0 flex-1 overflow-y-auto border-t border-studio-border p-4">
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-studio-muted">Script</h3>
           <p className="mb-2 text-[11px] text-studio-muted">Click a timeline block to seek and highlight its line.</p>
-          <ol className="space-y-0.5 font-mono text-[11px] leading-5">
+          <ol ref={scriptListRef} className="space-y-0.5 font-mono text-[11px] leading-5">
             {scriptLines.map((line, index) => {
               const n = index + 1;
               const active = selectedLine === n;
@@ -263,6 +270,7 @@ export default function StagePanel({
                 <li key={n}>
                   <button
                     type="button"
+                    data-script-line={n}
                     onClick={() => {
                       const hit = (lanes?.blocks || []).find((b) => b.scriptLine === n);
                       if (hit) seekTo(hit.startFrame, n);

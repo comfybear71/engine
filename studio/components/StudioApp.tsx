@@ -143,6 +143,7 @@ export default function StudioApp() {
           ) : null}
           <button
             type="button"
+            data-testid="studio-render"
             onClick={() => void onRender()}
             disabled={!project || !workerUp || rendering}
             className="inline-flex items-center gap-2 rounded-md bg-studio-accent px-3 py-1.5 text-sm font-semibold text-black hover:bg-studio-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
