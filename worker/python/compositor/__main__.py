@@ -17,7 +17,7 @@ from pathlib import Path
 
 import cv2
 
-from .compositor import compose_frame, render, scene_at_frame
+from .compositor import clamp_preview_frame, compose_frame, render, scene_at_frame
 from .ffmpeg_writer import CODEC_H264, SUPPORTED_CODECS
 from .schema_validate import TimelineValidationError
 from .timeline_loader import load_timeline
@@ -75,6 +75,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _write_preview(timeline, frame_index: int, output_path: Path | None, project_dir: Path) -> int:
+    if timeline.total_frames <= 0:
+        print("error: timeline has no frames", file=sys.stderr)
+        return 2
+    frame_index = clamp_preview_frame(timeline, frame_index)
     try:
         scene, local_frame = scene_at_frame(timeline, frame_index)
         canvas = compose_frame(timeline, frame_index)

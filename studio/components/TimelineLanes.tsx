@@ -24,13 +24,15 @@ export default function TimelineLanes({
   frame,
   selectedLine,
   onSeek,
+  totalFrames,
 }: {
   lanes: LanesResponse | null;
   frame: number;
   selectedLine: number | null;
   onSeek: (frame: number, scriptLine: number | null) => void;
+  totalFrames?: number;
 }) {
-  const total = Math.max(lanes?.totalFrames || 1, 1);
+  const total = Math.max(totalFrames || lanes?.totalFrames || 1, 1);
   const maxFrame = Math.max(total - 1, 0);
   const playheadPct = pct(Math.min(frame, maxFrame), total);
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -74,7 +76,7 @@ export default function TimelineLanes({
             </div>
           ))}
         </div>
-        <div className="relative min-w-0 flex-1">
+        <div className="relative min-w-0 flex-1 overflow-hidden">
           <div
             ref={trackRef}
             data-testid="timeline-scrubber"

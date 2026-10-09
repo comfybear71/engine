@@ -227,6 +227,19 @@ def iter_scene_frames(scene: Scene, canvas_w: int, canvas_h: int, fps: int, cach
         yield held_canvas
 
 
+def clamp_preview_frame(timeline: Timeline, frame_index: int) -> int:
+    """Clamp a Studio preview request onto ``[0, total_frames-1]``."""
+
+    total = int(timeline.total_frames or 0)
+    if total <= 0:
+        return 0
+    try:
+        index = int(frame_index)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(index, total - 1))
+
+
 def scene_at_frame(timeline: Timeline, frame_index: int) -> tuple[Scene, int]:
     """Return ``(scene, local_frame)`` for a 0-based global frame index."""
 

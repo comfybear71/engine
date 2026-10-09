@@ -70,3 +70,36 @@ export function saveStageLayout(layout: StageLayout): void {
     /* ignore quota / private mode */
   }
 }
+
+export const IMAGINE_DOCK_KEY = "engine.studio.imagineDock.v1";
+export const DEFAULT_IMAGINE_HEIGHT = 280;
+export const IMAGINE_HEIGHT_LIMITS = { min: 160, max: 560 } as const;
+
+export function clampImagineHeight(value: number): number {
+  return clamp(
+    typeof value === "number" ? value : DEFAULT_IMAGINE_HEIGHT,
+    IMAGINE_HEIGHT_LIMITS.min,
+    IMAGINE_HEIGHT_LIMITS.max
+  );
+}
+
+export function loadImagineHeight(): number {
+  if (typeof window === "undefined") return DEFAULT_IMAGINE_HEIGHT;
+  try {
+    const raw = window.localStorage.getItem(IMAGINE_DOCK_KEY);
+    if (!raw) return DEFAULT_IMAGINE_HEIGHT;
+    const parsed = JSON.parse(raw) as { height?: number };
+    return clampImagineHeight(typeof parsed.height === "number" ? parsed.height : DEFAULT_IMAGINE_HEIGHT);
+  } catch {
+    return DEFAULT_IMAGINE_HEIGHT;
+  }
+}
+
+export function saveImagineHeight(height: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(IMAGINE_DOCK_KEY, JSON.stringify({ height: clampImagineHeight(height) }));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}

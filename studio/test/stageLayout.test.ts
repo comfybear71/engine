@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  DEFAULT_IMAGINE_HEIGHT,
   DEFAULT_STAGE_LAYOUT,
+  clampImagineHeight,
   clampStageLayout,
   parseStoredLayout,
 } from "../lib/stageLayout.ts";
-import { formatTimecode, frameFromTrackX, scriptLineAtFrame } from "../lib/playhead.ts";
+import { clampFrameIndex, formatTimecode, frameFromTrackX, scriptLineAtFrame } from "../lib/playhead.ts";
 
 describe("stage layout", () => {
   test("clamps sizes and fills defaults", () => {
@@ -23,6 +25,12 @@ describe("stage layout", () => {
     assert.equal(stored.leftWidth, 300);
     assert.equal(stored.rightWidth, DEFAULT_STAGE_LAYOUT.rightWidth);
     assert.equal(stored.timelineHeight, DEFAULT_STAGE_LAYOUT.timelineHeight);
+  });
+
+  test("clampImagineHeight bounds the Grok Imagine dock", () => {
+    assert.equal(clampImagineHeight(80), 160);
+    assert.equal(clampImagineHeight(900), 560);
+    assert.equal(clampImagineHeight(DEFAULT_IMAGINE_HEIGHT), DEFAULT_IMAGINE_HEIGHT);
   });
 });
 
@@ -49,5 +57,12 @@ describe("playhead", () => {
     assert.equal(frameFromTrackX(0, 0, 100, 101), 0);
     assert.equal(frameFromTrackX(100, 0, 100, 101), 100);
     assert.equal(frameFromTrackX(50, 0, 100, 101), 50);
+  });
+
+  test("clampFrameIndex stays on [0, total-1] even when lanes extend past the compositor", () => {
+    assert.equal(clampFrameIndex(287, 285), 284);
+    assert.equal(clampFrameIndex(-3, 285), 0);
+    assert.equal(clampFrameIndex(0, 285), 0);
+    assert.equal(clampFrameIndex(Number.NaN, 24), 0);
   });
 });

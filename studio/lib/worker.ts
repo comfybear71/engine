@@ -3,11 +3,9 @@ export const WORKER_URL = (process.env.NEXT_PUBLIC_WORKER_URL || "http://localho
   ""
 );
 
-export const WORKER_START_COMMAND = "cd worker && npm start";
-
 export class WorkerUnreachableError extends Error {
   constructor() {
-    super(`Worker is not running. Start it with: ${WORKER_START_COMMAND}`);
+    super("The engine isn't running yet.");
     this.name = "WorkerUnreachableError";
   }
 }

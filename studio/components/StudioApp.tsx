@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import AssetsPanel from "@/components/AssetsPanel";
+import EngineStatus from "@/components/EngineStatus";
+import ImagineDock from "@/components/ImagineDock";
 import ScriptPanel from "@/components/ScriptPanel";
 import StagePanel from "@/components/StagePanel";
 import {
-  WORKER_START_COMMAND,
   checkWorker,
   loadScripts,
   renderVideoUrl,
@@ -37,6 +38,9 @@ export default function StudioApp({ projectName }: { projectName: string }) {
   const [showVideo, setShowVideo] = useState(false);
   const [selectedScriptLine, setSelectedScriptLine] = useState<number | null>(null);
   const [scriptEpoch, setScriptEpoch] = useState(0);
+  const [imagineOpen, setImagineOpen] = useState(false);
+  const [assetCharacterId, setAssetCharacterId] = useState<string | null>(null);
+  const [assetEpoch, setAssetEpoch] = useState(0);
 
   const refresh = useCallback(async () => {
     const up = await checkWorker();
@@ -56,9 +60,10 @@ export default function StudioApp({ projectName }: { projectName: string }) {
 
   useEffect(() => {
     void refresh();
-    const id = window.setInterval(() => void refresh(), 4000);
+    const ms = workerUp === true ? 4000 : 2000;
+    const id = window.setInterval(() => void refresh(), ms);
     return () => window.clearInterval(id);
-  }, [refresh]);
+  }, [refresh, workerUp]);
 
   async function onRender() {
     if (!project || rendering) return;
@@ -164,15 +169,19 @@ export default function StudioApp({ projectName }: { projectName: string }) {
         </div>
       </header>
 
-      {workerUp === false ? (
-        <div className="border-b border-amber-700/60 bg-amber-950/80 px-4 py-2 text-sm text-amber-100">
-          Worker is not running. Start it with: <code className="font-mono">{WORKER_START_COMMAND}</code>
-        </div>
-      ) : null}
+      <EngineStatus workerUp={workerUp} onRetry={() => void refresh()} />
 
       <main className="flex min-h-0 flex-1 flex-col">
         {tab === "assets" ? (
-          <AssetsPanel project={project} workerUp={workerUp === true} onLibraryChange={() => void refresh()} />
+          <AssetsPanel
+            project={project}
+            workerUp={workerUp === true}
+            onLibraryChange={() => void refresh()}
+            selectedId={assetCharacterId}
+            onSelectId={setAssetCharacterId}
+            onOpenImagine={() => setImagineOpen(true)}
+            refreshToken={assetEpoch}
+          />
         ) : null}
         {tab === "stage" ? (
           <StagePanel
@@ -199,6 +208,19 @@ export default function StudioApp({ projectName }: { projectName: string }) {
         ) : null}
         {!active.ready ? <PlaceholderPage name={active.label} /> : null}
       </main>
+
+      <ImagineDock
+        project={project}
+        workerUp={workerUp === true}
+        open={imagineOpen}
+        characterId={assetCharacterId}
+        onOpenChange={setImagineOpen}
+        onCharacterId={setAssetCharacterId}
+        onChanged={() => {
+          setAssetEpoch((n) => n + 1);
+          void refresh();
+        }}
+      />
 
       {showVideo && videoSrc ? (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/70 p-6">

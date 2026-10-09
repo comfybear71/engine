@@ -8,7 +8,7 @@ import { LayersInspector, MarksInspector, ScriptInspector } from "@/components/S
 import { LeftIconRail, RightIconRail, type LeftPoolId, type RightDrawerId } from "@/components/StageRails";
 import TimelineLanes from "@/components/TimelineLanes";
 import TransportBar from "@/components/TransportBar";
-import { scriptLineAtFrame } from "@/lib/playhead";
+import { clampFrameIndex, scriptLineAtFrame } from "@/lib/playhead";
 import {
   DEFAULT_STAGE_LAYOUT,
   clampStageLayout,
@@ -70,6 +70,7 @@ export default function StagePanel({
   const playingRef = useRef(false);
   const frameRef = useRef(0);
   const userSeekRef = useRef(false);
+  const playableTotalRef = useRef<number | null>(null);
 
   playingRef.current = playing;
   frameRef.current = frame;
@@ -90,6 +91,7 @@ export default function StagePanel({
     setFrame(0);
     setPlaying(false);
     setSelectedMark(null);
+    playableTotalRef.current = null;
     Promise.all([loadStage(project, script), loadLanes(project, script), loadScript(project, script)])
       .then(([info, nextLanes, text]) => {
         if (cancelled) return;
@@ -99,7 +101,9 @@ export default function StagePanel({
         setFps(info.fps);
         setCanvas(info.canvas);
         setSceneId(info.scenes[0]?.id ?? null);
-        if (nextLanes.totalFrames > 0) setTotalFrames(nextLanes.totalFrames);
+        if (playableTotalRef.current == null && nextLanes.totalFrames > 0) {
+          setTotalFrames(nextLanes.totalFrames);
+        }
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -130,14 +134,21 @@ export default function StagePanel({
     if (!project || !workerUp) return;
     if (playing && hasRender) return;
     const controller = new AbortController();
+    const requestFrame = clampFrameIndex(frame, totalFrames);
     const timer = window.setTimeout(() => {
-      fetchPreviewFrame(project, frame, controller.signal, script)
+      fetchPreviewFrame(project, requestFrame, controller.signal, script)
         .then(({ blob, meta }) => {
           const url = URL.createObjectURL(blob);
           if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
           previewUrlRef.current = url;
           setPreviewUrl(url);
-          if (meta.totalFrames > 0) setTotalFrames(meta.totalFrames);
+          const nextTotal = meta.totalFrames > 0 ? meta.totalFrames : totalFrames;
+          if (nextTotal > 0) {
+            playableTotalRef.current = nextTotal;
+            setTotalFrames(nextTotal);
+          }
+          const served = clampFrameIndex(Number.isFinite(meta.frame) ? meta.frame : requestFrame, nextTotal);
+          if (served !== frame) setFrame(served);
           if (meta.fps) setFps(meta.fps);
           if (meta.canvasWidth && meta.canvasHeight) {
             setCanvas({ width: meta.canvasWidth, height: meta.canvasHeight });
@@ -154,7 +165,7 @@ export default function StagePanel({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [project, script, workerUp, frame, playing, hasRender]);
+  }, [project, script, workerUp, frame, playing, hasRender, totalFrames]);
 
   useEffect(() => {
     return () => {
@@ -196,7 +207,7 @@ export default function StagePanel({
 
   const seekTo = useCallback(
     (nextFrame: number, scriptLine: number | null) => {
-      const clamped = Math.max(0, Math.min(maxFrame, Math.round(nextFrame)));
+      const clamped = clampFrameIndex(nextFrame, totalFrames);
       setFrame(clamped);
       userSeekRef.current = true;
       const line = scriptLine ?? scriptLineAtFrame(lanes?.blocks || [], clamped);
@@ -206,7 +217,7 @@ export default function StagePanel({
         video.currentTime = clamped / Math.max(fps, 1);
       }
     },
-    [fps, hasRender, lanes, maxFrame, onSelectLine]
+    [fps, hasRender, lanes, totalFrames, onSelectLine]
   );
 
   useEffect(() => {
@@ -464,7 +475,13 @@ export default function StagePanel({
           }
         />
         <div className="shrink-0 overflow-hidden" style={{ height: layout.timelineHeight }}>
-          <TimelineLanes lanes={lanes} frame={frame} selectedLine={selectedLine} onSeek={seekTo} />
+          <TimelineLanes
+            lanes={lanes}
+            frame={frame}
+            selectedLine={selectedLine}
+            onSeek={seekTo}
+            totalFrames={totalFrames}
+          />
         </div>
       </div>
       <RightIconRail

@@ -15,44 +15,43 @@ lanes, and Render never write `timeline.json` — Render parses the selected
 script to a temp timeline (the same `--script` option as the CLI) and
 writes `renders/<script-stem>.mp4`.
 
-## Two terminals
+## Starting Engine Studio
 
-From the repo root, after the usual [README setup](../README.md#setup)
-(`npm install` in `worker/`, Python venv, FFmpeg on `PATH`).
+You do not need a terminal. After the computer has been set up once
+(see [README setup](../README.md#setup)), start it like any other app.
 
-**Terminal 1 — worker**
+**Open Studio**
 
-```bash
-cd worker
-npm start
-```
+Double-click `start-studio.bat` in the engine folder. A minimised window
+starts the engine (port `4100`, `STUDIO_ORIGIN=http://localhost:3001`)
+and Studio together, restarts either if it stops, and opens the browser
+at `http://localhost:3001`. That is `node launcher.js` under the hood.
 
-That is `node src/server.js`. It should print:
+**Desktop shortcut**
 
-```
-Render worker listening on http://127.0.0.1:4100 (localhost only)
-```
+Double-click `install-studio-shortcut.bat`. It puts **Engine Studio** on
+the desktop. After that, start from the shortcut.
 
-**Terminal 2 — Studio**
+**Start with Windows**
 
-```bash
-cd studio
-npm install
-npm run dev
-```
+Double-click `install-studio-startup.bat`. Windows will start Engine
+Studio (minimised) when you sign in.
 
-Open `http://localhost:3000` (Next.js uses `3001` if `3000` is already
-taken). The page calls `http://localhost:4100` (or `NEXT_PUBLIC_WORKER_URL`)
-directly.
+**If the page opens but the engine is not ready yet**
 
-If the worker is not running, the Studio shows:
+Studio shows **Engine is starting…** and checks again every 2 seconds.
+Press **Start engine** if it stays that way — that asks Studio to start
+the engine on this PC (no terminal). If that cannot, it says so in
+plain English; try the desktop shortcut again.
 
-```
-Worker is not running. Start it with: cd worker && npm start
-```
+The browser talks to `http://localhost:4100` (or `NEXT_PUBLIC_WORKER_URL`)
+directly. The Studio UI never shows shell commands.
 
-Same two commands on Windows (`cd worker` then `npm start`, and `cd studio`
-then `npm run dev`).
+### Developers
+
+`node launcher.js` from the repo root is the same supervisor. One-time
+machine setup (Node, packages, Python venv, FFmpeg) stays in the
+[README](../README.md#setup).
 
 ## Config
 
@@ -112,11 +111,17 @@ clobber the project's `timeline.json`.
   props from those locations' `staging.json`. **Library** opens a drawer of
   global characters from `projects/_global_assets` and **Add** records a
   reference in `library.json` without copying art. Click a character to see
-  its slots (mouth, eyes, hands, …), drawings, and named cycles. On the
-  same page, **Grok Imagine** builds a ready-to-copy prompt per character
-  and need (templates in `studio/lib/assetNeeds.json`), then a drop zone
-  ingests the PNG you generated in the browser — there is no image-generation
-  API. See [Image assets](#image-assets-grok-imagine) below.
+  its slots (mouth, eyes, hands, …), drawings, and named cycles. Character
+  thumbnails use `object-fit: contain` so the whole figure is visible.
+  **Grok Imagine** lives in a bottom dock (hidden by default): open it with
+  the **Grok Imagine** tab on the bottom edge, or the same-named button on
+  the Assets page. Drag the dock's top splitter to resize (persisted in
+  `localStorage` as `engine.studio.imagineDock.v1`); double-click to reset;
+  Close or the tab again hides it so the asset grids stay fully visible
+  above. The dock builds a ready-to-copy prompt per character and need
+  (templates in `studio/lib/assetNeeds.json`), then a drop zone ingests
+  the PNG you generated in the browser — there is no image-generation API.
+  See [Image assets](#image-assets-grok-imagine) below.
 - **Stage** — the main workspace. A large frame preview from
   `POST /api/projects/:name/preview-frame?script=`, a transport bar under
   the viewer (rewind / play / stop; timecode on the left; `frame N · fps ·
@@ -136,7 +141,11 @@ clobber the project's `timeline.json`.
   through the existing script save path. Splitters between the left
   pool, stage, right drawer, and timeline are draggable; sizes persist
   in `localStorage` (`engine.studio.stageLayout.v1`); double-click a
-  splitter to reset. Lane editing by drag is a later PR.
+  splitter to reset. The playhead, scrubber, lane clicks, and
+  `preview-frame` requests are clamped to `[0, total_frames-1]`; Stage
+  uses the compositor's `total_frames` (via `X-Engine-Total-Frames`) so
+  lanes and preview share one length even when a lane block extends a
+  couple of frames past the movie. Lane editing by drag is a later PR.
 - **Script** — full-page line-numbered editor for the selected `script*.txt` with
   Save (Ctrl/Cmd+S) and Lint. Insert Action buttons drop real tag templates
   from [script-format.md](script-format.md) at the cursor, using character
@@ -198,7 +207,8 @@ matching the Stage scrubber.
 Generation happens in the browser (Grok Imagine). The Studio only builds
 the prompt and cuts the resulting PNG.
 
-1. On **Assets**, pick a character. **Grok Imagine** lists needs from
+1. Open the **Grok Imagine** dock (bottom-edge tab, or the button on
+   **Assets**) and pick a character. It lists needs from
    `studio/lib/assetNeeds.json` (edit that file to change copy or grids):
    full body without head/mouth, mouth/head sheet (3×3 Rhubarb `X,A–H`),
    expression heads, arm/hand pieces, walk cycle sheet (side/front/back,

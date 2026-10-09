@@ -40,9 +40,15 @@ export function scriptLineAtFrame(blocks: PlayheadBlock[], frame: number): numbe
   return previous[0]?.scriptLine ?? null;
 }
 
+export function clampFrameIndex(frame: number, totalFrames: number): number {
+  const maxFrame = Math.max(0, Math.max(Number(totalFrames) || 1, 1) - 1);
+  if (!Number.isFinite(frame)) return 0;
+  return Math.max(0, Math.min(maxFrame, Math.round(frame)));
+}
+
 export function frameFromTrackX(clientX: number, trackLeft: number, trackWidth: number, totalFrames: number): number {
-  const maxFrame = Math.max(0, totalFrames - 1);
+  const maxFrame = Math.max(0, Math.max(Number(totalFrames) || 1, 1) - 1);
   if (trackWidth <= 0) return 0;
   const t = (clientX - trackLeft) / trackWidth;
-  return Math.round(Math.min(1, Math.max(0, t)) * maxFrame);
+  return clampFrameIndex(Math.round(Math.min(1, Math.max(0, t)) * maxFrame), totalFrames);
 }
