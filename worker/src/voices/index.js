@@ -17,7 +17,7 @@ const { parseProject, parseProjectToFiles, resolveGlobalAssetsDir } = require(".
 const { resolveAsset } = require("../parser/assetLibrary");
 const { pcmToWav } = require("./wavHeader");
 const { sidecarPathForWav, writeSidecar, shouldSkipLine } = require("./creditGuard");
-const { synthesizePcm, resolveModelId, resolveApiKey, VoicesFatalError } = require("./elevenlabs");
+const { synthesizePcm, resolveModelId, resolveApiKey, resolveOutputFormat, VoicesFatalError } = require("./elevenlabs");
 const { runRhubarbOnWav } = require("./rhubarb");
 
 function padLineNumber(n) {
@@ -104,7 +104,7 @@ function makeIo(options) {
 }
 
 async function recordOneLine(line, ctx) {
-  const { projectDir, modelId, apiKey, io, options } = ctx;
+  const { projectDir, modelId, apiKey, outputFormat, sampleRate, io, options } = ctx;
   const wavAbs = path.join(projectDir, line.audio_path);
   const cuesAbs = path.join(projectDir, line.cues_path);
   const sidecarAbs = sidecarPathForWav(wavAbs);
@@ -114,12 +114,13 @@ async function recordOneLine(line, ctx) {
     text: line.text,
     modelId,
     apiKey,
+    outputFormat,
     fetchFn: options.fetch,
     sleepFn: options.sleep,
     backoffMs: options.backoffMs,
   });
 
-  atomicWriteFile(wavAbs, pcmToWav(pcm));
+  atomicWriteFile(wavAbs, pcmToWav(pcm, { sampleRate }));
   writeSidecar(sidecarAbs, {
     text: line.text,
     voiceId: line.voiceId,
@@ -172,6 +173,7 @@ async function runVoices(projectDir, options = {}) {
   const force = !!options.force;
   const modelId = resolveModelId();
   const apiKey = resolveApiKey();
+  const { outputFormat, sampleRate } = resolveOutputFormat();
 
   const parsed = await parseProject(resolvedProjectDir, {
     script: options.script,
@@ -258,7 +260,7 @@ async function runVoices(projectDir, options = {}) {
     throw new VoicesFatalError("ELEVENLABS_API_KEY is not set. Copy .env.example to .env and add your key.");
   }
 
-  const ctx = { projectDir: resolvedProjectDir, modelId, apiKey, io, options };
+  const ctx = { projectDir: resolvedProjectDir, modelId, apiKey, outputFormat, sampleRate, io, options };
   try {
     for (const line of result.toRecord) {
       io.log(`Recording ${lineLabel(line)} (${line.chars} chars)...`);

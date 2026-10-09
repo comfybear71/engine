@@ -7,9 +7,11 @@
  */
 
 const DEFAULT_MODEL_ID = "eleven_multilingual_v2";
+const DEFAULT_OUTPUT_FORMAT = "pcm_24000";
 const TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech";
 const DEFAULT_BACKOFF_MS = [1000, 2000, 4000];
 const MAX_ERROR_BODY_CHARS = 200;
+const PCM_FORMAT_RE = /^pcm_(\d+)$/;
 
 class VoicesFatalError extends Error {
   constructor(message) {
@@ -39,10 +41,36 @@ function isFatalAuthOrQuota(status, bodyText) {
   return isQuotaError(status, bodyText);
 }
 
+function isOutputFormatNotAllowed(status, bodyText) {
+  return status === 403 && /output_format_not_allowed/i.test(String(bodyText || ""));
+}
+
+function parseOutputFormat(value) {
+  const raw = value == null || String(value).trim() === "" ? DEFAULT_OUTPUT_FORMAT : String(value).trim();
+  const match = PCM_FORMAT_RE.exec(raw);
+  const sampleRate = match ? Number(match[1]) : NaN;
+  if (!match || !Number.isInteger(sampleRate) || sampleRate <= 0) {
+    throw new VoicesFatalError(
+      `Invalid ELEVENLABS_OUTPUT_FORMAT "${raw}". Expected pcm_<rate> (e.g. pcm_16000, pcm_22050, pcm_24000, pcm_44100).`
+    );
+  }
+  return { outputFormat: raw, sampleRate };
+}
+
+function resolveOutputFormat(env = process.env) {
+  return parseOutputFormat(env.ELEVENLABS_OUTPUT_FORMAT);
+}
+
 function fatalMessage(status, bodyText) {
   const excerpt = truncateBody(bodyText);
   if (status === 401) {
     return "ElevenLabs rejected the API key (401). Check ELEVENLABS_API_KEY in .env.";
+  }
+  if (isOutputFormatNotAllowed(status, bodyText)) {
+    return (
+      "ElevenLabs rejected the output format (403 output_format_not_allowed). " +
+      "Set ELEVENLABS_OUTPUT_FORMAT=pcm_24000 or lower in .env."
+    );
   }
   if (status === 402 || isQuotaError(status, bodyText)) {
     return `ElevenLabs quota/payment error (${status}). Voice recording stopped.${excerpt ? ` ${excerpt}` : ""}`;
@@ -55,10 +83,10 @@ function shouldRetry(status) {
 }
 
 /**
- * POST /v1/text-to-speech/{voice_id}?output_format=pcm_44100
- * Body: { text, model_id }. Response is raw 16-bit LE mono PCM at 44100 Hz.
+ * POST /v1/text-to-speech/{voice_id}?output_format=pcm_<rate>
+ * Body: { text, model_id }. Response is raw 16-bit LE mono PCM at that rate.
  */
-async function synthesizePcm({ voiceId, text, modelId, apiKey, fetchFn, sleepFn, backoffMs }) {
+async function synthesizePcm({ voiceId, text, modelId, apiKey, outputFormat, fetchFn, sleepFn, backoffMs }) {
   if (!apiKey) {
     throw new VoicesFatalError("ELEVENLABS_API_KEY is not set. Copy .env.example to .env and add your key.");
   }
@@ -68,7 +96,8 @@ async function synthesizePcm({ voiceId, text, modelId, apiKey, fetchFn, sleepFn,
   }
   const sleep = sleepFn || defaultSleep;
   const delays = backoffMs || DEFAULT_BACKOFF_MS;
-  const url = `${TTS_URL}/${encodeURIComponent(voiceId)}?output_format=pcm_44100`;
+  const format = parseOutputFormat(outputFormat ?? process.env.ELEVENLABS_OUTPUT_FORMAT);
+  const url = `${TTS_URL}/${encodeURIComponent(voiceId)}?output_format=${encodeURIComponent(format.outputFormat)}`;
   const maxAttempts = delays.length + 1;
 
   let lastError;
@@ -102,7 +131,7 @@ async function synthesizePcm({ voiceId, text, modelId, apiKey, fetchFn, sleepFn,
     }
 
     const bodyText = await response.text().catch(() => "");
-    if (isFatalAuthOrQuota(response.status, bodyText)) {
+    if (isOutputFormatNotAllowed(response.status, bodyText) || isFatalAuthOrQuota(response.status, bodyText)) {
       throw new VoicesFatalError(fatalMessage(response.status, bodyText));
     }
 
@@ -131,7 +160,11 @@ module.exports = {
   synthesizePcm,
   resolveModelId,
   resolveApiKey,
+  resolveOutputFormat,
+  parseOutputFormat,
   VoicesFatalError,
   DEFAULT_MODEL_ID,
+  DEFAULT_OUTPUT_FORMAT,
   isFatalAuthOrQuota,
+  isOutputFormatNotAllowed,
 };

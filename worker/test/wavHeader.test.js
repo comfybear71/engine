@@ -38,4 +38,13 @@ describe("WAV header helper", () => {
     assert.equal(wav.readUInt32LE(40), pcm.length);
     assert.deepEqual(wav.subarray(WAV_HEADER_BYTES), pcm);
   });
+
+  test("header uses the sample rate passed in (e.g. pcm_24000)", () => {
+    const sampleRate = 24000;
+    const header = buildWavHeader(48000, { sampleRate });
+    assert.equal(header.readUInt32LE(24), sampleRate);
+    assert.equal(header.readUInt32LE(28), sampleRate * 2);
+    const wav = pcmToWav(Buffer.from([0x00, 0x01]), { sampleRate: 16000 });
+    assert.equal(wav.readUInt32LE(24), 16000);
+  });
 });

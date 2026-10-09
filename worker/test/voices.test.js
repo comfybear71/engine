@@ -7,7 +7,7 @@ const path = require("path");
 
 const { runVoices } = require("../src/voices");
 const { writeSidecar } = require("../src/voices/creditGuard");
-const { resolveModelId } = require("../src/voices/elevenlabs");
+const { resolveModelId, resolveOutputFormat, VoicesFatalError } = require("../src/voices/elevenlabs");
 const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
 const { writeSilentWav } = require("./helpers/wav");
 
@@ -117,6 +117,36 @@ describe("voices --dry-run", () => {
     } finally {
       fixture.cleanup();
     }
+  });
+});
+
+describe("ELEVENLABS_OUTPUT_FORMAT", () => {
+  test("defaults to pcm_24000, parses pcm_<rate>, and rejects other values", () => {
+    assert.deepEqual(resolveOutputFormat({}), { outputFormat: "pcm_24000", sampleRate: 24000 });
+    assert.deepEqual(resolveOutputFormat({ ELEVENLABS_OUTPUT_FORMAT: "" }), {
+      outputFormat: "pcm_24000",
+      sampleRate: 24000,
+    });
+    assert.deepEqual(resolveOutputFormat({ ELEVENLABS_OUTPUT_FORMAT: "pcm_16000" }), {
+      outputFormat: "pcm_16000",
+      sampleRate: 16000,
+    });
+    assert.deepEqual(resolveOutputFormat({ ELEVENLABS_OUTPUT_FORMAT: "pcm_22050" }), {
+      outputFormat: "pcm_22050",
+      sampleRate: 22050,
+    });
+    assert.deepEqual(resolveOutputFormat({ ELEVENLABS_OUTPUT_FORMAT: "pcm_44100" }), {
+      outputFormat: "pcm_44100",
+      sampleRate: 44100,
+    });
+    assert.throws(
+      () => resolveOutputFormat({ ELEVENLABS_OUTPUT_FORMAT: "mp3_44100" }),
+      (err) => err instanceof VoicesFatalError && /pcm_<rate>/.test(err.message)
+    );
+    assert.throws(
+      () => resolveOutputFormat({ ELEVENLABS_OUTPUT_FORMAT: "pcm_foo" }),
+      VoicesFatalError
+    );
   });
 });
 
