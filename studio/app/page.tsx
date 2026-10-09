@@ -172,7 +172,9 @@ export default function StudioPage() {
       {workerDown ? (
         <div className="border-b border-amber-900 bg-amber-950/60 px-4 py-3 text-sm text-amber-100">
           Worker is not running. Start it with: <code className="font-mono">{WORKER_START_COMMAND}</code>
-          <span className="ml-2 text-amber-200/70">({WORKER_URL} — this is `node src/server.js` from worker/)</span>
+          <span className="ml-2 text-amber-200/70">
+            ({WORKER_URL} — that command runs <code className="font-mono">node src/server.js</code> from worker/)
+          </span>
         </div>
       ) : null}
 
