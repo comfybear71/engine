@@ -23,13 +23,14 @@ from typing import Iterator, NamedTuple
 
 import numpy as np
 
-from .asset_cache import AssetCache
+from .asset_cache import AssetCache, anchor_after_rotation
 from .background import fit_to_canvas
 from .blend import draw_image
 from .camera import apply_camera
 from .ffmpeg_writer import write_frames
-from .slots import Slot, active_drawing
-from .timeline_loader import Layer, Scene, Timeline
+from .slots import Slot, active_drawing, slot_is_visible
+from .timeline_loader import Child, Layer, Scene, Timeline, child_rotation_at, transform_at
+from .transform import rotate_offset_clockwise
 
 
 class _Placed(NamedTuple):
@@ -48,55 +49,134 @@ class _Placed(NamedTuple):
     slots: dict[str, Slot]
 
 
-def _resolve_layer_placements(layer: Layer) -> list[_Placed]:
-    t = layer.transform
-    placements = [
-        _Placed(
-            z=0, x=t.x, y=t.y, scale=t.scale, flip_x=t.flip_x, rotation=t.rotation,
-            opacity=t.opacity, anchor=t.anchor, asset=layer.asset, slots=layer.slots,
-        )
-    ]
+def _place_child_on_parent(parent: _Placed, child: Child, local_frame: int) -> _Placed:
+    """Place ``child`` in ``parent``'s local space, rotating the offset
+    about the parent's pivot by the parent's current rotation."""
+
+    mirrored_x = -child.offset_x if parent.flip_x else child.offset_x
+    rotated_x, rotated_y = rotate_offset_clockwise(mirrored_x, child.offset_y, parent.rotation)
+    return _Placed(
+        z=child.z,
+        x=parent.x + rotated_x * parent.scale,
+        y=parent.y + rotated_y * parent.scale,
+        scale=parent.scale * child.scale,
+        flip_x=(parent.flip_x != child.flip_x),
+        rotation=parent.rotation + child_rotation_at(child, local_frame),
+        opacity=parent.opacity * child.opacity,
+        anchor=child.pivot,
+        asset=child.asset,
+        slots=child.slots,
+    )
+
+
+def _resolve_layer_placements(layer: Layer, local_frame: int = 0) -> list[_Placed]:
+    t = transform_at(layer, local_frame)
+    root = _Placed(
+        z=0, x=t.x, y=t.y, scale=t.scale, flip_x=t.flip_x, rotation=t.rotation,
+        opacity=t.opacity, anchor=t.anchor, asset=layer.asset, slots=layer.slots,
+    )
+    placements = [root]
+    placed_by_id: dict[str, _Placed] = {}
+
+    # Top-level children (no child.parent) stay at their unrotated offset
+    # relative to the layer -- layer.rotation is still not composed into
+    # child placement (documented limitation). Their own rotation is applied
+    # around their own pivot via the pivot-fixed draw path.
     for child in layer.children:
-        mirrored_offset_x = -child.offset_x if t.flip_x else child.offset_x
-        child_x = t.x + mirrored_offset_x * t.scale
-        child_y = t.y + child.offset_y * t.scale
-        placements.append(
-            _Placed(
-                z=child.z,
-                x=child_x,
-                y=child_y,
-                scale=t.scale * child.scale,
-                flip_x=(t.flip_x != child.flip_x),  # composed (XOR): inherits parent flip by default
-                rotation=child.rotation,
-                opacity=t.opacity * child.opacity,
-                anchor=child.pivot,
-                asset=child.asset,
-                slots=child.slots,
-            )
+        if child.parent:
+            continue
+        layer_space = _Placed(
+            z=0, x=t.x, y=t.y, scale=t.scale, flip_x=t.flip_x, rotation=0.0,
+            opacity=t.opacity, anchor=t.anchor, asset=layer.asset, slots={},
         )
+        placed = _place_child_on_parent(layer_space, child, local_frame)
+        placed_by_id[child.id] = placed
+        placements.append(placed)
+
+    for child in layer.children:
+        if not child.parent:
+            continue
+        parent_placed = placed_by_id[child.parent]
+        placed = _place_child_on_parent(parent_placed, child, local_frame)
+        placed_by_id[child.id] = placed
+        placements.append(placed)
+
     return sorted(placements, key=lambda p: p.z)
 
 
-def _draw_slot(canvas: np.ndarray, cache: AssetCache, slot: Slot, owner: _Placed, owner_local_frame_idx: int, fps: int) -> None:
+def _draw_transformed(
+    canvas: np.ndarray,
+    cache: AssetCache,
+    path: Path,
+    x: float,
+    y: float,
+    scale: float,
+    flip_x: bool,
+    rotation: float,
+    anchor: str,
+    opacity: float,
+) -> None:
+    """Draw a scaled/flipped/rotated asset so ``anchor`` stays at ``(x, y)``.
+
+    ``AssetCache`` rotates about the image centre and expands the canvas.
+    We then find where the original (post-scale) anchor landed in that
+    expanded image and place the top-left so that point sits on ``(x, y)``.
+    """
+
+    img = cache.get_variant(path, scale=scale, flip_x=flip_x, rotation=rotation)
+    src_w, src_h = cache.pre_rotation_size(path, scale)
+    pivot_x, pivot_y = anchor_after_rotation(src_w, src_h, anchor, rotation)
+    draw_image(canvas, img, x - pivot_x, y - pivot_y, anchor="top-left", opacity=opacity)
+
+
+def _collect_slot_drawings(layer: Layer, local_frame: int, fps: int) -> dict[str, str | None]:
+    drawings: dict[str, str | None] = {}
+    for name, slot in layer.slots.items():
+        drawings[name] = active_drawing(slot, local_frame, fps)
+    for child in layer.children:
+        for name, slot in child.slots.items():
+            drawings[name] = active_drawing(slot, local_frame, fps)
+    return drawings
+
+
+def _draw_slot(
+    canvas: np.ndarray,
+    cache: AssetCache,
+    slot: Slot,
+    owner: _Placed,
+    owner_local_frame_idx: int,
+    fps: int,
+    drawings: dict[str, str | None],
+) -> None:
+    if not slot_is_visible(slot, drawings):
+        return
     drawing = active_drawing(slot, owner_local_frame_idx, fps)
     image_path = slot.resolve_image(drawing)
     if image_path is None:
         return
 
-    mirrored_offset_x = -slot.offset_x if owner.flip_x else slot.offset_x
-    slot_x = owner.x + mirrored_offset_x * owner.scale
-    slot_y = owner.y + slot.offset_y * owner.scale
+    mirrored_x = -slot.offset_x if owner.flip_x else slot.offset_x
+    rotated_x, rotated_y = rotate_offset_clockwise(mirrored_x, slot.offset_y, owner.rotation)
+    slot_x = owner.x + rotated_x * owner.scale
+    slot_y = owner.y + rotated_y * owner.scale
 
-    img = cache.get_variant(image_path, scale=owner.scale, flip_x=owner.flip_x)
-    draw_image(canvas, img, slot_x, slot_y, anchor="center", opacity=owner.opacity)
+    _draw_transformed(
+        canvas, cache, image_path,
+        slot_x, slot_y, owner.scale, owner.flip_x, owner.rotation,
+        anchor="center", opacity=owner.opacity,
+    )
 
 
 def _draw_layer(canvas: np.ndarray, layer: Layer, cache: AssetCache, layer_local_frame_idx: int, fps: int) -> None:
-    for placed in _resolve_layer_placements(layer):
-        img = cache.get_variant(placed.asset, scale=placed.scale, flip_x=placed.flip_x, rotation=placed.rotation)
-        draw_image(canvas, img, placed.x, placed.y, anchor=placed.anchor, opacity=placed.opacity)
+    drawings = _collect_slot_drawings(layer, layer_local_frame_idx, fps)
+    for placed in _resolve_layer_placements(layer, layer_local_frame_idx):
+        _draw_transformed(
+            canvas, cache, placed.asset,
+            placed.x, placed.y, placed.scale, placed.flip_x, placed.rotation,
+            placed.anchor, placed.opacity,
+        )
         for slot in placed.slots.values():
-            _draw_slot(canvas, cache, slot, placed, layer_local_frame_idx, fps)
+            _draw_slot(canvas, cache, slot, placed, layer_local_frame_idx, fps, drawings)
 
 
 def iter_scene_frames(scene: Scene, canvas_w: int, canvas_h: int, fps: int, cache: AssetCache) -> Iterator[np.ndarray]:

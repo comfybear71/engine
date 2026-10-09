@@ -142,7 +142,47 @@
         "bottom-left", "bottom-center", "bottom-right"
       ],
       "default": "bottom-center",
-      "description": "Which point of the asset's (post-scale) bounding box is placed at transform.x/transform.y in canvas space."
+      "description": "Which point of the asset's (post-scale) bounding box is placed at transform.x/transform.y in canvas space. Rotation is applied around this same point: after the image is rotated (which expands the canvas) the compositor places the result so this pivot stays fixed at x/y."
+    },
+
+    "ease": {
+      "type": "string",
+      "enum": ["linear", "inout"],
+      "default": "linear",
+      "description": "How to interpolate from this keyframe to the next one that specifies the same property. linear (default) is a constant-speed lerp; inout is a smoothstep ease-in-out. Taken from the departing keyframe of each pair."
+    },
+
+    "transform_keyframe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame"],
+      "properties": {
+        "frame": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Layer-local frame (relative to this layer's timing.start_frame) this sample applies at."
+        },
+        "x": { "type": "number", "description": "Canvas-space X of the anchor. Omitted: this keyframe does not change X." },
+        "y": { "type": "number", "description": "Canvas-space Y of the anchor. Omitted: this keyframe does not change Y." },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "description": "Uniform scale. Omitted: this keyframe does not change scale." },
+        "rotation": { "type": "number", "description": "Degrees, clockwise, around the anchor. Omitted: this keyframe does not change rotation." },
+        "ease": { "$ref": "#/definitions/ease" }
+      }
+    },
+
+    "rotation_keyframe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame", "rotation"],
+      "properties": {
+        "frame": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Layer-local frame (relative to the owning layer's timing.start_frame)."
+        },
+        "rotation": { "type": "number", "description": "Degrees, clockwise, around this child's own pivot." },
+        "ease": { "$ref": "#/definitions/ease" }
+      }
     },
 
     "transform": {
@@ -158,7 +198,7 @@
         "rotation": {
           "type": "number",
           "default": 0,
-          "description": "Degrees, clockwise, applied around the anchor point after scaling/flipping."
+          "description": "Degrees, clockwise, applied around the anchor point after scaling/flipping. The pivot stays fixed: the rotated (expanded) image is placed so the original anchor point still sits at x/y."
         },
         "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0 }
       }
@@ -206,7 +246,7 @@
       "properties": {
         "offset": {
           "$ref": "#/definitions/offset",
-          "description": "Offset in the owner's local (pre-scale) pixel space, from the owner's anchor/pivot point to where this slot's drawing should be centered."
+          "description": "Offset in the owner's local (pre-scale) pixel space, from the owner's anchor/pivot point to where this slot's drawing should be centered. Mirrored in x when the owner is flipped, scaled with the owner, and rotated about the owner's pivot by the owner's current rotation so the slot stays attached when the owner swings."
         },
         "images": {
           "type": "object",
@@ -217,15 +257,16 @@
         "keyframes": {
           "type": "array",
           "minItems": 1,
-          "description": "Held-until-changed drawing changes: sorted by `frame`, each keyframe's `drawing` stays active until the next keyframe's frame is reached. Frames are relative to this slot's owner's own start_frame (not the scene). Before the first keyframe, the first keyframe's drawing is used.",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["frame", "drawing"],
-            "properties": {
-              "frame": { "type": "integer", "minimum": 0 },
-              "drawing": { "type": "string" }
-            }
+          "description": "Held-until-changed drawing changes: sorted by `frame`. Each keyframe is either a single `drawing` (held until the next keyframe) or a `cycle` + `fps` that loops those drawings from this frame until the next keyframe. Frames are relative to this slot's owner's own start_frame (not the scene). Before the first keyframe, the first keyframe's drawing/cycle is used. A scene `frame_step` of N>1 already holds the picture on in-between frames, so the cycle is only evaluated on recomputed frames.",
+          "items": { "$ref": "#/definitions/slot_keyframe" }
+        },
+        "visible_when": {
+          "type": "object",
+          "description": "Optional visibility gate: this slot only draws when each named slot's currently active drawing is in the given list. Names are resolved on the same layer (the layer's own slots and every child's slots). Example: hide a mouth unless a body slot is showing \"front\".",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" }
           }
         },
         "lipsync": {
@@ -265,6 +306,40 @@
       }
     },
 
+    "slot_keyframe": {
+      "description": "Either a held drawing or a looping cycle. Exactly one of `drawing` or (`cycle` + `fps`).",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["frame", "drawing"],
+          "properties": {
+            "frame": { "type": "integer", "minimum": 0 },
+            "drawing": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["frame", "cycle", "fps"],
+          "properties": {
+            "frame": { "type": "integer", "minimum": 0 },
+            "cycle": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" },
+              "description": "Drawings to loop, in order, from this keyframe until the next."
+            },
+            "fps": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "How many cycle drawings to show per second of timeline time (at the document fps). index = floor((frame - keyframe.frame) / document_fps * cycle.fps) % len(cycle)."
+            }
+          }
+        }
+      ]
+    },
+
     "slots": {
       "type": "object",
       "description": "Map of slot name (e.g. \"mouth\", \"eyes\", \"right_hand\") -> slot definition. Slots on the same owner are drawn in the order given here, after that owner's own image.",
@@ -272,7 +347,7 @@
     },
 
     "child": {
-      "description": "A cut-out rig child part (head, arm, hand, ...), nested under a parent layer. The parent's transform (position, scale, flip_x) applies to every child, so flipping or walking the parent on/off-screen keeps all its parts aligned and clipped together; `offset`/`pivot`/`z` are the child's own placement relative to the parent root. Children are a single level deep (a child cannot itself have children) -- enough for \"head, arms, hands\" style rigs without open-ended recursion.",
+      "description": "A cut-out rig child part (head, arm, hand, ...), nested under a parent layer. The parent's transform (position, scale, flip_x) applies to every child, so flipping or walking the parent on/off-screen keeps all its parts aligned and clipped together; `offset`/`pivot`/`z` are the child's own placement relative to its parent (the layer root, or another child named in `parent`). One level of child-to-child nesting is allowed via `parent`; deeper chains and cycles are rejected at load time.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "asset", "z", "offset"],
@@ -294,9 +369,19 @@
         },
         "scale": { "type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "Multiplies the parent's own scale." },
         "flip_x": { "type": "boolean", "default": false, "description": "Composed with the parent's flip_x (XOR): false (default) means this child simply mirrors along with the parent; true gives it an independent mirror on top of that." },
-        "rotation": { "type": "number", "default": 0, "description": "Degrees, clockwise, around this child's own pivot. Independent of the parent's own `transform.rotation` (a rotating parent's rotation is not currently composed into its children -- see docs/timeline-schema.md)." },
+        "rotation": { "type": "number", "default": 0, "description": "Degrees, clockwise, around this child's own pivot (the pivot stays fixed after rotate+canvas-expand). Independent of the layer's own `transform.rotation` (a rotating layer's rotation is not composed into its children -- see docs/timeline-schema.md). When this child is the `parent` of another child, that grandchild's offset is rotated by this value and the rotations accumulate." },
+        "rotation_keyframes": {
+          "type": "array",
+          "description": "Optional animation of this child's rotation, layer-local frames, same interpolation rules as `layer.transform_keyframes`. The static `rotation` is used when this list is omitted or empty.",
+          "items": { "$ref": "#/definitions/rotation_keyframe" }
+        },
+        "parent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Id of another child on the same layer that this child hangs off. Offset is in that parent's local space and is rotated about the parent's pivot by the parent's current rotation. The parent must exist, must not itself have a parent (only one level of nesting), and must not create a cycle."
+        },
         "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0, "description": "Multiplies the parent's own opacity." },
-        "slots": { "$ref": "#/definitions/slots", "description": "Drawing-swap slots attached to this child instead of to the parent root (e.g. a mouth slot on a head child, a pose slot on a hand child)." }
+        "slots": { "$ref": "#/definitions/slots", "description": "Drawing-swap slots attached to this child instead of to the parent root (e.g. a mouth slot on a head child, a pose slot on a hand child). Slot offsets rotate with this child's current rotation so e.g. a hand on a forearm stays at the wrist." }
       }
     },
 
@@ -332,6 +417,11 @@
         "asset": { "type": "string", "description": "Path (relative to the project folder) to the layer's own (root/base) image (PNG with alpha recommended)." },
         "z": { "type": "integer", "description": "Explicit draw order within the scene. Layers are drawn back-to-front in ascending z order; the background is implicitly z = -infinity." },
         "transform": { "$ref": "#/definitions/transform" },
+        "transform_keyframes": {
+          "type": "array",
+          "description": "Optional per-property animation of this layer's x/y/scale/rotation. Frames are layer-local (relative to timing.start_frame). Each property is interpolated independently between keyframes that specify it, held before the first and after the last. Properties never mentioned keep the static `transform` value. flip_x is not keyframed -- flip by adding a new layer. Omit entirely for a pose that never moves.",
+          "items": { "$ref": "#/definitions/transform_keyframe" }
+        },
         "timing": { "$ref": "#/definitions/timing" },
         "dialogue": {
           "type": "array",

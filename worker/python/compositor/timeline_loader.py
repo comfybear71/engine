@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import lipsync
 from .camera import Camera, CameraKeyframe, Shake
+from .interpolate import interpolate_scalar
 from .media_probe import probe_duration_seconds
 from .schema_validate import validate_timeline
 from .slots import Slot, SlotKeyframe
@@ -49,12 +50,32 @@ class Transform:
 
 
 @dataclass(frozen=True)
+class TransformKeyframe:
+    """One sample of a layer's animated transform. Omitted properties are
+    not interpolated from this keyframe (see :func:`transform_at`)."""
+
+    frame: int
+    x: float | None = None
+    y: float | None = None
+    scale: float | None = None
+    rotation: float | None = None
+    ease: str = "linear"
+
+
+@dataclass(frozen=True)
+class RotationKeyframe:
+    frame: int
+    rotation: float
+    ease: str = "linear"
+
+
+@dataclass(frozen=True)
 class Child:
     """A cut-out rig part nested under a parent Layer (head, arm, hand, ...).
 
     Position/scale/flip are relative to the parent's own transform; see
-    docs/timeline-schema.md for the exact composition rules. Children are a
-    single level deep: a Child cannot itself have children.
+    docs/timeline-schema.md for the exact composition rules. A child may
+    name one other child as ``parent`` (one level of nesting, no cycles).
     """
 
     id: str
@@ -68,6 +89,8 @@ class Child:
     rotation: float = 0.0
     opacity: float = 1.0
     slots: dict[str, Slot] = field(default_factory=dict)
+    parent: str | None = None
+    rotation_keyframes: list[RotationKeyframe] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -103,6 +126,7 @@ class Layer:
     dialogue: list[DialogueClip] = field(default_factory=list)
     slots: dict[str, Slot] = field(default_factory=dict)
     children: list[Child] = field(default_factory=list)
+    transform_keyframes: list[TransformKeyframe] = field(default_factory=list)
 
     def is_visible_at(self, frame_idx: int, scene_total_frames: int) -> bool:
         end = self.end_frame if self.end_frame is not None else scene_total_frames
@@ -185,6 +209,45 @@ class Timeline:
                     clips.append(AudioClip(path=dialogue_clip.audio, start_seconds=clip_start_seconds))
             elapsed_frames += scene.total_frames
         return clips
+
+
+def transform_at(layer: Layer, local_frame: int) -> Transform:
+    """Layer transform at a layer-local frame, with ``transform_keyframes``.
+
+    Properties never mentioned in any keyframe keep the static
+    ``layer.transform`` value. ``flip_x``, ``anchor`` and ``opacity`` are
+    never keyframed (flip by adding a new layer). Held before the first
+    keyframe that specifies a property and after the last.
+    """
+
+    base = layer.transform
+    kfs = layer.transform_keyframes
+    if not kfs:
+        return base
+    return Transform(
+        x=interpolate_scalar([(k.frame, k.x, k.ease) for k in kfs if k.x is not None], local_frame, base.x),
+        y=interpolate_scalar([(k.frame, k.y, k.ease) for k in kfs if k.y is not None], local_frame, base.y),
+        scale=interpolate_scalar(
+            [(k.frame, k.scale, k.ease) for k in kfs if k.scale is not None], local_frame, base.scale
+        ),
+        rotation=interpolate_scalar(
+            [(k.frame, k.rotation, k.ease) for k in kfs if k.rotation is not None], local_frame, base.rotation
+        ),
+        anchor=base.anchor,
+        flip_x=base.flip_x,
+        opacity=base.opacity,
+    )
+
+
+def child_rotation_at(child: Child, local_frame: int) -> float:
+    """Child rotation at a layer-local frame, with ``rotation_keyframes``."""
+
+    kfs = child.rotation_keyframes
+    if not kfs:
+        return child.rotation
+    return interpolate_scalar(
+        [(k.frame, k.rotation, k.ease) for k in kfs], local_frame, child.rotation
+    )
 
 
 def _resolve(project_dir: Path, rel_path: str) -> Path:
@@ -287,7 +350,12 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
             cues = lipsync.get_cues(lipsync_raw, project_dir)
     else:
         raw_keyframes = sorted(raw["keyframes"], key=lambda k: k["frame"])
-        keyframes = [SlotKeyframe(frame=int(k["frame"]), drawing=k["drawing"]) for k in raw_keyframes]
+        keyframes = [_build_slot_keyframe(k) for k in raw_keyframes]
+
+    visible_when = {
+        name: [str(d) for d in drawings]
+        for name, drawings in raw.get("visible_when", {}).items()
+    }
 
     return Slot(
         images=images,
@@ -296,13 +364,37 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
         keyframes=keyframes,
         cues=cues,
         dialogue=dialogue_ref,
+        visible_when=visible_when,
     )
+
+
+def _build_slot_keyframe(raw: dict) -> SlotKeyframe:
+    if "cycle" in raw:
+        return SlotKeyframe(
+            frame=int(raw["frame"]),
+            cycle=[str(d) for d in raw["cycle"]],
+            fps=float(raw["fps"]),
+        )
+    return SlotKeyframe(frame=int(raw["frame"]), drawing=raw["drawing"])
 
 
 def _build_slots(raw: dict | None, project_dir: Path, dialogue: list[DialogueClip] | None = None) -> dict[str, Slot]:
     if not raw:
         return {}
     return {name: _build_slot(slot_raw, project_dir, dialogue) for name, slot_raw in raw.items()}
+
+
+def _build_rotation_keyframes(raw: list[dict] | None) -> list[RotationKeyframe]:
+    if not raw:
+        return []
+    return [
+        RotationKeyframe(
+            frame=int(k["frame"]),
+            rotation=float(k["rotation"]),
+            ease=k.get("ease", "linear"),
+        )
+        for k in sorted(raw, key=lambda item: item["frame"])
+    ]
 
 
 def _build_child(raw: dict, project_dir: Path) -> Child:
@@ -319,7 +411,71 @@ def _build_child(raw: dict, project_dir: Path) -> Child:
         rotation=float(raw.get("rotation", 0.0)),
         opacity=float(raw.get("opacity", 1.0)),
         slots=_build_slots(raw.get("slots"), project_dir, dialogue=None),
+        parent=raw.get("parent"),
+        rotation_keyframes=_build_rotation_keyframes(raw.get("rotation_keyframes")),
     )
+
+
+def _validate_children(layer_id: str, children_raw: list[dict]) -> None:
+    """Parent must exist, no deeper than one level, no cycles."""
+
+    if not children_raw:
+        return
+    ids = [c["id"] for c in children_raw]
+    id_set = set(ids)
+    parents: dict[str, str] = {}
+    uses_parent = any("parent" in c and c["parent"] for c in children_raw)
+    if uses_parent and len(ids) != len(id_set):
+        raise ValueError(
+            f"layer {layer_id!r} has duplicate child ids; ids must be unique "
+            f"when a child names a parent"
+        )
+    for child in children_raw:
+        parent = child.get("parent")
+        if not parent:
+            continue
+        child_id = child["id"]
+        if parent not in id_set:
+            raise ValueError(
+                f"layer {layer_id!r} child {child_id!r} parent {parent!r} does not exist"
+            )
+        if parent == child_id:
+            raise ValueError(
+                f"layer {layer_id!r} child {child_id!r} cannot be its own parent"
+            )
+        parents[child_id] = parent
+    for child_id, parent_id in parents.items():
+        if parent_id in parents:
+            raise ValueError(
+                f"layer {layer_id!r} child {child_id!r} parent {parent_id!r} is "
+                f"itself parented (only one level of nesting is allowed; no cycles)"
+            )
+
+
+def _layer_slot_names(layer_raw: dict) -> set[str]:
+    names = set(layer_raw.get("slots", {}))
+    for child in layer_raw.get("children", []):
+        names.update(child.get("slots", {}))
+    return names
+
+
+def _validate_visible_when(layer_id: str, layer_raw: dict) -> None:
+    names = _layer_slot_names(layer_raw)
+
+    def check(slots_raw: dict | None, owner: str) -> None:
+        if not slots_raw:
+            return
+        for slot_name, slot in slots_raw.items():
+            for ref in slot.get("visible_when", {}):
+                if ref not in names:
+                    raise ValueError(
+                        f"{owner} slot {slot_name!r} visible_when refers to "
+                        f"unknown slot {ref!r} on layer {layer_id!r}"
+                    )
+
+    check(layer_raw.get("slots"), f"layer {layer_id!r}")
+    for child in layer_raw.get("children", []):
+        check(child.get("slots"), f"child {child['id']!r}")
 
 
 def _raw_dialogue_clips(layer_raw: dict) -> list[dict]:
@@ -388,6 +544,21 @@ def _build_layer(
         for d in sorted(_raw_dialogue_clips(raw), key=lambda d: d["start_frame"])
     ]
 
+    _validate_children(raw["id"], raw.get("children", []))
+    _validate_visible_when(raw["id"], raw)
+
+    transform_keyframes = [
+        TransformKeyframe(
+            frame=int(k["frame"]),
+            x=k.get("x"),
+            y=k.get("y"),
+            scale=float(k["scale"]) if "scale" in k else None,
+            rotation=float(k["rotation"]) if "rotation" in k else None,
+            ease=k.get("ease", "linear"),
+        )
+        for k in sorted(raw.get("transform_keyframes", []), key=lambda item: item["frame"])
+    ]
+
     return Layer(
         id=raw["id"],
         character_id=raw.get("character_id"),
@@ -399,6 +570,7 @@ def _build_layer(
         dialogue=dialogue,
         slots=_build_slots(raw.get("slots"), project_dir, dialogue=dialogue or None),
         children=[_build_child(c, project_dir) for c in raw.get("children", [])],
+        transform_keyframes=transform_keyframes,
     )
 
 

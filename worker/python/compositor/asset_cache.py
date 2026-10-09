@@ -13,6 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .transform import anchor_offset
+
 
 def _to_bgra(img: np.ndarray) -> np.ndarray:
     """Normalize any image OpenCV can load into 4-channel BGRA, uint8."""
@@ -104,21 +106,67 @@ class AssetCache:
         self._variants[key] = img
         return img
 
+    def pre_rotation_size(self, path: Path, scale: float) -> tuple[int, int]:
+        """Width/height of the flipped+scaled image *before* rotation expand.
+
+        Must match the rounding inside :meth:`get_variant` so pivot math and
+        the cached pixels describe the same rectangle.
+        """
+
+        img = self.get_raw(path)
+        h, w = img.shape[:2]
+        if abs(scale - 1.0) > 1e-9:
+            return max(1, round(w * scale)), max(1, round(h * scale))
+        return w, h
+
+
+def rotation_expand_matrix(
+    width: float, height: float, degrees_clockwise: float
+) -> tuple[np.ndarray, int, int]:
+    """The affine matrix ``_rotate_bgra`` uses, plus the expanded canvas size.
+
+    Rotation is about the image centre; the canvas grows so no source pixel
+    is clipped. The named pivot/anchor is *not* the rotation centre -- call
+    :func:`anchor_after_rotation` to find where that point lands.
+    """
+
+    center = (width / 2.0, height / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, -degrees_clockwise, 1.0)
+
+    cos = abs(matrix[0, 0])
+    sin = abs(matrix[0, 1])
+    new_w = int(np.ceil(height * sin + width * cos))
+    new_h = int(np.ceil(height * cos + width * sin))
+    matrix[0, 2] += (new_w / 2.0) - center[0]
+    matrix[1, 2] += (new_h / 2.0) - center[1]
+    return matrix, new_w, new_h
+
+
+def map_affine_point(x: float, y: float, matrix: np.ndarray) -> tuple[float, float]:
+    return (
+        float(matrix[0, 0] * x + matrix[0, 1] * y + matrix[0, 2]),
+        float(matrix[1, 0] * x + matrix[1, 1] * y + matrix[1, 2]),
+    )
+
+
+def anchor_after_rotation(
+    width: float, height: float, anchor: str, degrees_clockwise: float
+) -> tuple[float, float]:
+    """Where ``anchor`` on the unrotated ``width``×``height`` image lands
+    after the centre-rotate + canvas-expand that ``_rotate_bgra`` does."""
+
+    ax, ay = anchor_offset(anchor, width, height)
+    if abs(degrees_clockwise) < 1e-9:
+        return ax, ay
+    matrix, _new_w, _new_h = rotation_expand_matrix(width, height, degrees_clockwise)
+    return map_affine_point(ax, ay, matrix)
+
 
 def _rotate_bgra(img: np.ndarray, degrees: float) -> np.ndarray:
     """Rotate a BGRA image clockwise by ``degrees``, expanding the canvas."""
 
     h, w = img.shape[:2]
-    center = (w / 2.0, h / 2.0)
-    matrix = cv2.getRotationMatrix2D(center, -degrees, 1.0)
-
-    cos = abs(matrix[0, 0])
-    sin = abs(matrix[0, 1])
-    new_w = int(np.ceil(h * sin + w * cos))
-    new_h = int(np.ceil(h * cos + w * sin))
-    matrix[0, 2] += (new_w / 2.0) - center[0]
-    matrix[1, 2] += (new_h / 2.0) - center[1]
-
+    matrix, new_w, new_h = rotation_expand_matrix(w, h, degrees)
     return cv2.warpAffine(
         img, matrix, (new_w, new_h),
         flags=cv2.INTER_LINEAR,
