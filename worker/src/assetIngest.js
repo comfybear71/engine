@@ -386,7 +386,12 @@ function confirmIngest(projectDir, globalAssetsDir, characterId, body) {
     writeCharacterJson(projectDir, characterId, character, backupRoot);
   }
 
-  fs.rmSync(previewDir(projectDir, characterId, sid), { recursive: true, force: true });
+  const previewRoot = previewDir(projectDir, characterId, sid);
+  fs.rmSync(previewRoot, { recursive: true, force: true });
+  const previewParent = path.dirname(previewRoot);
+  if (fs.existsSync(previewParent) && fs.readdirSync(previewParent).length === 0) {
+    fs.rmdirSync(previewParent);
+  }
 
   return { ok: true, written, characterId };
 }
