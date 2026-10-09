@@ -24,9 +24,11 @@ nothing here is derived from it.
   Vercel later)
 ```
 
-- **Studio** (`studio/`): a Next.js app (App Router). v1 is Assets + Stage
-  (library browser, one-frame preview, Render). It reads files **only**
-  through the local worker -- see [docs/studio.md](docs/studio.md).
+- **Studio** (`studio/`): a Next.js app (App Router). Assets, Stage
+  (preview + read-only timeline lanes), Script editor, and Render. It
+  reads and writes files **only** through the local worker -- see
+  [docs/studio.md](docs/studio.md). The script is the source of truth;
+  Save/Lint never write `timeline.json`.
 - **Script parser** (`worker/src/parser/`): turns a plain-text
   `script.txt` into a validated `timeline.json`, resolving characters,
   drawing-swap slots, and stage positions against a shared
@@ -364,6 +366,10 @@ cd worker
 npm start
 # GET  http://127.0.0.1:4100/api/projects
 # GET  http://127.0.0.1:4100/api/projects/<name>/characters
+# GET  http://127.0.0.1:4100/api/projects/<name>/script
+# PUT  http://127.0.0.1:4100/api/projects/<name>/script
+# POST http://127.0.0.1:4100/api/projects/<name>/lint
+# GET  http://127.0.0.1:4100/api/projects/<name>/lanes
 # POST http://127.0.0.1:4100/api/projects/<name>/preview-frame  { "frame": 0 }
 # POST http://127.0.0.1:4100/api/projects/<name>/render
 # POST http://127.0.0.1:4100/render  { "projectDir": "../projects/sample" }

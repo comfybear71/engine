@@ -23,10 +23,13 @@ function resolveGlobalAssetsDir(projectDir) {
 async function parseProject(projectDir, options = {}) {
   const scriptFilename = options.script || "script.txt";
   const scriptPath = path.join(projectDir, scriptFilename);
-  if (!fs.existsSync(scriptPath)) {
-    throw new Error(`Script not found: ${scriptPath}`);
+  let scriptText = options.scriptText;
+  if (scriptText == null) {
+    if (!fs.existsSync(scriptPath)) {
+      throw new Error(`Script not found: ${scriptPath}`);
+    }
+    scriptText = fs.readFileSync(scriptPath, "utf8");
   }
-  const scriptText = fs.readFileSync(scriptPath, "utf8");
   const globalAssetsDir = options.globalAssetsDir || resolveGlobalAssetsDir(projectDir);
 
   return parseScript(projectDir, globalAssetsDir, scriptText, options);
@@ -39,7 +42,10 @@ async function parseProject(projectDir, options = {}) {
  * and validation result.
  */
 async function parseProjectToFiles(projectDir, options = {}) {
-  const { timeline, lines, warnings, errors } = await parseProject(projectDir, options);
+  const { timeline, lines, warnings, errors, laneEvents, sceneLengths } = await parseProject(
+    projectDir,
+    options
+  );
 
   const outFilename = options.out || "timeline.json";
   const timelinePath = path.join(projectDir, outFilename);
@@ -50,7 +56,17 @@ async function parseProjectToFiles(projectDir, options = {}) {
 
   const validation = options.skipValidate ? { ok: true, message: "(validation skipped)" } : await validateTimelineFile(timelinePath);
 
-  return { timeline, lines, warnings, errors: errors || [], timelinePath, linesPath, validation };
+  return {
+    timeline,
+    lines,
+    warnings,
+    errors: errors || [],
+    laneEvents: laneEvents || [],
+    sceneLengths: sceneLengths || [],
+    timelinePath,
+    linesPath,
+    validation,
+  };
 }
 
 /**
@@ -59,7 +75,10 @@ async function parseProjectToFiles(projectDir, options = {}) {
  * preview / stage must use this. Caller must delete `tmpDir` when done.
  */
 async function parseProjectToTemp(projectDir, options = {}) {
-  const { timeline, lines, warnings, errors } = await parseProject(projectDir, options);
+  const { timeline, lines, warnings, errors, laneEvents, sceneLengths } = await parseProject(
+    projectDir,
+    options
+  );
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-timeline-"));
   const timelinePath = path.join(tmpDir, "timeline.json");
@@ -69,7 +88,17 @@ async function parseProjectToTemp(projectDir, options = {}) {
     ? { ok: true, message: "(validation skipped)" }
     : await validateTimelineFile(timelinePath, { projectDir });
 
-  return { timeline, lines, warnings, errors: errors || [], timelinePath, tmpDir, validation };
+  return {
+    timeline,
+    lines,
+    warnings,
+    errors: errors || [],
+    laneEvents: laneEvents || [],
+    sceneLengths: sceneLengths || [],
+    timelinePath,
+    tmpDir,
+    validation,
+  };
 }
 
 module.exports = { parseProject, parseProjectToFiles, parseProjectToTemp, resolveGlobalAssetsDir, ScriptError };

@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import TimelineLanes from "@/components/TimelineLanes";
 import {
   fetchPreviewFrame,
+  loadLanes,
+  loadScript,
   loadStage,
+  type LanesResponse,
   type Mark,
   type StageInfo,
   type StageLayer,
@@ -19,8 +23,22 @@ function formatTimecode(frame: number, fps: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(ff).padStart(2, "0")}`;
 }
 
-export default function StagePanel({ project, workerUp }: { project: string | null; workerUp: boolean }) {
+export default function StagePanel({
+  project,
+  workerUp,
+  scriptEpoch,
+  selectedLine,
+  onSelectLine,
+}: {
+  project: string | null;
+  workerUp: boolean;
+  scriptEpoch: number;
+  selectedLine: number | null;
+  onSelectLine: (line: number | null) => void;
+}) {
   const [stage, setStage] = useState<StageInfo | null>(null);
+  const [lanes, setLanes] = useState<LanesResponse | null>(null);
+  const [scriptLines, setScriptLines] = useState<string[]>([]);
   const [frame, setFrame] = useState(0);
   const [totalFrames, setTotalFrames] = useState(1);
   const [fps, setFps] = useState(24);
@@ -39,13 +57,16 @@ export default function StagePanel({ project, workerUp }: { project: string | nu
     setError(null);
     setFrame(0);
     setSelectedMark(null);
-    loadStage(project)
-      .then((info) => {
+    Promise.all([loadStage(project), loadLanes(project), loadScript(project)])
+      .then(([info, nextLanes, script]) => {
         if (cancelled) return;
         setStage(info);
+        setLanes(nextLanes);
+        setScriptLines(script.split("\n"));
         setFps(info.fps);
         setCanvas(info.canvas);
         setSceneId(info.scenes[0]?.id ?? null);
+        if (nextLanes.totalFrames > 0) setTotalFrames(nextLanes.totalFrames);
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -56,7 +77,7 @@ export default function StagePanel({ project, workerUp }: { project: string | nu
     return () => {
       cancelled = true;
     };
-  }, [project, workerUp]);
+  }, [project, workerUp, scriptEpoch]);
 
   useEffect(() => {
     if (!project || !workerUp) return;
@@ -120,7 +141,13 @@ export default function StagePanel({ project, workerUp }: { project: string | nu
     return <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">Pick a project to open the stage.</div>;
   }
 
+  function seekTo(nextFrame: number, scriptLine: number | null) {
+    setFrame(nextFrame);
+    onSelectLine(scriptLine);
+  }
+
   return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col bg-black/40">
         <div className="flex min-h-0 flex-1 items-center justify-center p-4">
@@ -131,7 +158,7 @@ export default function StagePanel({ project, workerUp }: { project: string | nu
               <img
                 src={previewUrl}
                 alt={`Frame ${frame}`}
-                className="max-h-[calc(100vh-220px)] max-w-full rounded-sm object-contain shadow-2xl"
+                className="max-h-[calc(100vh-340px)] max-w-full rounded-sm object-contain shadow-2xl"
               />
             ) : (
               <div className="flex h-[360px] w-[640px] max-w-full items-center justify-center rounded-sm border border-studio-border bg-studio-raised text-sm text-studio-muted">
@@ -225,7 +252,37 @@ export default function StagePanel({ project, workerUp }: { project: string | nu
             {layers.length === 0 ? <li className="text-sm text-studio-muted">No layers in this scene.</li> : null}
           </ul>
         </div>
+        <div className="min-h-0 flex-1 overflow-y-auto border-t border-studio-border p-4">
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-studio-muted">Script</h3>
+          <p className="mb-2 text-[11px] text-studio-muted">Click a timeline block to seek and highlight its line.</p>
+          <ol className="space-y-0.5 font-mono text-[11px] leading-5">
+            {scriptLines.map((line, index) => {
+              const n = index + 1;
+              const active = selectedLine === n;
+              return (
+                <li key={n}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const hit = (lanes?.blocks || []).find((b) => b.scriptLine === n);
+                      if (hit) seekTo(hit.startFrame, n);
+                      else onSelectLine(n);
+                    }}
+                    className={`flex w-full gap-2 rounded px-1 text-left ${
+                      active ? "bg-studio-accent/25 text-white" : "text-neutral-400 hover:bg-studio-raised"
+                    }`}
+                  >
+                    <span className="w-6 shrink-0 text-right text-studio-muted">{n}</span>
+                    <span className="truncate">{line || " "}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
       </aside>
+    </div>
+      <TimelineLanes lanes={lanes} frame={frame} selectedLine={selectedLine} onSeek={seekTo} />
     </div>
   );
 }
