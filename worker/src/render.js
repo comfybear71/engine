@@ -89,6 +89,7 @@ function spawnCompositor(projectDir, extraArgs, options = {}) {
  */
 function renderProject(projectDir, options = {}) {
   const extra = [];
+  if (options.timeline) extra.push("--timeline", path.resolve(options.timeline));
   if (options.codec) extra.push("--codec", options.codec);
   if (options.output) extra.push("--output", path.resolve(options.output));
   return spawnCompositor(projectDir, extra, options);

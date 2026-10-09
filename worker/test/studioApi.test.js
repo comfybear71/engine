@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { createApp, isSafeProjectName, resolveProjectDir, isSafeRelPath } = require("../src/server");
+const { renderOutputName, resolveScriptName } = require("../src/studioProjects");
 const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
 
 function listen(app) {
@@ -59,6 +60,19 @@ describe("studio worker API", () => {
     children: [],
   });
 
+  fixture.writeScript(
+    [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice, Bob]",
+      "Alice: Hello there friend.",
+      "[Scene: Next]",
+      "[Location: room_b]",
+      "[Cast: Alice]",
+      "Alice: Bye.",
+    ].join("\n")
+  );
+
   const app = createApp({ projectsDir: fixture.root, skipValidate: true });
   /** @type {{ url: string, close: () => Promise<void> }} */
   let ctx;
@@ -79,6 +93,10 @@ describe("studio worker API", () => {
     const names = body.projects.map((p) => p.name);
     assert.deepEqual(names, ["other_show", "project"]);
     assert.equal(names.includes("_global_assets"), false);
+    const project = body.projects.find((p) => p.name === "project");
+    assert.ok(project.scripts.includes("script.txt"));
+    assert.equal(project.thumbRel, "backgrounds/room_a/bg.png");
+    assert.equal(typeof project.sceneCount, "number");
   });
 
   test("GET /api/projects/:name/characters includes slots, drawings, cycles, and project-local", async () => {
@@ -235,6 +253,111 @@ describe("studio worker API", () => {
       assert.equal(typeof block.endFrame, "number");
       assert.ok(block.endFrame >= block.startFrame);
     }
+  });
+
+  test("Assets filter to script cast plus local, Library records a reference without copying art", async () => {
+    fixture.writeScript(
+      ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice, Bob]", "Alice: Hi."].join("\n")
+    );
+    const used = await fetch(`${ctx.url}/api/projects/project/characters`);
+    assert.equal(used.status, 200);
+    const usedIds = (await used.json()).characters.map((c) => c.id).sort();
+    assert.deepEqual(usedIds, ["alice", "bob", "carol"]);
+
+    const emptyDir = path.join(fixture.root, "other_show");
+    fs.writeFileSync(path.join(emptyDir, "script.txt"), "[Scene: Empty]\n");
+    const emptyChars = await fetch(`${ctx.url}/api/projects/other_show/characters`);
+    assert.equal(emptyChars.status, 200);
+    assert.deepEqual((await emptyChars.json()).characters, []);
+
+    const library = await fetch(`${ctx.url}/api/projects/other_show/library`);
+    assert.equal(library.status, 200);
+    const libBody = await library.json();
+    assert.ok(libBody.characters.some((c) => c.id === "alice"));
+    assert.deepEqual(libBody.added, []);
+
+    const add = await fetch(`${ctx.url}/api/projects/other_show/library`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ characterId: "alice" }),
+    });
+    const added = await add.json();
+    assert.equal(add.status, 200, JSON.stringify(added));
+    assert.deepEqual(added.library.characters, ["alice"]);
+    assert.equal(fs.existsSync(path.join(emptyDir, "characters", "alice")), false);
+    const libJson = JSON.parse(fs.readFileSync(path.join(emptyDir, "library.json"), "utf8"));
+    assert.deepEqual(libJson.characters, ["alice"]);
+
+    const after = await fetch(`${ctx.url}/api/projects/other_show/characters`);
+    assert.deepEqual((await after.json()).characters.map((c) => c.id), ["alice"]);
+  });
+
+  test("POST /api/projects creates an empty folder from the template", async () => {
+    const res = await fetch(`${ctx.url}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "new_ep" }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 201, JSON.stringify(body));
+    assert.equal(body.project.name, "new_ep");
+    const created = path.join(fixture.root, "new_ep");
+    assert.equal(fs.existsSync(path.join(created, "script.txt")), true);
+    assert.equal(fs.existsSync(path.join(created, "library.json")), true);
+    const dup = await fetch(`${ctx.url}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "new_ep" }),
+    });
+    assert.equal(dup.status, 409);
+  });
+
+  test("?script= selects a file; preview/lanes never overwrite timeline.json", async () => {
+    assert.equal(renderOutputName("script_mcd.txt"), "script_mcd.mp4");
+    assert.equal(renderOutputName("script.txt"), "script.mp4");
+    assert.equal(resolveScriptName("../x.txt"), null);
+    assert.equal(resolveScriptName("script_mcd.txt"), "script_mcd.txt");
+
+    const originalScript = fs.readFileSync(path.join(fixture.projectDir, "script.txt"), "utf8");
+    const alt = [
+      "[Scene: Alt]",
+      "[Location: room_b]",
+      "[Cast: Alice]",
+      "Alice: Different script.",
+    ].join("\n");
+    const put = await fetch(`${ctx.url}/api/projects/project/script?script=script_mcd.txt`, {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain" },
+      body: alt,
+    });
+    const putBody = await put.json();
+    assert.equal(put.status, 200, JSON.stringify(putBody));
+    assert.equal(fs.readFileSync(path.join(fixture.projectDir, "script_mcd.txt"), "utf8"), alt);
+    assert.equal(fs.readFileSync(path.join(fixture.projectDir, "script.txt"), "utf8"), originalScript);
+
+    const got = await fetch(`${ctx.url}/api/projects/project/script?script=script_mcd.txt`);
+    assert.equal(got.status, 200);
+    assert.equal(await got.text(), alt);
+
+    const scripts = await fetch(`${ctx.url}/api/projects/project/scripts`);
+    assert.deepEqual((await scripts.json()).scripts, ["script.txt", "script_mcd.txt"]);
+
+    const timelinePath = path.join(fixture.projectDir, "timeline.json");
+    const sentinelTimeline = { sentinel: true, series: "keep-me" };
+    fs.writeFileSync(timelinePath, JSON.stringify(sentinelTimeline));
+
+    const lanes = await fetch(`${ctx.url}/api/projects/project/lanes?script=script_mcd.txt`);
+    const laneBody = await lanes.json();
+    assert.equal(lanes.status, 200, JSON.stringify(laneBody));
+    assert.ok(laneBody.blocks.some((b) => /Different script/.test(b.label)));
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
+
+    const stage = await fetch(`${ctx.url}/api/projects/project/stage?script=script_mcd.txt`);
+    assert.equal(stage.status, 200, await stage.text());
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
+
+    const bad = await fetch(`${ctx.url}/api/projects/project/script?script=../secret.txt`);
+    assert.equal(bad.status, 400);
   });
 
   test("path traversal and reserved names are rejected", async () => {

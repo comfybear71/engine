@@ -5,6 +5,7 @@
  * (global + project-local), backgrounds, props, and marks from staging.json.
  */
 
+const fs = require("fs");
 const path = require("path");
 
 const {
@@ -72,32 +73,53 @@ function characterThumbRel(character, projectDir, globalAssetsDir, characterId) 
   return null;
 }
 
-function listCharacters(projectDir, globalAssetsDir) {
+function describeCharacter(projectDir, globalAssetsDir, id) {
+  const jsonRel = `characters/${id}/character.json`;
+  const resolved = resolveAsset(projectDir, globalAssetsDir, jsonRel);
+  const character = loadCharacter(projectDir, globalAssetsDir, id);
+  if (!resolved || !character) return null;
+  return {
+    id,
+    display_name: character.display_name || id,
+    aliases: character.aliases || [],
+    source: resolved.source,
+    z: character.z,
+    thumbRel: characterThumbRel(character, projectDir, globalAssetsDir, id),
+    slots: collectSlots(character, projectDir, globalAssetsDir, id),
+  };
+}
+
+function listCharacters(projectDir, globalAssetsDir, options = {}) {
+  const allow = options.ids ? new Set(options.ids) : null;
   const characters = [];
   for (const id of listKnownCharacterIds(projectDir, globalAssetsDir)) {
-    const jsonRel = `characters/${id}/character.json`;
-    const resolved = resolveAsset(projectDir, globalAssetsDir, jsonRel);
-    const character = loadCharacter(projectDir, globalAssetsDir, id);
-    if (!resolved || !character) continue;
-    characters.push({
-      id,
-      display_name: character.display_name || id,
-      aliases: character.aliases || [],
-      source: resolved.source,
-      z: character.z,
-      thumbRel: characterThumbRel(character, projectDir, globalAssetsDir, id),
-      slots: collectSlots(character, projectDir, globalAssetsDir, id),
-    });
+    if (allow && !allow.has(id)) continue;
+    const described = describeCharacter(projectDir, globalAssetsDir, id);
+    if (described) characters.push(described);
   }
   return characters;
 }
 
-function listStaging(projectDir, globalAssetsDir) {
+function listGlobalCharacters(projectDir, globalAssetsDir) {
+  const characters = [];
+  const dir = path.join(globalAssetsDir, "characters");
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return characters;
+  for (const id of fs.readdirSync(dir).sort()) {
+    if (!fs.statSync(path.join(dir, id)).isDirectory()) continue;
+    const described = describeCharacter(projectDir, globalAssetsDir, id);
+    if (described) characters.push({ ...described, source: "global" });
+  }
+  return characters;
+}
+
+function listStaging(projectDir, globalAssetsDir, options = {}) {
+  const allow = options.locationIds ? new Set(options.locationIds) : null;
   const backgrounds = [];
   const props = [];
   const marksByLocation = {};
 
   for (const loc of listKnownLocations(projectDir, globalAssetsDir)) {
+    if (allow && !allow.has(loc)) continue;
     const staging = loadStaging(projectDir, globalAssetsDir, loc);
     const bgRel = `backgrounds/${loc}/bg.png`;
     const bg = resolveAsset(projectDir, globalAssetsDir, bgRel);
@@ -162,6 +184,7 @@ function summarizeStage(timeline) {
 
 module.exports = {
   listCharacters,
+  listGlobalCharacters,
   listStaging,
   summarizeStage,
   locationFromBackgroundAsset,

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import AssetsPanel from "@/components/AssetsPanel";
 import ScriptPanel from "@/components/ScriptPanel";
@@ -7,7 +8,7 @@ import StagePanel from "@/components/StagePanel";
 import {
   WORKER_START_COMMAND,
   checkWorker,
-  listProjects,
+  loadScripts,
   renderVideoUrl,
   startRender,
   type RenderResponse,
@@ -23,10 +24,11 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-export default function StudioApp() {
+export default function StudioApp({ projectName }: { projectName: string }) {
+  const project = projectName;
   const [tab, setTab] = useState<TabId>("assets");
-  const [projects, setProjects] = useState<string[]>([]);
-  const [project, setProject] = useState<string | null>(null);
+  const [scripts, setScripts] = useState<string[]>([]);
+  const [script, setScript] = useState<string>("script.txt");
   const [workerUp, setWorkerUp] = useState<boolean | null>(null);
   const [rendering, setRendering] = useState(false);
   const [renderStatus, setRenderStatus] = useState<string | null>(null);
@@ -39,21 +41,18 @@ export default function StudioApp() {
   const refresh = useCallback(async () => {
     const up = await checkWorker();
     setWorkerUp(up);
-    if (!up) {
-      setProjects([]);
-      return;
-    }
+    if (!up) return;
     try {
-      const names = await listProjects();
-      setProjects(names);
-      setProject((current) => {
+      const names = await loadScripts(project);
+      setScripts(names);
+      setScript((current) => {
         if (current && names.includes(current)) return current;
-        return names.includes("sample") ? "sample" : names[0] ?? null;
+        return names.includes("script.txt") ? "script.txt" : names[0] ?? "script.txt";
       });
     } catch {
       setWorkerUp(false);
     }
-  }, []);
+  }, [project]);
 
   useEffect(() => {
     void refresh();
@@ -68,7 +67,7 @@ export default function StudioApp() {
     setRenderResult(null);
     setShowVideo(false);
     try {
-      const result = await startRender(project);
+      const result = await startRender(project, script);
       setRenderResult(result);
       setVideoBust(Date.now());
       setShowVideo(true);
@@ -82,26 +81,37 @@ export default function StudioApp() {
   }
 
   const active = TABS.find((item) => item.id === tab)!;
-  const videoSrc = project && videoBust ? renderVideoUrl(project, videoBust) : null;
+  const videoSrc = project && videoBust ? renderVideoUrl(project, videoBust, script) : null;
 
   return (
     <div className="flex h-screen flex-col bg-studio-bg">
       <header className="grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-studio-border bg-studio-panel px-3">
         <div className="flex items-center gap-3">
+          <Link href="/" className="text-xs text-studio-muted hover:text-white" data-testid="back-home">
+            ← Projects
+          </Link>
           <div className="flex items-center gap-2">
             <span className="flex h-6 w-6 items-center justify-center rounded bg-studio-accent text-xs font-bold text-black">▶</span>
             <span className="text-sm font-semibold tracking-wide text-white">Engine Studio</span>
           </div>
+          <span className="truncate text-sm text-neutral-200" data-testid="project-name">
+            {project}
+          </span>
           <label className="flex items-center gap-2 text-xs text-studio-muted">
-            Project
+            Script
             <select
               className="rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={project ?? ""}
-              onChange={(event) => setProject(event.target.value || null)}
-              disabled={!workerUp || projects.length === 0}
+              value={script}
+              onChange={(event) => {
+                setScript(event.target.value);
+                setSelectedScriptLine(null);
+                setScriptEpoch((n) => n + 1);
+              }}
+              disabled={!workerUp || scripts.length === 0}
+              data-testid="script-select"
             >
-              {projects.length === 0 ? <option value="">No projects</option> : null}
-              {projects.map((name) => (
+              {scripts.length === 0 ? <option value="script.txt">script.txt</option> : null}
+              {scripts.map((name) => (
                 <option key={name} value={name}>
                   {name}
                 </option>
@@ -161,10 +171,13 @@ export default function StudioApp() {
       ) : null}
 
       <main className="flex min-h-0 flex-1 flex-col">
-        {tab === "assets" ? <AssetsPanel project={project} workerUp={workerUp === true} /> : null}
+        {tab === "assets" ? (
+          <AssetsPanel project={project} workerUp={workerUp === true} onLibraryChange={() => void refresh()} />
+        ) : null}
         {tab === "stage" ? (
           <StagePanel
             project={project}
+            script={script}
             workerUp={workerUp === true}
             scriptEpoch={scriptEpoch}
             selectedLine={selectedScriptLine}
@@ -174,6 +187,7 @@ export default function StudioApp() {
         {tab === "script" ? (
           <ScriptPanel
             project={project}
+            script={script}
             workerUp={workerUp === true}
             selectedLine={selectedScriptLine}
             onSelectLine={setSelectedScriptLine}
@@ -187,7 +201,7 @@ export default function StudioApp() {
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/70 p-6">
           <div className="w-full max-w-4xl rounded-md border border-studio-border bg-studio-panel p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-medium text-white">Render</h2>
+              <h2 className="text-sm font-medium text-white">Render · {script}</h2>
               <button
                 type="button"
                 className="text-sm text-studio-muted hover:text-white"
@@ -198,6 +212,9 @@ export default function StudioApp() {
             </div>
             <video key={videoBust || "render"} className="max-h-[70vh] w-full bg-black" controls src={videoSrc} />
             {renderStatus ? <p className="mt-2 text-xs text-studio-muted">{renderStatus}</p> : null}
+            {renderResult?.url ? (
+              <p className="mt-1 font-mono text-[11px] text-studio-muted">{renderResult.url}</p>
+            ) : null}
           </div>
         </div>
       ) : null}

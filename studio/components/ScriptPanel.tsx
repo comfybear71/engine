@@ -16,12 +16,14 @@ function flattenLint(result: { lint: { errors: LintIssue[]; warnings: LintIssue[
 
 export default function ScriptPanel({
   project,
+  script = "script.txt",
   workerUp,
   selectedLine,
   onSelectLine,
   onSaved,
 }: {
   project: string | null;
+  script?: string;
   workerUp: boolean;
   selectedLine: number | null;
   onSelectLine: (line: number | null) => void;
@@ -41,10 +43,10 @@ export default function ScriptPanel({
   useEffect(() => {
     if (!project || !workerUp) return;
     let cancelled = false;
-    loadScript(project)
-      .then((script) => {
+    loadScript(project, script)
+      .then((next) => {
         if (cancelled) return;
-        setText(script);
+        setText(next);
         setDirty(false);
         setIssues([]);
         setStatus(null);
@@ -65,7 +67,7 @@ export default function ScriptPanel({
     return () => {
       cancelled = true;
     };
-  }, [project, workerUp]);
+  }, [project, script, workerUp]);
 
   const lines = useMemo(() => text.split("\n"), [text]);
 
@@ -80,7 +82,7 @@ export default function ScriptPanel({
     setSaving(true);
     setStatus("Saving…");
     try {
-      const result = await saveScript(project, text);
+      const result = await saveScript(project, text, script);
       setIssues(flattenLint(result));
       setDirty(false);
       setStatus(result.ok ? "Saved." : "Saved, with lint issues.");
@@ -90,14 +92,14 @@ export default function ScriptPanel({
     } finally {
       setSaving(false);
     }
-  }, [project, saving, text, onSaved]);
+  }, [project, script, saving, text, onSaved]);
 
   const onLint = useCallback(async () => {
     if (!project || linting) return;
     setLinting(true);
     setStatus("Linting…");
     try {
-      const result = await lintScript(project, text);
+      const result = await lintScript(project, text, script);
       setIssues(flattenLint(result));
       setStatus(result.ok ? "Lint OK." : "Lint found issues.");
     } catch (err) {
@@ -105,7 +107,7 @@ export default function ScriptPanel({
     } finally {
       setLinting(false);
     }
-  }, [project, linting, text]);
+  }, [project, script, linting, text]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -150,7 +152,7 @@ export default function ScriptPanel({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between gap-2 border-b border-studio-border px-3 py-2">
           <div className="text-xs text-studio-muted">
-            script.txt {dirty ? "· unsaved" : ""}
+            {script} {dirty ? "· unsaved" : ""}
             {status ? <span className="ml-2 text-neutral-400">{status}</span> : null}
           </div>
           <div className="flex gap-2">
