@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const { createApp } = require("../src/server");
+const { createApp, isSafeProjectName, resolveProjectDir } = require("../src/server");
 const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
 
 function listen(app) {
@@ -76,7 +76,15 @@ describe("studio worker API", () => {
   });
 
   test("path traversal and reserved names are rejected", async () => {
-    const names = ["..", "_global_assets", encodeURIComponent("../project"), encodeURIComponent("..\\project")];
+    assert.equal(isSafeProjectName(".."), false);
+    assert.equal(isSafeProjectName("_global_assets"), false);
+    assert.equal(resolveProjectDir(fixture.root, ".."), null);
+    assert.equal(resolveProjectDir(fixture.root, "../project"), null);
+    assert.equal(resolveProjectDir(fixture.root, "_global_assets"), null);
+
+    // Bare ".." is a URL path segment and gets normalized by fetch; encoded
+    // names stay in :name so the server sees the traversal attempt.
+    const names = ["_global_assets", encodeURIComponent("../project"), encodeURIComponent("..\\project")];
     for (const name of names) {
       const res = await fetch(`${ctx.url}/api/projects/${name}/script`);
       assert.equal(res.status, 400, `expected 400 for name ${JSON.stringify(name)}, got ${res.status}`);
