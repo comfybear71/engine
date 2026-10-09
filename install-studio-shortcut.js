@@ -18,6 +18,12 @@ function targetFolder(kind) {
   return path.join(os.homedir(), "Desktop");
 }
 
+function vbsLiteral(value) {
+  // VBScript string literals do not treat backslash as an escape. Doubling
+  // them produced WorkingDirectory values like C:\\Users\\...
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
 function createShortcut(kind) {
   if (process.platform !== "win32") {
     console.error("This shortcut helper is for Windows.");
@@ -38,10 +44,10 @@ function createShortcut(kind) {
   const vbsPath = path.join(os.tmpdir(), `engine-studio-shortcut-${process.pid}.vbs`);
   const vbs = [
     'Set oWS = WScript.CreateObject("WScript.Shell")',
-    `sLinkFile = "${linkPath.replace(/\\/g, "\\\\")}"`,
+    `sLinkFile = ${vbsLiteral(linkPath)}`,
     "Set oLink = oWS.CreateShortcut(sLinkFile)",
-    `oLink.TargetPath = "${bat.replace(/\\/g, "\\\\")}"`,
-    `oLink.WorkingDirectory = "${root.replace(/\\/g, "\\\\")}"`,
+    `oLink.TargetPath = ${vbsLiteral(bat)}`,
+    `oLink.WorkingDirectory = ${vbsLiteral(root)}`,
     "oLink.WindowStyle = 7",
     'oLink.Description = "Engine Studio"',
     "oLink.Save",

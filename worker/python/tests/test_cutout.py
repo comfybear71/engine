@@ -119,3 +119,45 @@ def test_drops_small_lowsat_bottom_right_watermark():
     assert len(opaque) > 50
     sat = opaque[:, :3].max(axis=1) - opaque[:, :3].min(axis=1)
     assert float(sat.mean()) > 60
+
+
+def test_grid_cell_drops_intruding_blob_from_next_row():
+    """3x3 sheet: a blob from the next row at the cell bottom must be removed."""
+    cell = 60
+    rows, cols = 3, 3
+    img = np.zeros((cell * rows, cell * cols, 3), dtype=np.uint8)
+    img[:] = GROK_GREEN_BGR
+
+    def paint(row: int, col: int, y0: int, y1: int, x0: int, x1: int, bgr: tuple[int, int, int]) -> None:
+        img[row * cell + y0 : row * cell + y1, col * cell + x0 : col * cell + x1] = bgr
+
+    red = (0, 0, 220)
+    blue = (220, 40, 20)
+    dark = (30, 30, 40)
+
+    # Top-left cell: main figure, nearby sunglasses, hat-top from the row below.
+    paint(0, 0, 12, 44, 14, 46, red)
+    paint(0, 0, 6, 10, 20, 36, dark)
+    paint(0, 0, 52, 60, 20, 40, blue)
+    for row in range(rows):
+        for col in range(cols):
+            if row == 0 and col == 0:
+                continue
+            paint(row, col, 14, 46, 14, 46, red)
+
+    cells = process_image(img, key=True, grid=(3, 3), split="grid", trim=True)
+    assert len(cells) == 9
+    top_left = cells[0]
+    assert not is_empty(top_left)
+    # Intrusion would pin the trim to the full 60px cell height.
+    assert top_left.shape[0] < 55
+    assert top_left.shape[1] < 55
+
+    opaque = top_left[:, :, 3] > 128
+    assert int(np.count_nonzero(opaque)) > 50
+    blue_ch, _green_ch, red_ch = top_left[:, :, 0], top_left[:, :, 1], top_left[:, :, 2]
+    blueish = opaque & (blue_ch > 150) & (blue_ch > red_ch)
+    assert int(np.count_nonzero(blueish)) == 0
+    # Detached sunglasses (dark, sitting just above the head) stay.
+    darkish = opaque & (red_ch < 80) & (blue_ch < 80)
+    assert int(np.count_nonzero(darkish)) >= 8
