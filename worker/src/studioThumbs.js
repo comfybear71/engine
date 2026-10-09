@@ -27,7 +27,20 @@ function cachePathFor(absPath, stat) {
 
 function generateJpegThumb(src, dest) {
   return new Promise((resolve, reject) => {
-    const args = ["-y", "-i", src, "-vf", `scale=${THUMB_WIDTH}:-2`, "-q:v", "5", dest];
+    const args = [
+      "-y",
+      "-i",
+      src,
+      "-vf",
+      `scale=${THUMB_WIDTH}:-2`,
+      "-frames:v",
+      "1",
+      "-update",
+      "1",
+      "-q:v",
+      "5",
+      dest,
+    ];
     const proc = spawn("ffmpeg", args);
     let stderr = "";
     proc.stderr.on("data", (chunk) => (stderr += chunk));
@@ -47,7 +60,7 @@ async function cachedBackgroundThumb(absPath) {
   const stat = fs.statSync(absPath);
   const dest = cachePathFor(absPath, stat);
   if (fs.existsSync(dest) && fs.statSync(dest).size > 0) return dest;
-  const tmp = `${dest}.part-${process.pid}`;
+  const tmp = `${dest}.${process.pid}.tmp.jpg`;
   try {
     await generateJpegThumb(absPath, tmp);
     fs.renameSync(tmp, dest);
