@@ -1,7 +1,8 @@
 "use strict";
 
 /**
- * Parses an `[Action: Name key=value key=value free text note]` tag body.
+ * Parses an `[Action: Name key=value key=value free text note]` tag body
+ * (same key=value grammar is reused for [Move]/[Pose]/[Swing]).
  *
  * Grammar: the first word is the character name. Then zero or more
  * `key=value` tokens (no spaces inside a value) are consumed greedily.
@@ -11,7 +12,12 @@
  * the key=value pairs is kept as a note/comment, not an error").
  */
 
+const { ScriptError } = require("./errors");
+
 const KEY_VALUE_RE = /^([A-Za-z_][\w]*)=(\S+)$/;
+const NUMBER_RE = /^[+-]?\d+(?:\.\d+)?$/;
+const XY_RE = /^([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?)$/;
+const SECONDS_RE = /^(\d+(?:\.\d+)?)s$/i;
 
 function parseActionTag(body) {
   const words = body.trim().split(/\s+/).filter(Boolean);
@@ -61,8 +67,70 @@ function parsePauseValue(body, lineNumber) {
   if (framesMatch) {
     return { frames: parseInt(framesMatch[1], 10) };
   }
-  const { ScriptError } = require("./errors");
   throw new ScriptError(lineNumber, `Invalid [Pause: ${body}] -- expected a frame count ("12") or seconds ("0.5s").`);
 }
 
-module.exports = { parseActionTag, parseCastList, parsePauseValue, KEY_VALUE_RE };
+/** "1s" / "0.5s" -> seconds. Used by [Move]/[Pose]/[Swing] duration fields. */
+function parseSecondsSpec(value, lineNumber, label) {
+  if (value === undefined || value === "") {
+    throw new ScriptError(lineNumber, `${label} is required (e.g. "1s" or "0.5s").`);
+  }
+  const trimmed = String(value).trim();
+  const match = trimmed.match(SECONDS_RE);
+  if (!match) {
+    throw new ScriptError(lineNumber, `Invalid ${label} "${value}" -- expected seconds like "1s" or "0.5s".`);
+  }
+  const seconds = parseFloat(match[1]);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new ScriptError(lineNumber, `Invalid ${label} "${value}" -- must be greater than 0.`);
+  }
+  return seconds;
+}
+
+function parseEaseValue(value, lineNumber) {
+  if (value === undefined) return "linear";
+  const v = String(value).toLowerCase();
+  if (v !== "linear" && v !== "inout") {
+    throw new ScriptError(lineNumber, `Invalid ease "${value}" -- expected "linear" or "inout".`);
+  }
+  return v;
+}
+
+function parseWaitValue(value, lineNumber) {
+  if (value === undefined) return true;
+  const v = String(value).toLowerCase();
+  if (v === "true" || v === "1") return true;
+  if (v === "false" || v === "0") return false;
+  throw new ScriptError(lineNumber, `Invalid wait "${value}" -- expected true or false.`);
+}
+
+function parseNumberValue(value, lineNumber, label) {
+  const trimmed = String(value).trim();
+  if (!NUMBER_RE.test(trimmed)) {
+    throw new ScriptError(lineNumber, `Invalid ${label} "${value}" -- expected a number.`);
+  }
+  const n = parseFloat(trimmed);
+  if (!Number.isFinite(n)) {
+    throw new ScriptError(lineNumber, `Invalid ${label} "${value}" -- expected a number.`);
+  }
+  return n;
+}
+
+/** "400,1080" -> {x,y}; anything else -> null (caller treats it as a mark name). */
+function parseXyPair(value) {
+  const match = String(value).trim().match(XY_RE);
+  if (!match) return null;
+  return { x: parseFloat(match[1]), y: parseFloat(match[2]) };
+}
+
+module.exports = {
+  parseActionTag,
+  parseCastList,
+  parsePauseValue,
+  parseSecondsSpec,
+  parseEaseValue,
+  parseWaitValue,
+  parseNumberValue,
+  parseXyPair,
+  KEY_VALUE_RE,
+};

@@ -286,6 +286,250 @@ describe("line-numbered errors", () => {
   });
 });
 
+describe("character.json pass-through", () => {
+  test("child parent and pivot from character.json are copied onto the layer", async () => {
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]"].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const alice = layersFor(timeline).find((l) => l.character_id === "alice");
+    const arm = alice.children.find((c) => c.id === "right_arm");
+    const forearm = alice.children.find((c) => c.id === "forearm");
+    assert.equal(arm.pivot, "top-center");
+    assert.equal(forearm.parent, "right_arm");
+    assert.equal(forearm.pivot, "top-center");
+  });
+
+  test("blank base asset + slots.body is a valid body-as-slot character", async () => {
+    const billDir = path.join(fixture.globalAssetsDir, "characters", "bill");
+    fixture.writePng(path.join(billDir, "blank.png"));
+    fixture.writePng(path.join(billDir, "body", "stand.png"));
+    fixture.writePng(path.join(billDir, "body", "ws01.png"));
+    fixture.writePng(path.join(billDir, "body", "ws02.png"));
+    fixture.writeJson(path.join(billDir, "character.json"), {
+      id: "bill",
+      display_name: "Bill",
+      aliases: ["Bill"],
+      asset: "blank.png",
+      z: 10,
+      default_scale: 1.0,
+      slots: {
+        body: {
+          offset: { x: 0, y: 0 },
+          drawings_dir: "body",
+          default_drawing: "stand",
+          cycles: { walk_side: { drawings: ["ws01", "ws02"], fps: 12 } },
+        },
+        mouth: {
+          offset: { x: 0, y: -10 },
+          drawings_dir: "mouth",
+          visible_when: { body: ["stand"] },
+        },
+      },
+      children: [],
+    });
+    for (const shape of ["A", "B", "C", "D", "E", "F", "G", "H", "X"]) {
+      fixture.writePng(path.join(billDir, "mouth", `${shape}.png`));
+    }
+
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Bill]", "[Action: Bill body=walk_side]"].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const bill = layersFor(timeline).find((l) => l.character_id === "bill");
+    assert.ok(bill.asset.endsWith("blank.png"));
+    assert.ok(bill.slots.body);
+    const [kf] = bill.slots.body.keyframes.filter((k) => k.cycle);
+    assert.deepEqual(kf.cycle, ["ws01", "ws02"]);
+    assert.equal(kf.fps, 12);
+  });
+});
+
+describe("[Move:] / [Pose:] / [Swing:] / cycle actions", () => {
+  test("[Move] writes transform keyframes on the current layer and advances the clock", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Move: Alice to=right over=1s]",
+      "Alice: After the walk.",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const aliceLayers = layersFor(timeline).filter((l) => l.character_id === "alice");
+    assert.equal(aliceLayers.length, 1);
+    const alice = aliceLayers[0];
+    assert.equal(alice.transform.x, 450); // opened at room_a left
+    assert.ok(alice.transform_keyframes);
+    const [start, end] = alice.transform_keyframes;
+    assert.equal(start.frame, 0);
+    assert.equal(start.x, 450);
+    assert.equal(end.frame, 24);
+    assert.equal(end.x, 550);
+    assert.equal(alice.dialogue[0].start_frame, 24);
+  });
+
+  test("[Move wait=false] does not advance the cursor", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Move: Alice to=right over=1s wait=false]",
+      "Alice: During the walk.",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const alice = layersFor(timeline).find((l) => l.character_id === "alice");
+    assert.equal(alice.dialogue[0].start_frame, 0);
+    assert.equal(alice.transform_keyframes[1].frame, 24);
+  });
+
+  test("[Action: flip] after [Move] starts the new layer at the moved-to position", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Move: Alice to=right over=1s]",
+      "[Action: Alice flip]",
+      "Alice: Now facing the other way.",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const aliceLayers = layersFor(timeline).filter((l) => l.character_id === "alice");
+    assert.equal(aliceLayers.length, 2);
+    const [first, second] = aliceLayers;
+    assert.equal(first.timing.end_frame, second.timing.start_frame);
+    assert.equal(second.transform.x, 550); // room_a right, not the original left mark
+    assert.equal(second.transform.y, 1000);
+    assert.equal(second.transform.flip_x, true);
+    assert.equal(first.transform.x, 450);
+  });
+
+  test("[Pose] writes rotation keyframes from the current angle to the target", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Pose: Alice right_arm=40 over=0.5s ease=inout]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const alice = layersFor(timeline).find((l) => l.character_id === "alice");
+    const arm = alice.children.find((c) => c.id === "right_arm");
+    assert.ok(arm.rotation_keyframes);
+    assert.equal(arm.rotation_keyframes.length, 2);
+    assert.equal(arm.rotation_keyframes[0].frame, 0);
+    assert.equal(arm.rotation_keyframes[0].rotation, 0);
+    assert.equal(arm.rotation_keyframes[0].ease, "inout");
+    assert.equal(arm.rotation_keyframes[1].frame, 12);
+    assert.equal(arm.rotation_keyframes[1].rotation, 40);
+    assert.equal(arm.rotation, 40);
+  });
+
+  test("[Swing] writes a full-period keyframe run that ends at the start angle", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Swing: Alice right_arm=30 period=1s for=1s]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const alice = layersFor(timeline).find((l) => l.character_id === "alice");
+    const arm = alice.children.find((c) => c.id === "right_arm");
+    const keys = arm.rotation_keyframes;
+    assert.equal(keys.length, 5);
+    assert.equal(keys[0].rotation, 0);
+    assert.equal(keys[0].frame, 0);
+    assert.equal(keys[1].rotation, 30);
+    assert.equal(keys[1].ease, "inout");
+    assert.equal(keys[2].rotation, 0);
+    assert.equal(keys[3].rotation, -30);
+    assert.equal(keys[4].rotation, 0);
+    assert.equal(keys[4].frame, 24);
+    assert.equal(arm.rotation, 0);
+  });
+
+  test("[Action] with a named cycle emits a cycle keyframe; a drawing name still works", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Action: Alice eyes=blink_loop]",
+      "[Pause: 12]",
+      "[Action: Alice eyes=closed]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const alice = layersFor(timeline).find((l) => l.character_id === "alice");
+    const keys = alice.slots.eyes.keyframes;
+    const cycleKf = keys.find((k) => k.cycle);
+    const drawingKf = keys.find((k) => k.drawing === "closed");
+    assert.ok(cycleKf);
+    assert.deepEqual(cycleKf.cycle, ["open", "closed"]);
+    assert.equal(cycleKf.fps, 6);
+    assert.ok(drawingKf);
+    assert.equal(drawingKf.frame, 12);
+  });
+});
+
+describe("line-numbered errors for motion / cycles", () => {
+  test("unknown cycle cites the line and lists available cycles", async () => {
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Action: Alice eyes=walk_side]"].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /cycle "walk_side"/.test(err.message) &&
+        /blink_loop/.test(err.message)
+    );
+  });
+
+  test("unknown part on [Pose] cites the line and lists available parts", async () => {
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Pose: Alice left_foot=20 over=1s]"].join(
+      "\n"
+    );
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /Unknown part "left_foot"/.test(err.message) &&
+        /right_arm/.test(err.message)
+    );
+  });
+
+  test("unknown mark on [Move] cites the line", async () => {
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Move: Alice to=upstage over=1s]"].join(
+      "\n"
+    );
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) => err instanceof ScriptError && err.lineNumber === 4 && /Unknown mark "upstage"/.test(err.message)
+    );
+  });
+
+  test("unknown character on [Move] cites the line", async () => {
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Move: Zelda to=right over=1s]"].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) => err instanceof ScriptError && err.lineNumber === 4 && /Unknown character "Zelda"/.test(err.message)
+    );
+  });
+
+  test("bad numbers on [Move] / [Pose] cite the line", async () => {
+    await assert.rejects(
+      () =>
+        parseScript(
+          fixture.projectDir,
+          fixture.globalAssetsDir,
+          ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Move: Alice to=right over=nope]"].join("\n")
+        ),
+      (err) => err instanceof ScriptError && err.lineNumber === 4 && /Invalid over/.test(err.message)
+    );
+    await assert.rejects(
+      () =>
+        parseScript(
+          fixture.projectDir,
+          fixture.globalAssetsDir,
+          ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Pose: Alice right_arm=forty over=1s]"].join("\n")
+        ),
+      (err) => err instanceof ScriptError && err.lineNumber === 4 && /Invalid Pose right_arm/.test(err.message)
+    );
+  });
+});
+
 describe("lines.json manifest shape", () => {
   test("includes scene, line number, character, text, audio/cues paths and status", async () => {
     const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hello there friend."].join("\n");
