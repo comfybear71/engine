@@ -272,12 +272,19 @@ export default function AssetsPanel({
             onClick={(event) => event.stopPropagation()}
             data-testid="library-drawer"
           >
-            <div className="flex items-center justify-between border-b border-studio-border px-4 py-3">
-              <div>
+            <div className="flex items-start justify-between gap-3 border-b border-studio-border px-4 py-3">
+              <div className="min-w-0">
                 <h2 className="text-sm font-semibold text-white">Library</h2>
-                <p className="text-[11px] text-studio-muted">Global characters from _global_assets. Adding records a reference — art is not copied.</p>
+                <p className="text-[11px] text-studio-muted">
+                  Global characters from _global_assets. Adding records a reference — art is not copied.
+                </p>
               </div>
-              <button type="button" className="text-sm text-studio-muted hover:text-white" onClick={() => setLibraryOpen(false)}>
+              <button
+                type="button"
+                data-testid="library-close"
+                className="shrink-0 text-sm text-studio-muted hover:text-white"
+                onClick={() => setLibraryOpen(false)}
+              >
                 Close
               </button>
             </div>
