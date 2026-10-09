@@ -41,23 +41,18 @@ def _solid(w: int, h: int, bgr: tuple[int, int, int], alpha: int = 255) -> np.nd
     return img
 
 
-def _green_centroid(canvas: np.ndarray) -> tuple[float, float]:
-    """Centroid of pixels that are clearly green (the pivot marker)."""
-
-    b, g, r = canvas[:, :, 0], canvas[:, :, 1], canvas[:, :, 2]
-    mask = (g > 180) & (r < 80) & (b < 80)
-    ys, xs = np.nonzero(mask)
-    assert len(xs) > 0, "expected a green pivot marker on the canvas"
-    return float(xs.mean()), float(ys.mean())
+def _opaque_xy(canvas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    ys, xs = np.nonzero(canvas.sum(axis=2) > 40)
+    assert len(xs) > 0, "expected the arm to be drawn"
+    return xs, ys
 
 
 def test_shoulder_pivot_stays_put_when_child_rotates_90(tmp_path):
-    """A top-center (shoulder) pivot must stay at the same canvas pixel
-    after a 90° rotation -- the old path placed the *expanded* box by its
-    top-center edge and the arm detached."""
+    """A top-center (shoulder) pivot must stay at the offset after a 90°
+    rotation. The old path placed the *expanded* box by its top-center edge,
+    so the real shoulder jumped ~30px (to ~230, 160 on this fixture)."""
 
-    arm = _solid(20, 60, (0, 0, 200))  # red body
-    arm[0:6, 7:13] = (0, 220, 0, 255)  # green marker around top-center (10, 0)
+    arm = _solid(20, 60, (0, 0, 200))  # red, hangs down from the shoulder
     arm_path = _write_bgra(tmp_path / "arm.png", arm)
     torso_path = _write_bgra(tmp_path / "torso.png", _solid(4, 4, (255, 255, 255), 0))
 
@@ -79,15 +74,21 @@ def test_shoulder_pivot_stays_put_when_child_rotates_90(tmp_path):
     _draw_layer(canvas_0, layer_0, AssetCache(), 0, fps=24)
     _draw_layer(canvas_90, layer_90, AssetCache(), 0, fps=24)
 
-    cx0, cy0 = _green_centroid(canvas_0)
-    cx90, cy90 = _green_centroid(canvas_90)
-    assert (cx0, cy0) == pytest.approx(pivot, abs=2.0)
-    assert (cx90, cy90) == pytest.approx(pivot, abs=2.0)
-    assert (cx90, cy90) == pytest.approx((cx0, cy0), abs=1.5)
+    xs0, ys0 = _opaque_xy(canvas_0)
+    xs90, ys90 = _opaque_xy(canvas_90)
 
-    # Rotation actually happened: a pixel that was below the shoulder is now
-    # to the left of it (clockwise, Y-down).
-    assert tuple(canvas_90[150, 160]) != (0, 0, 0)
+    # Unrotated: the top edge (shoulder) sits on the pivot.
+    assert ys0.min() == pytest.approx(150, abs=1)
+    assert xs0.min() == pytest.approx(190, abs=1)
+    assert xs0.max() == pytest.approx(209, abs=1)
+
+    # 90° clockwise, Y-down: the arm hangs left. The shoulder is now the
+    # right-hand edge and must still sit on the same pivot -- not on the
+    # expanded box's top-center (~230).
+    assert xs90.max() == pytest.approx(199, abs=2)
+    assert ys90[xs90 == xs90.max()].mean() == pytest.approx(150, abs=2)
+    assert xs90.min() < 160  # actually swung left
+    assert (ys90.max() - ys90.min()) < 30  # ~20px tall, not the old 60
 
 
 def test_transform_interpolation_at_mid_frame():
