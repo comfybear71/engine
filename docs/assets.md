@@ -17,7 +17,9 @@ projects/
 │   ├── backgrounds/
 │   │   └── <location>/
 │   │       ├── bg.png                 # the background image for this location
-│   │       └── staging.json           # this location's marks + auto_order
+│   │       ├── staging.json           # this location's marks + auto_order + props
+│   │       └── props/                 # optional still images (letterbox, furniture, ...)
+│   │           └── <name>.png
 │   └── characters/
 │       └── <character_id>/
 │           ├── character.json         # display name, aliases, slots, rig children, voice_id
@@ -166,7 +168,17 @@ numbered slots** -- a script says `at=left`, not `at=1`.
     "far_left":  { "x": 680, "y": 1080, "scale": 1.05 },
     "far_right": { "x": 1240, "y": 1080, "scale": 1.05, "flip_x": true }
   },
-  "auto_order": ["left", "right", "far_left", "far_right"]
+  "auto_order": ["left", "right", "far_left", "far_right"],
+  "props": {
+    "letterbox": {
+      "asset": "props/letterbox.png",
+      "x": 960,
+      "y": 1080,
+      "anchor": "bottom-center",
+      "scale": 1.0,
+      "z": 5
+    }
+  }
 }
 ```
 
@@ -176,6 +188,32 @@ numbered slots** -- a script says `at=left`, not `at=1`.
   auto-assigned a mark by their position in the scene's `[Cast: ...]` list --
   the first cast member gets `auto_order[0]`, the second gets `auto_order[1]`,
   and so on (wrapping around if there are more cast members than entries).
+- `props`: optional still objects for this location (see [Props](#props)
+  below). Not merged from `staging_defaults.json` -- only this location's
+  own `staging.json` declares them.
+
+### Props
+
+A **prop** is a still image drawn as its own timeline layer, in the same
+`z` list as characters, so a character can walk behind or in front of it
+(a letterbox, a desk, a doorway frame). This replaces the old workaround
+of faking a prop as a character with no slots.
+
+Images live in `backgrounds/<location>/props/`. Each entry under
+`staging.json` `props` is:
+
+| Field | Notes |
+|---|---|
+| `asset` | Path relative to the location folder. Defaults to `props/<name>.png`. |
+| `x` / `y` | Canvas-space position of the anchor. If both are set, the prop is placed from frame 0 when the scene's `[Location: ...]` is set. Omit them to keep the prop off-stage until a `[Prop: <name> at=...]` places it. |
+| `anchor` | Same enum as a layer transform (`bottom-center` default). British `centre` spellings are accepted and stored as `center`. |
+| `scale` | Default `1.0`. |
+| `z` | Default draw order (`0` if omitted). Override mid-shot with `[Prop: ... z=N]` or `[Layer: <name> z=N]`. |
+
+The parser emits each visible prop as a timeline layer with `prop_id`
+(no `character_id`, no slots). Lint (`node src/cli.js lint`) errors if a
+declared prop's image is missing. Script control is `[Prop: ...]` and
+`[Layer: ...]` -- see [docs/script-format.md](script-format.md).
 
 The sample project deliberately ships two very different staging profiles to
 make this visible: **`bedroom`** is a small room with marks close together
@@ -237,7 +275,7 @@ projects/my_episode/
 
 This works for anything: `character.json` itself, `body.png`, a single
 rig-part image, a single drawing inside a slot folder, a location's
-`bg.png`, or its `staging.json`. Overriding a slot folder only replaces the
+`bg.png`, its `staging.json`, or a single file in `props/`. Overriding a slot folder only replaces the
 specific filenames you provide; any other drawing names in that slot still
 come from the global version.
 

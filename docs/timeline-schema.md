@@ -81,7 +81,7 @@ layer coordinates.
 | `background` | object | yes | See [Background](#background). |
 | `audio` | string | no | Scene-wide audio bed (music/ambience), mixed in starting at this scene's first frame. |
 | `camera` | object | no | See [Camera](#camera). |
-| `layers` | array of [Layer](#layer) | no | Drawn back-to-front by `z`. |
+| `layers` | array of [Layer](#layer) | no | Drawn back-to-front by `z`. Character layers and location-prop layers share this list; the background stays behind every layer. |
 
 ### `frame_step` (cut-out "on Ns" cadence)
 
@@ -164,8 +164,9 @@ frame briefly after the audio/dialogue ends.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `id` | string | yes | Unique within the scene. A character that's repositioned mid-scene gets a second layer id (e.g. `hicks_2`), same `character_id`, back-to-back in `timing` -- see [Multi-line dialogue](#multi-line-dialogue-per-character). |
+| `id` | string | yes | Unique within the scene. A character that's repositioned mid-scene gets a second layer id (e.g. `hicks_2`), same `character_id`, back-to-back in `timing` -- see [Multi-line dialogue](#multi-line-dialogue-per-character). A prop that's moved, re-z'd, or hidden/shown mid-scene forks the same way (`letterbox_2`, same `prop_id`). |
 | `character_id` | string | no | Logical character identity, for continuity across scenes and tooling (the script parser uses this to track a recurring character and to resolve its [asset library](assets.md) entry). |
+| `prop_id` | string | no | Logical location-prop identity when this layer is a still object declared under `backgrounds/<location>/staging.json` `props` (see [docs/assets.md#props](assets.md#props)). The compositor draws prop and character layers together in ascending `z`. |
 | `asset` | string | yes | This layer's own root/base image. PNG with alpha recommended; non-alpha images still work (treated as fully opaque). |
 | `z` | integer | yes | **Explicit** draw order, ascending (higher `z` draws on top). The background is implicitly behind every layer. |
 | `transform` | object | yes | See below. |

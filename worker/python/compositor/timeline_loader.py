@@ -123,6 +123,7 @@ class Layer:
     start_frame: int = 0
     end_frame: int | None = None  # None => visible through end of scene
     character_id: str | None = None
+    prop_id: str | None = None
     dialogue: list[DialogueClip] = field(default_factory=list)
     slots: dict[str, Slot] = field(default_factory=dict)
     children: list[Child] = field(default_factory=list)
@@ -562,6 +563,7 @@ def _build_layer(
     return Layer(
         id=raw["id"],
         character_id=raw.get("character_id"),
+        prop_id=raw.get("prop_id"),
         asset=_resolve(project_dir, raw["asset"]),
         z=int(raw["z"]),
         transform=_build_transform(raw["transform"]),

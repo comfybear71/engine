@@ -119,6 +119,24 @@ function listKnownLocations(projectDir, globalAssetsDir) {
 }
 
 const DEFAULT_AUTO_ORDER = ["centre", "left", "right", "far_left", "far_right"];
+const ANCHOR_NAMES = new Set([
+  "top-left",
+  "top-center",
+  "top-right",
+  "center-left",
+  "center",
+  "center-right",
+  "bottom-left",
+  "bottom-center",
+  "bottom-right",
+]);
+
+/** Accepts British "centre" spellings; returns a schema anchor or null if unknown. */
+function normalizeAnchor(value) {
+  if (value == null || value === "") return "bottom-center";
+  const normalized = String(value).trim().toLowerCase().replace(/centre/g, "center");
+  return ANCHOR_NAMES.has(normalized) ? normalized : null;
+}
 
 /**
  * Loads a location's staging profile (`backgrounds/<location>/staging.json`),
@@ -134,8 +152,9 @@ function loadStaging(projectDir, globalAssetsDir, location) {
 
   const marks = { ...(globalDefaults.marks || {}), ...((locationStaging && locationStaging.marks) || {}) };
   const autoOrder = (locationStaging && locationStaging.auto_order) || globalDefaults.auto_order || DEFAULT_AUTO_ORDER;
+  const props = { ...((locationStaging && locationStaging.props) || {}) };
 
-  return { marks, autoOrder, hasLocationProfile: !!locationStaging };
+  return { marks, autoOrder, props, hasLocationProfile: !!locationStaging };
 }
 
 module.exports = {
@@ -146,5 +165,7 @@ module.exports = {
   loadStaging,
   listKnownCharacterIds,
   listKnownLocations,
+  normalizeAnchor,
+  ANCHOR_NAMES,
   DEFAULT_AUTO_ORDER,
 };

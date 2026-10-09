@@ -414,6 +414,7 @@
       "properties": {
         "id": { "type": "string", "minLength": 1, "description": "Unique id of this layer within the scene." },
         "character_id": { "type": "string", "description": "Optional logical character this layer belongs to, for continuity across scenes and tooling (e.g. the script.txt parser)." },
+        "prop_id": { "type": "string", "description": "Optional logical location-prop identity (from backgrounds/<location>/staging.json `props`) when this layer is a still object rather than a character. Drawn in the same z-ordered list as character layers; the background stays behind every layer." },
         "asset": { "type": "string", "description": "Path (relative to the project folder) to the layer's own (root/base) image (PNG with alpha recommended)." },
         "z": { "type": "integer", "description": "Explicit draw order within the scene. Layers are drawn back-to-front in ascending z order; the background is implicitly z = -infinity." },
         "transform": { "$ref": "#/definitions/transform" },

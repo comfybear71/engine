@@ -624,3 +624,91 @@ describe("lines.json manifest shape", () => {
     assert.ok("voice_id" in line);
   });
 });
+
+describe("prop layers", () => {
+  test("declared props emit layers; [Prop:] moves/hides and [Layer:] changes z", async () => {
+    const isolated = createFixtureLibrary();
+    isolated.writePng(path.join(isolated.globalAssetsDir, "backgrounds", "room_a", "props", "letterbox.png"));
+    isolated.writeJson(path.join(isolated.globalAssetsDir, "backgrounds", "room_a", "staging.json"), {
+      marks: {
+        centre: { x: 500, y: 1000, scale: 1.0 },
+        left: { x: 450, y: 1000, scale: 1.0 },
+        right: { x: 550, y: 1000, scale: 1.0 },
+      },
+      auto_order: ["left", "right"],
+      props: {
+        letterbox: {
+          asset: "props/letterbox.png",
+          x: 300,
+          y: 1000,
+          anchor: "bottom-centre",
+          scale: 1.0,
+          z: 5,
+        },
+      },
+    });
+
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Prop: letterbox at=right z=15]",
+      "Alice: Walking past the box.",
+      "[Layer: letterbox z=25]",
+      "[Layer: Alice z=5]",
+      "[Pause: 12]",
+      "[Prop: letterbox hide]",
+    ].join("\n");
+
+    const { timeline, errors } = await parseScript(isolated.projectDir, isolated.globalAssetsDir, script);
+    isolated.cleanup();
+
+    assert.deepEqual(errors, []);
+    const layers = layersFor(timeline);
+    const aliceLayers = layers.filter((l) => l.character_id === "alice");
+    const propLayers = layers.filter((l) => l.prop_id === "letterbox");
+
+    assert.equal(aliceLayers.length, 2);
+    assert.equal(aliceLayers[0].z, 10);
+    assert.equal(aliceLayers[1].z, 5);
+    assert.equal(aliceLayers[1].id, "alice_2");
+    assert.equal(aliceLayers[0].timing.end_frame, aliceLayers[1].timing.start_frame);
+
+    assert.equal(propLayers.length, 2);
+    assert.equal(propLayers[0].character_id, undefined);
+    assert.equal(propLayers[0].transform.x, 550); // room_a right
+    assert.equal(propLayers[0].transform.y, 1000);
+    assert.equal(propLayers[0].transform.anchor, "bottom-center");
+    assert.equal(propLayers[0].z, 15);
+    assert.equal(propLayers[0].asset, "../_global_assets/backgrounds/room_a/props/letterbox.png");
+    assert.equal(propLayers[1].id, "letterbox_2");
+    assert.equal(propLayers[1].z, 25);
+    assert.equal(propLayers[0].timing.end_frame, propLayers[1].timing.start_frame);
+    assert.ok(propLayers[1].timing.end_frame > propLayers[1].timing.start_frame);
+  });
+
+  test("lint/parse errors when a declared prop asset is missing", async () => {
+    const isolated = createFixtureLibrary();
+    isolated.writeJson(path.join(isolated.globalAssetsDir, "backgrounds", "room_a", "staging.json"), {
+      marks: {
+        centre: { x: 500, y: 1000, scale: 1.0 },
+        left: { x: 450, y: 1000, scale: 1.0 },
+        right: { x: 550, y: 1000, scale: 1.0 },
+      },
+      auto_order: ["left", "right"],
+      props: {
+        letterbox: { asset: "props/letterbox.png", x: 300, y: 1000, z: 5 },
+      },
+    });
+
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]"].join("\n");
+    await assert.rejects(
+      () => parseScript(isolated.projectDir, isolated.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 2 &&
+        /Prop "letterbox" is missing asset "backgrounds\/room_a\/props\/letterbox.png"/.test(err.message)
+    );
+    isolated.cleanup();
+  });
+});

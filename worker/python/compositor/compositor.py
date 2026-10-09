@@ -7,13 +7,15 @@ feature-length episode at 1920x1080 could easily be tens of gigabytes of
 raw frames; this is what lets ``render()`` stream them straight into
 FFmpeg's stdin frame-by-frame instead of buffering in RAM or on disk.
 
-Each top-level ``Layer`` is composited as a self-contained local rig: its
-own base image plus any ``children`` (head, arms, ...), stacked among
-themselves by their own ``z`` (relative to the parent, not the scene), with
-the parent's position/scale/flip applied to all of them. Any ``slots``
-attached to the layer or to a specific child (mouth, eyes, hand pose, ...)
-are drawn immediately on top of their owner, at the owner's effective
-position.
+Each top-level ``Layer`` -- a character or a location prop -- is composited
+as a self-contained local rig: its own base image plus any ``children``
+(head, arms, ...), stacked among themselves by their own ``z`` (relative to
+the parent, not the scene), with the parent's position/scale/flip applied to
+all of them. Any ``slots`` attached to the layer or to a specific child
+(mouth, eyes, hand pose, ...) are drawn immediately on top of their owner,
+at the owner's effective position. Props and characters share one scene
+layer list and are drawn together in ascending ``z``; the background is
+painted first and stays behind every layer.
 """
 
 from __future__ import annotations
@@ -183,6 +185,9 @@ def iter_scene_frames(scene: Scene, canvas_w: int, canvas_h: int, fps: int, cach
     bg_raw = cache.get_raw(scene.background.asset)
     bg_fitted = fit_to_canvas(bg_raw, canvas_w, canvas_h, scene.background.fit)
 
+    # Character and prop layers share this list and are drawn together in
+    # ascending z. The fitted background is painted first and stays behind
+    # every layer.
     sorted_layers = sorted(scene.layers, key=lambda l: l.z)
     frame_step = max(1, scene.frame_step)
 

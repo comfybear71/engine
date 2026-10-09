@@ -3,7 +3,8 @@
 /**
  * Extra checks used by `node src/cli.js lint` (and attached to parse
  * results so the CLI can print them). These are not schema/load
- * validation -- they catch staging overlaps and incomplete mouth sheets.
+ * validation -- they catch staging overlaps, incomplete mouth sheets,
+ * and missing prop assets.
  */
 
 const assetLibrary = require("./assetLibrary");
@@ -118,9 +119,56 @@ function findMouthSheetErrors(usedCharacters, projectDir, globalAssetsDir) {
   return errors;
 }
 
+/**
+ * One declared/used location prop, so lint can confirm its image exists.
+ *
+ * @typedef {{
+ *   name: string,
+ *   assetRel: string,
+ *   lineNumber: number,
+ *   location?: string,
+ * }} UsedProp
+ */
+
+/**
+ * Errors if a used location prop's image is missing from both the
+ * project folder and `_global_assets`. Each error cites the script line
+ * that introduced the location (or the `[Prop: ...]` tag) and lists
+ * whatever *is* in that location's `props/` folder.
+ *
+ * @param {UsedProp[]} usedProps
+ * @param {string} projectDir
+ * @param {string} globalAssetsDir
+ * @returns {string[]}
+ */
+function findMissingPropAssets(usedProps, projectDir, globalAssetsDir) {
+  const errors = [];
+  const listed = new Set();
+
+  for (const prop of usedProps) {
+    const resolved = assetLibrary.resolveAsset(projectDir, globalAssetsDir, prop.assetRel);
+    if (resolved) continue;
+
+    const dedupeKey = `${prop.lineNumber}\0${prop.assetRel}`;
+    if (listed.has(dedupeKey)) continue;
+    listed.add(dedupeKey);
+
+    const propsDir = prop.location ? `backgrounds/${prop.location}/props` : null;
+    const present = propsDir
+      ? [...assetLibrary.scanDrawingsDir(projectDir, globalAssetsDir, propsDir).keys()].sort()
+      : [];
+    errors.push(
+      `Line ${prop.lineNumber}: Prop "${prop.name}" is missing asset "${prop.assetRel}". Available: ${present.join(", ") || "(none)"}`
+    );
+  }
+
+  return errors;
+}
+
 module.exports = {
   findOverlapWarnings,
   findMouthSheetErrors,
+  findMissingPropAssets,
   findMouthSlot,
   RHUBARB_MOUTH_SHAPES,
   REST_MOUTH_SHAPE,
