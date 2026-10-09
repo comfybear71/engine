@@ -378,6 +378,63 @@ describe("[Move:] / [Pose:] / [Swing:] / cycle actions", () => {
     assert.equal(alice.transform_keyframes[1].frame, 24);
   });
 
+  test("bare flip in [Action: ...] does not swallow later slot assignments", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Action: Alice flip eyes=closed]",
+    ].join("\n");
+    const { timeline, warnings } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const alice = layersFor(timeline).find((l) => l.character_id === "alice");
+    assert.equal(alice.transform.flip_x, true);
+    assert.equal(alice.slots.eyes.keyframes[0].drawing, "closed");
+    assert.equal(
+      warnings.filter((w) => /key=value/.test(w)).length,
+      0,
+      `unexpected swallowed-assignment warning: ${JSON.stringify(warnings)}`
+    );
+  });
+
+  test("a forked layer carries the active drawing/cycle instead of resetting to default_drawing", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Action: Alice eyes=blink_loop right_hand=point]",
+      "[Move: Alice to=right over=0.5s]",
+      "[Action: Alice flip=true]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const [first, second] = layersFor(timeline).filter((l) => l.character_id === "alice");
+    assert.equal(first.slots.eyes.keyframes[0].cycle[0], "open");
+    const secondEyes = second.slots.eyes.keyframes[0];
+    // 0.5s at 24 fps, cycle fps 6: index = floor(12/24*6)%2 = 1 → "closed" first
+    assert.ok(secondEyes.cycle, "layer 2 eyes should still be a cycle, not default_drawing");
+    assert.deepEqual(secondEyes.cycle, ["closed", "open"]);
+    assert.equal(secondEyes.fps, 6);
+    assert.equal(secondEyes.frame, 0);
+    const secondHand = second.children.find((c) => c.id === "right_arm").slots.right_hand.keyframes[0];
+    assert.equal(secondHand.drawing, "point");
+    assert.equal(second.transform.flip_x, true);
+  });
+
+  test("a note that contains key=value warns with the line number", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Action: Alice at=left hello eyes=closed]",
+    ].join("\n");
+    const { timeline, warnings } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const alice = layersFor(timeline).find((l) => l.character_id === "alice");
+    assert.equal(alice.slots.eyes.keyframes[0].drawing, "open"); // default; eyes=closed was in the note
+    assert.ok(
+      warnings.some((w) => /Line 4:/.test(w) && /eyes=closed/.test(w) && /ignored/.test(w)),
+      `expected swallowed-assignment warning, got: ${JSON.stringify(warnings)}`
+    );
+  });
+
   test("[Action: flip] after [Move] starts the new layer at the moved-to position", async () => {
     const script = [
       "[Scene: Intro]",

@@ -115,11 +115,13 @@ mark before any dialogue has happened, does not create a redundant extra
 layer. `[Action: Name flip]` after a `[Move]` opens the new layer at the
 **moved-to** position, not the original mark.
 
-Parsing a tag's key/value pairs stops at the first token that isn't a valid
-`key=value` -- everything from there to the end of the line is kept as a
-free-text note (e.g. `[Action: Hicks at=left storms across the room]`), not
-an error. It's not currently used for anything, but it's there for a human
-(or a future feature) to read.
+`key=value` tokens and bare flags (`flip`) can appear in any order.
+Parsing stops at the first token that is neither -- everything from there
+to the end of the line is kept as a free-text note (e.g. `[Action: Hicks
+at=left storms across the room]`), not an error. So
+`[Action: Bill flip body=walk_side]` sets both flip and the body slot;
+`[Action: Bill at=left hello body=walk_side]` treats `body=walk_side` as
+part of the note and warns, because it looks like a swallowed assignment.
 
 ### `[Pause: <N>]` or `[Pause: <N>s]`
 
@@ -214,7 +216,10 @@ character default > canvas/library default).
   they've already spoken or had time pass), the current layer's
   `timing.end_frame` is set to that frame and a new layer (`<id>_2`, `_3`,
   ...) opens there with the new transform. `flip_x` is not keyframed, so
-  turning a character around is always this kind of cut.
+  turning a character around is always this kind of cut. The new layer
+  **keeps** each slot's active drawing or cycle (rotated so the cycle
+  continues from the drawing that was showing) and each child's current
+  rotation, unless the same tag sets that slot.
 - **`[Move:]` does not fork a layer.** It writes `transform_keyframes` on
   the current layer from the current pose to the target. After the move,
   the current position *is* the target, so `[Action: Name flip]` opens the

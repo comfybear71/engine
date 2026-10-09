@@ -5,11 +5,13 @@
  * (same key=value grammar is reused for [Move]/[Pose]/[Swing]).
  *
  * Grammar: the first word is the character name. Then zero or more
- * `key=value` tokens (no spaces inside a value) are consumed greedily.
- * The first token that does *not* match `key=value` ends the key/value
- * section; everything from there to the end of the line is kept verbatim
- * as a free-text `note` -- never an error, per the brief ("Free-text after
- * the key=value pairs is kept as a note/comment, not an error").
+ * `key=value` tokens (no spaces inside a value) are consumed, with bare
+ * flags (`flip`) allowed anywhere among them. The first token that is
+ * neither `key=value` nor a bare flag ends the key/value section;
+ * everything from there to the end of the line is kept verbatim as a
+ * free-text `note` -- never an error. If that note itself contains a
+ * `key=value` token, the parser warns (it was almost certainly meant as
+ * an assignment and got swallowed).
  */
 
 const { ScriptError } = require("./errors");
@@ -27,26 +29,30 @@ function parseActionTag(body) {
 
   const character = words[0];
   const kv = {};
-  let noteStartIdx = words.length;
-
-  for (let i = 1; i < words.length; i++) {
+  let i = 1;
+  for (; i < words.length; i++) {
     const match = words[i].match(KEY_VALUE_RE);
-    if (!match) {
-      noteStartIdx = i;
-      break;
+    if (match) {
+      const [, key, value] = match;
+      kv[key.toLowerCase()] = value;
+      continue;
     }
-    const [, key, value] = match;
-    kv[key.toLowerCase()] = value;
+    // Bare flags may sit anywhere among key=value tokens (not only at the end).
+    if (words[i].toLowerCase() === "flip") {
+      kv.flip = "true";
+      continue;
+    }
+    break;
   }
 
-  // A bare "flip" flag (no "=") is also allowed, per the brief.
-  if (noteStartIdx < words.length && words[noteStartIdx].toLowerCase() === "flip") {
-    kv.flip = "true";
-    noteStartIdx += 1;
-  }
-
-  const note = words.slice(noteStartIdx).join(" ");
+  const note = words.slice(i).join(" ");
   return { character, kv, note };
+}
+
+/** True if a free-text note contains a token that looks like `key=value`. */
+function noteHasKeyValue(note) {
+  if (!note) return false;
+  return note.split(/\s+/).some((word) => KEY_VALUE_RE.test(word));
 }
 
 function parseCastList(body) {
@@ -125,6 +131,7 @@ function parseXyPair(value) {
 
 module.exports = {
   parseActionTag,
+  noteHasKeyValue,
   parseCastList,
   parsePauseValue,
   parseSecondsSpec,

@@ -30,6 +30,7 @@ const path = require("path");
 const { tokenize } = require("./tokenizer");
 const {
   parseActionTag,
+  noteHasKeyValue,
   parseCastList,
   parsePauseValue,
   parseSecondsSpec,
@@ -37,6 +38,7 @@ const {
   parseWaitValue,
   parseNumberValue,
   parseXyPair,
+  KEY_VALUE_RE,
 } = require("./actionTag");
 const { ScriptError } = require("./errors");
 const assetLibrary = require("./assetLibrary");
@@ -65,6 +67,21 @@ function estimateDurationSeconds(text) {
 
 function framesFromSeconds(seconds, fps) {
   return Math.max(0, Math.round(seconds * fps));
+}
+
+function slotStateKey(owner, slotName) {
+  return owner.ownerType === "child" ? `${owner.childId}:${slotName}` : slotName;
+}
+
+/** Timeline keyframe at local frame 0 that continues `active` at `scene`'s cursor. */
+function keyframeFromActive(active, scene) {
+  if (active.cycle && active.cycle.length > 0) {
+    const elapsed = Math.max(0, scene.cursorFrames - (active.startedAtSceneFrame || 0));
+    const index = Math.floor((elapsed / scene.fps) * active.fps) % active.cycle.length;
+    const rotated = active.cycle.slice(index).concat(active.cycle.slice(0, index));
+    return { frame: 0, cycle: rotated, fps: active.fps };
+  }
+  return { frame: 0, drawing: active.drawing };
 }
 
 /**
@@ -150,6 +167,9 @@ class CharacterSceneState {
     this.segments = []; // finished segments (plain JSON layer objects)
     this.current = null; // the open segment draft, or null
     this.childRotations = new Map(); // childId -> current degrees (survives layer forks)
+    // Last Action-set drawing/cycle per slot, so a forked layer can continue
+    // it instead of snapping back to default_drawing.
+    this.activeSlots = new Map(); // slotStateKey -> { ownerType, childId?, slotName, drawing?, cycle?, fps?, startedAtSceneFrame? }
   }
 }
 
@@ -425,7 +445,7 @@ class ScriptParser {
       scene.castOrder.push(characterId);
     }
     const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
-    void note; // free-text note: intentionally not an error, not otherwise used yet
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "Action", note);
 
     const positionKeys = ["at", "scale", "flip", "z"];
     const hasPositionChange = positionKeys.some((k) => kv[k] !== undefined);
@@ -494,6 +514,7 @@ class ScriptParser {
         }
         current._lineNumber = token.lineNumber;
       } else if (!current || transformsDiffer(current.transform, newTransform) || current.z !== newZ) {
+        const hadOpenSegment = !!current;
         this._closeCurrentSegment(state, scene.cursorFrames);
         this._openSegment(
           scene,
@@ -501,6 +522,10 @@ class ScriptParser {
           { markName, actionKv: kv, transform: newTransform, z: newZ },
           token.lineNumber
         );
+        if (hadOpenSegment) {
+          const skipSlots = new Set(Object.keys(kv).filter((k) => !positionKeys.includes(k)));
+          this._carryActiveSlots(state, scene, skipSlots);
+        }
       }
     }
 
@@ -584,6 +609,19 @@ class ScriptParser {
       );
     }
 
+    this._writeSlotKeyframe(segment, owner, slotName, keyframe);
+    state.activeSlots.set(slotStateKey(owner, slotName), {
+      ownerType: owner.ownerType,
+      childId: owner.childId,
+      slotName,
+      drawing: keyframe.drawing,
+      cycle: keyframe.cycle ? [...keyframe.cycle] : undefined,
+      fps: keyframe.fps,
+      startedAtSceneFrame: keyframe.cycle ? scene.cursorFrames : undefined,
+    });
+  }
+
+  _writeSlotKeyframe(segment, owner, slotName, keyframe) {
     let bucket;
     if (owner.ownerType === "layer") {
       bucket = segment.slotKeyframes.get(slotName) || [];
@@ -597,10 +635,32 @@ class ScriptParser {
       bucket = childMap.get(slotName) || [];
       childMap.set(slotName, bucket);
     }
-    // Replace any keyframe already at this exact frame (re-setting the same slot twice at once) instead of duplicating it.
-    const existingIdx = bucket.findIndex((k) => k.frame === relativeFrame);
+    const existingIdx = bucket.findIndex((k) => k.frame === keyframe.frame);
     if (existingIdx !== -1) bucket[existingIdx] = keyframe;
     else bucket.push(keyframe);
+  }
+
+  /**
+   * Seed a newly opened layer with the character's last active drawing/cycle
+   * for every slot the forking tag did not itself set. Cycles are rotated so
+   * the drawing that was showing at the cut is first (phase-continuous at
+   * the drawing boundary; intra-drawing leftover cannot be encoded because
+   * keyframe frames cannot be negative).
+   */
+  _carryActiveSlots(state, scene, skipSlotNames) {
+    for (const active of state.activeSlots.values()) {
+      if (skipSlotNames.has(active.slotName)) continue;
+      const owner = { ownerType: active.ownerType, childId: active.childId };
+      this._writeSlotKeyframe(state.current, owner, active.slotName, keyframeFromActive(active, scene));
+    }
+  }
+
+  _warnNoteLooksLikeAssignments(lineNumber, tagName, note) {
+    if (!noteHasKeyValue(note)) return;
+    const extras = note.split(/\s+/).filter((word) => KEY_VALUE_RE.test(word));
+    this.warnings.push(
+      `Line ${lineNumber}: [${tagName}: ...] free-text note contains key=value (${extras.join(", ")}) which was ignored. Bare flags like "flip" can sit anywhere among key=value tokens; only text after the first non-flag word is a note.`
+    );
   }
 
   _findChild(config, partName) {
@@ -650,7 +710,7 @@ class ScriptParser {
   _requireCharacterForMotion(token, tagName) {
     const scene = this._requireScene(token.lineNumber, tagName);
     const { character: scriptName, kv, note } = parseActionTag(token.body);
-    void note;
+    this._warnNoteLooksLikeAssignments(token.lineNumber, tagName, note);
     if (!scriptName) throw new ScriptError(token.lineNumber, `[${tagName}: ...] needs a character name.`);
     const characterId = this._resolveCharacterIdOrThrow(scriptName, token.lineNumber);
     if (!scene.castOrder.includes(characterId)) {

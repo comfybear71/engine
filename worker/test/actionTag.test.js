@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 
 const {
   parseActionTag,
+  noteHasKeyValue,
   parseCastList,
   parsePauseValue,
   parseSecondsSpec,
@@ -33,6 +34,27 @@ describe("parseActionTag", () => {
   test("bare 'flip' flag sets flip=true without needing a value", () => {
     const { kv } = parseActionTag("Hicks flip");
     assert.equal(kv.flip, "true");
+  });
+
+  test("bare flip does not swallow later key=value tokens", () => {
+    const { kv, note } = parseActionTag("BillWalk flip body=walk_side eyes=furious");
+    assert.equal(kv.flip, "true");
+    assert.equal(kv.body, "walk_side");
+    assert.equal(kv.eyes, "furious");
+    assert.equal(note, "");
+  });
+
+  test("bare flip can sit between key=value tokens", () => {
+    const { kv, note } = parseActionTag("Hicks at=left flip body=walk_side storms off");
+    assert.deepEqual(kv, { at: "left", flip: "true", body: "walk_side" });
+    assert.equal(note, "storms off");
+    assert.equal(noteHasKeyValue(note), false);
+  });
+
+  test("noteHasKeyValue is true when free text contains a key=value token", () => {
+    const { note } = parseActionTag("Hicks at=left hello body=walk_side");
+    assert.equal(note, "hello body=walk_side");
+    assert.equal(noteHasKeyValue(note), true);
   });
 
   test("scale= and z= are parsed as plain key/value like any slot", () => {
