@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import AssetImaginePanel from "@/components/AssetImaginePanel";
 import {
   addLibraryCharacter,
   assetUrl,
@@ -216,6 +217,19 @@ export default function AssetsPanel({
           </div>
           )}
         </Section>
+
+        {selected ? (
+          <div className="mb-8">
+            <AssetImaginePanel
+              project={project}
+              character={selected}
+              onChanged={() => {
+                setReloadKey((n) => n + 1);
+                onLibraryChange?.();
+              }}
+            />
+          </div>
+        ) : null}
 
         <Section title="Backgrounds" count={staging?.backgrounds.length ?? 0}>
           <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">

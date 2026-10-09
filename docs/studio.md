@@ -110,7 +110,11 @@ clobber the project's `timeline.json`.
   props from those locations' `staging.json`. **Library** opens a drawer of
   global characters from `projects/_global_assets` and **Add** records a
   reference in `library.json` without copying art. Click a character to see
-  its slots (mouth, eyes, hands, …), drawings, and named cycles.
+  its slots (mouth, eyes, hands, …), drawings, and named cycles. On the
+  same page, **Grok Imagine** builds a ready-to-copy prompt per character
+  and need (templates in `studio/lib/assetNeeds.json`), then a drop zone
+  ingests the PNG you generated in the browser — there is no image-generation
+  API. See [Image assets](#image-assets-grok-imagine) below.
 - **Stage** — a large frame preview from
   `POST /api/projects/:name/preview-frame?script=`, a time scrubber, the
   current location's marks, a read-only layer list in z order, and
@@ -143,9 +147,13 @@ project root). Those paths parse to **temp** files and never write
 | `POST` | `/api/trash/:id/restore` | Move that trash folder back to `projects/<originalName>`. 409 if that name exists. |
 | `POST` | `/api/trash/empty` | Permanently delete everything in `_trash`. JSON `{ "confirm": "empty" }`. |
 | `GET` | `/api/projects/:name/scripts` | `script*.txt` files in that folder. |
-| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots, drawings, cycles, thumbnail paths. |
+| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots, drawings, cycles, thumbnail paths, and `style`. |
 | `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. |
 | `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Appends to `library.json`; does not copy art. |
+| `PUT` | `/api/projects/:name/characters/:id` | JSON `{ "style": "painted semi-real" }`. Writes a project-local `character.json` (copied from global if needed) with that free-text style field. Does not touch `_global_assets`. |
+| `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64", "filename?", "frames?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. |
+| `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }] }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames), backs up overwritten **local** files to `_backup/<timestamp>/`, merges new slots/cycles into project-local `character.json` without deleting other entries. |
+| `POST` | `/api/projects/:name/characters/:id/ingest/cancel` | JSON `{ "sessionId" }`. Deletes the preview session dir. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks for locations this project uses. |
 | `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for background cards. |
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
@@ -167,3 +175,39 @@ prop changes), `dialogue` (spoken lines with text), `audio` (the recorded
 line wavs), `sfx` (only if the parsed scene has bed audio), and `camera`
 (from `[Camera:]` keyframes). Frames are global (concatenated scenes),
 matching the Stage scrubber.
+
+## Image assets (Grok Imagine)
+
+Generation happens in the browser (Grok Imagine). The Studio only builds
+the prompt and cuts the resulting PNG.
+
+1. On **Assets**, pick a character. **Grok Imagine** lists needs from
+   `studio/lib/assetNeeds.json` (edit that file to change copy or grids):
+   full body without head/mouth, mouth/head sheet (3×3 Rhubarb `X,A–H`),
+   expression heads, arm/hand pieces, walk cycle sheet (side/front/back,
+   N frames), prop on its own, background plate.
+2. Style notes come from `character.json` `style` (free text, e.g.
+   `painted semi-real` or `flat cartoon`). Save writes a **project-local**
+   `character.json`; shared `_global_assets` is never modified.
+3. **Copy prompt**, paste into Grok Imagine. Character/prop prompts always
+   ask for a plain `#00FF00` green background, the same size/position in
+   each cell, no watermark text, and no cropped body parts. Background
+   plates skip the green screen (and skip chroma key) so the plate stays
+   opaque.
+4. Drop or paste the PNG onto the need. The worker saves the original to
+   `projects/<name>/characters/<id>/_library/`, then
+   `python -m compositor.cutout` keys `#00FF00` with despill, trims, and
+   splits by the template grid (or connected components).
+5. The preview grid lets you rename / reassign a cell (mouth cells map in
+   order `X,A,B,…`) before **Confirm**. Confirm writes
+   `mouth/<shape>.png`, numbered cycle frames, `parts/`, `props/`, or
+   `backgrounds/<name>/bg.png`. Existing **project-local** files are copied
+   to `characters/<id>/_backup/<timestamp>/` first. Global library files
+   are not overwritten; a local file at the same relative path is an
+   override, same as [docs/assets.md](assets.md#overrides).
+
+Walk-cycle ingest adds `slots.body.cycles` (`walk_side`, `walk_front`,
+`walk_back`) on the project-local `character.json`. That is the
+body-as-a-slot pattern in [docs/assets.md](assets.md#the-body-as-a-slot)
+— a transparent root `asset` is still something you set by hand if the
+character currently uses an opaque `body.png`.

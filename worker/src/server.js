@@ -35,9 +35,11 @@ const {
   duplicateProject,
   createEmptyProject,
   addLibraryCharacter,
+  isSafeFolderName,
 } = require("./studioProjects");
 const { cachedBackgroundThumb } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
+const { previewIngest, confirmIngest, cancelIngest, saveCharacterStyle } = require("./assetIngest");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
 const DEFAULT_STUDIO_ORIGINS = [
@@ -194,7 +196,7 @@ function createApp(options = {}) {
     next();
   });
 
-  app.use(express.json({ limit: "2mb" }));
+  app.use(express.json({ limit: "20mb" }));
   app.use(express.text({ type: "text/plain", limit: "2mb" }));
 
   function projectFromRequest(req, res) {
@@ -367,6 +369,75 @@ function createApp(options = {}) {
       characters: listGlobalCharacters(projectDir, globalAssetsDir),
       added: used.library.characters,
     });
+  });
+
+  function sendIngestError(res, err) {
+    if (err.code === "EINVAL") return res.status(400).json({ error: err.message });
+    if (err.code === "ENOENT" || err.code === "ENOTFOUND") return res.status(404).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+
+  function characterIdFromRequest(req, res) {
+    const characterId = req.params.characterId;
+    if (!isSafeFolderName(characterId)) {
+      res.status(400).json({ error: "Invalid character id" });
+      return null;
+    }
+    return characterId;
+  }
+
+  app.put("/api/projects/:name/characters/:characterId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const style = req.body && req.body.style;
+      res.json(saveCharacterStyle(projectDir, globalAssetsDir, characterId, style));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/ingest", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const ingestOpts = options.pythonBin ? { pythonBin: options.pythonBin } : {};
+      const result = await previewIngest(projectDir, globalAssetsDir, characterId, req.body || {}, ingestOpts);
+      res.json(result);
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/ingest/confirm", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(confirmIngest(projectDir, globalAssetsDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/ingest/cancel", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    try {
+      res.json(cancelIngest(projectDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
   });
 
   app.post("/api/projects/:name/library", (req, res) => {
