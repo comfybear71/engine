@@ -72,9 +72,12 @@ scripts (like Stuart's existing Deck exports) that already use it visually.
 Sets the scene's background and [staging profile](assets.md#staging) to
 `projects/_global_assets/backgrounds/<location>/` (or a project-local
 override at the same relative path). Must appear before any `[Cast: ...]`,
-`[Action: ...]`, or dialogue line in the scene, since those need to resolve
-marks against it. Unknown locations raise a line-numbered error listing
-every known location.
+`[Action: ...]`, `[Prop: ...]`, `[Layer: ...]`, or dialogue line in the
+scene, since those need to resolve marks and declared props against it.
+Unknown locations raise a line-numbered error listing every known location.
+Any [props](assets.md#props) declared on that location with `x`/`y` are
+placed as timeline layers from frame 0 (unless a later `[Prop: ... hide]`
+removes them). Missing prop images are a line-numbered error.
 
 ### `[Cast: Name, Name, ...]`
 
@@ -122,6 +125,38 @@ at=left storms across the room]`), not an error. So
 `[Action: Bill flip body=walk_side]` sets both flip and the body slot;
 `[Action: Bill at=left hello body=walk_side]` treats `body=walk_side` as
 part of the note and warns, because it looks like a swallowed assignment.
+
+### `[Prop: <name> at=<mark>|x,y z=<n> scale=<s> hide|show]`
+
+Adds, moves, or hides a [location prop](assets.md#props) from this point
+on. `<name>` must be declared under `props` in the current location's
+`staging.json` (matched case-insensitively). Declared props with `x`/`y`
+are already on stage when the location is set; this tag changes them from
+the current cursor onward (same instant-cut layer fork as `[Action: ...]`).
+
+| Key | Meaning |
+|---|---|
+| `at=<mark>` | Move to that staging mark's `x`/`y` (and the mark's `scale` if it defines one). |
+| `at=<x,y>` | Move to explicit canvas coordinates (no spaces). |
+| `scale=<number>` | Override scale from here on. |
+| `z=<integer>` | Override draw order from here on. |
+| `hide` (bare) or `hide=true` | Hide the prop from this point (closes its current layer). |
+| `show` (bare) or `show=true` | Show it again at its last pose, or at `at=`/`scale=`/`z=` if given. |
+
+`hide` and `show` cannot appear on the same tag. A prop that was never
+given `x`/`y` in staging.json is not placed until a `[Prop: ...]` supplies
+`at=` (or `show` with a staging position). This replaces the old workaround
+of faking a still object as a character with no slots.
+
+### `[Layer: <Name> z=<n>]`
+
+Changes a character's or prop's draw order from this point mid-shot,
+forking a new layer (same `character_id` / `prop_id`, back-to-back in
+time) when `z` actually differs. `<Name>` is resolved as a character
+first (same aliases as `[Cast: ...]` / `[Action: ...]`), then as a
+declared prop. `[Layer: ...]` only accepts `z=`; use `[Action: ...]` or
+`[Prop: ...]` to move. `z=` inside `[Action: ...]` does the same
+thing for a character or a declared prop (`[Prop: ... z=]` also works).
 
 ### `[Pause: <N>]` or `[Pause: <N>s]`
 
@@ -219,7 +254,10 @@ character default > canvas/library default).
   turning a character around is always this kind of cut. The new layer
   **keeps** each slot's active drawing or cycle (rotated so the cycle
   continues from the drawing that was showing) and each child's current
-  rotation, unless the same tag sets that slot.
+  rotation, unless the same tag sets that slot. `[Prop: ...]` and
+  `[Layer: ... z=]` fork the same way for props (and `[Layer: ...]` for
+  characters). Props and characters share one `layers` list and are drawn
+  together in ascending `z`; the background stays behind every layer.
 - **`[Move:]` does not fork a layer.** It writes `transform_keyframes` on
   the current layer from the current pose to the target. After the move,
   the current position *is* the target, so `[Action: Name flip]` opens the
@@ -279,6 +317,7 @@ Line 8: Invalid over "nope" -- expected seconds like "1s" or "0.5s".
 Line 7: Unknown mark "upstage" for location "corridor". Available: centre, left, right, far_left, far_right
 Line 3: Unknown character "Zelda". Known characters: Hicks, Dana
 Line 2: Unknown location "nowhere" (no backgrounds/nowhere/bg.png). Available: bedroom, corridor
+Line 2: Prop "letterbox" is missing asset "backgrounds/corridor/props/letterbox.png". Available: (none)
 ```
 
 `node src/cli.js lint <project>` runs the exact same parse + validation

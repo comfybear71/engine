@@ -21,12 +21,13 @@ const NUMBER_RE = /^[+-]?\d+(?:\.\d+)?$/;
 const XY_RE = /^([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?)$/;
 const SECONDS_RE = /^(\d+(?:\.\d+)?)s$/i;
 
-function parseActionTag(body) {
+function parseActionTag(body, options = {}) {
   const words = body.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) {
     return { character: null, kv: {}, note: "" };
   }
 
+  const extraBare = new Set((options.bareFlags || []).map((flag) => String(flag).toLowerCase()));
   const character = words[0];
   const kv = {};
   let i = 1;
@@ -38,8 +39,9 @@ function parseActionTag(body) {
       continue;
     }
     // Bare flags may sit anywhere among key=value tokens (not only at the end).
-    if (words[i].toLowerCase() === "flip") {
-      kv.flip = "true";
+    const word = words[i].toLowerCase();
+    if (word === "flip" || extraBare.has(word)) {
+      kv[word] = "true";
       continue;
     }
     break;

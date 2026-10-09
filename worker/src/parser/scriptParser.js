@@ -22,6 +22,11 @@
  * same character_id, back-to-back in time. [Move:] does *not* fork a layer --
  * it adds transform_keyframes on the current one. Flip still forks (flip_x
  * is not keyframed); the new layer starts at the post-Move position.
+ *
+ * Location props from staging.json `props` are the same kind of layer
+ * (prop_id instead of character_id), drawn in z order with characters.
+ * [Prop:] adds/moves/hides them; [Layer: Name z=N] changes a character's
+ * or prop's z mid-shot.
  */
 
 const fs = require("fs");
@@ -43,7 +48,7 @@ const {
 const { ScriptError } = require("./errors");
 const assetLibrary = require("./assetLibrary");
 const { probeDurationSeconds } = require("./ffprobeDuration");
-const { findOverlapWarnings, findMouthSheetErrors } = require("./lint");
+const { findOverlapWarnings, findMouthSheetErrors, findMissingPropAssets } = require("./lint");
 
 const WORDS_PER_SECOND = 2.5;
 const ESTIMATE_PAD_SECONDS = 0.3;
@@ -154,6 +159,7 @@ class SceneContext {
     this.background = null;
     this.castOrder = []; // character ids, in [Cast: ...]/first-appearance order
     this.characters = new Map(); // character_id -> CharacterSceneState
+    this.props = new Map(); // prop_id -> PropSceneState
     this.cursorFrames = 0;
     this.horizonFrames = 0; // latest animation end, including wait=false motions
     this.lineCounter = 0; // for audio/<scene>/<nnn>_<char>.wav naming
@@ -170,6 +176,16 @@ class CharacterSceneState {
     // Last Action-set drawing/cycle per slot, so a forked layer can continue
     // it instead of snapping back to default_drawing.
     this.activeSlots = new Map(); // slotStateKey -> { ownerType, childId?, slotName, drawing?, cycle?, fps?, startedAtSceneFrame? }
+  }
+}
+
+class PropSceneState {
+  constructor(propId, def) {
+    this.propId = propId;
+    this.def = def; // { assetRel, x, y, scale, z, anchor }
+    this.segments = [];
+    this.current = null;
+    this.lastPose = null; // last transform/z/mark, so [Prop: show] resumes there
   }
 }
 
@@ -208,6 +224,7 @@ class ScriptParser {
     this.errors = [];
     this._usedSceneIds = new Set();
     this.usedCharacters = new Map(); // characterId -> character.json (used in this script)
+    this.usedProps = []; // declared/used location props, for the missing-asset lint
     this.occupancy = []; // per-segment mark/z intervals, for the overlap lint
     this.scene = null; // current SceneContext
   }
@@ -247,6 +264,12 @@ class ScriptParser {
         return;
       case "action":
         this._handleAction(token);
+        return;
+      case "prop":
+        this._handleProp(token);
+        return;
+      case "layer":
+        this._handleLayer(token);
         return;
       case "move":
         this._handleMove(token);
@@ -304,6 +327,7 @@ class ScriptParser {
     scene.location = locationId;
     scene.background = bg.timelinePath;
     scene.staging = assetLibrary.loadStaging(this.projectDir, this.globalAssetsDir, locationId);
+    this._placeDeclaredProps(scene, token.lineNumber);
   }
 
   _handleCast(token) {
@@ -381,6 +405,182 @@ class ScriptParser {
     return state;
   }
 
+  _normalizePropDef(scene, name, raw, lineNumber) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new ScriptError(lineNumber, `Prop "${name}" in staging.json must be an object with asset/x/y/z.`);
+    }
+    const asset = raw.asset || `props/${name}.png`;
+    const assetRel = `backgrounds/${scene.location}/${asset}`;
+    const anchor = assetLibrary.normalizeAnchor(raw.anchor === undefined ? "bottom-center" : raw.anchor);
+    if (!anchor) {
+      throw new ScriptError(
+        lineNumber,
+        `Prop "${name}" has invalid anchor "${raw.anchor}". Available: ${[...assetLibrary.ANCHOR_NAMES].join(", ")}`
+      );
+    }
+    let scale = 1.0;
+    if (raw.scale !== undefined) {
+      scale = Number(raw.scale);
+      if (!Number.isFinite(scale) || scale <= 0) {
+        throw new ScriptError(lineNumber, `Prop "${name}" has invalid scale "${raw.scale}" -- must be greater than 0.`);
+      }
+    }
+    let z = 0;
+    if (raw.z !== undefined) {
+      z = parseInt(raw.z, 10);
+      if (!Number.isFinite(z)) {
+        throw new ScriptError(lineNumber, `Prop "${name}" has invalid z "${raw.z}" -- expected an integer.`);
+      }
+    }
+    const x = raw.x !== undefined ? Number(raw.x) : undefined;
+    const y = raw.y !== undefined ? Number(raw.y) : undefined;
+    if (x !== undefined && !Number.isFinite(x)) {
+      throw new ScriptError(lineNumber, `Prop "${name}" has invalid x "${raw.x}" -- expected a number.`);
+    }
+    if (y !== undefined && !Number.isFinite(y)) {
+      throw new ScriptError(lineNumber, `Prop "${name}" has invalid y "${raw.y}" -- expected a number.`);
+    }
+    return { name, asset, assetRel, x, y, scale, z, anchor };
+  }
+
+  _placeDeclaredProps(scene, lineNumber) {
+    const declared = (scene.staging && scene.staging.props) || {};
+    for (const [rawName, raw] of Object.entries(declared)) {
+      const def = this._normalizePropDef(scene, rawName, raw, lineNumber);
+      this.usedProps.push({
+        name: def.name,
+        location: scene.location,
+        assetRel: def.assetRel,
+        lineNumber,
+      });
+      const resolved = assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, def.assetRel);
+      if (!resolved) {
+        const present = [...assetLibrary.scanDrawingsDir(this.projectDir, this.globalAssetsDir, `backgrounds/${scene.location}/props`).keys()].sort();
+        throw new ScriptError(
+          lineNumber,
+          `Prop "${def.name}" is missing asset "${def.assetRel}". Available: ${present.join(", ") || "(none)"}`
+        );
+      }
+      def.resolved = resolved;
+      const state = new PropSceneState(def.name, def);
+      scene.props.set(def.name, state);
+      if (def.x !== undefined && def.y !== undefined) {
+        this._openPropSegment(
+          scene,
+          state,
+          {
+            transform: { x: def.x, y: def.y, scale: def.scale, anchor: def.anchor, flip_x: false },
+            z: def.z,
+            markName: null,
+          },
+          lineNumber
+        );
+      }
+    }
+  }
+
+  _knownPropNames(scene) {
+    return [...scene.props.keys()];
+  }
+
+  _findPropState(scene, scriptName) {
+    if (!scene || !scene.props) return null;
+    const exact = scene.props.get(scriptName);
+    if (exact) return exact;
+    const lower = String(scriptName).toLowerCase();
+    for (const [name, state] of scene.props) {
+      if (name.toLowerCase() === lower) return state;
+    }
+    return null;
+  }
+
+  _resolvePropState(scene, scriptName, lineNumber) {
+    const state = this._findPropState(scene, scriptName);
+    if (state) return state;
+    throw new ScriptError(
+      lineNumber,
+      `Unknown prop "${scriptName}" for location "${scene.location}". Available: ${this._knownPropNames(scene).join(", ") || "(none)"}`
+    );
+  }
+
+  _openPropSegment(scene, state, { transform, z, markName }, lineNumber) {
+    const segmentIndex = state.segments.length + 1;
+    const layerId = segmentIndex === 1 ? state.propId : `${state.propId}_${segmentIndex}`;
+    state.current = newSegmentDraft(layerId, scene.cursorFrames, transform, z, markName);
+    state.current._lineNumber = lineNumber;
+    state.lastPose = { transform: { ...transform }, z, markName };
+  }
+
+  _resolvePropPose(scene, state, kv, lineNumber) {
+    const current = state.current;
+    const prior = current
+      ? { transform: current.transform, z: current.z, markName: current.markName }
+      : state.lastPose;
+    const def = state.def;
+    let x = prior ? prior.transform.x : def.x;
+    let y = prior ? prior.transform.y : def.y;
+    let scale = prior ? prior.transform.scale : def.scale;
+    let z = prior ? prior.z : def.z;
+    let anchor = prior ? prior.transform.anchor : def.anchor;
+    let markName = prior ? prior.markName : null;
+
+    if (kv.at !== undefined) {
+      const xy = parseXyPair(kv.at);
+      if (xy) {
+        x = xy.x;
+        y = xy.y;
+        markName = null;
+      } else {
+        const mark = this._resolveMark(scene, kv.at, lineNumber);
+        x = mark.x;
+        y = mark.y;
+        markName = kv.at;
+        if (kv.scale === undefined && mark.scale !== undefined) scale = mark.scale;
+      }
+    }
+    if (kv.scale !== undefined) {
+      scale = parseNumberValue(kv.scale, lineNumber, "scale");
+      if (scale <= 0) {
+        throw new ScriptError(lineNumber, `Invalid scale "${kv.scale}" -- must be greater than 0.`);
+      }
+    }
+    if (kv.z !== undefined) {
+      z = parseInt(kv.z, 10);
+      if (!Number.isFinite(z)) {
+        throw new ScriptError(lineNumber, `Invalid z "${kv.z}" -- expected an integer.`);
+      }
+    }
+    if (x === undefined || y === undefined) {
+      throw new ScriptError(
+        lineNumber,
+        `Prop "${state.propId}" needs a position (staging x/y, or at=<mark|x,y>).`
+      );
+    }
+    return {
+      transform: { x, y, scale, anchor: anchor || "bottom-center", flip_x: false },
+      z,
+      markName,
+    };
+  }
+
+  _applyPropPose(scene, state, pose, lineNumber) {
+    const current = state.current;
+    const sameFrameAsSegmentStart = current && current.startFrame === scene.cursorFrames;
+    if (current && sameFrameAsSegmentStart) {
+      current.transform = pose.transform;
+      current.openingTransform = { ...pose.transform };
+      current.z = pose.z;
+      current.markName = pose.markName;
+      current._lineNumber = lineNumber;
+      state.lastPose = { transform: { ...pose.transform }, z: pose.z, markName: pose.markName };
+      return;
+    }
+    if (!current || transformsDiffer(current.transform, pose.transform) || current.z !== pose.z) {
+      this._closeCurrentSegment(state, scene.cursorFrames);
+      this._openPropSegment(scene, state, pose, lineNumber);
+    }
+  }
+
   /** Builds the resolved {x,y,scale,flip_x,z} for a character given a mark + Action overrides. */
   _resolveTransformAndZ(state, mark, actionKv) {
     const config = state.config || {};
@@ -426,11 +626,142 @@ class ScriptParser {
   _closeCurrentSegment(state, endFrame) {
     if (!state.current) return;
     state.current.endFrame = endFrame;
+    if (Object.prototype.hasOwnProperty.call(state, "lastPose")) {
+      state.lastPose = {
+        transform: { ...state.current.transform },
+        z: state.current.z,
+        markName: state.current.markName,
+      };
+    }
     // Snapshot pose at close so a later [Pose] on the next layer cannot
     // rewrite this segment's static child rotations.
-    state.current.closingChildRotations = new Map(state.childRotations);
+    if (state.childRotations) {
+      state.current.closingChildRotations = new Map(state.childRotations);
+    }
+    // A hide/replace at the same frame the segment opened never existed
+    // on screen -- skip the zero-length layer.
+    if (endFrame !== undefined && endFrame === state.current.startFrame) {
+      state.current = null;
+      return;
+    }
     state.segments.push(state.current);
     state.current = null;
+  }
+
+  // ---- [Prop: ...] / [Layer: ...] -----------------------------------------
+
+  _handleProp(token) {
+    const scene = this._requireScene(token.lineNumber, "Prop");
+    if (!scene.location) {
+      throw new ScriptError(token.lineNumber, `[Prop: ...] needs a [Location: ...] first -- props are declared on the location.`);
+    }
+    const { character: scriptName, kv, note } = parseActionTag(token.body, { bareFlags: ["hide", "show"] });
+    if (!scriptName) throw new ScriptError(token.lineNumber, "[Prop: ...] needs a prop name.");
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "Prop", note);
+    if (kv.hide && kv.show) {
+      throw new ScriptError(token.lineNumber, `[Prop: ...] cannot take both hide and show.`);
+    }
+
+    const state = this._resolvePropState(scene, scriptName, token.lineNumber);
+    const wantHide = kv.hide === "true" || kv.hide === "1";
+    const wantShow = kv.show === "true" || kv.show === "1";
+    const hasPoseChange = kv.at !== undefined || kv.scale !== undefined || kv.z !== undefined;
+
+    if (wantHide) {
+      this._closeCurrentSegment(state, scene.cursorFrames);
+      return;
+    }
+
+    const pose = this._resolvePropPose(scene, state, kv, token.lineNumber);
+    if (!state.current) {
+      this._openPropSegment(scene, state, pose, token.lineNumber);
+      return;
+    }
+    if (hasPoseChange || wantShow) {
+      this._applyPropPose(scene, state, pose, token.lineNumber);
+    }
+  }
+
+  _handleLayer(token) {
+    const scene = this._requireScene(token.lineNumber, "Layer");
+    const { character: scriptName, kv, note } = parseActionTag(token.body);
+    if (!scriptName) throw new ScriptError(token.lineNumber, "[Layer: ...] needs a character or prop name.");
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "Layer", note);
+    if (kv.z === undefined) {
+      throw new ScriptError(token.lineNumber, `[Layer: ...] needs z=<integer>.`);
+    }
+    const extraKeys = Object.keys(kv).filter((key) => key !== "z");
+    if (extraKeys.length > 0) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[Layer: ...] only accepts z=; use [Action: ...] or [Prop: ...] to move. Unexpected: ${extraKeys.join(", ")}`
+      );
+    }
+    const newZ = parseInt(kv.z, 10);
+    if (!Number.isFinite(newZ)) {
+      throw new ScriptError(token.lineNumber, `Invalid z "${kv.z}" -- expected an integer.`);
+    }
+
+    const characterId = this.characterLibrary.resolveIdByScriptName(scriptName);
+    if (characterId) {
+      if (!scene.castOrder.includes(characterId)) {
+        scene.castOrder.push(characterId);
+      }
+      const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
+      this._applyCharacterZ(scene, state, newZ, token.lineNumber);
+      return;
+    }
+    const propState = this._findPropState(scene, scriptName);
+    if (!propState) {
+      throw new ScriptError(
+        token.lineNumber,
+        `Unknown character or prop "${scriptName}". Known characters: ${this.characterLibrary.knownNamesSummary()}. Known props: ${this._knownPropNames(scene).join(", ") || "(none)"}`
+      );
+    }
+    if (!propState.current) {
+      throw new ScriptError(
+        token.lineNumber,
+        `"${scriptName}" is hidden -- show it with [Prop: ${scriptName} show] before changing its layer.`
+      );
+    }
+    this._applyPropPose(scene, propState, this._resolvePropPose(scene, propState, { z: String(newZ) }, token.lineNumber), token.lineNumber);
+  }
+
+  _handleActionOnProp(scene, state, kv, note, lineNumber) {
+    this._warnNoteLooksLikeAssignments(lineNumber, "Action", note);
+    const allowed = new Set(["at", "scale", "z"]);
+    const extra = Object.keys(kv).filter((key) => !allowed.has(key));
+    if (extra.length > 0) {
+      throw new ScriptError(
+        lineNumber,
+        `Prop "${state.propId}" has no slots. Unexpected: ${extra.join(", ")}. Use [Prop: ...] or [Layer: ... z=].`
+      );
+    }
+    if (kv.at === undefined && kv.scale === undefined && kv.z === undefined) {
+      return;
+    }
+    const pose = this._resolvePropPose(scene, state, kv, lineNumber);
+    if (!state.current) {
+      this._openPropSegment(scene, state, pose, lineNumber);
+      return;
+    }
+    this._applyPropPose(scene, state, pose, lineNumber);
+  }
+
+  _applyCharacterZ(scene, state, newZ, lineNumber) {
+    const current = state.current;
+    if (!current) return;
+    if (current.z === newZ) return;
+    if (current.startFrame === scene.cursorFrames) {
+      current.z = newZ;
+      current._lineNumber = lineNumber;
+      return;
+    }
+    const transform = { ...current.transform };
+    const markName = current.markName;
+    this._closeCurrentSegment(state, scene.cursorFrames);
+    this._openSegment(scene, state, { transform, z: newZ, markName }, lineNumber);
+    this._carryActiveSlots(state, scene, new Set());
   }
 
   // ---- [Action: ...] -------------------------------------------------------
@@ -439,6 +770,13 @@ class ScriptParser {
     const scene = this._requireScene(token.lineNumber, "Action");
     const { character: scriptName, kv, note } = parseActionTag(token.body);
     if (!scriptName) throw new ScriptError(token.lineNumber, "[Action: ...] needs a character name.");
+    if (!this.characterLibrary.resolveIdByScriptName(scriptName)) {
+      const propState = this._findPropState(scene, scriptName);
+      if (propState) {
+        this._handleActionOnProp(scene, propState, kv, note, token.lineNumber);
+        return;
+      }
+    }
     const characterId = this._resolveCharacterIdOrThrow(scriptName, token.lineNumber);
 
     if (!scene.castOrder.includes(characterId)) {
@@ -977,6 +1315,7 @@ class ScriptParser {
   _runLintChecks() {
     this.warnings.push(...findOverlapWarnings(this.occupancy));
     this.errors.push(...findMouthSheetErrors(this.usedCharacters, this.projectDir, this.globalAssetsDir));
+    this.errors.push(...findMissingPropAssets(this.usedProps, this.projectDir, this.globalAssetsDir));
   }
 
   // ---- scene finalization -------------------------------------------------
@@ -988,6 +1327,9 @@ class ScriptParser {
     for (const state of scene.characters.values()) {
       this._closeCurrentSegment(state, undefined); // undefined end_frame -> "through end of scene"
     }
+    for (const state of scene.props.values()) {
+      this._closeCurrentSegment(state, undefined);
+    }
 
     this._recordOccupancy(scene);
 
@@ -997,6 +1339,11 @@ class ScriptParser {
       for (const segment of state.segments) {
         anyDialogue = anyDialogue || segment.dialogue.length > 0;
         layers.push(this._buildLayerJson(state, segment));
+      }
+    }
+    for (const state of scene.props.values()) {
+      for (const segment of state.segments) {
+        layers.push(this._buildPropLayerJson(state, segment));
       }
     }
 
@@ -1015,6 +1362,28 @@ class ScriptParser {
     });
 
     this.scene = null;
+  }
+
+  _buildPropLayerJson(state, segment) {
+    const resolved = state.def.resolved || assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, state.def.assetRel);
+    if (!resolved) {
+      throw new ScriptError(
+        segment._lineNumber,
+        `Prop "${state.propId}" is missing asset "${state.def.assetRel}".`
+      );
+    }
+    const layer = {
+      id: segment.layerId,
+      prop_id: state.propId,
+      asset: resolved.timelinePath,
+      z: segment.z,
+      transform: segment.openingTransform || segment.transform,
+    };
+    if (segment.startFrame !== 0 || segment.endFrame !== undefined) {
+      layer.timing = { start_frame: segment.startFrame };
+      if (segment.endFrame !== undefined) layer.timing.end_frame = segment.endFrame;
+    }
+    return layer;
   }
 
   _buildLayerJson(state, segment) {
