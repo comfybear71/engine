@@ -38,7 +38,7 @@ async function parseProject(projectDir, options = {}) {
  * and validation result.
  */
 async function parseProjectToFiles(projectDir, options = {}) {
-  const { timeline, lines, warnings } = await parseProject(projectDir, options);
+  const { timeline, lines, warnings, errors } = await parseProject(projectDir, options);
 
   const outFilename = options.out || "timeline.json";
   const timelinePath = path.join(projectDir, outFilename);
@@ -49,7 +49,7 @@ async function parseProjectToFiles(projectDir, options = {}) {
 
   const validation = options.skipValidate ? { ok: true, message: "(validation skipped)" } : await validateTimelineFile(timelinePath);
 
-  return { timeline, lines, warnings, timelinePath, linesPath, validation };
+  return { timeline, lines, warnings, errors: errors || [], timelinePath, linesPath, validation };
 }
 
 module.exports = { parseProject, parseProjectToFiles, resolveGlobalAssetsDir, ScriptError };

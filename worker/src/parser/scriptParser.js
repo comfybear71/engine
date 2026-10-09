@@ -29,6 +29,7 @@ const { parseActionTag, parseCastList, parsePauseValue } = require("./actionTag"
 const { ScriptError } = require("./errors");
 const assetLibrary = require("./assetLibrary");
 const { probeDurationSeconds } = require("./ffprobeDuration");
+const { findOverlapWarnings, findMouthSheetErrors } = require("./lint");
 
 const WORDS_PER_SECOND = 2.5;
 const ESTIMATE_PAD_SECONDS = 0.3;
@@ -107,12 +108,13 @@ class CharacterSceneState {
   }
 }
 
-function newSegmentDraft(layerId, startFrame, transform, z) {
+function newSegmentDraft(layerId, startFrame, transform, z, markName) {
   return {
     layerId,
     startFrame,
     transform,
     z,
+    markName,
     dialogue: [],
     slotKeyframes: new Map(), // slotName -> [{frame, drawing}]
     childSlotKeyframes: new Map(), // childId -> Map(slotName -> [{frame, drawing}])
@@ -135,7 +137,10 @@ class ScriptParser {
     this.scenes = [];
     this.lines = [];
     this.warnings = [];
+    this.errors = [];
     this._usedSceneIds = new Set();
+    this.usedCharacters = new Map(); // characterId -> character.json (used in this script)
+    this.occupancy = []; // per-segment mark/z intervals, for the overlap lint
     this.scene = null; // current SceneContext
   }
 
@@ -147,6 +152,7 @@ class ScriptParser {
       await this._handleToken(token);
     }
     this._closeScene(); // flush the last scene, if any
+    this._runLintChecks();
 
     const timeline = {
       series: this.series,
@@ -154,7 +160,7 @@ class ScriptParser {
       fps: this.fps,
       scenes: this.scenes,
     };
-    return { timeline, lines: this.lines, warnings: this.warnings };
+    return { timeline, lines: this.lines, warnings: this.warnings, errors: this.errors };
   }
 
   async _handleToken(token) {
@@ -255,6 +261,9 @@ class ScriptParser {
       state = new CharacterSceneState(characterId, config);
       scene.characters.set(characterId, state);
     }
+    if (state.config && !this.usedCharacters.has(characterId)) {
+      this.usedCharacters.set(characterId, state.config);
+    }
     return state;
   }
 
@@ -291,7 +300,7 @@ class ScriptParser {
 
     const markName = this._autoAssignMark(scene, characterId);
     const mark = this._resolveMark(scene, markName, lineNumber);
-    this._openSegment(scene, state, { markSource: "auto", mark, actionKv: {} }, lineNumber);
+    this._openSegment(scene, state, { markSource: "auto", mark, markName, actionKv: {} }, lineNumber);
     return state;
   }
 
@@ -314,11 +323,11 @@ class ScriptParser {
     return { transform: { x, y, scale, flip_x: flipX, anchor: "bottom-center" }, z };
   }
 
-  _openSegment(scene, state, { mark, actionKv }, lineNumber) {
+  _openSegment(scene, state, { mark, markName, actionKv }, lineNumber) {
     const { transform, z } = this._resolveTransformAndZ(state, mark, actionKv || {});
     const segmentIndex = state.segments.length + 1;
     const layerId = segmentIndex === 1 ? state.characterId : `${state.characterId}_${segmentIndex}`;
-    state.current = newSegmentDraft(layerId, scene.cursorFrames, transform, z);
+    state.current = newSegmentDraft(layerId, scene.cursorFrames, transform, z, markName);
     state.current._lineNumber = lineNumber;
   }
 
@@ -360,9 +369,11 @@ class ScriptParser {
         // update it in place rather than forking a pointless extra segment.
         current.transform = newTransform;
         current.z = newZ;
+        current.markName = markName;
+        current._lineNumber = token.lineNumber;
       } else if (!current || transformsDiffer(current.transform, newTransform) || current.z !== newZ) {
         this._closeCurrentSegment(state, scene.cursorFrames);
-        this._openSegment(scene, state, { mark, actionKv: kv }, token.lineNumber);
+        this._openSegment(scene, state, { mark, markName, actionKv: kv }, token.lineNumber);
       }
     }
 
@@ -509,6 +520,32 @@ class ScriptParser {
     scene.cursorFrames += durationFrames;
   }
 
+  // ---- lint (overlap warnings + mouth-sheet errors) ----------------------
+
+  _recordOccupancy(scene) {
+    for (const state of scene.characters.values()) {
+      const displayName = (state.config && (state.config.display_name || state.config.id)) || state.characterId;
+      for (const segment of state.segments) {
+        if (!segment.markName) continue;
+        this.occupancy.push({
+          sceneId: scene.sceneId,
+          characterId: state.characterId,
+          displayName,
+          markName: segment.markName,
+          z: segment.z,
+          startFrame: segment.startFrame,
+          endFrame: segment.endFrame === undefined ? Number.POSITIVE_INFINITY : segment.endFrame,
+          lineNumber: segment._lineNumber,
+        });
+      }
+    }
+  }
+
+  _runLintChecks() {
+    this.warnings.push(...findOverlapWarnings(this.occupancy));
+    this.errors.push(...findMouthSheetErrors(this.usedCharacters, this.projectDir, this.globalAssetsDir));
+  }
+
   // ---- scene finalization -------------------------------------------------
 
   _closeScene() {
@@ -518,6 +555,8 @@ class ScriptParser {
     for (const state of scene.characters.values()) {
       this._closeCurrentSegment(state, undefined); // undefined end_frame -> "through end of scene"
     }
+
+    this._recordOccupancy(scene);
 
     const layers = [];
     let anyDialogue = false;

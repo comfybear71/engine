@@ -85,12 +85,15 @@ async function cmdLint(flags) {
   const projectDir = flags._[0];
   if (!projectDir) printUsageAndExit();
   // lint == parse to a throwaway file + validate, without disturbing any
-  // committed timeline.json/lines.json in the project.
+  // committed timeline.json/lines.json in the project. Overlap warnings
+  // and mouth-sheet errors are attached to the parse result.
   const tmpOut = ".lint-timeline.json";
   try {
     const result = await parseProjectToFiles(projectDir, { script: flags.script, out: tmpOut });
     const ok = await reportParseResult(result);
-    if (!ok) process.exit(1);
+    const lintErrors = result.errors || [];
+    for (const e of lintErrors) console.error(e);
+    if (!ok || lintErrors.length > 0) process.exit(1);
     console.log("Lint OK: no errors.");
   } finally {
     const tmpPath = path.join(projectDir, tmpOut);
