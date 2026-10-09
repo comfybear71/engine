@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!**/.env.example
 
 # Node
 node_modules/
@@ -35,3 +36,4 @@ Thumbs.db
 # Future Studio (Next.js) build output
 studio/.next/
 studio/node_modules/
+*.tsbuildinfo

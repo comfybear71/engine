@@ -181,6 +181,30 @@ def _draw_layer(canvas: np.ndarray, layer: Layer, cache: AssetCache, layer_local
             _draw_slot(canvas, cache, slot, placed, layer_local_frame_idx, fps, drawings)
 
 
+def compose_scene_frame(
+    scene: Scene,
+    local_frame: int,
+    canvas_w: int,
+    canvas_h: int,
+    fps: int,
+    cache: AssetCache,
+    bg_fitted: np.ndarray | None = None,
+) -> np.ndarray:
+    """Compose one scene-local frame, honoring ``frame_step`` hold cadence."""
+
+    if bg_fitted is None:
+        bg_raw = cache.get_raw(scene.background.asset)
+        bg_fitted = fit_to_canvas(bg_raw, canvas_w, canvas_h, scene.background.fit)
+
+    frame_step = max(1, scene.frame_step)
+    composed_idx = local_frame - (local_frame % frame_step)
+    canvas = bg_fitted.copy()
+    for layer in sorted(scene.layers, key=lambda l: l.z):
+        if layer.is_visible_at(composed_idx, scene.total_frames):
+            _draw_layer(canvas, layer, cache, composed_idx - layer.start_frame, fps)
+    return apply_camera(canvas, scene.camera, composed_idx, fps)
+
+
 def iter_scene_frames(scene: Scene, canvas_w: int, canvas_h: int, fps: int, cache: AssetCache) -> Iterator[np.ndarray]:
     bg_raw = cache.get_raw(scene.background.asset)
     bg_fitted = fit_to_canvas(bg_raw, canvas_w, canvas_h, scene.background.fit)
@@ -188,23 +212,44 @@ def iter_scene_frames(scene: Scene, canvas_w: int, canvas_h: int, fps: int, cach
     # Character and prop layers share this list and are drawn together in
     # ascending z. The fitted background is painted first and stays behind
     # every layer.
-    sorted_layers = sorted(scene.layers, key=lambda l: l.z)
     frame_step = max(1, scene.frame_step)
 
     held_canvas: np.ndarray | None = None
     for frame_idx in range(scene.total_frames):
         if held_canvas is None or frame_idx % frame_step == 0:
-            canvas = bg_fitted.copy()
-            for layer in sorted_layers:
-                if layer.is_visible_at(frame_idx, scene.total_frames):
-                    _draw_layer(canvas, layer, cache, frame_idx - layer.start_frame, fps)
-            canvas = apply_camera(canvas, scene.camera, frame_idx, fps)
-            held_canvas = canvas
+            held_canvas = compose_scene_frame(
+                scene, frame_idx, canvas_w, canvas_h, fps, cache, bg_fitted=bg_fitted
+            )
         # On held frames (frame_step > 1) we deliberately re-yield the exact
         # same array instead of recomposing -- the classic cut-out "on Ns"
         # cadence. Audio is unaffected: it's mixed by FFmpeg against wall-clock
         # start times, never against this per-frame compositing loop.
         yield held_canvas
+
+
+def scene_at_frame(timeline: Timeline, frame_index: int) -> tuple[Scene, int]:
+    """Return ``(scene, local_frame)`` for a 0-based global frame index."""
+
+    if frame_index < 0:
+        raise ValueError(f"frame_index must be >= 0, got {frame_index}")
+    elapsed = 0
+    for scene in timeline.scenes:
+        if frame_index < elapsed + scene.total_frames:
+            return scene, frame_index - elapsed
+        elapsed += scene.total_frames
+    raise ValueError(
+        f"frame_index {frame_index} is past the end of the timeline ({timeline.total_frames} frames)"
+    )
+
+
+def compose_frame(timeline: Timeline, frame_index: int, cache: AssetCache | None = None) -> np.ndarray:
+    """Compose one global timeline frame (used by the Studio preview-frame API)."""
+
+    cache = cache if cache is not None else AssetCache()
+    scene, local_frame = scene_at_frame(timeline, frame_index)
+    return compose_scene_frame(
+        scene, local_frame, timeline.canvas.width, timeline.canvas.height, timeline.fps, cache
+    )
 
 
 def iter_frames(timeline: Timeline, cache: AssetCache | None = None) -> Iterator[np.ndarray]:
