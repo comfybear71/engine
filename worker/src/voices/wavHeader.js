@@ -2,7 +2,7 @@
 
 /**
  * Build a 44-byte RIFF/WAV header for headerless PCM from ElevenLabs
- * (`output_format=pcm_44100`: 16-bit little-endian mono at 44100 Hz).
+ * (`output_format=pcm_<rate>`: 16-bit little-endian mono).
  */
 
 const DEFAULT_SAMPLE_RATE = 44100;

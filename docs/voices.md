@@ -13,8 +13,10 @@ node src/cli.js voices ../projects/sample --force
 
 Requires `ELEVENLABS_API_KEY` and (optionally) `ELEVENLABS_MODEL_ID` in the
 repo-root `.env` -- see `.env.example`. The default model is
-`eleven_multilingual_v2`. The key is sent only as the `xi-api-key` header;
-it is never printed, logged, or placed in a shell command.
+`eleven_multilingual_v2`. Set `ELEVENLABS_OUTPUT_FORMAT` to a `pcm_<rate>`
+value (default `pcm_24000`; `pcm_44100` needs ElevenLabs Pro). The key is
+sent only as the `xi-api-key` header; it is never printed, logged, or
+placed in a shell command.
 
 ## Which lines are recorded
 
@@ -44,14 +46,15 @@ re-records everything (characters still need a `voice_id`).
 
 ## Request and WAV write
 
-`POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_44100`
+`POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=…`
 with JSON `{ text, model_id }`. The response is headerless 16-bit
-little-endian mono PCM at 44100 Hz. A 44-byte RIFF/WAV header is prepended
-in pure JS and the `.wav` is written atomically (temp file, then rename).
+little-endian mono PCM at the rate from `ELEVENLABS_OUTPUT_FORMAT`. A
+44-byte RIFF/WAV header is prepended in pure JS and the `.wav` is written
+atomically (temp file, then rename).
 
 Lines are processed sequentially. HTTP 429 / 5xx are retried up to 3 times
-with backoff. 401, 402, or quota errors stop the run immediately with a
-clear message (the key is still never printed).
+with backoff. 401, 402, quota errors, or 403 `output_format_not_allowed`
+stop the run immediately with a clear message (the key is still never printed).
 
 ## Rhubarb cues
 
