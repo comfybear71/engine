@@ -36,3 +36,4 @@ Thumbs.db
 # Future Studio (Next.js) build output
 studio/.next/
 studio/node_modules/
+*.tsbuildinfo

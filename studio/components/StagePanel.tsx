@@ -10,11 +10,13 @@ import {
 } from "@/lib/worker";
 
 function formatTimecode(frame: number, fps: number): string {
-  const totalSeconds = fps > 0 ? frame / fps : 0;
-  const m = Math.floor(totalSeconds / 60);
-  const s = Math.floor(totalSeconds % 60);
-  const f = Math.floor(frame % Math.max(fps, 1));
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(f).padStart(2, "0")}`;
+  const safeFps = Math.max(fps, 1);
+  const ff = Math.floor(frame % safeFps);
+  const totalSeconds = Math.floor(frame / safeFps);
+  const s = totalSeconds % 60;
+  const m = Math.floor(totalSeconds / 60) % 60;
+  const h = Math.floor(totalSeconds / 3600);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(ff).padStart(2, "0")}`;
 }
 
 export default function StagePanel({ project, workerUp }: { project: string | null; workerUp: boolean }) {
