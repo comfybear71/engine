@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import EngineStatus from "@/components/EngineStatus";
 import {
-  WORKER_START_COMMAND,
+  WorkerUnreachableError,
   assetUrl,
   checkWorker,
   createProject,
@@ -95,13 +96,18 @@ export default function HomeScreen() {
       setError(null);
     } catch (err) {
       setWorkerUp(false);
-      setError(err instanceof Error ? err.message : "Failed to load projects");
+      if (!(err instanceof WorkerUnreachableError)) {
+        setError(err instanceof Error ? err.message : "Couldn't load projects.");
+      }
     }
   }, []);
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    const ms = workerUp === true ? 4000 : 2000;
+    const id = window.setInterval(() => void refresh(), ms);
+    return () => window.clearInterval(id);
+  }, [refresh, workerUp]);
 
   useEffect(() => {
     const urls: string[] = [];
@@ -179,11 +185,7 @@ export default function HomeScreen() {
         </div>
       </header>
 
-      {workerUp === false ? (
-        <div className="border-b border-amber-700/60 bg-amber-950/80 px-4 py-2 text-sm text-amber-100">
-          Worker is not running. Start it with: <code className="font-mono">{WORKER_START_COMMAND}</code>
-        </div>
-      ) : null}
+      <EngineStatus workerUp={workerUp} onRetry={() => void refresh()} />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
         <h1 className="mb-6 text-2xl font-semibold text-white">Projects</h1>

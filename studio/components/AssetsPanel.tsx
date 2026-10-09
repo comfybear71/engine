@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import AssetImaginePanel from "@/components/AssetImaginePanel";
 import {
   addLibraryCharacter,
   assetUrl,
@@ -19,12 +18,14 @@ function Thumb({
   selected,
   onClick,
   badge,
+  fit = "cover",
 }: {
   src: string | null;
   label: string;
   selected?: boolean;
   onClick?: () => void;
   badge?: string;
+  fit?: "cover" | "contain";
 }) {
   return (
     <button
@@ -33,14 +34,18 @@ function Thumb({
       className={`group flex w-full flex-col gap-1.5 text-left ${onClick ? "cursor-pointer" : "cursor-default"}`}
     >
       <div
-        className={`relative aspect-square overflow-hidden rounded-md border bg-studio-raised ${
-          selected ? "border-studio-accent ring-2 ring-studio-accent/40" : "border-studio-border"
-        }`}
+        className={`relative aspect-square overflow-hidden rounded-md border ${
+          fit === "contain" ? "studio-checker" : "bg-studio-raised"
+        } ${selected ? "border-studio-accent ring-2 ring-studio-accent/40" : "border-studio-border"}`}
       >
         {src ? (
           // Worker-served PNGs; next/image remote config is out of scope for localhost.
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={src} alt={label} className="h-full w-full object-cover" />
+          <img
+            src={src}
+            alt={label}
+            className={`h-full w-full ${fit === "contain" ? "object-contain object-bottom" : "object-cover"}`}
+          />
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-studio-muted">No art</div>
         )}
@@ -88,6 +93,7 @@ function SlotBlock({ slot, project }: { slot: CharacterSlot; project: string }) 
             src={assetUrl(project, drawing.rel)}
             label={drawing.name}
             selected={drawing.name === slot.default_drawing}
+            fit="contain"
           />
         ))}
       </div>
@@ -99,14 +105,29 @@ export default function AssetsPanel({
   project,
   workerUp,
   onLibraryChange,
+  variant = "page",
+  poolSection = "assets",
+  selectedId: selectedIdProp,
+  onSelectId,
+  onOpenImagine,
+  refreshToken = 0,
 }: {
   project: string | null;
   workerUp: boolean;
   onLibraryChange?: () => void;
+  variant?: "page" | "pool";
+  poolSection?: "assets" | "media" | "effects";
+  selectedId?: string | null;
+  onSelectId?: (id: string | null) => void;
+  onOpenImagine?: () => void;
+  refreshToken?: number;
 }) {
+  const pool = variant === "pool";
   const [characters, setCharacters] = useState<Character[]>([]);
   const [staging, setStaging] = useState<Staging | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIdState, setSelectedIdState] = useState<string | null>(null);
+  const selectedId = onSelectId ? selectedIdProp ?? null : selectedIdState;
+  const setSelectedId = onSelectId ?? setSelectedIdState;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -126,7 +147,8 @@ export default function AssetsPanel({
         if (cancelled) return;
         setCharacters(chars);
         setStaging(nextStaging);
-        setSelectedId((current) => current && chars.some((c) => c.id === current) ? current : chars[0]?.id ?? null);
+        const current = selectedId;
+        setSelectedId(current && chars.some((c) => c.id === current) ? current : chars[0]?.id ?? null);
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -137,7 +159,7 @@ export default function AssetsPanel({
     return () => {
       cancelled = true;
     };
-  }, [project, workerUp, reloadKey]);
+  }, [project, workerUp, reloadKey, refreshToken]);
 
   useEffect(() => {
     if (!project || !workerUp || !libraryOpen) return;
@@ -181,29 +203,59 @@ export default function AssetsPanel({
     return <EmptyState message="Pick a project to browse the library." />;
   }
 
+  const showCharacters = !pool || poolSection === "assets";
+  const showBackgrounds = !pool || poolSection === "media";
+  const showProps = !pool || poolSection === "effects";
+  const gridClass = pool
+    ? "grid grid-cols-2 gap-2"
+    : "grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
+
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
-      <div className="min-w-0 flex-1 overflow-y-auto p-5">
+      <div className={`min-w-0 flex-1 overflow-y-auto ${pool ? "p-3" : "p-5"}`}>
         {error ? <p className="mb-4 text-sm text-red-400">{error}</p> : null}
         {loading ? <p className="mb-4 text-sm text-studio-muted">Loading library…</p> : null}
 
-        <div className="mb-6 flex items-center justify-between">
-          <p className="text-sm text-studio-muted">Characters, backgrounds, and props this project uses.</p>
-          <button
-            type="button"
-            data-testid="library-open"
-            onClick={() => setLibraryOpen(true)}
-            className="rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white"
-          >
-            Library
-          </button>
+        <div className={`mb-4 flex items-center justify-between ${pool ? "gap-2" : "mb-6"}`}>
+          <p className="text-sm text-studio-muted">
+            {pool
+              ? poolSection === "assets"
+                ? "Library characters"
+                : poolSection === "media"
+                  ? "Backgrounds"
+                  : "Props"
+              : "Characters, backgrounds, and props this project uses."}
+          </p>
+          {showCharacters ? (
+            <div className="flex shrink-0 items-center gap-2">
+              {onOpenImagine ? (
+                <button
+                  type="button"
+                  data-testid="imagine-open"
+                  onClick={onOpenImagine}
+                  className="rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white"
+                >
+                  Grok Imagine
+                </button>
+              ) : null}
+              <button
+                type="button"
+                data-testid="library-open"
+                onClick={() => setLibraryOpen(true)}
+                className="rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white"
+              >
+                Library
+              </button>
+            </div>
+          ) : null}
         </div>
 
+        {showCharacters ? (
         <Section title="Characters" count={characters.length}>
           {characters.length === 0 ? (
             <p className="text-sm text-studio-muted">None in this project yet. Open Library to add a global character.</p>
           ) : (
-          <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          <div className={gridClass}>
             {characters.map((character) => (
               <Thumb
                 key={character.id}
@@ -211,39 +263,31 @@ export default function AssetsPanel({
                 label={character.display_name}
                 badge={character.source === "project" ? "local" : undefined}
                 selected={character.id === selectedId}
+                fit="contain"
                 onClick={() => setSelectedId(character.id)}
               />
             ))}
           </div>
           )}
         </Section>
-
-        {selected ? (
-          <div className="mb-8">
-            <AssetImaginePanel
-              project={project}
-              character={selected}
-              onChanged={() => {
-                setReloadKey((n) => n + 1);
-                onLibraryChange?.();
-              }}
-            />
-          </div>
         ) : null}
 
+        {showBackgrounds ? (
         <Section title="Backgrounds" count={staging?.backgrounds.length ?? 0}>
-          <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          <div className={gridClass}>
             {(staging?.backgrounds || []).map((bg) => (
               <Thumb key={bg.id} src={assetUrl(project, bg.thumbRel, { thumb: true })} label={bg.id} />
             ))}
           </div>
         </Section>
+        ) : null}
 
+        {showProps ? (
         <Section title="Props" count={staging?.props.length ?? 0}>
           {(staging?.props || []).length === 0 ? (
             <p className="text-sm text-studio-muted">No props in this project&apos;s staging.json.</p>
           ) : (
-            <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+            <div className={gridClass}>
               {(staging?.props || []).map((prop) => (
                 <Thumb
                   key={`${prop.location}:${prop.id}`}
@@ -254,8 +298,10 @@ export default function AssetsPanel({
             </div>
           )}
         </Section>
+        ) : null}
       </div>
 
+      {pool ? null : (
       <aside className="w-[340px] shrink-0 overflow-y-auto border-l border-studio-border bg-studio-panel p-4">
         {selected ? (
           <div className="space-y-5">
@@ -278,6 +324,7 @@ export default function AssetsPanel({
           <p className="text-sm text-studio-muted">Click a character to see slots, drawings, and cycles.</p>
         )}
       </aside>
+      )}
 
       {libraryOpen ? (
         <div className="fixed inset-0 z-30 flex justify-end bg-black/50" onClick={() => setLibraryOpen(false)}>
@@ -309,7 +356,7 @@ export default function AssetsPanel({
                   const added = libraryAdded.includes(character.id) || characters.some((c) => c.id === character.id);
                   return (
                     <div key={character.id} className="space-y-1.5">
-                      <Thumb src={assetUrl(project, character.thumbRel)} label={character.display_name} />
+                      <Thumb src={assetUrl(project, character.thumbRel)} label={character.display_name} fit="contain" />
                       <button
                         type="button"
                         disabled={added || addingId === character.id}

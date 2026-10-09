@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from compositor.compositor import compose_frame, scene_at_frame
+from compositor.compositor import clamp_preview_frame, compose_frame, scene_at_frame
 from compositor.timeline_loader import Background, Canvas, Scene, Timeline
 
 
@@ -54,3 +54,17 @@ def test_compose_frame_rejects_out_of_range(tmp_path):
         compose_frame(timeline, 10)
     with pytest.raises(ValueError, match="must be >= 0"):
         compose_frame(timeline, -1)
+
+
+def test_clamp_preview_frame_stays_on_last_valid_index(tmp_path):
+    timeline = _two_scene_timeline(tmp_path)
+    assert timeline.total_frames == 10
+    assert clamp_preview_frame(timeline, -5) == 0
+    assert clamp_preview_frame(timeline, 10) == 9
+    assert clamp_preview_frame(timeline, 287) == 9
+    clamped = clamp_preview_frame(timeline, 99)
+    scene, local = scene_at_frame(timeline, clamped)
+    assert scene.id == "s2"
+    assert local == 4
+    canvas = compose_frame(timeline, clamped)
+    assert canvas.shape == (20, 20, 3)
