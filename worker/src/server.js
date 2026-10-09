@@ -3,7 +3,7 @@
 /**
  * Express server for the Studio app. Binds to 127.0.0.1 only and reads
  * project files on this machine. The browser talks to this process directly
- * (CORS for http://localhost:3000 plus optional STUDIO_ORIGIN). Voices /
+ * (CORS for localhost:3000 / :3001 plus optional STUDIO_ORIGIN). Voices /
  * ElevenLabs stay CLI-only -- this file must never import worker/src/voices.
  */
 
@@ -18,9 +18,15 @@ const { renderProject, previewFrame, parseEstimatedSilent } = require("./render"
 const { parseProjectToFiles, parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
 const { resolveAsset } = require("./parser/assetLibrary");
 const { listCharacters, listStaging, summarizeStage } = require("./studioLibrary");
+const { buildLaneBlocks } = require("./studioLanes");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
-const DEFAULT_STUDIO_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];
+const DEFAULT_STUDIO_ORIGINS = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+];
 const SAFE_PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const RESERVED_PROJECT_NAMES = new Set(["_global_assets"]);
 const SAFE_REL_PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -63,7 +69,7 @@ function applyCors(req, res) {
   if (origin && allowedOrigins().has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     res.setHeader("Access-Control-Expose-Headers", [
       "X-Engine-Frame",
@@ -84,6 +90,44 @@ function parseErrorPayload(err) {
     };
   }
   return { error: err.message };
+}
+
+function lintIssueFromText(text, level) {
+  const raw = String(text);
+  const match = raw.match(/^Line (\d+):\s*([\s\S]*)$/);
+  if (match) return { level, line: Number(match[1]), message: match[2] };
+  return { level, line: null, message: raw };
+}
+
+function lintFromResult(result, parseError) {
+  const errors = [];
+  const warnings = [];
+
+  if (parseError instanceof ScriptError) {
+    errors.push({
+      level: "error",
+      line: parseError.lineNumber == null ? null : parseError.lineNumber,
+      message: parseError.message.replace(/^Line \d+:\s*/, ""),
+    });
+  } else if (parseError) {
+    errors.push({ level: "error", line: null, message: parseError.message });
+  }
+
+  if (result) {
+    for (const warning of result.warnings || []) warnings.push(lintIssueFromText(warning, "warning"));
+    for (const error of result.errors || []) errors.push(lintIssueFromText(error, "error"));
+    if (result.validation && result.validation.ok === false && result.validation.message) {
+      errors.push({ level: "error", line: null, message: result.validation.message });
+    }
+  }
+
+  return { errors, warnings };
+}
+
+function readScriptBody(req) {
+  if (typeof req.body === "string") return req.body;
+  if (req.body && typeof req.body.text === "string") return req.body.text;
+  return "";
 }
 
 function estimatedSilentFromLines(lines) {
@@ -119,7 +163,8 @@ function createApp(options = {}) {
     next();
   });
 
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({ limit: "2mb" }));
+  app.use(express.text({ type: "text/plain", limit: "2mb" }));
 
   function projectFromRequest(req, res) {
     const projectDir = resolveProjectDir(projectsDir, req.params.name);
@@ -182,6 +227,85 @@ function createApp(options = {}) {
       return res.status(400).json({ error: "Unsupported asset type" });
     }
     res.type(type).sendFile(resolved.absPath);
+  });
+
+  app.get("/api/projects/:name/script", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptPath = path.join(projectDir, "script.txt");
+    if (!fs.existsSync(scriptPath)) {
+      return res.status(404).json({ error: "script.txt not found" });
+    }
+    res.type("text/plain").send(fs.readFileSync(scriptPath, "utf8"));
+  });
+
+  app.put("/api/projects/:name/script", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptText = readScriptBody(req);
+    fs.writeFileSync(path.join(projectDir, "script.txt"), scriptText);
+
+    let result;
+    let parseError = null;
+    try {
+      result = await parseProjectToTemp(projectDir, { skipValidate });
+    } catch (err) {
+      parseError = err;
+    }
+    const lint = lintFromResult(result, parseError);
+    try {
+      res.json({
+        ok: lint.errors.length === 0,
+        saved: true,
+        lint,
+      });
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
+  app.post("/api/projects/:name/lint", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const opts = { skipValidate };
+    if (req.body && typeof req.body === "object" && typeof req.body.text === "string") {
+      opts.scriptText = req.body.text;
+    } else if (typeof req.body === "string") {
+      opts.scriptText = req.body;
+    }
+
+    let result;
+    let parseError = null;
+    try {
+      result = await parseProjectToTemp(projectDir, opts);
+    } catch (err) {
+      parseError = err;
+    }
+    const lint = lintFromResult(result, parseError);
+    try {
+      res.json({ ok: lint.errors.length === 0, lint });
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
+  app.get("/api/projects/:name/lanes", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    let result;
+    try {
+      result = await parseProjectToTemp(projectDir, { skipValidate });
+    } catch (err) {
+      return res.status(400).json(parseErrorPayload(err));
+    }
+    try {
+      if (result.validation && result.validation.ok === false) {
+        return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
+      }
+      res.json(buildLaneBlocks(result));
+    } finally {
+      cleanupTempParse(result);
+    }
   });
 
   app.get("/api/projects/:name/stage", async (req, res) => {

@@ -81,6 +81,26 @@ export type RenderResponse = {
   estimatedSilent?: EstimatedSilent;
   error?: string;
 };
+export type LintIssue = { level: "error" | "warning"; line: number | null; message: string };
+export type LintResult = { ok: boolean; lint: { errors: LintIssue[]; warnings: LintIssue[] }; saved?: boolean };
+export type LaneId = "action" | "dialogue" | "audio" | "sfx" | "camera";
+export type LaneBlock = {
+  id: string;
+  lane: LaneId;
+  label: string;
+  startFrame: number;
+  endFrame: number;
+  scriptLine: number | null;
+  sceneId: string;
+};
+export type LaneScene = { id: string; startFrame: number; endFrame: number; frames: number };
+export type LanesResponse = {
+  fps: number;
+  totalFrames: number;
+  lanes: LaneId[];
+  scenes: LaneScene[];
+  blocks: LaneBlock[];
+};
 
 async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
   try {
@@ -162,6 +182,40 @@ export async function fetchPreviewFrame(
     sceneId: res.headers.get("X-Engine-Scene-Id"),
   };
   return { blob, meta };
+}
+
+export async function loadScript(name: string): Promise<string> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/script`);
+  if (!res.ok) throw new Error(await readError(res));
+  return res.text();
+}
+
+export async function saveScript(name: string, text: string): Promise<LintResult> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/script`, {
+    method: "PUT",
+    headers: { "Content-Type": "text/plain" },
+    body: text,
+  });
+  const body = (await res.json().catch(() => ({}))) as LintResult & { error?: string };
+  if (!res.ok) throw new Error(body.error || `Save failed (${res.status})`);
+  return body;
+}
+
+export async function lintScript(name: string, text?: string): Promise<LintResult> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/lint`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(text == null ? {} : { text }),
+  });
+  const body = (await res.json().catch(() => ({}))) as LintResult & { error?: string };
+  if (!res.ok) throw new Error(body.error || `Lint failed (${res.status})`);
+  return body;
+}
+
+export async function loadLanes(name: string): Promise<LanesResponse> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/lanes`);
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<LanesResponse>;
 }
 
 export async function startRender(name: string): Promise<RenderResponse> {

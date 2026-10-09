@@ -165,6 +165,78 @@ describe("studio worker API", () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
   });
 
+  test("PUT /script and GET /lanes do not overwrite timeline.json", async () => {
+    const timelinePath = path.join(fixture.projectDir, "timeline.json");
+    const linesPath = path.join(fixture.projectDir, "lines.json");
+    const sentinelTimeline = { sentinel: true, series: "keep-me" };
+    const sentinelLines = { sentinel: "lines" };
+    fs.writeFileSync(timelinePath, JSON.stringify(sentinelTimeline));
+    fs.writeFileSync(linesPath, JSON.stringify(sentinelLines));
+
+    const bad = await fetch(`${ctx.url}/api/projects/project/script`, {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain" },
+      body: ["[Scene: Intro]", "[Location: room_a]", "Zelda: Hello."].join("\n"),
+    });
+    assert.equal(bad.status, 200);
+    const badBody = await bad.json();
+    assert.equal(badBody.saved, true);
+    assert.equal(badBody.ok, false);
+    assert.ok(badBody.lint.errors.some((e) => e.line === 3 && /Unknown character "Zelda"/.test(e.message)));
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
+    assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
+
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Camera: zoom=1.3 over=1s]",
+      "[Action: Alice eyes=closed]",
+      "Alice: Hello there friend.",
+      "[Move: Alice to=right over=1s]",
+    ].join("\n");
+    const good = await fetch(`${ctx.url}/api/projects/project/script`, {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain" },
+      body: script,
+    });
+    const goodBody = await good.json();
+    assert.equal(good.status, 200, JSON.stringify(goodBody));
+    assert.equal(goodBody.saved, true);
+    assert.equal(goodBody.ok, true);
+    assert.equal(fs.readFileSync(path.join(fixture.projectDir, "script.txt"), "utf8"), script);
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
+
+    const lint = await fetch(`${ctx.url}/api/projects/project/lint`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: script }),
+    });
+    assert.equal(lint.status, 200);
+    const lintBody = await lint.json();
+    assert.equal(lintBody.ok, true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
+
+    const lanes = await fetch(`${ctx.url}/api/projects/project/lanes`);
+    const laneBody = await lanes.json();
+    assert.equal(lanes.status, 200, JSON.stringify(laneBody));
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
+    assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
+    assert.ok(laneBody.totalFrames > 0);
+    assert.deepEqual(laneBody.lanes, ["action", "dialogue", "audio", "sfx", "camera"]);
+    const byLane = (name) => laneBody.blocks.filter((b) => b.lane === name);
+    assert.ok(byLane("camera").some((b) => b.scriptLine === 4 && /zoom/.test(b.label)));
+    assert.ok(byLane("dialogue").some((b) => b.scriptLine === 6 && /Hello there friend/.test(b.label)));
+    assert.ok(byLane("audio").some((b) => b.scriptLine === 6 && /\.wav$/.test(b.label)));
+    assert.ok(byLane("action").some((b) => b.scriptLine === 5 && /eyes=closed/.test(b.label)));
+    assert.ok(byLane("action").some((b) => b.scriptLine === 7 && /right/.test(b.label)));
+    for (const block of laneBody.blocks) {
+      assert.equal(typeof block.startFrame, "number");
+      assert.equal(typeof block.endFrame, "number");
+      assert.ok(block.endFrame >= block.startFrame);
+    }
+  });
+
   test("path traversal and reserved names are rejected", async () => {
     assert.equal(isSafeProjectName(".."), false);
     assert.equal(isSafeProjectName("_global_assets"), false);
