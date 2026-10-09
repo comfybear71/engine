@@ -17,15 +17,16 @@ nothing here is derived from it.
 ## Architecture
 
 ```
-          writes/edits                reads + validates
-  Studio ───────────────► timeline.json ───────────────► Render worker
- (Next.js,                (shared contract,              (Node orchestrator
-  on Vercel,               schema/timeline.schema.json)    + Python compositor)
-  built later)
+          browser → http://127.0.0.1:4100
+  Studio ───────────────► worker Express ──► script.txt / timeline.json
+ (Next.js,                (localhost only,     then the Python compositor
+  local now;              docs/studio.md)
+  Vercel later)
 ```
 
-- **Studio** (`studio/`, not built yet): a future Next.js app on Vercel that
-  will write scripts and edit `timeline.json` visually.
+- **Studio** (`studio/`): a Next.js app (App Router) that edits `script.txt`
+  and shows `timeline.json` + the latest render. It reads and writes files
+  **only** through the local worker -- see [docs/studio.md](docs/studio.md).
 - **Script parser** (`worker/src/parser/`): turns a plain-text
   `script.txt` into a validated `timeline.json`, resolving characters,
   drawing-swap slots, and stage positions against a shared
@@ -53,13 +54,14 @@ engine/
 │   ├── timeline-schema.md       # Field-by-field schema reference, with examples
 │   ├── script-format.md         # script.txt tag reference, with a full example
 │   ├── assets.md                # Shared asset library layout, staging, overrides
-│   └── voices.md                # ElevenLabs voices command (never called by watch)
+│   ├── voices.md                # ElevenLabs voices command (never called by watch)
+│   └── studio.md                # How to run the Studio + local worker on Windows
 ├── worker/                      # The render worker
 │   ├── package.json
 │   ├── test/                    # node:test unit + end-to-end tests
 │   ├── src/                     # Node orchestrator (thin)
 │   │   ├── cli.js               # `node src/cli.js parse|lint|voices|render|watch <projectDir> ...`
-│   │   ├── server.js            # Express server: POST /render
+│   │   ├── server.js            # Express server: Studio JSON API + POST /render
 │   │   ├── render.js            # Spawns the Python compositor
 │   │   ├── watcher.js           # chokidar: re-parse (if --from-script) + re-render; never ElevenLabs
 │   │   ├── pythonRuntime.js     # Picks the right python (prefers worker/python/venv)
@@ -104,7 +106,7 @@ engine/
 │       ├── timeline.json        # generated: `node src/cli.js parse`
 │       ├── lines.json           # generated alongside it
 │       └── audio/<scene_id>/<nnn>_<character>.wav(.rhubarb.json)
-├── studio/                      # Placeholder for the future Next.js app
+├── studio/                      # Next.js Studio (talks to the local worker only)
 ├── .env.example
 └── .gitignore
 ```
@@ -336,13 +338,32 @@ cd ../../worker
 npm test
 ```
 
-## Running the worker's HTTP server
+## Running the Studio
 
-For when the future Studio wants to trigger a render remotely instead of via
-the CLI:
+The Studio is a local Next.js app. It does not touch disk itself -- the
+browser calls the worker on `127.0.0.1`. Full steps (Windows, two
+terminals): **[docs/studio.md](docs/studio.md)**.
+
+```bash
+# Terminal 1
+cd worker
+npm start
+# listens on http://127.0.0.1:4100 only
+
+# Terminal 2
+cd studio
+npm install
+npm run dev
+# open http://localhost:3000
+```
+
+## Running the worker's HTTP server
 
 ```bash
 cd worker
 npm start
-# POST http://localhost:4100/render  { "projectDir": "../projects/sample" }
+# GET  http://127.0.0.1:4100/api/projects
+# PUT  http://127.0.0.1:4100/api/projects/<name>/script
+# POST http://127.0.0.1:4100/api/projects/<name>/render
+# POST http://127.0.0.1:4100/render  { "projectDir": "../projects/sample" }
 ```

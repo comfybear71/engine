@@ -11,11 +11,23 @@ const path = require("path");
 
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 
+const ESTIMATED_SILENT_RE = /(\d+) of (\d+) lines are estimated\/silent/;
+
+function parseEstimatedSilent(text) {
+  const match = String(text || "").match(ESTIMATED_SILENT_RE);
+  if (!match) return null;
+  return {
+    estimated: Number(match[1]),
+    total: Number(match[2]),
+    message: match[0],
+  };
+}
+
 /**
  * @param {string} projectDir Absolute or cwd-relative path to a project
  *   folder containing timeline.json.
  * @param {{codec?: string, output?: string, pythonBin?: string}} [options]
- * @returns {Promise<{code: number}>}
+ * @returns {Promise<{code: number, stdout: string, stderr: string, estimatedSilent: {estimated: number, total: number, message: string}|null}>}
  */
 function renderProject(projectDir, options = {}) {
   const resolvedProjectDir = path.resolve(projectDir);
@@ -30,13 +42,28 @@ function renderProject(projectDir, options = {}) {
   }
 
   return new Promise((resolve, reject) => {
+    const chunks = { stdout: "", stderr: "" };
+    let settled = false;
     const child = spawn(pythonBin, args, {
       cwd: PYTHON_DIR, // so `python -m compositor` resolves the package
-      stdio: "inherit",
+      stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
     });
 
+    child.stdout.on("data", (d) => {
+      const s = d.toString();
+      chunks.stdout += s;
+      process.stdout.write(s);
+    });
+    child.stderr.on("data", (d) => {
+      const s = d.toString();
+      chunks.stderr += s;
+      process.stderr.write(s);
+    });
+
     child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
       reject(
         new Error(
           `Failed to spawn Python compositor (${pythonBin}): ${err.message}. ` +
@@ -46,8 +73,11 @@ function renderProject(projectDir, options = {}) {
     });
 
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      const estimatedSilent = parseEstimatedSilent(chunks.stdout + "\n" + chunks.stderr);
       if (code === 0) {
-        resolve({ code });
+        resolve({ code, stdout: chunks.stdout, stderr: chunks.stderr, estimatedSilent });
       } else {
         reject(new Error(`Python compositor exited with code ${code}`));
       }
@@ -55,4 +85,4 @@ function renderProject(projectDir, options = {}) {
   });
 }
 
-module.exports = { renderProject };
+module.exports = { renderProject, parseEstimatedSilent };
