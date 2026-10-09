@@ -362,6 +362,8 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
         images=images,
         offset_x=float(offset.get("x", 0.0)),
         offset_y=float(offset.get("y", 0.0)),
+        scale=float(raw.get("scale", 1.0)),
+        rotation=float(raw.get("rotation", 0.0)),
         keyframes=keyframes,
         cues=cues,
         dialogue=dialogue_ref,

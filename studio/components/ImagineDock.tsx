@@ -19,6 +19,7 @@ export default function ImagineDock({
   onOpenChange,
   onCharacterId,
   onChanged,
+  refreshToken = 0,
 }: {
   project: string;
   workerUp: boolean;
@@ -27,6 +28,7 @@ export default function ImagineDock({
   onOpenChange: (open: boolean) => void;
   onCharacterId: (id: string | null) => void;
   onChanged: () => void;
+  refreshToken?: number;
 }) {
   const [characters, setCharacters] = useState<Character[]>([]);
   const [height, setHeight] = useState(DEFAULT_IMAGINE_HEIGHT);
@@ -54,7 +56,7 @@ export default function ImagineDock({
     return () => {
       cancelled = true;
     };
-  }, [project, workerUp, reloadKey]);
+  }, [project, workerUp, reloadKey, refreshToken]);
 
   useEffect(() => {
     if (characters.length === 0) return;

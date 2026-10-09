@@ -46,6 +46,8 @@ class Slot:
     images: dict[str, Path]
     offset_x: float = 0.0
     offset_y: float = 0.0
+    scale: float = 1.0
+    rotation: float = 0.0
     keyframes: list[SlotKeyframe] | None = None  # held-until-changed / cycle driver
     cues: list[lipsync.MouthCue] | None = None  # single-clip lipsync driver
     # Dialogue-list driver: a sequence of objects each exposing

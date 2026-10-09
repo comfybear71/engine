@@ -1,6 +1,19 @@
 {
   "needs": [
     {
+      "id": "full_body_reference",
+      "label": "Full body reference",
+      "description": "A complete standing character including head, stored as a likeness guide (original file, no cut-out).",
+      "split": "grid",
+      "key": false,
+      "ingest": false,
+      "dest": { "kind": "reference" },
+      "cells": [
+        { "name": "reference", "dest": { "kind": "reference" } }
+      ],
+      "prompt": "A full-body standing reference of {{name}}, {{style}}. Complete character including head, face, hair, neck, torso, arms, hands, legs, and feet. Front-facing, feet planted, arms slightly off the torso. Same size, crop, stance, and ground line as a production body turnaround so a cut-out head can be aligned to this drawing. Neutral expression, closed mouth. Finished illustration, not a sprite sheet. No watermark, no caption, no text, no logo. Do not crop hands, feet, or hair. Small empty margin inside the frame. One character only."
+    },
+    {
       "id": "body_no_head",
       "label": "Full body (no head / mouth)",
       "description": "Standing body without a head or mouth, for attaching expression heads later.",

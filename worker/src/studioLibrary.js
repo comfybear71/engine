@@ -41,12 +41,19 @@ function collectSlots(character, projectDir, globalAssetsDir, characterId) {
         });
       }
       drawings.sort((a, b) => a.name.localeCompare(b.name));
+      const offset = spec.offset || {};
       slots.push({
         name,
         owner,
         default_drawing: spec.default_drawing || null,
         drawings,
         cycles: spec.cycles || {},
+        offset: {
+          x: offset.x == null ? 0 : offset.x,
+          y: offset.y == null ? 0 : offset.y,
+        },
+        scale: spec.scale == null ? 1 : spec.scale,
+        rotation: spec.rotation == null ? 0 : spec.rotation,
       });
     }
   }
@@ -56,6 +63,16 @@ function collectSlots(character, projectDir, globalAssetsDir, characterId) {
     addSlots(child.slots, child.id);
   }
   return slots;
+}
+
+function characterReferenceRel(character, projectDir, globalAssetsDir, characterId) {
+  const raw = character && character.reference;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const trimmed = raw.trim().replace(/\\/g, "/");
+  if (trimmed.includes("..") || trimmed.startsWith("/")) return null;
+  const rel = trimmed.startsWith("characters/") ? trimmed : `characters/${characterId}/${trimmed}`;
+  if (!resolveAsset(projectDir, globalAssetsDir, rel)) return null;
+  return rel;
 }
 
 function characterThumbRel(character, projectDir, globalAssetsDir, characterId) {
@@ -78,6 +95,7 @@ function describeCharacter(projectDir, globalAssetsDir, id) {
   const resolved = resolveAsset(projectDir, globalAssetsDir, jsonRel);
   const character = loadCharacter(projectDir, globalAssetsDir, id);
   if (!resolved || !character) return null;
+  const thumbRel = characterThumbRel(character, projectDir, globalAssetsDir, id);
   return {
     id,
     display_name: character.display_name || id,
@@ -85,7 +103,11 @@ function describeCharacter(projectDir, globalAssetsDir, id) {
     source: resolved.source,
     z: character.z,
     style: typeof character.style === "string" ? character.style : "",
-    thumbRel: characterThumbRel(character, projectDir, globalAssetsDir, id),
+    asset: character.asset || null,
+    thumbRel,
+    bodyRel: thumbRel,
+    reference: typeof character.reference === "string" ? character.reference : null,
+    referenceRel: characterReferenceRel(character, projectDir, globalAssetsDir, id),
     slots: collectSlots(character, projectDir, globalAssetsDir, id),
   };
 }

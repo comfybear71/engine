@@ -17,6 +17,13 @@ const { loadCharacter } = require("./parser/assetLibrary");
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 const { isSafeFolderName } = require("./studioProjects");
 const { getNeed, expandNeed } = require("./assetNeeds");
+const {
+  characterDir,
+  backupIfExists,
+  readWritableCharacter,
+  writeCharacterJson,
+  findSlotSpec,
+} = require("./characterLocal");
 
 const DRAWING_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SAFE_SESSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -25,10 +32,6 @@ function ingestError(message, code) {
   const err = new Error(message);
   err.code = code || "EINVAL";
   return err;
-}
-
-function characterDir(projectDir, characterId) {
-  return path.join(projectDir, "characters", characterId);
 }
 
 function posixJoin(...parts) {
@@ -63,43 +66,6 @@ function decodeImageBuffer(body) {
     return buf;
   }
   throw ingestError("imageBase64 is required");
-}
-
-function backupIfExists(absPath, backupRoot, relFromRoot) {
-  if (!fs.existsSync(absPath)) return null;
-  const dest = path.join(backupRoot, relFromRoot);
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(absPath, dest);
-  return dest;
-}
-
-function readWritableCharacter(projectDir, globalAssetsDir, characterId) {
-  const localPath = path.join(characterDir(projectDir, characterId), "character.json");
-  if (fs.existsSync(localPath)) {
-    return JSON.parse(fs.readFileSync(localPath, "utf8"));
-  }
-  const loaded = loadCharacter(projectDir, globalAssetsDir, characterId);
-  if (!loaded) throw ingestError(`Unknown character: ${characterId}`, "ENOTFOUND");
-  return JSON.parse(JSON.stringify(loaded));
-}
-
-function writeCharacterJson(projectDir, characterId, data, backupRoot) {
-  const dir = characterDir(projectDir, characterId);
-  fs.mkdirSync(dir, { recursive: true });
-  const dest = path.join(dir, "character.json");
-  if (backupRoot) backupIfExists(dest, backupRoot, "character.json");
-  fs.writeFileSync(dest, JSON.stringify(data, null, 2) + "\n");
-  return dest;
-}
-
-function findSlotSpec(character, slotName) {
-  if (character.slots && character.slots[slotName]) {
-    return character.slots[slotName];
-  }
-  for (const child of character.children || []) {
-    if (child.slots && child.slots[slotName]) return child.slots[slotName];
-  }
-  return null;
 }
 
 function ensureSlot(character, dest) {
@@ -243,6 +209,9 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
 
   const need = getNeed(body && body.needId);
   if (!need) throw ingestError("Unknown need");
+  if (need.ingest === false || (need.dest && need.dest.kind === "reference")) {
+    throw ingestError("This need stores the original as a full-body reference; POST .../reference instead");
+  }
   const expanded = expandNeed(need, body && body.frames);
   const image = decodeImageBuffer(body);
 
@@ -403,20 +372,10 @@ function cancelIngest(projectDir, characterId, body) {
   return { ok: true };
 }
 
-function saveCharacterStyle(projectDir, globalAssetsDir, characterId, style) {
-  if (!isSafeFolderName(characterId)) throw ingestError("Invalid character id");
-  if (typeof style !== "string") throw ingestError("style must be a string");
-  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
-  character.style = style;
-  writeCharacterJson(projectDir, characterId, character, null);
-  return { ok: true, style: character.style };
-}
-
 module.exports = {
   previewIngest,
   confirmIngest,
   cancelIngest,
-  saveCharacterStyle,
   ensureSlot,
   readWritableCharacter,
   destRelForCell,

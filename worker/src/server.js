@@ -39,7 +39,8 @@ const {
 } = require("./studioProjects");
 const { cachedBackgroundThumb } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
-const { previewIngest, confirmIngest, cancelIngest, saveCharacterStyle } = require("./assetIngest");
+const { previewIngest, confirmIngest, cancelIngest } = require("./assetIngest");
+const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, SLOT_NAME } = require("./characterLocal");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
 const DEFAULT_STUDIO_ORIGINS = [
@@ -395,6 +396,36 @@ function createApp(options = {}) {
     try {
       const style = req.body && req.body.style;
       res.json(saveCharacterStyle(projectDir, globalAssetsDir, characterId, style));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/reference", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(saveCharacterReference(projectDir, globalAssetsDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.put("/api/projects/:name/characters/:characterId/slots/:slotName", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = req.params.slotName;
+    if (!SLOT_NAME.test(String(slotName || ""))) {
+      return res.status(400).json({ error: "Invalid slot name" });
+    }
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(saveSlotAlignment(projectDir, globalAssetsDir, characterId, slotName, req.body || {}));
     } catch (err) {
       sendIngestError(res, err);
     }

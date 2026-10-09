@@ -161,10 +161,14 @@ def _draw_slot(
     rotated_x, rotated_y = rotate_offset_clockwise(mirrored_x, slot.offset_y, owner.rotation)
     slot_x = owner.x + rotated_x * owner.scale
     slot_y = owner.y + rotated_y * owner.scale
+    # Slot scale/rotation are around the attachment point (center anchor),
+    # so the offset stays put when the drawing is resized.
+    slot_scale = owner.scale * (slot.scale if slot.scale else 1.0)
+    slot_rotation = owner.rotation + slot.rotation
 
     _draw_transformed(
         canvas, cache, image_path,
-        slot_x, slot_y, owner.scale, owner.flip_x, owner.rotation,
+        slot_x, slot_y, slot_scale, owner.flip_x, slot_rotation,
         anchor="center", opacity=owner.opacity,
     )
 

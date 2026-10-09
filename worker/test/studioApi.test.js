@@ -529,6 +529,60 @@ describe("studio worker API", () => {
     assert.equal(alice.source, "project");
   });
 
+  test("POST reference and PUT slot alignment write project-local character.json", async () => {
+    const globalJson = path.join(fixture.globalAssetsDir, "characters", "bob", "character.json");
+    const globalBefore = fs.readFileSync(globalJson, "utf8");
+    const png = fs.readFileSync(path.join(fixture.globalAssetsDir, "characters", "bob", "body.png"));
+
+    const refRes = await fetch(`${ctx.url}/api/projects/project/characters/bob/reference`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageBase64: `data:image/png;base64,${png.toString("base64")}` }),
+    });
+    const refBody = await refRes.json();
+    assert.equal(refRes.status, 200, JSON.stringify(refBody));
+    assert.equal(refBody.reference, "_reference/full.png");
+    assert.equal(refBody.referenceRel, "characters/bob/_reference/full.png");
+
+    const localJson = path.join(fixture.projectDir, "characters", "bob", "character.json");
+    assert.equal(fs.existsSync(localJson), true);
+    const afterRef = JSON.parse(fs.readFileSync(localJson, "utf8"));
+    assert.equal(afterRef.reference, "_reference/full.png");
+    assert.equal(
+      fs.existsSync(path.join(fixture.projectDir, "characters", "bob", "_reference", "full.png")),
+      true
+    );
+
+    const alignRes = await fetch(`${ctx.url}/api/projects/project/characters/bob/slots/mouth`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ offset: { x: 12, y: -40 }, scale: 1.25, rotation: 8 }),
+    });
+    const alignBody = await alignRes.json();
+    assert.equal(alignRes.status, 200, JSON.stringify(alignBody));
+    assert.equal(alignBody.offset.x, 12);
+    assert.equal(alignBody.offset.y, -40);
+    assert.equal(alignBody.scale, 1.25);
+    assert.equal(alignBody.rotation, 8);
+
+    const saved = JSON.parse(fs.readFileSync(localJson, "utf8"));
+    assert.equal(saved.reference, "_reference/full.png");
+    assert.deepEqual(saved.slots.mouth.offset, { x: 12, y: -40 });
+    assert.equal(saved.slots.mouth.scale, 1.25);
+    assert.equal(saved.slots.mouth.rotation, 8);
+    assert.ok(saved.slots.eyes, "copy-on-write keeps other slots");
+    assert.equal(fs.readFileSync(globalJson, "utf8"), globalBefore, "never touches _global_assets");
+
+    const listed = await fetch(`${ctx.url}/api/projects/project/characters`);
+    const bob = (await listed.json()).characters.find((c) => c.id === "bob");
+    assert.equal(bob.source, "project");
+    assert.equal(bob.referenceRel, "characters/bob/_reference/full.png");
+    const mouth = bob.slots.find((s) => s.name === "mouth");
+    assert.equal(mouth.offset.x, 12);
+    assert.equal(mouth.scale, 1.25);
+    assert.equal(mouth.rotation, 8);
+  });
+
   test("POST ingest without an image is 400", async () => {
     const res = await fetch(`${ctx.url}/api/projects/project/characters/alice/ingest`, {
       method: "POST",

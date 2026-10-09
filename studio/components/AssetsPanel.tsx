@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import AlignHeadModal from "@/components/AlignHeadModal";
+import CharacterReferenceCard from "@/components/CharacterReferenceCard";
+import { alignableSlots } from "@/lib/headAlign";
 import {
   addLibraryCharacter,
   assetUrl,
@@ -104,6 +107,7 @@ function SlotBlock({ slot, project }: { slot: CharacterSlot; project: string }) 
 export default function AssetsPanel({
   project,
   workerUp,
+  script,
   onLibraryChange,
   variant = "page",
   poolSection = "assets",
@@ -114,6 +118,7 @@ export default function AssetsPanel({
 }: {
   project: string | null;
   workerUp: boolean;
+  script?: string | null;
   onLibraryChange?: () => void;
   variant?: "page" | "pool";
   poolSection?: "assets" | "media" | "effects";
@@ -136,6 +141,7 @@ export default function AssetsPanel({
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [addingId, setAddingId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [alignOpen, setAlignOpen] = useState(false);
 
   useEffect(() => {
     if (!project || !workerUp) return;
@@ -198,6 +204,10 @@ export default function AssetsPanel({
     () => characters.find((c) => c.id === selectedId) || null,
     [characters, selectedId]
   );
+
+  useEffect(() => {
+    setAlignOpen(false);
+  }, [selectedId]);
 
   if (!project) {
     return <EmptyState message="Pick a project to browse the library." />;
@@ -312,6 +322,24 @@ export default function AssetsPanel({
                 {selected.id} · {selected.source} · z {selected.z}
               </p>
             </div>
+            <CharacterReferenceCard
+              project={project}
+              character={selected}
+              onChanged={() => {
+                setReloadKey((n) => n + 1);
+                onLibraryChange?.();
+              }}
+            />
+            {alignableSlots(selected.slots).length > 0 ? (
+              <button
+                type="button"
+                data-testid="align-head"
+                onClick={() => setAlignOpen(true)}
+                className="w-full rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white"
+              >
+                Align head
+              </button>
+            ) : null}
             {selected.slots.length === 0 ? (
               <p className="text-sm text-studio-muted">No slots on this character.</p>
             ) : (
@@ -325,6 +353,19 @@ export default function AssetsPanel({
         )}
       </aside>
       )}
+
+      {alignOpen && selected ? (
+        <AlignHeadModal
+          project={project}
+          character={selected}
+          script={script}
+          onClose={() => setAlignOpen(false)}
+          onChanged={() => {
+            setReloadKey((n) => n + 1);
+            onLibraryChange?.();
+          }}
+        />
+      ) : null}
 
       {libraryOpen ? (
         <div className="fixed inset-0 z-30 flex justify-end bg-black/50" onClick={() => setLibraryOpen(false)}>

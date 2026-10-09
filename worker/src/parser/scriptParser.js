@@ -1731,12 +1731,18 @@ class ScriptParser {
     return layer;
   }
 
+  _applySlotTransform(slot, slotConfig) {
+    if (slotConfig.scale != null) slot.scale = slotConfig.scale;
+    if (slotConfig.rotation != null) slot.rotation = slotConfig.rotation;
+    return slot;
+  }
+
   _buildSlotJson(characterId, slotName, slotConfig, keyframes) {
     if (slotName === "mouth") {
       const images = this._scanSlotImages(characterId, slotConfig);
       const mouth = { offset: slotConfig.offset || { x: 0, y: 0 }, images, lipsync: { source: "dialogue" } };
       if (slotConfig.visible_when) mouth.visible_when = slotConfig.visible_when;
-      return mouth;
+      return this._applySlotTransform(mouth, slotConfig);
     }
     const sorted = [...keyframes].sort((a, b) => a.frame - b.frame);
     if (sorted.length === 0 || sorted[0].frame !== 0) {
@@ -1745,7 +1751,7 @@ class ScriptParser {
     const images = this._scanSlotImages(characterId, slotConfig);
     const slot = { offset: slotConfig.offset || { x: 0, y: 0 }, images, keyframes: sorted };
     if (slotConfig.visible_when) slot.visible_when = slotConfig.visible_when;
-    return slot;
+    return this._applySlotTransform(slot, slotConfig);
   }
 
   _scanSlotImages(characterId, slotConfig) {

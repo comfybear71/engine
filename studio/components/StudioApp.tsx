@@ -175,8 +175,12 @@ export default function StudioApp({ projectName }: { projectName: string }) {
         {tab === "assets" ? (
           <AssetsPanel
             project={project}
+            script={script}
             workerUp={workerUp === true}
-            onLibraryChange={() => void refresh()}
+            onLibraryChange={() => {
+              setAssetEpoch((n) => n + 1);
+              void refresh();
+            }}
             selectedId={assetCharacterId}
             onSelectId={setAssetCharacterId}
             onOpenImagine={() => setImagineOpen(true)}
@@ -216,6 +220,7 @@ export default function StudioApp({ projectName }: { projectName: string }) {
         characterId={assetCharacterId}
         onOpenChange={setImagineOpen}
         onCharacterId={setAssetCharacterId}
+        refreshToken={assetEpoch}
         onChanged={() => {
           setAssetEpoch((n) => n + 1);
           void refresh();
