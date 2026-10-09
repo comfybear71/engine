@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const { parseScript } = require("./scriptParser");
@@ -52,4 +53,23 @@ async function parseProjectToFiles(projectDir, options = {}) {
   return { timeline, lines, warnings, errors: errors || [], timelinePath, linesPath, validation };
 }
 
-module.exports = { parseProject, parseProjectToFiles, resolveGlobalAssetsDir, ScriptError };
+/**
+ * Parse the script into a throwaway timeline file under os.tmpdir().
+ * Never writes the project's timeline.json or lines.json -- Studio
+ * preview / stage must use this. Caller must delete `tmpDir` when done.
+ */
+async function parseProjectToTemp(projectDir, options = {}) {
+  const { timeline, lines, warnings, errors } = await parseProject(projectDir, options);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-timeline-"));
+  const timelinePath = path.join(tmpDir, "timeline.json");
+  fs.writeFileSync(timelinePath, JSON.stringify(timeline, null, 2) + "\n");
+
+  const validation = options.skipValidate
+    ? { ok: true, message: "(validation skipped)" }
+    : await validateTimelineFile(timelinePath, { projectDir });
+
+  return { timeline, lines, warnings, errors: errors || [], timelinePath, tmpDir, validation };
+}
+
+module.exports = { parseProject, parseProjectToFiles, parseProjectToTemp, resolveGlobalAssetsDir, ScriptError };

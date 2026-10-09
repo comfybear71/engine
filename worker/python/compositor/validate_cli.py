@@ -9,10 +9,14 @@ possibly-drifting JSON Schema implementation on the Node side.
 
 Exit code 0 + "OK" on stdout on success; exit code 1 + the error message on
 stderr on failure.
+
+`--project-dir` is required when the timeline file is not inside the
+project folder (Studio preview writes a throwaway copy under /tmp).
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -21,18 +25,26 @@ from .timeline_loader import load_timeline
 
 
 def main(argv: list[str] | None = None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 1:
-        print("usage: python -m compositor.validate_cli <timeline.json>", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(
+        prog="python -m compositor.validate_cli",
+        description="Validate a timeline.json the same way a render would.",
+    )
+    parser.add_argument("timeline", type=Path, help="Path to timeline.json")
+    parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=None,
+        help="Project folder asset/audio paths are relative to (default: the timeline file's parent)",
+    )
+    args = parser.parse_args(argv)
 
-    timeline_path = Path(argv[0])
+    timeline_path: Path = args.timeline
     if not timeline_path.exists():
         print(f"error: file not found: {timeline_path}", file=sys.stderr)
         return 2
 
     try:
-        timeline = load_timeline(timeline_path)
+        timeline = load_timeline(timeline_path, project_dir=args.project_dir)
     except TimelineValidationError as exc:
         print(str(exc), file=sys.stderr)
         return 1

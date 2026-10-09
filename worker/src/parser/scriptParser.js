@@ -15,6 +15,7 @@
  * position (it doesn't advance it). [Move:]/[Pose:]/[Swing:] write
  * keyframes on the current layer; wait=true (default) advances the cursor
  * like [Pause], wait=false leaves it so following lines run during the motion.
+ * [Camera:] writes scene-level camera keyframes the same way.
  *
  * A character gets exactly one Layer per *cut* they hold in a scene:
  * an [Action: ... at=/flip=/scale=/z=] that actually changes their resolved
@@ -35,6 +36,7 @@ const path = require("path");
 const { tokenize } = require("./tokenizer");
 const {
   parseActionTag,
+  parseKvTag,
   noteHasKeyValue,
   parseCastList,
   parsePauseValue,
@@ -53,7 +55,10 @@ const { findOverlapWarnings, findMouthSheetErrors, findMissingPropAssets } = req
 const WORDS_PER_SECOND = 2.5;
 const ESTIMATE_PAD_SECONDS = 0.3;
 const DEFAULT_SCENE_PADDING_FRAMES = 12;
+const DEFAULT_CANVAS_WIDTH = 1920;
+const DEFAULT_CANVAS_HEIGHT = 1080;
 const RESERVED_SLOT_NAMES = new Set(["mouth"]); // dialogue-driven only, never settable via [Action: ...]
+const CAMERA_KEYS = new Set(["zoom", "pan", "tilt", "to", "over", "ease", "wait", "reset"]);
 
 function slugify(text) {
   return (
@@ -151,9 +156,10 @@ class CharacterLibrary {
 
 /** All per-scene mutable parsing state lives here. */
 class SceneContext {
-  constructor(sceneId, fps) {
+  constructor(sceneId, fps, canvas) {
     this.sceneId = sceneId;
     this.fps = fps;
+    this.canvas = canvas;
     this.location = null;
     this.staging = null;
     this.background = null;
@@ -163,6 +169,8 @@ class SceneContext {
     this.cursorFrames = 0;
     this.horizonFrames = 0; // latest animation end, including wait=false motions
     this.lineCounter = 0; // for audio/<scene>/<nnn>_<char>.wav naming
+    this.camera = { x: canvas.width / 2, y: canvas.height / 2, zoom: 1.0 };
+    this.cameraKeyframes = [];
   }
 }
 
@@ -217,6 +225,10 @@ class ScriptParser {
     this.series = options.series || "Untitled Series";
     this.episode = options.episode != null ? options.episode : "pilot";
     this.fps = options.fps || 24;
+    this.canvas = {
+      width: (options.canvas && options.canvas.width) || DEFAULT_CANVAS_WIDTH,
+      height: (options.canvas && options.canvas.height) || DEFAULT_CANVAS_HEIGHT,
+    };
     this.characterLibrary = new CharacterLibrary(projectDir, globalAssetsDir);
     this.scenes = [];
     this.lines = [];
@@ -280,6 +292,9 @@ class ScriptParser {
       case "swing":
         this._handleSwing(token);
         return;
+      case "camera":
+        this._handleCamera(token);
+        return;
       case "pause":
         this._handlePause(token);
         return;
@@ -302,7 +317,7 @@ class ScriptParser {
       id = `${slugify(name)}_${suffix++}`;
     }
     this._usedSceneIds.add(id);
-    this.scene = new SceneContext(id, this.fps);
+    this.scene = new SceneContext(id, this.fps, this.canvas);
     this.scene.displayName = name;
   }
 
@@ -1045,6 +1060,15 @@ class ScriptParser {
     list.push(keyframe);
   }
 
+  _addCameraKeyframe(scene, keyframe) {
+    const existing = scene.cameraKeyframes.find((k) => k.frame === keyframe.frame);
+    if (existing) {
+      Object.assign(existing, keyframe);
+      return;
+    }
+    scene.cameraKeyframes.push(keyframe);
+  }
+
   _requireCharacterForMotion(token, tagName) {
     const scene = this._requireScene(token.lineNumber, tagName);
     const { character: scriptName, kv, note } = parseActionTag(token.body);
@@ -1217,6 +1241,112 @@ class ScriptParser {
     this._applyWait(scene, durationFrames, wait);
   }
 
+  // ---- [Camera: ...] -----------------------------------------------------
+
+  _handleCamera(token) {
+    const scene = this._requireScene(token.lineNumber, "Camera");
+    const { kv, note } = parseKvTag(token.body, { bareFlags: ["reset"] });
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "Camera", note);
+
+    for (const key of Object.keys(kv)) {
+      if (!CAMERA_KEYS.has(key)) {
+        throw new ScriptError(
+          token.lineNumber,
+          `Unknown [Camera: ...] argument "${key}". Allowed: zoom, pan, tilt, to, over, ease, wait, reset.`
+        );
+      }
+    }
+
+    const isReset = kv.reset === "true";
+    const hasZoom = kv.zoom !== undefined;
+    const hasPan = kv.pan !== undefined;
+    const hasTilt = kv.tilt !== undefined;
+    const hasTo = kv.to !== undefined;
+
+    if (isReset && (hasZoom || hasPan || hasTilt || hasTo)) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[Camera: reset] cannot combine with zoom, pan, tilt, or to.`
+      );
+    }
+    if (!isReset && !hasZoom && !hasPan && !hasTilt && !hasTo) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[Camera: ...] needs zoom=, pan=, tilt=, to=, or reset.`
+      );
+    }
+    if (hasTo && hasPan) {
+      throw new ScriptError(token.lineNumber, `[Camera: ...] cannot combine to= and pan=.`);
+    }
+    if (hasTo && hasTilt) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[Camera: ...] cannot combine to= and tilt= (tilt is a vertical shift from the current centre).`
+      );
+    }
+
+    const overSeconds = parseSecondsSpec(kv.over, token.lineNumber, "over");
+    const ease = parseEaseValue(kv.ease, token.lineNumber);
+    const wait = parseWaitValue(kv.wait, token.lineNumber);
+    const durationFrames = framesFromSeconds(overSeconds, this.fps);
+    if (durationFrames <= 0) {
+      throw new ScriptError(token.lineNumber, `Invalid over "${kv.over}" -- duration rounds to 0 frames at ${this.fps} fps.`);
+    }
+
+    const from = scene.camera;
+    let toX = from.x;
+    let toY = from.y;
+    let toZoom = from.zoom;
+
+    if (isReset) {
+      toX = scene.canvas.width / 2;
+      toY = scene.canvas.height / 2;
+      toZoom = 1.0;
+    } else {
+      if (hasTo) {
+        const xy = parseXyPair(kv.to);
+        if (!xy) {
+          throw new ScriptError(
+            token.lineNumber,
+            `Invalid to "${kv.to}" -- expected canvas coordinates like "960,540" (no spaces).`
+          );
+        }
+        toX = xy.x;
+        toY = xy.y;
+      }
+      if (hasPan) {
+        const xy = parseXyPair(kv.pan);
+        if (!xy) {
+          throw new ScriptError(
+            token.lineNumber,
+            `Invalid pan "${kv.pan}" -- expected canvas coordinates like "960,540" (no spaces).`
+          );
+        }
+        toX = xy.x;
+        toY = xy.y;
+      }
+      if (hasTilt) {
+        toY = from.y + parseNumberValue(kv.tilt, token.lineNumber, "tilt");
+      }
+      if (hasZoom) {
+        toZoom = parseNumberValue(kv.zoom, token.lineNumber, "zoom");
+        if (toZoom <= 0) {
+          throw new ScriptError(token.lineNumber, `Invalid zoom "${kv.zoom}" -- must be greater than 0.`);
+        }
+      }
+    }
+
+    const startFrame = scene.cursorFrames;
+    const endFrame = startFrame + durationFrames;
+    const startKey = { frame: startFrame, x: from.x, y: from.y, zoom: from.zoom };
+    if (ease !== "linear") startKey.ease = ease;
+    this._addCameraKeyframe(scene, startKey);
+    this._addCameraKeyframe(scene, { frame: endFrame, x: toX, y: toY, zoom: toZoom });
+
+    scene.camera = { x: toX, y: toY, zoom: toZoom };
+    this._applyWait(scene, durationFrames, wait);
+  }
+
   // ---- [Pause: ...] ----------------------------------------------------
 
   _handlePause(token) {
@@ -1354,12 +1484,18 @@ class ScriptParser {
         ? { from_dialogue: true, padding_frames: DEFAULT_SCENE_PADDING_FRAMES + extraHold }
         : { frames: Math.max(endFrames, this.fps) }; // at least 1s for a silent/establishing scene
 
-    this.scenes.push({
+    const sceneJson = {
       id: scene.sceneId,
       duration,
       background: { asset: scene.background },
       layers,
-    });
+    };
+    if (scene.cameraKeyframes.length > 0) {
+      sceneJson.camera = {
+        keyframes: [...scene.cameraKeyframes].sort((a, b) => a.frame - b.frame),
+      };
+    }
+    this.scenes.push(sceneJson);
 
     this.scene = null;
   }

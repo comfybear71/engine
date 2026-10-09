@@ -87,9 +87,9 @@ parses the project's `script.txt` and runs the existing compositor.
 | `GET` | `/api/projects/:name/characters` | Characters with slots, drawings, cycles, thumbnail paths. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks from `staging.json`. |
 | `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). |
-| `GET` | `/api/projects/:name/stage` | Parse the script; return canvas/fps, scene layers, marks. |
-| `POST` | `/api/projects/:name/preview-frame` | Parse the script, compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a PNG. Metadata is in `X-Engine-*` headers. |
-| `POST` | `/api/projects/:name/render` | Parse the script, run the existing render, return the mp4 `outputPath` and `url`. One render at a time. |
+| `GET` | `/api/projects/:name/stage` | Parse the script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
+| `POST` | `/api/projects/:name/preview-frame` | Parse the script to a temp timeline, compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a PNG. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. |
+| `POST` | `/api/projects/:name/render` | Parse the script (writes `timeline.json` from the script only), run the existing render, return the mp4 `outputPath` and `url`. One render at a time. |
 | `GET` | `/api/projects/:name/renders/output.mp4` | Stream the latest render. |
 | `POST` | `/render` | Original CLI-oriented contract: `{ "projectDir": "..." }`. |
 

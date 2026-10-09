@@ -1,11 +1,12 @@
-"""Minimal virtual camera: linear keyframe pan/zoom plus additive shake.
+"""Minimal virtual camera: keyframe pan/zoom plus additive shake.
 
 Deliberately simple (see schema/timeline.schema.json `camera`): a list of
-(frame, x, y, zoom) keyframes, linearly interpolated, plus an optional
-sine-based shake. It is applied as a post-process on the fully composited
-canvas-sized frame: crop the visible window, then resize back up to the
-canvas size. That means zooming in re-samples already-rendered pixels
-(a documented limitation, not a bug -- see docs/timeline-schema.md).
+(frame, x, y, zoom) keyframes, interpolated (linear or inout ease on the
+departing keyframe), plus an optional sine-based shake. It is applied as a
+post-process on the fully composited canvas-sized frame: crop the visible
+window, then resize back up to the canvas size. That means zooming in
+re-samples already-rendered pixels (a documented limitation, not a bug --
+see docs/timeline-schema.md).
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from .interpolate import apply_ease
+
 
 @dataclass(frozen=True)
 class CameraKeyframe:
@@ -23,6 +26,7 @@ class CameraKeyframe:
     x: float | None = None
     y: float | None = None
     zoom: float = 1.0
+    ease: str = "linear"
 
 
 @dataclass(frozen=True)
@@ -45,27 +49,34 @@ def _interpolate(keyframes: list[CameraKeyframe], frame: int, canvas_w: int, can
 
     kfs = sorted(keyframes, key=lambda k: k.frame)
     resolved = [
-        (k.frame, k.x if k.x is not None else canvas_w / 2.0, k.y if k.y is not None else canvas_h / 2.0, k.zoom)
+        (
+            k.frame,
+            k.x if k.x is not None else canvas_w / 2.0,
+            k.y if k.y is not None else canvas_h / 2.0,
+            k.zoom,
+            k.ease,
+        )
         for k in kfs
     ]
 
     if frame <= resolved[0][0]:
-        _, x, y, z = resolved[0]
+        _, x, y, z, _ease = resolved[0]
         return x, y, z
     if frame >= resolved[-1][0]:
-        _, x, y, z = resolved[-1]
+        _, x, y, z, _ease = resolved[-1]
         return x, y, z
 
-    for (f0, x0, y0, z0), (f1, x1, y1, z1) in zip(resolved, resolved[1:]):
+    for (f0, x0, y0, z0, ease0), (f1, x1, y1, z1, _ease1) in zip(resolved, resolved[1:]):
         if f0 <= frame <= f1:
             t = 0.0 if f1 == f0 else (frame - f0) / (f1 - f0)
+            t = apply_ease(t, ease0)
             return (
                 x0 + (x1 - x0) * t,
                 y0 + (y1 - y0) * t,
                 z0 + (z1 - z0) * t,
             )
 
-    _, x, y, z = resolved[-1]
+    _, x, y, z, _ease = resolved[-1]
     return x, y, z
 
 

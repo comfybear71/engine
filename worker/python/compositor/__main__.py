@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        timeline = load_timeline(timeline_path)
+        timeline = load_timeline(timeline_path, project_dir=project_dir)
     except TimelineValidationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

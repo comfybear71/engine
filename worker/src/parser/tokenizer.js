@@ -51,7 +51,7 @@ function tokenize(scriptText) {
     if (bracketMatch) {
       const tag = bracketMatch[1].toLowerCase();
       const body = bracketMatch[2];
-      const knownTags = ["scene", "location", "cast", "action", "prop", "layer", "pause", "move", "pose", "swing"];
+      const knownTags = ["scene", "location", "cast", "action", "prop", "layer", "pause", "move", "pose", "swing", "camera"];
       if (!knownTags.includes(tag)) {
         throw new ScriptError(
           lineNumber,
