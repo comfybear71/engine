@@ -26,9 +26,18 @@ const {
   listScriptFiles,
   collectUsedAssets,
   summarizeProject,
+  describeProjectContents,
+  moveProjectToTrash,
+  listTrash,
+  restoreFromTrash,
+  emptyTrash,
+  renameProject,
+  duplicateProject,
   createEmptyProject,
   addLibraryCharacter,
 } = require("./studioProjects");
+const { cachedBackgroundThumb } = require("./studioThumbs");
+const { streamProjectZip } = require("./studioZip");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
 const DEFAULT_STUDIO_ORIGINS = [
@@ -38,7 +47,7 @@ const DEFAULT_STUDIO_ORIGINS = [
   "http://127.0.0.1:3001",
 ];
 const SAFE_PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const RESERVED_PROJECT_NAMES = new Set(["_global_assets"]);
+const RESERVED_PROJECT_NAMES = new Set(["_global_assets", "_trash"]);
 const SAFE_REL_PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const IMAGE_TYPES = {
   ".png": "image/png",
@@ -89,6 +98,7 @@ function applyCors(req, res) {
       "X-Engine-Canvas-Width",
       "X-Engine-Canvas-Height",
       "X-Engine-Scene-Id",
+      "Content-Disposition",
     ].join(", "));
   }
 }
@@ -204,7 +214,19 @@ function createApp(options = {}) {
     res.json({ ok: true });
   });
 
-  app.get("/api/projects", (_req, res) => {
+  async function summarized(projectDir, name) {
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    return summarizeProject(projectDir, name, globalAssetsDir);
+  }
+
+  function sendLifecycleError(res, err) {
+    if (err.code === "EINVAL") return res.status(400).json({ error: err.message });
+    if (err.code === "ENOENT") return res.status(404).json({ error: err.message });
+    if (err.code === "EEXIST") return res.status(409).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+
+  app.get("/api/projects", async (_req, res) => {
     if (!fs.existsSync(projectsDir)) {
       return res.json({ projects: [] });
     }
@@ -213,27 +235,113 @@ function createApp(options = {}) {
       .filter((entry) => entry.isDirectory() && isSafeProjectName(entry.name))
       .map((entry) => entry.name)
       .sort();
-    const projects = names.map((name) => {
-      const projectDir = path.join(projectsDir, name);
-      const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
-      return summarizeProject(projectDir, name, globalAssetsDir);
-    });
-    res.json({ projects });
+    try {
+      const projects = [];
+      for (const name of names) {
+        const projectDir = path.join(projectsDir, name);
+        projects.push(await summarized(projectDir, name));
+      }
+      res.json({ projects });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.post("/api/projects", (req, res) => {
+  app.post("/api/projects", async (req, res) => {
     const name = req.body && req.body.name;
     if (!isSafeProjectName(name)) {
       return res.status(400).json({ error: "Invalid project name" });
     }
     try {
       const projectDir = createEmptyProject(projectsDir, name);
-      const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
-      res.status(201).json({ ok: true, project: summarizeProject(projectDir, name, globalAssetsDir) });
+      res.status(201).json({ ok: true, project: await summarized(projectDir, name) });
     } catch (err) {
-      if (err.code === "EEXIST") return res.status(409).json({ error: err.message });
-      return res.status(500).json({ error: err.message });
+      sendLifecycleError(res, err);
     }
+  });
+
+  app.get("/api/trash", (_req, res) => {
+    res.json({ trash: listTrash(projectsDir) });
+  });
+
+  app.post("/api/trash/empty", (req, res) => {
+    const confirm = req.body && req.body.confirm;
+    if (confirm !== "empty") {
+      return res.status(400).json({ error: 'Type "empty" to confirm emptying trash' });
+    }
+    try {
+      res.json({ ok: true, ...emptyTrash(projectsDir) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.post("/api/trash/:id/restore", async (req, res) => {
+    const id = req.params.id;
+    try {
+      const restored = restoreFromTrash(projectsDir, id);
+      res.json({ ok: true, project: await summarized(restored.projectDir, restored.name) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/contents", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    res.json({ name: req.params.name, contents: describeProjectContents(projectDir) });
+  });
+
+  app.post("/api/projects/:name/trash", (req, res) => {
+    const name = req.params.name;
+    if (!isSafeProjectName(name)) {
+      return res.status(400).json({ error: "Invalid project name" });
+    }
+    const confirmName = req.body && req.body.confirmName;
+    if (confirmName !== name) {
+      return res.status(400).json({ error: "Type the project name to confirm" });
+    }
+    try {
+      res.json({ ok: true, trash: moveProjectToTrash(projectsDir, name) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/rename", async (req, res) => {
+    const name = req.params.name;
+    if (!isSafeProjectName(name)) {
+      return res.status(400).json({ error: "Invalid project name" });
+    }
+    const newName = req.body && req.body.name;
+    if (!isSafeProjectName(newName)) {
+      return res.status(400).json({ error: "Invalid project name" });
+    }
+    try {
+      const renamed = renameProject(projectsDir, name, newName);
+      res.json({ ok: true, project: await summarized(renamed.projectDir, renamed.name) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/duplicate", async (req, res) => {
+    const name = req.params.name;
+    if (!isSafeProjectName(name)) {
+      return res.status(400).json({ error: "Invalid project name" });
+    }
+    try {
+      const copied = duplicateProject(projectsDir, name);
+      res.status(201).json({ ok: true, project: await summarized(copied.projectDir, copied.name) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/download", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    streamProjectZip(projectDir, req.params.name, res);
   });
 
   app.get("/api/projects/:name/scripts", (req, res) => {
@@ -300,6 +408,20 @@ function createApp(options = {}) {
     const type = IMAGE_TYPES[ext];
     if (!type) {
       return res.status(400).json({ error: "Unsupported asset type" });
+    }
+    const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
+    if (wantThumb) {
+      cachedBackgroundThumb(resolved.absPath)
+        .then((thumbPath) => {
+          const file = thumbPath || resolved.absPath;
+          const sendType = thumbPath ? "image/jpeg" : type;
+          res.setHeader("Cache-Control", "no-cache");
+          res.type(sendType).sendFile(file);
+        })
+        .catch((err) => {
+          if (!res.headersSent) res.status(500).json({ error: err.message });
+        });
+      return;
     }
     res.type(type).sendFile(resolved.absPath);
   });

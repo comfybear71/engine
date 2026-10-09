@@ -109,6 +109,22 @@ export type ProjectSummary = {
   sceneCount: number;
   lastRenderAt: string | null;
 };
+export type ByteCount = { files: number; bytes: number };
+export type ProjectContents = {
+  scripts: string[];
+  scriptBytes: number;
+  audio: ByteCount;
+  renders: ByteCount;
+  localAssets: ByteCount;
+  libraryJsonBytes: number;
+  totalBytes: number;
+};
+export type TrashItem = {
+  id: string;
+  originalName: string;
+  deletedAt: string;
+  bytes: number;
+};
 export type LibraryResponse = {
   characters: Character[];
   added: string[];
@@ -207,9 +223,80 @@ export async function loadStage(name: string, script?: string | null): Promise<S
   return res.json() as Promise<StageInfo>;
 }
 
-export function assetUrl(project: string, rel: string | null | undefined): string | null {
+export function assetUrl(
+  project: string,
+  rel: string | null | undefined,
+  opts?: { thumb?: boolean }
+): string | null {
   if (!rel) return null;
-  return `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/asset?rel=${encodeURIComponent(rel)}`;
+  const thumb = opts?.thumb ? "&thumb=1" : "";
+  return `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/asset?rel=${encodeURIComponent(rel)}${thumb}`;
+}
+
+export async function loadProjectContents(name: string): Promise<ProjectContents> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/contents`);
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { contents: ProjectContents };
+  return body.contents;
+}
+
+export async function trashProject(name: string, confirmName: string): Promise<void> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/trash`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmName }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+}
+
+export async function renameProject(name: string, newName: string): Promise<ProjectSummary> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: newName }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { project?: ProjectSummary; error?: string };
+  if (!res.ok) throw new Error(body.error || `Rename failed (${res.status})`);
+  if (!body.project) throw new Error("Rename failed");
+  return body.project;
+}
+
+export async function duplicateProject(name: string): Promise<ProjectSummary> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/duplicate`, {
+    method: "POST",
+  });
+  const body = (await res.json().catch(() => ({}))) as { project?: ProjectSummary; error?: string };
+  if (!res.ok) throw new Error(body.error || `Duplicate failed (${res.status})`);
+  if (!body.project) throw new Error("Duplicate failed");
+  return body.project;
+}
+
+export function downloadProjectUrl(name: string): string {
+  return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/download`;
+}
+
+export async function listTrash(): Promise<TrashItem[]> {
+  const res = await workerFetch("/api/trash");
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { trash: TrashItem[] };
+  return body.trash;
+}
+
+export async function restoreTrash(id: string): Promise<ProjectSummary> {
+  const res = await workerFetch(`/api/trash/${encodeURIComponent(id)}/restore`, { method: "POST" });
+  const body = (await res.json().catch(() => ({}))) as { project?: ProjectSummary; error?: string };
+  if (!res.ok) throw new Error(body.error || `Restore failed (${res.status})`);
+  if (!body.project) throw new Error("Restore failed");
+  return body.project;
+}
+
+export async function emptyTrash(): Promise<void> {
+  const res = await workerFetch("/api/trash/empty", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm: "empty" }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
 }
 
 export async function fetchPreviewFrame(

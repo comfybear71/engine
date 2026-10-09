@@ -69,10 +69,23 @@ override the worker URL.
 
 The default route `/` is a **home screen**: a grid of project cards
 (thumbnail = first-frame preview if the worker can compose it, otherwise
-the first used background; name; estimated length; last render time) plus
-a **New project** card. New project creates an empty folder under
-`projects/` from a small text template (`script.txt` + `library.json`) —
-no art is copied. Click a card to open `/p/<name>`.
+a cached ~480px JPEG of the first used background; name; length; last
+render time) plus a **New project** card. Card length is the latest
+render's real duration (`ffprobe`, then the MP4 `mvhd` header). If there
+is no render yet, it uses parsed timeline frames/fps — not a dialogue-text
+guess. New project creates an empty folder under `projects/` from a small
+text template (`script.txt` + `library.json`) — no art is copied. Click a
+card to open `/p/<name>`.
+
+Each card has an actions menu: **Duplicate** (copy the folder to
+`<name>-copy`, then `<name>-copy-2`, …), **Rename** (folder rename, same
+name rules as create), **Download** (zip of the project folder), and
+**Delete**. Delete asks you to type the project name after listing what
+will go (script files, audio, renders, local assets, sizes). It **moves**
+the folder to `projects/_trash/<name>-<timestamp>` — never a hard delete,
+and it never touches `projects/_global_assets`. A **Trash** section on the
+home screen can **Restore** an item or **Empty trash** (that step is
+permanent and has its own confirm).
 
 Inside a project: **Assets**, **Stage**, **Script**, **Edit**, **Deliver**,
 a back-to-home link, the project name, and a **script picker**. A project
@@ -119,14 +132,22 @@ project root). Those paths parse to **temp** files and never write
 | Method | Path | What |
 |---|---|---|
 | `GET` | `/health` | Liveness. |
-| `GET` | `/api/projects` | Folders under `projects/`, excluding `_global_assets`. Each item has `name`, `scripts`, `thumbRel`, `durationSeconds`, `sceneCount`, `lastRenderAt`. |
+| `GET` | `/api/projects` | Folders under `projects/`, excluding `_global_assets` and `_trash`. Each item has `name`, `scripts`, `thumbRel`, `durationSeconds`, `sceneCount`, `lastRenderAt`. `durationSeconds` is the latest render length, else parsed timeline frames/fps. |
 | `POST` | `/api/projects` | Create an empty project from the template. JSON `{ "name": "episode_01" }`. |
+| `GET` | `/api/projects/:name/contents` | What Delete will list: script files, audio/renders/local-asset file counts and bytes. |
+| `POST` | `/api/projects/:name/trash` | Move the folder to `projects/_trash/<name>-<timestamp>`. JSON `{ "confirmName": "<name>" }` must match. Never deletes `_global_assets` or `_trash`. |
+| `POST` | `/api/projects/:name/rename` | Rename the folder. JSON `{ "name": "new_name" }`. |
+| `POST` | `/api/projects/:name/duplicate` | Copy the folder to `<name>-copy` (then `-copy-2`, …). Skips `node_modules` / `venv` / temp. |
+| `GET` | `/api/projects/:name/download` | Stream a zip of the project folder (scripts, audio, renders, local assets, `library.json`, …). Excludes `node_modules`, `venv`, temp. |
+| `GET` | `/api/trash` | Soft-deleted folders under `projects/_trash`. |
+| `POST` | `/api/trash/:id/restore` | Move that trash folder back to `projects/<originalName>`. 409 if that name exists. |
+| `POST` | `/api/trash/empty` | Permanently delete everything in `_trash`. JSON `{ "confirm": "empty" }`. |
 | `GET` | `/api/projects/:name/scripts` | `script*.txt` files in that folder. |
 | `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots, drawings, cycles, thumbnail paths. |
 | `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. |
 | `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Appends to `library.json`; does not copy art. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks for locations this project uses. |
-| `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). |
+| `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for background cards. |
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |
 | `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. |
@@ -137,8 +158,9 @@ project root). Those paths parse to **temp** files and never write
 | `GET` | `/api/projects/:name/renders/:file` | Stream a render (`script.mp4`, `script_mcd.mp4`, or a leftover `output.mp4`). |
 | `POST` | `/render` | Original CLI-oriented contract: `{ "projectDir": "..." }`. |
 
-`:name` is validated against path traversal. `rel` cannot contain `..`.
-`?script=` cannot contain `/` or `..`.
+`:name` is validated against path traversal. `_global_assets` and `_trash`
+are reserved and cannot be created, renamed to, duplicated as, or deleted.
+`rel` cannot contain `..`. `?script=` cannot contain `/` or `..`.
 
 Lane `lane` values are `action` (character actions, moves, poses, layer /
 prop changes), `dialogue` (spoken lines with text), `audio` (the recorded
