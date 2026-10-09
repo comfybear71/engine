@@ -64,6 +64,8 @@ describe("sequential timing", () => {
 
     assert.equal(clip1.start_frame, 0);
     assert.ok(clip2.start_frame > clip1.start_frame);
+    assert.equal(clip1.estimated, true);
+    assert.ok(clip1.estimated_duration_seconds > 0);
     assert.equal(lines[0].status, "missing");
     assert.ok(lines[0].estimated_duration_seconds > 0);
   });

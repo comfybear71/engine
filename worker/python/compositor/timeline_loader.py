@@ -24,6 +24,12 @@ DEFAULT_CANVAS_WIDTH = 1920
 DEFAULT_CANVAS_HEIGHT = 1080
 DEFAULT_ANCHOR = "bottom-center"
 
+# Same word-count estimate the script parser uses when a WAV is missing
+# (see worker/src/parser/scriptParser.js). Kept here so a hand-written
+# timeline that only has `text` still gets a silent preview length.
+WORDS_PER_SECOND = 2.5
+ESTIMATE_PAD_SECONDS = 0.3
+
 
 @dataclass(frozen=True)
 class Canvas:
@@ -80,6 +86,7 @@ class DialogueClip:
     duration_frames: int
     cues: list[lipsync.MouthCue]
     text: str | None = None
+    estimated: bool = False  # True => no WAV yet; silent preview at duration_frames
 
 
 @dataclass(frozen=True)
@@ -138,8 +145,27 @@ class Timeline:
     def total_frames(self) -> int:
         return sum(s.total_frames for s in self.scenes)
 
+    def dialogue_line_counts(self) -> tuple[int, int]:
+        """Return ``(estimated_or_silent, total)`` dialogue clip counts."""
+
+        total = 0
+        estimated = 0
+        for scene in self.scenes:
+            for layer in scene.layers:
+                for clip in layer.dialogue:
+                    total += 1
+                    if clip.estimated:
+                        estimated += 1
+        return estimated, total
+
     def all_audio_clips(self) -> list[AudioClip]:
-        """All audio referenced anywhere in the timeline, with global start times."""
+        """Real audio files to mix in, with global start times.
+
+        Estimated/silent dialogue clips are omitted here -- they have no
+        file to mix. The FFmpeg writer always lays down a full-length
+        silence bed so those gaps (and scenes with no audio at all) still
+        produce one audio stream covering the whole render.
+        """
 
         clips: list[AudioClip] = []
         elapsed_frames = 0
@@ -149,6 +175,8 @@ class Timeline:
                 clips.append(AudioClip(path=scene.audio, start_seconds=scene_start_seconds))
             for layer in scene.layers:
                 for dialogue_clip in layer.dialogue:
+                    if dialogue_clip.estimated:
+                        continue
                     clip_start_seconds = scene_start_seconds + dialogue_clip.start_frame / float(self.fps)
                     clips.append(AudioClip(path=dialogue_clip.audio, start_seconds=clip_start_seconds))
             elapsed_frames += scene.total_frames
@@ -161,6 +189,66 @@ def _resolve(project_dir: Path, rel_path: str) -> Path:
 
 def _frames_from_seconds(seconds: float, fps: int) -> int:
     return max(0, round(seconds * fps))
+
+
+def _estimate_duration_seconds(text: str) -> float:
+    """Same formula the script parser uses: words / 2.5 + 0.3 seconds."""
+
+    word_count = len([w for w in text.split() if w]) or 1
+    return word_count / WORDS_PER_SECOND + ESTIMATE_PAD_SECONDS
+
+
+def _load_lines_manifest(project_dir: Path) -> dict[str, dict]:
+    """Index ``lines.json`` by ``audio_path``, if that manifest exists."""
+
+    path = project_dir / "lines.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    by_audio: dict[str, dict] = {}
+    for line in data.get("lines", []):
+        audio_path = line.get("audio_path")
+        if audio_path:
+            by_audio[audio_path] = line
+    return by_audio
+
+
+def _clip_duration_seconds(
+    clip_raw: dict,
+    project_dir: Path,
+    lines_by_audio: dict[str, dict],
+) -> tuple[float, bool]:
+    """Return ``(duration_seconds, estimated)`` for one dialogue clip.
+
+    A real audio file on disk always wins (ffprobe). Otherwise the
+    estimated length already stored on the clip, then the matching
+    ``lines.json`` entry, then a word-count estimate from the clip's
+    ``text``.
+    """
+
+    audio_rel = clip_raw["audio"]
+    audio_path = _resolve(project_dir, audio_rel)
+    if audio_path.is_file():
+        return probe_duration_seconds(audio_path), False
+
+    if "estimated_duration_seconds" in clip_raw:
+        return float(clip_raw["estimated_duration_seconds"]), True
+
+    line = lines_by_audio.get(audio_rel)
+    if line is not None and line.get("estimated_duration_seconds") is not None:
+        return float(line["estimated_duration_seconds"]), True
+
+    text = clip_raw.get("text")
+    if text:
+        return _estimate_duration_seconds(text), True
+
+    raise FileNotFoundError(
+        f"Dialogue audio is missing ({audio_path}) and no estimated "
+        f"duration is stored on the clip or in lines.json"
+    )
 
 
 def _build_transform(raw: dict) -> Transform:
@@ -244,16 +332,25 @@ def _raw_dialogue_clips(layer_raw: dict) -> list[dict]:
     return dialogue_raw
 
 
-def _build_dialogue_clip(raw: dict, project_dir: Path, fps: int) -> DialogueClip:
+def _build_dialogue_clip(
+    raw: dict,
+    project_dir: Path,
+    fps: int,
+    lines_by_audio: dict[str, dict],
+) -> DialogueClip:
     audio_path = _resolve(project_dir, raw["audio"])
-    duration_s = probe_duration_seconds(audio_path)
+    duration_s, estimated = _clip_duration_seconds(raw, project_dir, lines_by_audio)
 
-    lipsync_config: dict = {"audio": raw["audio"]}
-    if "cues" in raw:
-        lipsync_config["cues"] = raw["cues"]
-    if "text" in raw:
-        lipsync_config["dialogue_text"] = raw["text"]
-    cues = lipsync.get_cues(lipsync_config, project_dir)
+    if estimated:
+        # No WAV (and therefore no Rhubarb cues) -- mouth stays on X.
+        cues: list[lipsync.MouthCue] = []
+    else:
+        lipsync_config: dict = {"audio": raw["audio"]}
+        if "cues" in raw:
+            lipsync_config["cues"] = raw["cues"]
+        if "text" in raw:
+            lipsync_config["dialogue_text"] = raw["text"]
+        cues = lipsync.get_cues(lipsync_config, project_dir)
 
     return DialogueClip(
         audio=audio_path,
@@ -261,10 +358,16 @@ def _build_dialogue_clip(raw: dict, project_dir: Path, fps: int) -> DialogueClip
         duration_frames=_frames_from_seconds(duration_s, fps),
         cues=cues,
         text=raw.get("text"),
+        estimated=estimated,
     )
 
 
-def _build_layer(raw: dict, project_dir: Path, fps: int) -> Layer:
+def _build_layer(
+    raw: dict,
+    project_dir: Path,
+    fps: int,
+    lines_by_audio: dict[str, dict],
+) -> Layer:
     timing = raw.get("timing", {})
     start_frame = int(timing.get("start_frame", 0))
 
@@ -279,7 +382,7 @@ def _build_layer(raw: dict, project_dir: Path, fps: int) -> Layer:
         end_frame = None
 
     dialogue = [
-        _build_dialogue_clip(d, project_dir, fps)
+        _build_dialogue_clip(d, project_dir, fps, lines_by_audio)
         for d in sorted(_raw_dialogue_clips(raw), key=lambda d: d["start_frame"])
     ]
 
@@ -323,7 +426,13 @@ def _build_camera(raw: dict | None) -> Camera | None:
     return Camera(keyframes=keyframes, shake=shake)
 
 
-def _scene_total_frames(raw_duration: dict, project_dir: Path, fps: int, layers_raw: list[dict]) -> int:
+def _scene_total_frames(
+    raw_duration: dict,
+    project_dir: Path,
+    fps: int,
+    layers_raw: list[dict],
+    lines_by_audio: dict[str, dict],
+) -> int:
     if "frames" in raw_duration:
         return int(raw_duration["frames"])
 
@@ -340,8 +449,7 @@ def _scene_total_frames(raw_duration: dict, project_dir: Path, fps: int, layers_
         for layer_raw in layers_raw:
             for clip_raw in _raw_dialogue_clips(layer_raw):
                 found_any = True
-                audio_path = _resolve(project_dir, clip_raw["audio"])
-                duration_s = probe_duration_seconds(audio_path)
+                duration_s, _estimated = _clip_duration_seconds(clip_raw, project_dir, lines_by_audio)
                 end_frame = int(clip_raw["start_frame"]) + _frames_from_seconds(duration_s, fps)
                 max_end_frame = max(max_end_frame, end_frame)
         if not found_any:
@@ -354,13 +462,15 @@ def _scene_total_frames(raw_duration: dict, project_dir: Path, fps: int, layers_
     raise ValueError(f"Unrecognized scene duration config: {raw_duration!r}")
 
 
-def _build_scene(raw: dict, project_dir: Path, fps: int) -> Scene:
-    total_frames = _scene_total_frames(raw["duration"], project_dir, fps, raw.get("layers", []))
+def _build_scene(raw: dict, project_dir: Path, fps: int, lines_by_audio: dict[str, dict]) -> Scene:
+    total_frames = _scene_total_frames(
+        raw["duration"], project_dir, fps, raw.get("layers", []), lines_by_audio
+    )
     background = Background(
         asset=_resolve(project_dir, raw["background"]["asset"]),
         fit=raw["background"].get("fit", "cover"),
     )
-    layers = [_build_layer(l, project_dir, fps) for l in raw.get("layers", [])]
+    layers = [_build_layer(l, project_dir, fps, lines_by_audio) for l in raw.get("layers", [])]
     scene_audio = _resolve(project_dir, raw["audio"]) if "audio" in raw else None
     return Scene(
         id=raw["id"],
@@ -390,7 +500,8 @@ def load_timeline(timeline_path: Path, schema_path: Path | None = None) -> Timel
         height=int(canvas_raw.get("height", DEFAULT_CANVAS_HEIGHT)),
     )
     fps = int(raw["fps"])
-    scenes = [_build_scene(s, project_dir, fps) for s in raw["scenes"]]
+    lines_by_audio = _load_lines_manifest(project_dir)
+    scenes = [_build_scene(s, project_dir, fps, lines_by_audio) for s in raw["scenes"]]
 
     return Timeline(
         series=raw["series"],

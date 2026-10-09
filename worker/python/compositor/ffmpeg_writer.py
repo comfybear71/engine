@@ -22,18 +22,48 @@ CODEC_PRORES4444 = "prores4444"
 SUPPORTED_CODECS = (CODEC_H264, CODEC_PRORES4444)
 
 
-def _build_audio_filter(audio_clips: list[AudioClip]) -> tuple[list[str], str]:
-    """Returns (ffmpeg input args for audio, filter_complex producing [aout])."""
+def _silence_input_args(duration_seconds: float) -> list[str]:
+    """A finite silent stereo bed covering the whole render.
 
-    input_args: list[str] = []
+    ``anullsrc`` is otherwise infinite; ``-t`` on this input (plus
+    ``duration=first`` on the mix) is what keeps the audio stream the same
+    length as the picture -- including when every dialogue clip is
+    estimated/silent and there are no real WAV inputs at all.
+    """
+
+    return [
+        "-f", "lavfi",
+        "-t", f"{duration_seconds:.6f}",
+        "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+    ]
+
+
+def _build_audio_filter(
+    audio_clips: list[AudioClip],
+    duration_seconds: float,
+) -> tuple[list[str], str]:
+    """Returns (ffmpeg input args for audio, filter_complex producing [aout]).
+
+    Input 0 is the raw video pipe. Input 1 is always a full-length silence
+    bed; real dialogue/ambience files (if any) start at input 2. Estimated
+    clips never appear here -- they have no file -- so their time is just
+    the silence already in the bed.
+    """
+
+    input_args = _silence_input_args(duration_seconds)
     labels: list[str] = []
+    mix_parts = ["[1:a]"]
     for i, clip in enumerate(audio_clips):
+        input_index = i + 2
         input_args += ["-i", str(clip.path)]
         delay_ms = max(0, round(clip.start_seconds * 1000))
-        labels.append(f"[{i + 1}:a]adelay={delay_ms}:all=1[a{i}]")
+        labels.append(f"[{input_index}:a]adelay={delay_ms}:all=1[a{i}]")
+        mix_parts.append(f"[a{i}]")
 
-    mix_inputs = "".join(f"[a{i}]" for i in range(len(audio_clips)))
-    labels.append(f"{mix_inputs}amix=inputs={len(audio_clips)}:normalize=0:dropout_transition=0[aout]")
+    n = len(mix_parts)
+    labels.append(
+        f"{''.join(mix_parts)}amix=inputs={n}:normalize=0:dropout_transition=0:duration=first[aout]"
+    )
     return input_args, ";".join(labels)
 
 
@@ -55,31 +85,26 @@ def build_ffmpeg_cmd(
         "-i", "-",
     ]
 
-    map_args: list[str]
-    if audio_clips:
-        audio_inputs, filter_complex = _build_audio_filter(audio_clips)
-        cmd += audio_inputs
-        cmd += ["-filter_complex", filter_complex]
-        map_args = ["-map", "0:v", "-map", "[aout]"]
-    else:
-        map_args = ["-map", "0:v"]
-
-    cmd += map_args
+    # Always attach one audio stream covering the full scene length, even
+    # when there are no real clips (all estimated / no dialogue at all).
+    # Drafts and finished renders then line up the same way in Resolve.
+    audio_inputs, filter_complex = _build_audio_filter(audio_clips, duration_seconds)
+    cmd += audio_inputs
+    cmd += ["-filter_complex", filter_complex]
+    cmd += ["-map", "0:v", "-map", "[aout]"]
 
     if codec == CODEC_H264:
         cmd += [
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "18",
             "-movflags", "+faststart",
+            "-c:a", "aac", "-b:a", "192k",
         ]
-        if audio_clips:
-            cmd += ["-c:a", "aac", "-b:a", "192k"]
     else:  # prores4444
         cmd += [
             "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuv444p10le",
             "-vendor", "apl0", "-qscale:v", "9",
+            "-c:a", "pcm_s16le",
         ]
-        if audio_clips:
-            cmd += ["-c:a", "pcm_s16le"]
 
     cmd += ["-t", f"{duration_seconds:.6f}"]
     cmd.append(str(output_path))

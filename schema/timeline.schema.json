@@ -309,7 +309,16 @@
         "audio": { "type": "string", "description": "Path (relative to the project folder) to this line's audio file." },
         "start_frame": { "type": "integer", "minimum": 0, "description": "Scene-relative frame this clip starts at. Typically computed by the script parser from the running total of prior lines/pauses in the scene, but may be hand-set." },
         "cues": { "type": "string", "description": "Path (relative to the project folder) to this clip's Rhubarb cues JSON. Defaults to \"<audio>.rhubarb.json\" if omitted -- see the lipsync resolution order under `slot.lipsync`." },
-        "text": { "type": "string", "description": "The spoken line text. Used as Rhubarb's --dialogFile hint when cues must be generated from audio, and for the lines.json manifest / a future ElevenLabs generation step. Purely informational for rendering." }
+        "text": { "type": "string", "description": "The spoken line text. Used as Rhubarb's --dialogFile hint when cues must be generated from audio, and for the lines.json manifest / a future ElevenLabs generation step. Purely informational for rendering." },
+        "estimated": {
+          "type": "boolean",
+          "description": "True when this line has no audio file yet (a silent preview). The renderer holds the mouth on the rest shape X and mixes silence for the estimated duration instead of failing the render."
+        },
+        "estimated_duration_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Word-count estimate used when the audio file is missing. The script parser writes this onto the clip; the compositor also accepts the same field from lines.json if the clip itself does not have it."
+        }
       }
     },
 

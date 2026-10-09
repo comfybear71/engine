@@ -138,6 +138,10 @@ def render(
 ) -> Path:
     """Render a Timeline to ``output_path``, streaming frames into FFmpeg."""
 
+    estimated, total = timeline.dialogue_line_counts()
+    if total:
+        print(f"{estimated} of {total} lines are estimated/silent")
+
     cache = AssetCache()
     frames = iter_frames(timeline, cache)
     write_frames(
