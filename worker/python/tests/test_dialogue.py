@@ -126,8 +126,11 @@ class TestDialogueClipsList:
         timeline = load_timeline(_write_timeline(tmp_path, scene))
         layer = timeline.scenes[0].layers[0]
         assert len(layer.dialogue) == 1
-        assert layer.dialogue[0].start_frame == 10  # inherited from timing.start_frame
+        assert layer.dialogue[0].start_frame == 0  # layer-local; clip starts when the layer starts
         assert layer.dialogue[0].duration_frames == 18  # 0.75s @ 24fps
+        clips = timeline.all_audio_clips()
+        assert len(clips) == 1
+        assert clips[0].start_seconds == pytest.approx(10 / 24)
 
     def test_dialogue_takes_priority_over_legacy_audio_if_both_given(self, tmp_path):
         _base_project(tmp_path)
@@ -181,6 +184,36 @@ class TestDialogueClipsList:
         assert len(clips) == 2
         starts = sorted(c.start_seconds for c in clips)
         assert starts == pytest.approx([0.0, 2.0])
+
+    def test_layer_start_frame_offsets_clip_audio_and_scene_duration(self, tmp_path):
+        """A clip's start_frame is layer-local. A layer that begins at
+        frame 47 with a clip at start_frame 0 must mix audio at 47/fps
+        and last long enough to include that clip."""
+        _base_project(tmp_path)
+        write_wav(tmp_path / "line.wav", 1.0)  # 24 frames at 24fps
+
+        scene = {
+            "id": "s1",
+            "duration": {"from_dialogue": True, "padding_frames": 0},
+            "background": {"asset": "bg.png"},
+            "layers": [
+                {
+                    "id": "dana_2",
+                    "asset": "body.png",
+                    "z": 1,
+                    "transform": {"x": 0, "y": 0, "anchor": "top-left"},
+                    "timing": {"start_frame": 47},
+                    "dialogue": [{"audio": "line.wav", "start_frame": 0}],
+                }
+            ],
+        }
+        timeline = load_timeline(_write_timeline(tmp_path, scene, fps=24))
+        clips = timeline.all_audio_clips()
+        assert len(clips) == 1
+        assert clips[0].start_seconds == pytest.approx(47 / 24.0)
+        # layer.start 47 + clip.start 0 + 24 frames; scene must cover the clip
+        assert timeline.scenes[0].total_frames >= 47 + 24
+        assert timeline.scenes[0].total_frames == 71
 
 
 class TestMouthSlotDrivenByDialogue:

@@ -77,7 +77,7 @@
           "properties": {
             "from_dialogue": {
               "const": true,
-              "description": "The scene's frame count is the latest (start_frame + that clip's own audio duration) across every dialogue clip on every layer in the scene (plus padding_frames), i.e. it ends when the last line finishes. At least one layer in the scene must have a non-empty `dialogue` (or legacy single `audio`)."
+              "description": "The scene's frame count is the latest (layer.timing.start_frame + clip.start_frame + that clip's own audio duration) across every dialogue clip on every layer in the scene (plus padding_frames), i.e. it ends when the last line finishes. At least one layer in the scene must have a non-empty `dialogue` (or legacy single `audio`)."
             },
             "padding_frames": {
               "type": "integer",
@@ -307,7 +307,7 @@
       "required": ["audio", "start_frame"],
       "properties": {
         "audio": { "type": "string", "description": "Path (relative to the project folder) to this line's audio file." },
-        "start_frame": { "type": "integer", "minimum": 0, "description": "Scene-relative frame this clip starts at. Typically computed by the script parser from the running total of prior lines/pauses in the scene, but may be hand-set." },
+        "start_frame": { "type": "integer", "minimum": 0, "description": "Frame this clip starts at, relative to the owning layer's timing.start_frame (layer-local). Absolute mix time is scene_start + layer.start_frame + clip.start_frame. Typically computed by the script parser from the running total of prior lines/pauses in the scene minus that layer segment's start, but may be hand-set." },
         "cues": { "type": "string", "description": "Path (relative to the project folder) to this clip's Rhubarb cues JSON. Defaults to \"<audio>.rhubarb.json\" if omitted -- see the lipsync resolution order under `slot.lipsync`." },
         "text": { "type": "string", "description": "The spoken line text. Used as Rhubarb's --dialogFile hint when cues must be generated from audio, and for the lines.json manifest / a future ElevenLabs generation step. Purely informational for rendering." },
         "estimated": {
@@ -335,10 +335,10 @@
         "timing": { "$ref": "#/definitions/timing" },
         "dialogue": {
           "type": "array",
-          "description": "This character's spoken lines in the scene, each with its own audio/timing/cues. Every clip's audio is mixed into the final render at its own start_frame; a `slots.mouth` with `lipsync.source: \"dialogue\"` shows each clip's cues within that clip's window and the idle shape between lines.",
+          "description": "This character's spoken lines in the scene, each with its own audio/timing/cues. Every clip's audio is mixed into the final render at scene_start + layer.start_frame + clip.start_frame; a `slots.mouth` with `lipsync.source: \"dialogue\"` shows each clip's cues within that clip's window and the idle shape between lines.",
           "items": { "$ref": "#/definitions/dialogue_clip" }
         },
-        "audio": { "type": "string", "description": "Deprecated single-clip shorthand, kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: timing.start_frame }]`. Ignored if `dialogue` is also given. Prefer `dialogue` for anything with more than one line." },
+        "audio": { "type": "string", "description": "Deprecated single-clip shorthand, kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: 0 }]` (the clip begins when the layer becomes visible). Ignored if `dialogue` is also given. Prefer `dialogue` for anything with more than one line." },
         "slots": { "$ref": "#/definitions/slots", "description": "Drawing-swap slots attached directly to this layer's own root image (e.g. a mouth on a single-image character with no separate head part)." },
         "children": {
           "type": "array",

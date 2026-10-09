@@ -72,13 +72,15 @@ class Child:
 
 @dataclass(frozen=True)
 class DialogueClip:
-    """One spoken line's audio, placed at an explicit scene-relative frame.
+    """One spoken line's audio, placed at a layer-local frame.
 
-    A character layer carries a *list* of these (``Layer.dialogue``) so a
-    real scene can give one character many lines without a separate layer
-    per line. ``duration_frames`` and ``cues`` are both resolved once at
-    load time (ffprobe + the lipsync resolution order), not per render
-    frame.
+    ``start_frame`` is relative to the owning layer's ``timing.start_frame``,
+    not the scene. Absolute mix time is
+    ``scene_start + layer.start_frame + clip.start_frame``. A character
+    layer carries a *list* of these (``Layer.dialogue``) so a real scene
+    can give one character many lines without a separate layer per line.
+    ``duration_frames`` and ``cues`` are both resolved once at load time
+    (ffprobe + the lipsync resolution order), not per render frame.
     """
 
     audio: Path
@@ -177,7 +179,9 @@ class Timeline:
                 for dialogue_clip in layer.dialogue:
                     if dialogue_clip.estimated:
                         continue
-                    clip_start_seconds = scene_start_seconds + dialogue_clip.start_frame / float(self.fps)
+                    clip_start_seconds = scene_start_seconds + (
+                        layer.start_frame + dialogue_clip.start_frame
+                    ) / float(self.fps)
                     clips.append(AudioClip(path=dialogue_clip.audio, start_seconds=clip_start_seconds))
             elapsed_frames += scene.total_frames
         return clips
@@ -320,15 +324,13 @@ def _build_child(raw: dict, project_dir: Path) -> Child:
 
 def _raw_dialogue_clips(layer_raw: dict) -> list[dict]:
     """Raw `dialogue` entries, plus the legacy single-`audio` shorthand
-    normalized into the same shape (one clip starting at the layer's own
-    timing.start_frame). Shared by `_scene_total_frames` (which only has
-    raw JSON to work with) and `_build_layer`."""
+    normalized into the same shape (one clip at layer-local start_frame 0,
+    i.e. when the layer becomes visible). Shared by `_scene_total_frames`
+    (which only has raw JSON to work with) and `_build_layer`."""
 
     dialogue_raw = list(layer_raw.get("dialogue", []))
     if "audio" in layer_raw and not dialogue_raw:
-        timing = layer_raw.get("timing", {})
-        start_frame = int(timing.get("start_frame", 0))
-        dialogue_raw = [{"audio": layer_raw["audio"], "start_frame": start_frame}]
+        dialogue_raw = [{"audio": layer_raw["audio"], "start_frame": 0}]
     return dialogue_raw
 
 
@@ -447,10 +449,15 @@ def _scene_total_frames(
         max_end_frame = 0
         found_any = False
         for layer_raw in layers_raw:
+            layer_start = int(layer_raw.get("timing", {}).get("start_frame", 0))
             for clip_raw in _raw_dialogue_clips(layer_raw):
                 found_any = True
                 duration_s, _estimated = _clip_duration_seconds(clip_raw, project_dir, lines_by_audio)
-                end_frame = int(clip_raw["start_frame"]) + _frames_from_seconds(duration_s, fps)
+                end_frame = (
+                    layer_start
+                    + int(clip_raw["start_frame"])
+                    + _frames_from_seconds(duration_s, fps)
+                )
                 max_end_frame = max(max_end_frame, end_frame)
         if not found_any:
             raise ValueError(
