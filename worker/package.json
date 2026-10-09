@@ -9,6 +9,7 @@
     "parse": "node src/cli.js parse",
     "render": "node src/cli.js render",
     "lint:project": "node src/cli.js lint",
+    "voices": "node src/cli.js voices",
     "watch": "node src/cli.js watch",
     "test": "node --test"
   },

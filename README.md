@@ -34,7 +34,7 @@ nothing here is derived from it.
   [docs/script-format.md](docs/script-format.md).
 - **Render worker** (`worker/`): runs on Stuart's PC or a GPU host later.
   - Node.js (`worker/src/`) is a **thin orchestrator only**: a CLI (parse /
-    lint / render / watch), an Express server, and the script parser above.
+    lint / voices / render / watch), an Express server, and the script parser above.
     It does **no** image or video processing itself.
   - Python (`worker/python/`) does all the actual image and video work,
     using `opencv-python` + `numpy` for compositing and `FFmpeg` (via
@@ -52,16 +52,18 @@ engine/
 ├── docs/
 │   ├── timeline-schema.md       # Field-by-field schema reference, with examples
 │   ├── script-format.md         # script.txt tag reference, with a full example
-│   └── assets.md                # Shared asset library layout, staging, overrides
+│   ├── assets.md                # Shared asset library layout, staging, overrides
+│   └── voices.md                # ElevenLabs voices command (never called by watch)
 ├── worker/                      # The render worker
 │   ├── package.json
 │   ├── test/                    # node:test unit + end-to-end tests
 │   ├── src/                     # Node orchestrator (thin)
-│   │   ├── cli.js               # `node src/cli.js parse|lint|render|watch <projectDir> ...`
+│   │   ├── cli.js               # `node src/cli.js parse|lint|voices|render|watch <projectDir> ...`
 │   │   ├── server.js            # Express server: POST /render
 │   │   ├── render.js            # Spawns the Python compositor
-│   │   ├── watcher.js           # chokidar: re-parse (if --from-script) + re-render
+│   │   ├── watcher.js           # chokidar: re-parse (if --from-script) + re-render; never ElevenLabs
 │   │   ├── pythonRuntime.js     # Picks the right python (prefers worker/python/venv)
+│   │   ├── voices/              # ElevenLabs TTS + credit-guard sidecars + Rhubarb
 │   │   └── parser/              # script.txt -> timeline.json
 │   │       ├── tokenizer.js     # lexes script.txt into kind-tagged lines
 │   │       ├── actionTag.js     # parses [Action: ...] key=value + Cast/Pause bodies
@@ -245,6 +247,8 @@ cd ..                             # back to repo root
 
 Copy `.env.example` to `.env` and fill in real values locally. `.env` is
 gitignored -- **this repo is public, never commit real secrets.**
+`ELEVENLABS_API_KEY` / `ELEVENLABS_MODEL_ID` are only used by
+`node src/cli.js voices` -- see [docs/voices.md](docs/voices.md).
 
 ```bash
 cp .env.example .env
@@ -292,6 +296,13 @@ script.txt line number):
 node src/cli.js lint ../projects/sample
 ```
 
+Record (or dry-run) ElevenLabs dialogue -- see [docs/voices.md](docs/voices.md).
+`watch` never does this:
+
+```bash
+node src/cli.js voices ../projects/sample --dry-run
+```
+
 To re-parse and re-render automatically whenever `script.txt` changes:
 
 ```bash
@@ -316,10 +327,11 @@ cd worker/python
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pytest -q
 
-# Node (script parser): tag parsing, one-layer-per-character, sequential
+# Node (script parser + voices): tag parsing, one-layer-per-character, sequential
 # timing (real + estimated durations), mark resolution order, slot keyframes
 # from Action tags, line-numbered errors, the lines.json manifest, schema
-# validity of parser output, and an end-to-end parse+render+ffprobe check.
+# validity of parser output, an end-to-end parse+render+ffprobe check,
+# WAV header / credit-guard skip logic, and voices --dry-run (mocked fetch).
 cd ../../worker
 npm test
 ```

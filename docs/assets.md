@@ -81,7 +81,7 @@ beyond the generated PNGs/WAVs themselves).
 | `asset` | This character's root/base image, relative to the character's own folder. |
 | `z` | This character's default draw order (can be overridden per `[Action: ... z=N]`). |
 | `default_scale` / `default_flip_x` | Used when neither an `[Action: ...]` tag nor the resolved staging mark specifies that field -- see [mark resolution order](script-format.md#mark-resolution-order) in the script format doc. |
-| `voice_id` | Optional identifier for a future ElevenLabs generation step. **Never a secret** -- it's a voice *identifier* (e.g. `"EXAVITQu4vr4xnSDxMaL"`), not an API key. `null` means "not assigned yet"; the real API key lives in `.env` as `ELEVENLABS_API_KEY`, never here. |
+| `voice_id` | Optional identifier for `node src/cli.js voices`. **Never a secret** -- it's a voice *identifier* (e.g. `"EXAVITQu4vr4xnSDxMaL"`), not an API key. `null` means "not assigned yet"; the real API key lives in `.env` as `ELEVENLABS_API_KEY`, never here. See [docs/voices.md](voices.md). |
 | `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). |
 | `children` | Rig parts, in the same shape as `schema/timeline.schema.json`'s `child` definition (`id`, `asset`, `z`, `offset`, `pivot`, `scale`, `flip_x`, `rotation`), plus their own optional `slots` (same shape as above). See [docs/timeline-schema.md#cut-out-rig-nesting](timeline-schema.md#cut-out-rig-nesting). |
 

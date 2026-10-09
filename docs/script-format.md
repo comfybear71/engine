@@ -10,6 +10,7 @@ character/slot/drawing/location/mark reference against the
 cd worker
 node src/cli.js parse  ../projects/sample              # script.txt -> timeline.json + lines.json
 node src/cli.js lint   ../projects/sample              # parse + validate only, no files written
+node src/cli.js voices ../projects/sample [--dry-run]  # ElevenLabs WAVs + Rhubarb cues (never from watch)
 node src/cli.js render ../projects/sample --from-script # parse, then render
 node src/cli.js watch  ../projects/sample --from-script # re-parse + re-render on every script.txt save
 ```
@@ -197,11 +198,12 @@ order:
 
 `status` is `"ok"` if that audio file already exists (real duration used)
 or `"missing"` if it doesn't (estimated duration used; an
-`estimated_duration_seconds` field is also present in that case). This is
-the manifest a future ElevenLabs generation step reads: for every `"missing"`
-line, synthesize `audio_path` using `voice_id` (filled in from the
-character's `character.json`, or overridden per-line later), then re-run
-`node src/cli.js parse` to pick up the real durations and cues.
+`estimated_duration_seconds` field is also present in that case).
+`node src/cli.js voices` re-parses the script (so every dialogue line is
+considered, not only `"missing"` rows), records through ElevenLabs when
+the credit-guard sidecar doesn't match, writes Rhubarb cues next to the
+WAV when Rhubarb is installed, then re-runs parse so timings come from
+the real files -- see [docs/voices.md](voices.md).
 
 ## Errors
 

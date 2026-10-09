@@ -6,13 +6,15 @@
  *
  *   node src/cli.js parse  <projectDir> [--script script.txt] [--out timeline.json]
  *   node src/cli.js lint   <projectDir> [--script script.txt]
+ *   node src/cli.js voices <projectDir> [--dry-run] [--force] [--script script.txt]
  *   node src/cli.js render <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
  *   node src/cli.js watch  <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
  *
  * `render` parses script.txt first (then renders) when --from-script is
  * given, or automatically when the project has a script.txt but no
  * timeline.json yet. `watch` re-parses (if applicable) and re-renders
- * whenever script.txt or timeline.json changes.
+ * whenever script.txt or timeline.json changes. `watch` never calls
+ * ElevenLabs; use `voices` for that.
  */
 
 const fs = require("fs");
@@ -23,6 +25,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "..", "..", ".env") });
 const { renderProject } = require("./render");
 const { watchProject } = require("./watcher");
 const { parseProjectToFiles } = require("./parser");
+const { runVoices } = require("./voices");
 
 function parseFlags(argv) {
   const flags = { _: [] };
@@ -50,6 +53,7 @@ function printUsageAndExit() {
       "Usage:",
       "  node src/cli.js parse  <projectDir> [--script script.txt] [--out timeline.json]",
       "  node src/cli.js lint   <projectDir> [--script script.txt]",
+      "  node src/cli.js voices <projectDir> [--dry-run] [--force] [--script script.txt]",
       "  node src/cli.js render <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
       "  node src/cli.js watch  <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
     ].join("\n")
@@ -136,6 +140,27 @@ function cmdWatch(flags) {
   });
 }
 
+async function cmdVoices(flags) {
+  const projectDir = flags._[0];
+  if (!projectDir) printUsageAndExit();
+  try {
+    const result = await runVoices(projectDir, {
+      dryRun: !!flags["dry-run"],
+      force: !!flags.force,
+      script: flags.script,
+    });
+    if (result.parse) {
+      const ok = await reportParseResult(result.parse);
+      if (!ok || !result.ok) process.exit(1);
+      return;
+    }
+    if (!result.ok) process.exit(1);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+}
+
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   const flags = parseFlags(rest);
@@ -149,6 +174,8 @@ async function main() {
       return cmdRender(flags);
     case "watch":
       return cmdWatch(flags);
+    case "voices":
+      return cmdVoices(flags);
     default:
       printUsageAndExit();
   }
