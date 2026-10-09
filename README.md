@@ -24,11 +24,12 @@ nothing here is derived from it.
   Vercel later)
 ```
 
-- **Studio** (`studio/`): a Next.js app (App Router). Assets, Stage
-  (preview + read-only timeline lanes), Script editor, and Render. It
+- **Studio** (`studio/`): a Next.js app (App Router). Home (`/`) lists
+  project cards; `/p/<name>` is Assets, Stage (preview + read-only
+  timeline lanes), Script editor, and Render for that project. It
   reads and writes files **only** through the local worker -- see
   [docs/studio.md](docs/studio.md). The script is the source of truth;
-  Save/Lint never write `timeline.json`.
+  Save/Lint/preview/Render never write `timeline.json`.
 - **Script parser** (`worker/src/parser/`): turns a plain-text
   `script.txt` into a validated `timeline.json`, resolving characters,
   drawing-swap slots, and stage positions against a shared

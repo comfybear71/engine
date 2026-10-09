@@ -101,6 +101,24 @@ export type LanesResponse = {
   scenes: LaneScene[];
   blocks: LaneBlock[];
 };
+export type ProjectSummary = {
+  name: string;
+  scripts: string[];
+  thumbRel: string | null;
+  durationSeconds: number | null;
+  sceneCount: number;
+  lastRenderAt: string | null;
+};
+export type LibraryResponse = {
+  characters: Character[];
+  added: string[];
+};
+
+function withScript(path: string, script?: string | null): string {
+  if (!script) return path;
+  const join = path.includes("?") ? "&" : "?";
+  return `${path}${join}script=${encodeURIComponent(script)}`;
+}
 
 async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
   try {
@@ -129,11 +147,45 @@ export async function checkWorker(): Promise<boolean> {
   }
 }
 
-export async function listProjects(): Promise<string[]> {
+export async function listProjects(): Promise<ProjectSummary[]> {
   const res = await workerFetch("/api/projects");
   if (!res.ok) throw new Error(await readError(res));
-  const body = (await res.json()) as { projects: { name: string }[] };
-  return body.projects.map((p) => p.name);
+  const body = (await res.json()) as { projects: ProjectSummary[] };
+  return body.projects;
+}
+
+export async function createProject(name: string): Promise<ProjectSummary> {
+  const res = await workerFetch("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { project?: ProjectSummary; error?: string };
+  if (!res.ok) throw new Error(body.error || `Create failed (${res.status})`);
+  if (!body.project) throw new Error("Create failed");
+  return body.project;
+}
+
+export async function loadScripts(name: string): Promise<string[]> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/scripts`);
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { scripts: string[] };
+  return body.scripts;
+}
+
+export async function loadLibrary(name: string): Promise<LibraryResponse> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/library`);
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<LibraryResponse>;
+}
+
+export async function addLibraryCharacter(name: string, characterId: string): Promise<void> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/library`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ characterId }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
 }
 
 export async function loadCharacters(name: string): Promise<Character[]> {
@@ -149,8 +201,8 @@ export async function loadStaging(name: string): Promise<Staging> {
   return res.json() as Promise<Staging>;
 }
 
-export async function loadStage(name: string): Promise<StageInfo> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/stage`);
+export async function loadStage(name: string, script?: string | null): Promise<StageInfo> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/stage`, script));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<StageInfo>;
 }
@@ -163,9 +215,10 @@ export function assetUrl(project: string, rel: string | null | undefined): strin
 export async function fetchPreviewFrame(
   name: string,
   frame: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  script?: string | null
 ): Promise<{ blob: Blob; meta: PreviewMeta }> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/preview-frame`, {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/preview-frame`, script), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ frame }),
@@ -184,14 +237,14 @@ export async function fetchPreviewFrame(
   return { blob, meta };
 }
 
-export async function loadScript(name: string): Promise<string> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/script`);
+export async function loadScript(name: string, script?: string | null): Promise<string> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, script));
   if (!res.ok) throw new Error(await readError(res));
   return res.text();
 }
 
-export async function saveScript(name: string, text: string): Promise<LintResult> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/script`, {
+export async function saveScript(name: string, text: string, script?: string | null): Promise<LintResult> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, script), {
     method: "PUT",
     headers: { "Content-Type": "text/plain" },
     body: text,
@@ -201,8 +254,8 @@ export async function saveScript(name: string, text: string): Promise<LintResult
   return body;
 }
 
-export async function lintScript(name: string, text?: string): Promise<LintResult> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/lint`, {
+export async function lintScript(name: string, text?: string, script?: string | null): Promise<LintResult> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lint`, script), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(text == null ? {} : { text }),
@@ -212,14 +265,14 @@ export async function lintScript(name: string, text?: string): Promise<LintResul
   return body;
 }
 
-export async function loadLanes(name: string): Promise<LanesResponse> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/lanes`);
+export async function loadLanes(name: string, script?: string | null): Promise<LanesResponse> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lanes`, script));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<LanesResponse>;
 }
 
-export async function startRender(name: string): Promise<RenderResponse> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/render`, {
+export async function startRender(name: string, script?: string | null): Promise<RenderResponse> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/render`, script), {
     method: "POST",
   });
   const body = (await res.json().catch(() => ({}))) as RenderResponse;
@@ -229,7 +282,13 @@ export async function startRender(name: string): Promise<RenderResponse> {
   return body;
 }
 
-export function renderVideoUrl(name: string, bust?: number): string {
+export function renderOutputFile(script?: string | null): string {
+  const base = (script || "script.txt").replace(/\.txt$/i, "") || "script";
+  return `${base}.mp4`;
+}
+
+export function renderVideoUrl(name: string, bust?: number, script?: string | null): string {
+  const file = renderOutputFile(script);
   const qs = bust ? `?t=${bust}` : "";
-  return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/renders/output.mp4${qs}`;
+  return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/renders/${encodeURIComponent(file)}${qs}`;
 }

@@ -15,10 +15,20 @@ const path = require("path");
 const express = require("express");
 
 const { renderProject, previewFrame, parseEstimatedSilent } = require("./render");
-const { parseProjectToFiles, parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
+const { parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
 const { resolveAsset } = require("./parser/assetLibrary");
-const { listCharacters, listStaging, summarizeStage } = require("./studioLibrary");
+const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = require("./studioLibrary");
 const { buildLaneBlocks } = require("./studioLanes");
+const {
+  DEFAULT_SCRIPT,
+  renderOutputName,
+  resolveScriptName,
+  listScriptFiles,
+  collectUsedAssets,
+  summarizeProject,
+  createEmptyProject,
+  addLibraryCharacter,
+} = require("./studioProjects");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
 const DEFAULT_STUDIO_ORIGINS = [
@@ -36,6 +46,7 @@ const IMAGE_TYPES = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
 };
+const SAFE_RENDER_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(mp4|mov)$/;
 
 function isSafeProjectName(name) {
   return typeof name === "string" && SAFE_PROJECT_NAME.test(name) && !RESERVED_PROJECT_NAMES.has(name);
@@ -141,8 +152,18 @@ function estimatedSilentFromLines(lines) {
   };
 }
 
-async function parseOrFail(projectDir, skipValidate) {
-  return parseProjectToFiles(projectDir, { skipValidate });
+function scriptFromRequest(req, res) {
+  const raw = req.query && req.query.script;
+  const scriptName = resolveScriptName(raw);
+  if (!scriptName) {
+    res.status(400).json({ error: "Invalid script name" });
+    return null;
+  }
+  return scriptName;
+}
+
+function parseOpts(skipValidate, scriptName) {
+  return { skipValidate, script: scriptName || DEFAULT_SCRIPT };
 }
 
 function cleanupTempParse(result) {
@@ -192,21 +213,75 @@ function createApp(options = {}) {
       .filter((entry) => entry.isDirectory() && isSafeProjectName(entry.name))
       .map((entry) => entry.name)
       .sort();
-    res.json({ projects: names.map((name) => ({ name })) });
+    const projects = names.map((name) => {
+      const projectDir = path.join(projectsDir, name);
+      const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+      return summarizeProject(projectDir, name, globalAssetsDir);
+    });
+    res.json({ projects });
+  });
+
+  app.post("/api/projects", (req, res) => {
+    const name = req.body && req.body.name;
+    if (!isSafeProjectName(name)) {
+      return res.status(400).json({ error: "Invalid project name" });
+    }
+    try {
+      const projectDir = createEmptyProject(projectsDir, name);
+      const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+      res.status(201).json({ ok: true, project: summarizeProject(projectDir, name, globalAssetsDir) });
+    } catch (err) {
+      if (err.code === "EEXIST") return res.status(409).json({ error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/projects/:name/scripts", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    res.json({ scripts: listScriptFiles(projectDir), default: DEFAULT_SCRIPT });
   });
 
   app.get("/api/projects/:name/characters", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
-    res.json({ characters: listCharacters(projectDir, globalAssetsDir) });
+    const used = collectUsedAssets(projectDir, globalAssetsDir);
+    res.json({ characters: listCharacters(projectDir, globalAssetsDir, { ids: used.characterIds }) });
+  });
+
+  app.get("/api/projects/:name/library", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    const used = collectUsedAssets(projectDir, globalAssetsDir);
+    res.json({
+      characters: listGlobalCharacters(projectDir, globalAssetsDir),
+      added: used.library.characters,
+    });
+  });
+
+  app.post("/api/projects/:name/library", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    const characterId = req.body && req.body.characterId;
+    try {
+      const library = addLibraryCharacter(projectDir, globalAssetsDir, characterId);
+      res.json({ ok: true, library });
+    } catch (err) {
+      if (err.code === "EINVAL") return res.status(400).json({ error: err.message });
+      if (err.code === "ENOTFOUND") return res.status(404).json({ error: err.message });
+      return res.status(500).json({ error: err.message });
+    }
   });
 
   app.get("/api/projects/:name/staging", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
-    res.json(listStaging(projectDir, globalAssetsDir));
+    const used = collectUsedAssets(projectDir, globalAssetsDir);
+    res.json(listStaging(projectDir, globalAssetsDir, { locationIds: used.locationIds }));
   });
 
   app.get("/api/projects/:name/asset", (req, res) => {
@@ -232,9 +307,11 @@ function createApp(options = {}) {
   app.get("/api/projects/:name/script", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
-    const scriptPath = path.join(projectDir, "script.txt");
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    const scriptPath = path.join(projectDir, scriptName);
     if (!fs.existsSync(scriptPath)) {
-      return res.status(404).json({ error: "script.txt not found" });
+      return res.status(404).json({ error: `${scriptName} not found` });
     }
     res.type("text/plain").send(fs.readFileSync(scriptPath, "utf8"));
   });
@@ -242,13 +319,15 @@ function createApp(options = {}) {
   app.put("/api/projects/:name/script", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
     const scriptText = readScriptBody(req);
-    fs.writeFileSync(path.join(projectDir, "script.txt"), scriptText);
+    fs.writeFileSync(path.join(projectDir, scriptName), scriptText);
 
     let result;
     let parseError = null;
     try {
-      result = await parseProjectToTemp(projectDir, { skipValidate });
+      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
     } catch (err) {
       parseError = err;
     }
@@ -267,7 +346,9 @@ function createApp(options = {}) {
   app.post("/api/projects/:name/lint", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
-    const opts = { skipValidate };
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    const opts = parseOpts(skipValidate, scriptName);
     if (req.body && typeof req.body === "object" && typeof req.body.text === "string") {
       opts.scriptText = req.body.text;
     } else if (typeof req.body === "string") {
@@ -292,9 +373,11 @@ function createApp(options = {}) {
   app.get("/api/projects/:name/lanes", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
     let result;
     try {
-      result = await parseProjectToTemp(projectDir, { skipValidate });
+      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
     } catch (err) {
       return res.status(400).json(parseErrorPayload(err));
     }
@@ -311,10 +394,12 @@ function createApp(options = {}) {
   app.get("/api/projects/:name/stage", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     let result;
     try {
-      result = await parseProjectToTemp(projectDir, { skipValidate });
+      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
     } catch (err) {
       return res.status(400).json(parseErrorPayload(err));
     }
@@ -335,10 +420,12 @@ function createApp(options = {}) {
   app.post("/api/projects/:name/preview-frame", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
 
     let result;
     try {
-      result = await parseProjectToTemp(projectDir, { skipValidate });
+      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
     } catch (err) {
       return res.status(400).json(parseErrorPayload(err));
     }
@@ -395,46 +482,60 @@ function createApp(options = {}) {
   app.post("/api/projects/:name/render", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
     if (renderInProgress) {
       return res.status(409).json({ error: "A render is already in progress" });
     }
 
     renderInProgress = true;
-    const outputPath = path.join(projectDir, "renders", "output.mp4");
+    // Same flags as `node src/cli.js render <dir> --from-script --script <file> --output renders/<stem>.mp4`.
+    // Parse to a temp timeline so Studio Render never overwrites timeline.json.
+    const outputFile = renderOutputName(scriptName);
+    const outputPath = path.join(projectDir, "renders", outputFile);
+    let parsed;
     try {
-      let result;
       try {
-        result = await parseOrFail(projectDir, skipValidate);
+        parsed = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
       } catch (err) {
         return res.status(400).json(parseErrorPayload(err));
       }
-      if (result.validation && result.validation.ok === false) {
-        return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
+      if (parsed.validation && parsed.validation.ok === false) {
+        return res.status(400).json({ error: parsed.validation.message || "timeline validation failed" });
       }
 
-      const rendered = await renderProject(projectDir, { codec: "h264", output: outputPath });
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      const renderOpts = { codec: "h264", output: outputPath, timeline: parsed.timelinePath };
+      if (options.pythonBin) renderOpts.pythonBin = options.pythonBin;
+      const rendered = await renderProject(projectDir, renderOpts);
       const estimatedSilent =
         rendered.estimatedSilent ||
         parseEstimatedSilent(`${rendered.stdout}\n${rendered.stderr}`) ||
-        estimatedSilentFromLines(result.lines);
+        estimatedSilentFromLines(parsed.lines);
 
       res.json({
         ok: true,
         outputPath,
-        url: `/api/projects/${encodeURIComponent(req.params.name)}/renders/output.mp4`,
+        script: scriptName,
+        url: `/api/projects/${encodeURIComponent(req.params.name)}/renders/${encodeURIComponent(outputFile)}`,
         estimatedSilent,
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
     } finally {
+      cleanupTempParse(parsed);
       renderInProgress = false;
     }
   });
 
-  app.get("/api/projects/:name/renders/output.mp4", (req, res) => {
+  app.get("/api/projects/:name/renders/:file", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
-    const outputPath = path.join(projectDir, "renders", "output.mp4");
+    const file = path.basename(String(req.params.file || ""));
+    if (!SAFE_RENDER_FILE.test(file)) {
+      return res.status(400).json({ error: "Invalid render filename" });
+    }
+    const outputPath = path.join(projectDir, "renders", file);
     if (!fs.existsSync(outputPath)) {
       return res.status(404).json({ error: "No render yet. Use the Render button first." });
     }
@@ -477,3 +578,5 @@ module.exports.createApp = createApp;
 module.exports.isSafeProjectName = isSafeProjectName;
 module.exports.resolveProjectDir = resolveProjectDir;
 module.exports.isSafeRelPath = isSafeRelPath;
+module.exports.renderOutputName = renderOutputName;
+module.exports.resolveScriptName = resolveScriptName;

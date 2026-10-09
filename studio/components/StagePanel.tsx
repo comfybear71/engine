@@ -25,12 +25,14 @@ function formatTimecode(frame: number, fps: number): string {
 
 export default function StagePanel({
   project,
+  script = "script.txt",
   workerUp,
   scriptEpoch,
   selectedLine,
   onSelectLine,
 }: {
   project: string | null;
+  script?: string;
   workerUp: boolean;
   scriptEpoch: number;
   selectedLine: number | null;
@@ -57,7 +59,7 @@ export default function StagePanel({
     setError(null);
     setFrame(0);
     setSelectedMark(null);
-    Promise.all([loadStage(project), loadLanes(project), loadScript(project)])
+    Promise.all([loadStage(project, script), loadLanes(project, script), loadScript(project, script)])
       .then(([info, nextLanes, script]) => {
         if (cancelled) return;
         setStage(info);
@@ -77,13 +79,13 @@ export default function StagePanel({
     return () => {
       cancelled = true;
     };
-  }, [project, workerUp, scriptEpoch]);
+  }, [project, script, workerUp, scriptEpoch]);
 
   useEffect(() => {
     if (!project || !workerUp) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      fetchPreviewFrame(project, frame, controller.signal)
+      fetchPreviewFrame(project, frame, controller.signal, script)
         .then(({ blob, meta }) => {
           const url = URL.createObjectURL(blob);
           if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
@@ -106,7 +108,7 @@ export default function StagePanel({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [project, workerUp, frame]);
+  }, [project, script, workerUp, frame]);
 
   useEffect(() => {
     return () => {
