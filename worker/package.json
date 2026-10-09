@@ -5,9 +5,12 @@
   "description": "Render worker orchestrator: a thin Node process that validates timeline.json and spawns the Python compositor. All actual image/video work happens in worker/python.",
   "main": "src/server.js",
   "scripts": {
-    "render": "node src/cli.js",
     "start": "node src/server.js",
-    "watch": "node src/cli.js --watch"
+    "parse": "node src/cli.js parse",
+    "render": "node src/cli.js render",
+    "lint:project": "node src/cli.js lint",
+    "watch": "node src/cli.js watch",
+    "test": "node --test"
   },
   "license": "UNLICENSED",
   "dependencies": {

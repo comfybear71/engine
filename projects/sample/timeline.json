@@ -1,103 +1,400 @@
 {
-  "$schema": "../../schema/timeline.schema.json",
-  "series": "Sunny Banks",
-  "episode": "sample-01",
+  "series": "Untitled Series",
+  "episode": "pilot",
   "fps": 24,
-  "canvas": { "width": 1920, "height": 1080 },
   "scenes": [
     {
-      "id": "scene-1-porch",
-      "duration": { "from_audio": "assets/audio/line1.wav", "padding_frames": 6 },
-      "background": { "asset": "assets/backgrounds/bg.png", "fit": "cover" },
-      "frame_step": 2,
-      "camera": {
-        "keyframes": [
-          { "frame": 0, "zoom": 1.0 },
-          { "frame": 65, "zoom": 1.08 }
-        ]
+      "id": "morning_argument",
+      "duration": {
+        "from_dialogue": true,
+        "padding_frames": 12
+      },
+      "background": {
+        "asset": "../_global_assets/backgrounds/bedroom/bg.png"
       },
       "layers": [
         {
-          "id": "dana",
-          "character_id": "dana",
-          "asset": "assets/characters/dana_body.png",
-          "z": 5,
-          "transform": {
-            "x": 1800,
-            "y": 1080,
-            "scale": 1.0,
-            "anchor": "bottom-center",
-            "flip_x": true
-          }
-        },
-        {
-          "id": "stuart",
-          "character_id": "stuart",
-          "asset": "assets/characters/stuart_body.png",
+          "id": "hicks",
+          "character_id": "hicks",
+          "asset": "../_global_assets/characters/hicks/body.png",
           "z": 10,
           "transform": {
-            "x": 1650,
+            "x": 800,
             "y": 1080,
-            "scale": 1.3,
-            "anchor": "bottom-center",
-            "flip_x": false
+            "scale": 1.15,
+            "flip_x": false,
+            "anchor": "bottom-center"
           },
-          "audio": "assets/audio/line1.wav",
+          "dialogue": [
+            {
+              "audio": "audio/morning_argument/001_hicks.wav",
+              "start_frame": 0,
+              "text": "Where's the rent money, Dana?"
+            },
+            {
+              "audio": "audio/morning_argument/003_hicks.wav",
+              "start_frame": 120,
+              "text": "Friday was last Friday too."
+            },
+            {
+              "audio": "audio/morning_argument/005_hicks.wav",
+              "start_frame": 252,
+              "text": "I'm not starting anything, I'm just asking."
+            }
+          ],
           "slots": {
             "mouth": {
-              "offset": { "x": 0, "y": -558 },
+              "offset": {
+                "x": 0,
+                "y": -558
+              },
               "images": {
-                "A": "assets/mouths/stuart/A.png",
-                "B": "assets/mouths/stuart/B.png",
-                "C": "assets/mouths/stuart/C.png",
-                "D": "assets/mouths/stuart/D.png",
-                "E": "assets/mouths/stuart/E.png",
-                "F": "assets/mouths/stuart/F.png",
-                "G": "assets/mouths/stuart/G.png",
-                "H": "assets/mouths/stuart/H.png",
-                "X": "assets/mouths/stuart/X.png"
+                "A": "../_global_assets/characters/hicks/mouth/A.png",
+                "B": "../_global_assets/characters/hicks/mouth/B.png",
+                "C": "../_global_assets/characters/hicks/mouth/C.png",
+                "D": "../_global_assets/characters/hicks/mouth/D.png",
+                "E": "../_global_assets/characters/hicks/mouth/E.png",
+                "F": "../_global_assets/characters/hicks/mouth/F.png",
+                "G": "../_global_assets/characters/hicks/mouth/G.png",
+                "H": "../_global_assets/characters/hicks/mouth/H.png",
+                "X": "../_global_assets/characters/hicks/mouth/X.png"
               },
               "lipsync": {
-                "cues": "assets/cues/line1_cues.json",
-                "audio": "assets/audio/line1.wav"
+                "source": "dialogue"
               }
             },
             "eyes": {
-              "offset": { "x": 0, "y": -624 },
+              "offset": {
+                "x": 0,
+                "y": -624
+              },
               "images": {
-                "open": "assets/eyes/stuart/open.png",
-                "closed": "assets/eyes/stuart/closed.png"
+                "closed": "../_global_assets/characters/hicks/eyes/closed.png",
+                "furious": "../_global_assets/characters/hicks/eyes/furious.png",
+                "open": "../_global_assets/characters/hicks/eyes/open.png"
               },
               "keyframes": [
-                { "frame": 0, "drawing": "open" },
-                { "frame": 34, "drawing": "closed" },
-                { "frame": 38, "drawing": "open" }
+                {
+                  "frame": 0,
+                  "drawing": "open"
+                },
+                {
+                  "frame": 120,
+                  "drawing": "furious"
+                }
               ]
             }
           },
           "children": [
             {
               "id": "right_arm",
-              "asset": "assets/parts/stuart_arm.png",
+              "asset": "../_global_assets/characters/hicks/parts/arm.png",
               "z": 1,
-              "offset": { "x": -170, "y": -480 },
+              "offset": {
+                "x": -170,
+                "y": -480
+              },
               "pivot": "top-center",
               "slots": {
-                "hand": {
-                  "offset": { "x": 0, "y": 230 },
+                "right_hand": {
+                  "offset": {
+                    "x": 0,
+                    "y": 230
+                  },
                   "images": {
-                    "open": "assets/parts/stuart_hand_open.png",
-                    "fist": "assets/parts/stuart_hand_fist.png"
+                    "fist": "../_global_assets/characters/hicks/right_hand/fist.png",
+                    "flat": "../_global_assets/characters/hicks/right_hand/flat.png",
+                    "point": "../_global_assets/characters/hicks/right_hand/point.png"
                   },
                   "keyframes": [
-                    { "frame": 0, "drawing": "open" },
-                    { "frame": 30, "drawing": "fist" },
-                    { "frame": 50, "drawing": "open" }
+                    {
+                      "frame": 0,
+                      "drawing": "flat"
+                    },
+                    {
+                      "frame": 252,
+                      "drawing": "point"
+                    }
                   ]
                 }
               }
             }
           ]
+        },
+        {
+          "id": "dana",
+          "character_id": "dana",
+          "asset": "../_global_assets/characters/dana/body.png",
+          "z": 10,
+          "transform": {
+            "x": 1120,
+            "y": 1080,
+            "scale": 1.15,
+            "flip_x": true,
+            "anchor": "bottom-center"
+          },
+          "dialogue": [
+            {
+              "audio": "audio/morning_argument/002_dana.wav",
+              "start_frame": 55,
+              "text": "I told you, it's coming Friday."
+            },
+            {
+              "audio": "audio/morning_argument/004_dana.wav",
+              "start_frame": 175,
+              "text": "Don't start with me this early."
+            },
+            {
+              "audio": "audio/morning_argument/006_dana.wav",
+              "start_frame": 326,
+              "text": "Then stop asking in that tone."
+            }
+          ],
+          "slots": {
+            "mouth": {
+              "offset": {
+                "x": 0,
+                "y": -558
+              },
+              "images": {
+                "A": "../_global_assets/characters/dana/mouth/A.png",
+                "B": "../_global_assets/characters/dana/mouth/B.png",
+                "C": "../_global_assets/characters/dana/mouth/C.png",
+                "D": "../_global_assets/characters/dana/mouth/D.png",
+                "E": "../_global_assets/characters/dana/mouth/E.png",
+                "F": "../_global_assets/characters/dana/mouth/F.png",
+                "G": "../_global_assets/characters/dana/mouth/G.png",
+                "H": "../_global_assets/characters/dana/mouth/H.png",
+                "X": "../_global_assets/characters/dana/mouth/X.png"
+              },
+              "lipsync": {
+                "source": "dialogue"
+              }
+            },
+            "eyes": {
+              "offset": {
+                "x": 0,
+                "y": -624
+              },
+              "images": {
+                "closed": "../_global_assets/characters/dana/eyes/closed.png",
+                "open": "../_global_assets/characters/dana/eyes/open.png"
+              },
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "drawing": "open"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "hallway_standoff",
+      "duration": {
+        "from_dialogue": true,
+        "padding_frames": 12
+      },
+      "background": {
+        "asset": "../_global_assets/backgrounds/corridor/bg.png"
+      },
+      "layers": [
+        {
+          "id": "hicks",
+          "character_id": "hicks",
+          "asset": "../_global_assets/characters/hicks/body.png",
+          "z": 10,
+          "transform": {
+            "x": 350,
+            "y": 1080,
+            "scale": 0.85,
+            "flip_x": false,
+            "anchor": "bottom-center"
+          },
+          "dialogue": [
+            {
+              "audio": "audio/hallway_standoff/001_hicks.wav",
+              "start_frame": 0,
+              "text": "We are not done talking about this."
+            },
+            {
+              "audio": "audio/hallway_standoff/003_hicks.wav",
+              "start_frame": 129,
+              "text": "Fine. Friday. I'm holding you to it."
+            }
+          ],
+          "slots": {
+            "mouth": {
+              "offset": {
+                "x": 0,
+                "y": -558
+              },
+              "images": {
+                "A": "../_global_assets/characters/hicks/mouth/A.png",
+                "B": "../_global_assets/characters/hicks/mouth/B.png",
+                "C": "../_global_assets/characters/hicks/mouth/C.png",
+                "D": "../_global_assets/characters/hicks/mouth/D.png",
+                "E": "../_global_assets/characters/hicks/mouth/E.png",
+                "F": "../_global_assets/characters/hicks/mouth/F.png",
+                "G": "../_global_assets/characters/hicks/mouth/G.png",
+                "H": "../_global_assets/characters/hicks/mouth/H.png",
+                "X": "../_global_assets/characters/hicks/mouth/X.png"
+              },
+              "lipsync": {
+                "source": "dialogue"
+              }
+            },
+            "eyes": {
+              "offset": {
+                "x": 0,
+                "y": -624
+              },
+              "images": {
+                "closed": "../_global_assets/characters/hicks/eyes/closed.png",
+                "furious": "../_global_assets/characters/hicks/eyes/furious.png",
+                "open": "../_global_assets/characters/hicks/eyes/open.png"
+              },
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "drawing": "open"
+                },
+                {
+                  "frame": 129,
+                  "drawing": "open"
+                }
+              ]
+            }
+          },
+          "children": [
+            {
+              "id": "right_arm",
+              "asset": "../_global_assets/characters/hicks/parts/arm.png",
+              "z": 1,
+              "offset": {
+                "x": -170,
+                "y": -480
+              },
+              "pivot": "top-center",
+              "slots": {
+                "right_hand": {
+                  "offset": {
+                    "x": 0,
+                    "y": 230
+                  },
+                  "images": {
+                    "fist": "../_global_assets/characters/hicks/right_hand/fist.png",
+                    "flat": "../_global_assets/characters/hicks/right_hand/flat.png",
+                    "point": "../_global_assets/characters/hicks/right_hand/point.png"
+                  },
+                  "keyframes": [
+                    {
+                      "frame": 0,
+                      "drawing": "flat"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "dana",
+          "character_id": "dana",
+          "asset": "../_global_assets/characters/dana/body.png",
+          "z": 10,
+          "transform": {
+            "x": 1570,
+            "y": 1080,
+            "scale": 0.85,
+            "flip_x": true,
+            "anchor": "bottom-center"
+          },
+          "timing": {
+            "start_frame": 0,
+            "end_frame": 74
+          },
+          "slots": {
+            "eyes": {
+              "offset": {
+                "x": 0,
+                "y": -624
+              },
+              "images": {
+                "closed": "../_global_assets/characters/dana/eyes/closed.png",
+                "open": "../_global_assets/characters/dana/eyes/open.png"
+              },
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "drawing": "open"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "dana_2",
+          "character_id": "dana",
+          "asset": "../_global_assets/characters/dana/body.png",
+          "z": 10,
+          "transform": {
+            "x": 1770,
+            "y": 1080,
+            "scale": 0.75,
+            "flip_x": true,
+            "anchor": "bottom-center"
+          },
+          "timing": {
+            "start_frame": 74
+          },
+          "dialogue": [
+            {
+              "audio": "audio/hallway_standoff/002_dana.wav",
+              "start_frame": 0,
+              "text": "Oh, we are so done."
+            }
+          ],
+          "slots": {
+            "mouth": {
+              "offset": {
+                "x": 0,
+                "y": -558
+              },
+              "images": {
+                "A": "../_global_assets/characters/dana/mouth/A.png",
+                "B": "../_global_assets/characters/dana/mouth/B.png",
+                "C": "../_global_assets/characters/dana/mouth/C.png",
+                "D": "../_global_assets/characters/dana/mouth/D.png",
+                "E": "../_global_assets/characters/dana/mouth/E.png",
+                "F": "../_global_assets/characters/dana/mouth/F.png",
+                "G": "../_global_assets/characters/dana/mouth/G.png",
+                "H": "../_global_assets/characters/dana/mouth/H.png",
+                "X": "../_global_assets/characters/dana/mouth/X.png"
+              },
+              "lipsync": {
+                "source": "dialogue"
+              }
+            },
+            "eyes": {
+              "offset": {
+                "x": 0,
+                "y": -624
+              },
+              "images": {
+                "closed": "../_global_assets/characters/dana/eyes/closed.png",
+                "open": "../_global_assets/characters/dana/eyes/open.png"
+              },
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "drawing": "open"
+                }
+              ]
+            }
+          }
         }
       ]
     }

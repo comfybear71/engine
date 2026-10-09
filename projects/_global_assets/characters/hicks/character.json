@@ -1,0 +1,51 @@
+{
+  "id": "hicks",
+  "display_name": "Hicks",
+  "aliases": [
+    "Hicks"
+  ],
+  "asset": "body.png",
+  "z": 10,
+  "default_scale": 1.0,
+  "default_flip_x": false,
+  "voice_id": null,
+  "slots": {
+    "mouth": {
+      "offset": {
+        "x": 0,
+        "y": -558
+      },
+      "drawings_dir": "mouth"
+    },
+    "eyes": {
+      "offset": {
+        "x": 0,
+        "y": -624
+      },
+      "drawings_dir": "eyes",
+      "default_drawing": "open"
+    }
+  },
+  "children": [
+    {
+      "id": "right_arm",
+      "asset": "parts/arm.png",
+      "z": 1,
+      "offset": {
+        "x": -170,
+        "y": -480
+      },
+      "pivot": "top-center",
+      "slots": {
+        "right_hand": {
+          "offset": {
+            "x": 0,
+            "y": 230
+          },
+          "drawings_dir": "right_hand",
+          "default_drawing": "flat"
+        }
+      }
+    }
+  ]
+}

@@ -8,15 +8,21 @@ reasoning behind it, for whoever writes the `script.txt` -> `timeline.json`
 parser next.
 
 A complete, working example lives at
-[`projects/sample/timeline.json`](../projects/sample/timeline.json).
+[`projects/sample/timeline.json`](../projects/sample/timeline.json) -- note
+that file is *generated* by the script parser
+(`node src/cli.js parse projects/sample`) from
+[`projects/sample/script.txt`](../projects/sample/script.txt); see
+[docs/script-format.md](script-format.md) if you're authoring a script
+rather than hand-writing a timeline.
 
 ## Ground rules
 
 - **All asset/audio paths are relative to the project folder** -- the
   directory containing `timeline.json` itself -- never to the current
   working directory of whatever process is reading the file. A path like
-  `"assets/characters/stuart.png"` in `projects/sample/timeline.json`
-  resolves to `projects/sample/assets/characters/stuart.png` regardless of
+  `"../_global_assets/characters/hicks/body.png"` in
+  `projects/sample/timeline.json` resolves to
+  `projects/_global_assets/characters/hicks/body.png` regardless of
   where you run the worker from.
 - **Every frame-based time value is in frames at the document's `fps`.**
   There is no per-scene frame rate.
@@ -95,10 +101,10 @@ against wall-clock start times, not against this per-frame loop.
 
 ### Duration
 
-A scene's length can be hand-set or derived from an audio file, satisfying
-"timing should be able to come from audio, not just a hand-typed total" while
-still allowing a hand-typed value when there's no audio to derive it from.
-Exactly one of:
+A scene's length can be hand-set or derived from audio, satisfying "timing
+should be able to come from audio, not just a hand-typed total" while still
+allowing a hand-typed value when there's no audio to derive it from. Exactly
+one of:
 
 ```json
 { "frames": 150 }
@@ -106,10 +112,21 @@ Exactly one of:
 ```json
 { "from_audio": "assets/audio/line1.wav", "padding_frames": 6 }
 ```
+```json
+{ "from_dialogue": true, "padding_frames": 12 }
+```
 
-`from_audio` probes the audio file's duration (via `ffprobe`) and computes
-`round(duration_seconds * fps) + padding_frames`. `padding_frames` (default
-0) is useful for holding the last frame briefly after dialogue ends.
+- `frames`: hand-set frame count.
+- `from_audio`: probes one audio file's duration (via `ffprobe`) and
+  computes `round(duration_seconds * fps) + padding_frames`.
+- `from_dialogue`: for scenes built from a script with several lines per
+  character (see [Multi-line dialogue](#multi-line-dialogue-per-character)
+  below) -- the scene runs until the *latest* line finishes across every
+  layer's `dialogue` list (`max(clip.start_frame + that clip's own audio
+  duration)`), plus `padding_frames`. This is what the script parser emits.
+
+`padding_frames` (default 0, both modes) is useful for holding the last
+frame briefly after the audio/dialogue ends.
 
 ### Background
 
@@ -127,17 +144,17 @@ Exactly one of:
 
 ```json
 {
-  "id": "stuart",
-  "character_id": "stuart",
-  "asset": "assets/characters/stuart_body.png",
+  "id": "hicks",
+  "character_id": "hicks",
+  "asset": "../_global_assets/characters/hicks/body.png",
   "z": 10,
   "transform": {
-    "x": 1650, "y": 1080, "scale": 1.3,
+    "x": 800, "y": 1080, "scale": 1.15,
     "anchor": "bottom-center", "flip_x": false,
     "rotation": 0, "opacity": 1.0
   },
-  "timing": { "start_frame": 24, "end_from_audio": "assets/audio/line1.wav" },
-  "audio": "assets/audio/line1.wav",
+  "timing": { "start_frame": 24, "end_from_audio": "audio/scene1/004_hicks.wav" },
+  "dialogue": [ /* optional, see Multi-line dialogue per character */ ],
   "slots": { /* optional, see Slots */ },
   "children": [ /* optional, see Cut-out rig nesting */ ]
 }
@@ -145,15 +162,49 @@ Exactly one of:
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `id` | string | yes | Unique within the scene. |
-| `character_id` | string | no | Logical character identity, for continuity across scenes and future tooling (the script.txt parser can use this to track a recurring character without caring about per-scene layer ids). |
+| `id` | string | yes | Unique within the scene. A character that's repositioned mid-scene gets a second layer id (e.g. `hicks_2`), same `character_id`, back-to-back in `timing` -- see [Multi-line dialogue](#multi-line-dialogue-per-character). |
+| `character_id` | string | no | Logical character identity, for continuity across scenes and tooling (the script parser uses this to track a recurring character and to resolve its [asset library](assets.md) entry). |
 | `asset` | string | yes | This layer's own root/base image. PNG with alpha recommended; non-alpha images still work (treated as fully opaque). |
 | `z` | integer | yes | **Explicit** draw order, ascending (higher `z` draws on top). The background is implicitly behind every layer. |
 | `transform` | object | yes | See below. |
 | `timing` | object | no | See below. Omit entirely for "visible for the whole scene". |
-| `audio` | string | no | This layer's dialogue/sound audio, mixed in starting at the layer's `start_frame`. |
+| `dialogue` | array of [dialogue clip](#multi-line-dialogue-per-character) | no | This character's spoken lines in the scene. See below. |
+| `audio` | string | no, **deprecated** | Single-clip shorthand kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: timing.start_frame }]`. Ignored if `dialogue` is also given; prefer `dialogue` for anything with more than one line. |
 | `slots` | object | no | Drawing-swap slots attached to this layer's own root image. See [Slots](#slots--drawing-swaps-mouths-blinks-hand-poses). |
 | `children` | array | no | Cut-out rig parts nested under this layer. See [Cut-out rig nesting](#cut-out-rig-nesting). |
+
+## Multi-line dialogue per character
+
+Real scenes have many lines per character, not one. A character layer
+carries a *list* of dialogue clips instead of a single `audio` field:
+
+```json
+"dialogue": [
+  { "audio": "audio/scene1/001_hicks.wav", "start_frame": 0, "text": "Where's the rent money, Dana?" },
+  { "audio": "audio/scene1/003_hicks.wav", "start_frame": 120, "text": "Friday was last Friday too." }
+]
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `audio` | string | yes | This line's audio file. |
+| `start_frame` | integer | yes | Scene-relative. Typically computed by the script parser from the running total of prior lines/pauses in the scene (see [docs/script-format.md](script-format.md)), but may be hand-set. |
+| `cues` | string | no | This clip's Rhubarb cues JSON. Defaults to `"<audio>.rhubarb.json"` -- same [resolution order](#lip-sync-cue-resolution-order) as any other lipsync source. |
+| `text` | string | no | The spoken line text. Used as Rhubarb's `--dialogFile` hint if cues must be generated from audio, and purely informational otherwise (it's what ends up in `lines.json` for a future ElevenLabs generation step). |
+
+Every clip's audio is mixed into the final render at its own `start_frame`
+(converted to a global timestamp). A `slots.mouth` with
+`lipsync.source: "dialogue"` (see below) automatically shows each clip's own
+cues within that clip's `[start_frame, start_frame + its audio duration)`
+window, and the idle (`"X"`) shape in the gaps between lines -- so a
+character's mouth closes between sentences instead of holding whatever
+shape the last line ended on.
+
+Clips may be listed in any order in the JSON; they're sorted by
+`start_frame` when loaded. Overlapping clips on the *same* layer aren't
+meaningful (a character can't speak two lines at once) and aren't
+specifically validated against, but mixing engines mixing overlapping audio
+on one layer is undefined behavior you shouldn't rely on.
 
 ### Transform
 
@@ -191,28 +242,31 @@ change. **This is one unified mechanism for mouths, blinks and hand poses**
 
 - a `keyframes`-driven slot holds a drawing until the next keyframe (a
   blink, a hand changing from an open palm to a fist, ...);
-- a `lipsync`-driven slot is fed by Rhubarb cue timings -- a mouth is simply
-  a slot whose driver happens to be lip-sync cues instead of hand-authored
-  keyframes.
+- a `lipsync`-driven slot is fed by Rhubarb cue timings. Two forms:
+  - `lipsync.source: "dialogue"` -- the normal case for a character's mouth:
+    pulls its cue timeline from the owning layer's `dialogue` list (see
+    [Multi-line dialogue](#multi-line-dialogue-per-character)), handling any
+    number of lines and the idle gaps between them automatically. Requires
+    the layer to have a non-empty `dialogue`.
+  - `lipsync.cues`/`lipsync.audio` (no `source`) -- a single cues/audio pair
+    for one-off lip-synced sounds that aren't part of a dialogue list (a
+    grunt, a laugh, ...).
 
 ```json
 "slots": {
   "mouth": {
     "offset": { "x": 0, "y": -558 },
     "images": {
-      "A": "assets/mouths/stuart/A.png",
-      "B": "assets/mouths/stuart/B.png",
+      "A": "../_global_assets/characters/hicks/mouth/A.png",
+      "B": "../_global_assets/characters/hicks/mouth/B.png",
       "...": "...",
-      "X": "assets/mouths/stuart/X.png"
+      "X": "../_global_assets/characters/hicks/mouth/X.png"
     },
-    "lipsync": {
-      "cues": "assets/cues/line1_cues.json",
-      "audio": "assets/audio/line1.wav"
-    }
+    "lipsync": { "source": "dialogue" }
   },
   "eyes": {
     "offset": { "x": 0, "y": -624 },
-    "images": { "open": "assets/eyes/stuart/open.png", "closed": "assets/eyes/stuart/closed.png" },
+    "images": { "open": "../_global_assets/characters/hicks/eyes/open.png", "closed": "../_global_assets/characters/hicks/eyes/closed.png" },
     "keyframes": [
       { "frame": 0, "drawing": "open" },
       { "frame": 34, "drawing": "closed" },
@@ -238,22 +292,24 @@ root.
 ### Lip-sync cue resolution order
 
 This is the important bit for making renders reliable without requiring
-every machine to have Rhubarb installed:
+every machine to have Rhubarb installed. It applies per cues/audio pair --
+for a `source: "dialogue"` mouth slot, that means *per dialogue clip*,
+independently:
 
-1. **If a `cues` file already exists on disk** (either the explicit `cues`
-   path, or, when only `audio` is given, the default cache path
-   `"<audio>.rhubarb.json"` next to it), it is loaded directly and **Rhubarb
-   is never invoked.** A committed cues file is the primary source of truth.
-2. **Else, if the `audio` file is given and a `rhubarb` binary is found on
-   PATH**, it's run once and the result is written to the `cues` path (so
-   the next render reuses it instead of re-running Rhubarb).
-3. **Else**, this does not fail the render: it prints a warning and the
-   slot falls back to its idle (`X`) shape for its whole duration. A
+1. **If a `cues` file already exists on disk** (either the clip's explicit
+   `cues` path, or the default cache path `"<audio>.rhubarb.json"` next to
+   its audio), it is loaded directly and **Rhubarb is never invoked.** A
+   committed cues file is the primary source of truth.
+2. **Else, if that clip's audio file exists and a `rhubarb` binary is found
+   on PATH**, it's run once and the result is written to the cues path (so
+   the next render/clip reuses it instead of re-running Rhubarb).
+3. **Else**, this does not fail the render: it prints a warning and that
+   clip's portion of the mouth falls back to the idle (`X`) shape. A
    missing Rhubarb install must never halt a render.
 
-The sample project ships a committed `assets/cues/line1_cues.json`, so
-`worker/python/scripts/generate_sample_assets.py` + the sample render work
-with **zero** Rhubarb installation.
+The sample project's lines all ship committed `audio/<scene>/<nnn>_<char>.wav.rhubarb.json`
+cues files (see `worker/python/scripts/generate_sample_audio.py`), so parsing
+and rendering it works with **zero** Rhubarb installation.
 
 See the [README](../README.md#rhubarb-lip-sync-optional) for how to install
 Rhubarb if you want to generate cues from new audio.
@@ -289,18 +345,17 @@ one unit.
 "children": [
   {
     "id": "right_arm",
-    "asset": "assets/parts/stuart_arm.png",
+    "asset": "../_global_assets/characters/hicks/parts/arm.png",
     "z": 1,
     "offset": { "x": -170, "y": -480 },
     "pivot": "top-center",
     "slots": {
-      "hand": {
+      "right_hand": {
         "offset": { "x": 0, "y": 230 },
-        "images": { "open": "assets/parts/stuart_hand_open.png", "fist": "assets/parts/stuart_hand_fist.png" },
+        "images": { "flat": "../_global_assets/characters/hicks/right_hand/flat.png", "point": "../_global_assets/characters/hicks/right_hand/point.png" },
         "keyframes": [
-          { "frame": 0, "drawing": "open" },
-          { "frame": 30, "drawing": "fist" },
-          { "frame": 50, "drawing": "open" }
+          { "frame": 0, "drawing": "flat" },
+          { "frame": 252, "drawing": "point" }
         ]
       }
     }
