@@ -18,6 +18,7 @@ export default function ScriptPanel({
   project,
   script = "script.txt",
   workerUp,
+  scriptEpoch = 0,
   selectedLine,
   onSelectLine,
   onSaved,
@@ -25,6 +26,7 @@ export default function ScriptPanel({
   project: string | null;
   script?: string;
   workerUp: boolean;
+  scriptEpoch?: number;
   selectedLine: number | null;
   onSelectLine: (line: number | null) => void;
   onSaved: () => void;
@@ -67,7 +69,7 @@ export default function ScriptPanel({
     return () => {
       cancelled = true;
     };
-  }, [project, script, workerUp]);
+  }, [project, script, workerUp, scriptEpoch]);
 
   const lines = useMemo(() => text.split("\n"), [text]);
 

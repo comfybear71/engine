@@ -46,6 +46,14 @@ function extendActionHolds(events, sceneLengthById) {
   return out;
 }
 
+function clampFrame(frame, totalFrames) {
+  const total = Math.max(Number(totalFrames) || 1, 1);
+  const max = total - 1;
+  const n = Math.floor(Number(frame));
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(max, n);
+}
+
 function sceneOffsets(sceneLengths) {
   const offsets = new Map();
   let cursor = 0;
@@ -91,4 +99,4 @@ function buildLaneBlocks(parsed) {
   return { fps, totalFrames, lanes: LANES, scenes, blocks };
 }
 
-module.exports = { LANES, buildLaneBlocks };
+module.exports = { LANES, buildLaneBlocks, clampFrame };

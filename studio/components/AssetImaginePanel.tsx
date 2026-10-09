@@ -31,10 +31,12 @@ export default function AssetImaginePanel({
   project,
   character,
   onChanged,
+  embedded = false,
 }: {
   project: string;
   character: Character;
   onChanged: () => void;
+  embedded?: boolean;
 }) {
   const [needId, setNeedId] = useState<string>(ASSET_NEEDS[0]?.id || "mouth_sheet");
   const need = useMemo(() => getAssetNeed(needId) || ASSET_NEEDS[0], [needId]);
@@ -198,11 +200,13 @@ export default function AssetImaginePanel({
   if (!need) return null;
 
   return (
-    <section className="rounded-md border border-studio-border bg-studio-panel p-4">
+    <section className={embedded ? "" : "rounded-md border border-studio-border bg-studio-panel p-4"}>
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-studio-muted">Grok Imagine</h3>
-          <p className="mt-1 text-sm text-neutral-300">
+          {embedded ? null : (
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-studio-muted">Grok Imagine</h3>
+          )}
+          <p className={`${embedded ? "" : "mt-1 "}text-sm text-neutral-300`}>
             Copy a prompt, generate in the browser, then drop the PNG onto {character.display_name}.
           </p>
         </div>

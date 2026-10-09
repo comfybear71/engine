@@ -344,21 +344,9 @@ npm test
 ## Running the Studio
 
 The Studio is a local Next.js app. It does not touch disk itself -- the
-browser calls the worker on `127.0.0.1`. Full steps:
-**[docs/studio.md](docs/studio.md)**.
-
-```bash
-# Terminal 1
-cd worker
-npm start
-# listens on http://127.0.0.1:4100 only
-
-# Terminal 2
-cd studio
-npm install
-npm run dev
-# open http://localhost:3000
-```
+browser calls the worker on `127.0.0.1`. Day-to-day start is the
+desktop shortcut / `start-studio.bat` (it runs `launcher.js`, no
+terminal). Full steps: **[docs/studio.md](docs/studio.md)**.
 
 ## Running the worker's HTTP server
 

@@ -18,7 +18,7 @@ const { renderProject, previewFrame, parseEstimatedSilent } = require("./render"
 const { parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
 const { resolveAsset } = require("./parser/assetLibrary");
 const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = require("./studioLibrary");
-const { buildLaneBlocks } = require("./studioLanes");
+const { buildLaneBlocks, clampFrame } = require("./studioLanes");
 const {
   DEFAULT_SCRIPT,
   renderOutputName,
@@ -92,7 +92,7 @@ function applyCors(req, res) {
   if (origin && allowedOrigins().has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     res.setHeader("Access-Control-Expose-Headers", [
       "X-Engine-Frame",
@@ -670,7 +670,9 @@ function createApp(options = {}) {
       cleanupTempParse(result);
       return res.status(400).json({ error: "frame must be a non-negative number (or pass time in seconds)" });
     }
-    frame = Math.floor(frame);
+    const lanes = buildLaneBlocks(result);
+    const playableFrames = lanes.totalFrames;
+    frame = clampFrame(frame, playableFrames);
 
     const tmp = path.join(
       os.tmpdir(),
@@ -681,8 +683,11 @@ function createApp(options = {}) {
       previewOpts.timeline = result.timelinePath;
       const preview = await previewFrame(projectDir, frame, tmp, previewOpts);
       const meta = preview.meta || {};
-      if (meta.frame != null) res.setHeader("X-Engine-Frame", String(meta.frame));
-      if (meta.totalFrames != null) res.setHeader("X-Engine-Total-Frames", String(meta.totalFrames));
+      const totalFrames =
+        Number(meta.totalFrames) > 0 ? Number(meta.totalFrames) : playableFrames;
+      const servedFrame = clampFrame(meta.frame != null ? meta.frame : frame, totalFrames);
+      res.setHeader("X-Engine-Frame", String(servedFrame));
+      res.setHeader("X-Engine-Total-Frames", String(totalFrames));
       if (meta.fps != null) res.setHeader("X-Engine-Fps", String(meta.fps));
       if (meta.canvas && meta.canvas.width) res.setHeader("X-Engine-Canvas-Width", String(meta.canvas.width));
       if (meta.canvas && meta.canvas.height) res.setHeader("X-Engine-Canvas-Height", String(meta.canvas.height));

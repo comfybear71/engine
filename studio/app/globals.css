@@ -51,3 +51,45 @@ input[type="range"].studio-scrubber::-moz-range-thumb {
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
+
+.studio-playhead-handle {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #f97316;
+  border: 2px solid #fff;
+  transform: translateX(-50%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+.studio-playhead-line {
+  position: absolute;
+  top: 12px;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: #f97316;
+  transform: translateX(-50%);
+}
+
+.studio-field {
+  width: 100%;
+  border-radius: 0.375rem;
+  border: 1px solid #2e2e2e;
+  background: #222222;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  color: #e8e8e8;
+  outline: none;
+}
+
+.studio-field:focus {
+  border-color: #f97316;
+}
+
+.studio-field:disabled {
+  opacity: 0.4;
+}
