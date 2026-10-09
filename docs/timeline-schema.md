@@ -122,8 +122,9 @@ one of:
 - `from_dialogue`: for scenes built from a script with several lines per
   character (see [Multi-line dialogue](#multi-line-dialogue-per-character)
   below) -- the scene runs until the *latest* line finishes across every
-  layer's `dialogue` list (`max(clip.start_frame + that clip's own audio
-  duration)`), plus `padding_frames`. This is what the script parser emits.
+  layer's `dialogue` list (`max(layer.timing.start_frame + clip.start_frame +
+  that clip's own audio duration)`), plus `padding_frames`. This is what the
+  script parser emits.
 
 `padding_frames` (default 0, both modes) is useful for holding the last
 frame briefly after the audio/dialogue ends.
@@ -169,7 +170,7 @@ frame briefly after the audio/dialogue ends.
 | `transform` | object | yes | See below. |
 | `timing` | object | no | See below. Omit entirely for "visible for the whole scene". |
 | `dialogue` | array of [dialogue clip](#multi-line-dialogue-per-character) | no | This character's spoken lines in the scene. See below. |
-| `audio` | string | no, **deprecated** | Single-clip shorthand kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: timing.start_frame }]`. Ignored if `dialogue` is also given; prefer `dialogue` for anything with more than one line. |
+| `audio` | string | no, **deprecated** | Single-clip shorthand kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: 0 }]` (the clip begins when the layer becomes visible). Ignored if `dialogue` is also given; prefer `dialogue` for anything with more than one line. |
 | `slots` | object | no | Drawing-swap slots attached to this layer's own root image. See [Slots](#slots--drawing-swaps-mouths-blinks-hand-poses). |
 | `children` | array | no | Cut-out rig parts nested under this layer. See [Cut-out rig nesting](#cut-out-rig-nesting). |
 
@@ -188,12 +189,12 @@ carries a *list* of dialogue clips instead of a single `audio` field:
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `audio` | string | yes | This line's audio file. |
-| `start_frame` | integer | yes | Scene-relative. Typically computed by the script parser from the running total of prior lines/pauses in the scene (see [docs/script-format.md](script-format.md)), but may be hand-set. |
+| `start_frame` | integer | yes | Relative to the owning layer's `timing.start_frame` (layer-local): a clip at 0 on a layer that starts at 47 plays at scene frame 47. Typically computed by the script parser from the running total of prior lines/pauses in the scene minus that layer segment's start (see [docs/script-format.md](script-format.md)), but may be hand-set. |
 | `cues` | string | no | This clip's Rhubarb cues JSON. Defaults to `"<audio>.rhubarb.json"` -- same [resolution order](#lip-sync-cue-resolution-order) as any other lipsync source. |
 | `text` | string | no | The spoken line text. Used as Rhubarb's `--dialogFile` hint if cues must be generated from audio, and purely informational otherwise (it's what ends up in `lines.json` for a future ElevenLabs generation step). |
 
-Every clip's audio is mixed into the final render at its own `start_frame`
-(converted to a global timestamp). A `slots.mouth` with
+Every clip's audio is mixed into the final render at
+`scene_start + layer.start_frame + clip.start_frame`. A `slots.mouth` with
 `lipsync.source: "dialogue"` (see below) automatically shows each clip's own
 cues within that clip's `[start_frame, start_frame + its audio duration)`
 window, and the idle (`"X"`) shape in the gaps between lines -- so a
