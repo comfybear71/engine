@@ -135,7 +135,15 @@ clobber the project's `timeline.json`.
   `POST /api/projects/:name/preview-frame?script=`, a transport bar under
   the viewer (centred rewind / larger play / stop; timecode on the left;
   `frame N · fps · script` on the right), and **read-only timeline lanes**
-  at the bottom (Action, Dialogue, Audio, SFX, Camera). Space toggles
+  at the bottom (Body/Move, Face, Props, Dialogue, Audio, SFX, Camera).
+  The old single Action lane is split so overlapping motion is visible:
+  `[Move:]` / `[Swing:]` / `[Pose:]` / `body=` cycles on Body/Move,
+  `face=` / `eyes=` / mouth pins on Face, `[Prop:]` on Props, and
+  `[Camera:]` stays on Camera. Empty category lanes collapse to a thin
+  row. Two blocks that overlap in the same lane stack in sub-rows
+  instead of covering each other. Timed `wait=false` actions use their
+  real `over=` / `for=` start and end, not just script order. Dialogue
+  and audio lanes are unchanged. Space toggles
   play. Stop returns to frame 0; rewind does the same. Play uses, in
   order: (a) an up-to-date `renders/<script-stem>.mp4` or leftover
   `output.mp4` (mtime ≥ the script) in the viewport with sound and a
@@ -210,7 +218,7 @@ project root). Those paths parse to **temp** files and never write
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |
 | `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. |
-| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`). Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Does **not** write `timeline.json`. |
+| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`, `row`). Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Overlapping blocks in one lane get distinct `row` indexes. Does **not** write `timeline.json`. |
 | `GET` | `/api/projects/:name/stage?script=` | Parse the selected script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
 | `GET` | `/api/projects/:name/playback?script=` | Render/proxy freshness (`renders/<stem>.mp4` or `output.mp4`, plus `<stem>_preview.mp4`) vs the script mtime, and audio-lane clips with `exists`. Temp parse only. |
 | `GET` | `/api/projects/:name/media?rel=` | Stream a project-local line WAV (`audio/<scene>/<file>.wav` only). |
@@ -225,10 +233,15 @@ project root). Those paths parse to **temp** files and never write
 are reserved and cannot be created, renamed to, duplicated as, or deleted.
 `rel` cannot contain `..`. `?script=` cannot contain `/` or `..`.
 
-Lane `lane` values are `action` (character actions, moves, poses, layer /
-prop changes), `dialogue` (spoken lines with text), `audio` (the recorded
-line wavs), `sfx` (only if the parsed scene has bed audio), and `camera`
-(from `[Camera:]` keyframes). Frames are global (concatenated scenes),
+Lane `lane` values are `body` (`[Move:]`, `[Swing:]`, `[Pose:]`,
+`body=` cycles, character `at=` / `flip` / layer-z), `face` (`face=` /
+`eyes=` / mouth pins), `props` (`[Prop:]` and prop layer-z), `dialogue`
+(spoken lines with text), `audio` (the recorded line wavs), `sfx` (only
+if the parsed scene has bed audio), and `camera` (from `[Camera:]`
+keyframes). Instant pins hold until the next instant pin in the same
+lane and subject (or the scene end); duration-bearing `wait=false`
+moves keep their `over=` / `for=` end frame so they can overlap a walk
+cycle or a face change. Frames are global (concatenated scenes),
 matching the Stage scrubber.
 
 ## Image assets (Grok Imagine)

@@ -18,14 +18,24 @@ import {
 import type { LaneBlock, LaneId, LanesResponse } from "@/lib/worker";
 
 const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
-  { id: "action", label: "Action", bar: "bg-orange-500/80", text: "text-orange-50" },
+  { id: "body", label: "Body/Move", bar: "bg-orange-500/80", text: "text-orange-50" },
+  { id: "face", label: "Face", bar: "bg-rose-500/80", text: "text-rose-50" },
+  { id: "props", label: "Props", bar: "bg-teal-500/80", text: "text-teal-50" },
   { id: "dialogue", label: "Dialogue", bar: "bg-sky-500/80", text: "text-sky-50" },
   { id: "audio", label: "Audio", bar: "bg-emerald-600/80", text: "text-emerald-50" },
   { id: "sfx", label: "SFX", bar: "bg-amber-500/80", text: "text-amber-50" },
   { id: "camera", label: "Camera", bar: "bg-violet-500/80", text: "text-violet-50" },
 ];
 
-const LABEL_WIDTH = 72;
+const LABEL_WIDTH = 80;
+const LANE_ROW_PX = 28;
+const LANE_EMPTY_PX = 12;
+
+function laneHeight(blocks: LaneBlock[]): number {
+  if (blocks.length === 0) return LANE_EMPTY_PX;
+  const rows = Math.max(1, ...blocks.map((block) => (block.row ?? 0) + 1));
+  return rows * LANE_ROW_PX;
+}
 
 export default function TimelineLanes({
   project,
@@ -262,23 +272,30 @@ export default function TimelineLanes({
         </div>
         <span className="ml-auto hidden uppercase tracking-[0.14em] sm:inline">Read-only · script is the source of truth</span>
       </div>
-      <div className="flex min-h-0 flex-1 px-2 pb-2">
+      <div className="flex min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         <div className="shrink-0" style={{ width: LABEL_WIDTH }}>
           <div className="h-5" />
-          {LANE_META.map((lane) => (
-            <div
-              key={lane.id}
-              className="h-7 truncate pt-1 text-[11px] font-medium uppercase tracking-wide text-studio-muted"
-            >
-              {lane.label}
-            </div>
-          ))}
+          {LANE_META.map((lane) => {
+            const blocks = (lanes?.blocks || []).filter((b) => b.lane === lane.id);
+            const height = laneHeight(blocks);
+            return (
+              <div
+                key={lane.id}
+                className="truncate pt-0.5 text-[11px] font-medium uppercase tracking-wide text-studio-muted"
+                style={{ height }}
+                data-testid={`timeline-label-${lane.id}`}
+                data-empty={blocks.length === 0 ? "true" : "false"}
+              >
+                {lane.label}
+              </div>
+            );
+          })}
         </div>
         <div className="relative min-w-0 flex-1" ref={viewRef}>
           <div
             ref={scrollRef}
             data-testid="timeline-scroll"
-            className="h-full overflow-x-auto overflow-y-hidden"
+            className="overflow-x-auto"
             onScroll={(event) => setScrollLeft(event.currentTarget.scrollLeft)}
           >
             <div
@@ -316,8 +333,15 @@ export default function TimelineLanes({
               <div data-testid="timeline-scrubber" className="relative">
                 {LANE_META.map((lane) => {
                   const blocks = (lanes?.blocks || []).filter((b) => b.lane === lane.id);
+                  const height = laneHeight(blocks);
                   return (
-                    <div key={lane.id} className="relative h-7">
+                    <div
+                      key={lane.id}
+                      className="relative"
+                      style={{ height }}
+                      data-testid={`timeline-lane-${lane.id}`}
+                      data-rows={blocks.length === 0 ? 0 : Math.max(1, ...blocks.map((b) => (b.row ?? 0) + 1))}
+                    >
                       <div className="absolute inset-x-0 inset-y-0.5 rounded-sm bg-black/40" />
                       {blocks.map((block) => (
                         <LaneChip
@@ -367,6 +391,7 @@ function LaneChip({
 }) {
   const left = block.startFrame * ppf;
   const width = Math.max((Math.max(block.endFrame - block.startFrame, 1)) * ppf, 2);
+  const top = (block.row ?? 0) * LANE_ROW_PX + 2;
   return (
     <button
       type="button"
@@ -374,10 +399,11 @@ function LaneChip({
         block.scriptLine ? ` · line ${block.scriptLine}` : ""
       }`}
       onClick={() => onSeek(block.startFrame, block.scriptLine)}
-      className={`absolute top-0.5 z-[1] h-6 overflow-hidden rounded-sm px-1.5 text-left text-[10px] leading-6 ${bar} ${text} ${
+      className={`absolute z-[1] h-6 overflow-hidden rounded-sm px-1.5 text-left text-[10px] leading-6 ${bar} ${text} ${
         selected ? "ring-2 ring-white" : ""
       }`}
-      style={{ left, width }}
+      style={{ left, width, top }}
+      data-row={block.row ?? 0}
     >
       <span className="block truncate">{block.label}</span>
     </button>

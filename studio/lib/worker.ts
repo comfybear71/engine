@@ -89,7 +89,7 @@ export type RenderResponse = {
 };
 export type LintIssue = { level: "error" | "warning"; line: number | null; message: string };
 export type LintResult = { ok: boolean; lint: { errors: LintIssue[]; warnings: LintIssue[] }; saved?: boolean };
-export type LaneId = "action" | "dialogue" | "audio" | "sfx" | "camera";
+export type LaneId = "body" | "face" | "props" | "dialogue" | "audio" | "sfx" | "camera";
 export type LaneBlock = {
   id: string;
   lane: LaneId;
@@ -99,6 +99,7 @@ export type LaneBlock = {
   scriptLine: number | null;
   sceneId: string;
   rel: string | null;
+  row?: number;
 };
 export type LaneScene = { id: string; startFrame: number; endFrame: number; frames: number };
 export type LanesResponse = {

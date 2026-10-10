@@ -247,12 +247,15 @@ class ScriptParser {
     this.sceneLengths = []; // { id, frames } in parse order, for global offsets
   }
 
-  _emitLane({ lane, token, startFrame, endFrame, label, subject, rel }) {
+  _emitLane({ lane, token, startFrame, endFrame, label, subject, rel, keys, subjectKind }) {
     if (!this.scene) return;
     const start = Math.max(0, startFrame);
     const end = Math.max(start, endFrame == null ? start : endFrame);
     this.laneEvents.push({
       lane,
+      tag: token.kind,
+      keys: Array.isArray(keys) ? keys : [],
+      subjectKind: subjectKind || null,
       sceneId: this.scene.sceneId,
       scriptLine: token.lineNumber,
       startFrame: start,
@@ -723,6 +726,8 @@ class ScriptParser {
         endFrame: scene.cursorFrames,
         label: `${scriptName} hide`,
         subject: state.propId,
+        subjectKind: "prop",
+        keys: Object.keys(kv),
       });
       return;
     }
@@ -738,6 +743,8 @@ class ScriptParser {
         endFrame: scene.cursorFrames,
         label: `${scriptName} ${verb}`,
         subject: state.propId,
+        subjectKind: "prop",
+        keys: Object.keys(kv),
       });
       return;
     }
@@ -751,6 +758,8 @@ class ScriptParser {
       endFrame: scene.cursorFrames,
       label: `${scriptName} ${verb}`,
       subject: state.propId,
+      subjectKind: "prop",
+      keys: Object.keys(kv),
     });
   }
 
@@ -788,6 +797,8 @@ class ScriptParser {
         endFrame: scene.cursorFrames,
         label: `${scriptName} z=${newZ}`,
         subject: characterId,
+        subjectKind: "character",
+        keys: ["z"],
       });
       return;
     }
@@ -812,6 +823,8 @@ class ScriptParser {
       endFrame: scene.cursorFrames,
       label: `${scriptName} z=${newZ}`,
       subject: propState.propId,
+      subjectKind: "prop",
+      keys: ["z"],
     });
   }
 
@@ -869,6 +882,8 @@ class ScriptParser {
           endFrame: scene.cursorFrames,
           label: `${scriptName} ${note || Object.keys(kv).join(" ") || "action"}`.trim(),
           subject: propState.propId,
+          subjectKind: "prop",
+          keys: Object.keys(kv),
         });
         return;
       }
@@ -985,6 +1000,8 @@ class ScriptParser {
       endFrame: scene.cursorFrames,
       label: `${scriptName}${bits.length ? " " + bits.join(" ") : ""}`,
       subject: characterId,
+      subjectKind: "character",
+      keys: Object.keys(kv),
     });
   }
 

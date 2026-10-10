@@ -243,13 +243,13 @@ describe("studio worker API", () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
     assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
     assert.ok(laneBody.totalFrames > 0);
-    assert.deepEqual(laneBody.lanes, ["action", "dialogue", "audio", "sfx", "camera"]);
+    assert.deepEqual(laneBody.lanes, ["body", "face", "props", "dialogue", "audio", "sfx", "camera"]);
     const byLane = (name) => laneBody.blocks.filter((b) => b.lane === name);
     assert.ok(byLane("camera").some((b) => b.scriptLine === 4 && /zoom/.test(b.label)));
     assert.ok(byLane("dialogue").some((b) => b.scriptLine === 6 && /Hello there friend/.test(b.label)));
     assert.ok(byLane("audio").some((b) => b.scriptLine === 6 && /\.wav$/.test(b.label) && /audio\/.+\.wav$/.test(b.rel)));
-    assert.ok(byLane("action").some((b) => b.scriptLine === 5 && /eyes=closed/.test(b.label)));
-    assert.ok(byLane("action").some((b) => b.scriptLine === 7 && /right/.test(b.label)));
+    assert.ok(byLane("face").some((b) => b.scriptLine === 5 && /eyes=closed/.test(b.label)));
+    assert.ok(byLane("body").some((b) => b.scriptLine === 7 && /right/.test(b.label)));
     for (const block of laneBody.blocks) {
       assert.equal(typeof block.startFrame, "number");
       assert.equal(typeof block.endFrame, "number");
