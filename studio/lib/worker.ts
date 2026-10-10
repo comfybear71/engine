@@ -97,7 +97,7 @@ export type RenderResponse = {
 };
 export type LintIssue = { level: "error" | "warning"; line: number | null; message: string };
 export type LintResult = { ok: boolean; lint: { errors: LintIssue[]; warnings: LintIssue[] }; saved?: boolean };
-export type LaneId = "body" | "face" | "props" | "dialogue" | "audio" | "sfx" | "camera";
+export type LaneId = "body" | "face" | "props" | "dialogue" | "mouth" | "audio" | "sfx" | "camera";
 export type LaneTimingKind = "over" | "for" | "pin" | "audio" | "dialogue";
 export type LaneTimingAttr = "over" | "for" | "hold" | "at_time" | "start" | null;
 export type LaneTiming = {
@@ -124,6 +124,8 @@ export type LaneBlock = {
   view?: string | null;
   marriedId?: string | null;
   role?: "mouth" | "pin" | null;
+  implicitHold?: boolean;
+  faceOverridesMouth?: boolean;
   trim?: { inFrames: number; outFrames: number };
   sourceDurationFrames?: number;
   words?: { word: string; start: number; end: number }[];
@@ -549,6 +551,42 @@ export async function loadScript(name: string, script?: string | null): Promise<
   return res.text();
 }
 
+export type ScriptHistorySnapshot = {
+  id: string;
+  createdAt: string;
+  bytes: number;
+  preview: string;
+};
+
+export async function loadScriptHistory(
+  name: string,
+  script?: string | null
+): Promise<{ script: string; snapshots: ScriptHistorySnapshot[] }> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script-history`, script));
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ script: string; snapshots: ScriptHistorySnapshot[] }>;
+}
+
+export async function restoreScriptHistory(
+  name: string,
+  id: string,
+  script?: string | null
+): Promise<LintResult & { text?: string; restored?: boolean; id?: string }> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script-history/restore`, script), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  const body = (await res.json().catch(() => ({}))) as LintResult & {
+    error?: string;
+    text?: string;
+    restored?: boolean;
+    id?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `Restore failed (${res.status})`);
+  return body;
+}
+
 export async function saveScript(name: string, text: string, script?: string | null): Promise<LintResult> {
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, script), {
     method: "PUT",
@@ -606,7 +644,7 @@ export async function saveStudioSettings(name: string, patch: Partial<StudioSett
 
 export async function syncDialogue(
   name: string,
-  body: { all?: boolean; scriptLine?: number; scriptLines?: number[]; force?: boolean },
+  body: { all?: boolean; scriptLine?: number; scriptLines?: number[]; force?: boolean; clear?: boolean },
   script?: string | null
 ): Promise<{ ok: boolean; lipSync: "auto" | "manual"; results: LipSyncResult[] }> {
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lipsync`, script), {

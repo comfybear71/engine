@@ -14,12 +14,15 @@
  * Never writes timeline.json -- caller must use parseProjectToTemp.
  */
 
-const LANES = ["body", "face", "props", "dialogue", "audio", "sfx", "camera"];
+const LANES = ["body", "face", "props", "dialogue", "mouth", "audio", "sfx", "camera"];
 
-const FACE_KEYS = new Set(["face", "eyes", "mouth", "head", "brow", "brows", "expression"]);
+const FACE_KEYS = new Set(["face", "eyes", "head", "brow", "brows", "expression"]);
 const BODY_KEYS = new Set(["body", "at", "flip", "scale", "z"]);
-const FACE_LABEL_RE = /\b(?:face|eyes|mouth|head)=/i;
+const FACE_LABEL_RE = /\b(?:face|eyes|head)=/i;
 const BODY_LABEL_RE = /\bbody=/i;
+const FACE_VALUE_RE = /\bface=([^\s\]]+)/i;
+const FACE_MOUTH_OVERRIDE_RE = /^(yap|talk|yapping|speaking|chatter)(?:[_-].*)?$/i;
+const DEFAULT_FACE_HOLD_SEC = 2;
 
 function eventKeys(event) {
   if (Array.isArray(event.keys) && event.keys.length > 0) {
@@ -50,7 +53,9 @@ function hasBodyKeys(keys, label) {
  */
 function assignActionLane(event) {
   const lane = event && event.lane;
-  if (lane === "dialogue" || lane === "audio" || lane === "sfx" || lane === "camera") return lane;
+  if (lane === "dialogue" || lane === "audio" || lane === "sfx" || lane === "camera" || lane === "mouth") {
+    return lane;
+  }
   if (lane === "body" || lane === "face" || lane === "props") return lane;
 
   const tag = String((event && event.tag) || "").toLowerCase();
@@ -77,14 +82,34 @@ function isInstant(event) {
   return !(event.endFrame > event.startFrame);
 }
 
+function defaultFaceHoldFrames(fps) {
+  return Math.max(1, Math.round((Number(fps) || 24) * DEFAULT_FACE_HOLD_SEC));
+}
+
+function faceSlotValue(event) {
+  const label = String((event && event.label) || "");
+  const match = label.match(FACE_VALUE_RE);
+  if (match) return match[1];
+  const kv = event && event.kv;
+  if (kv && kv.face != null) return String(kv.face);
+  return null;
+}
+
+function faceOverridesMouth(event) {
+  const value = faceSlotValue(event);
+  return Boolean(value && FACE_MOUTH_OVERRIDE_RE.test(value));
+}
+
 /**
  * Instant pins hold until the next instant pin in the same
- * scene + lane + subject, or the scene end. Timed Move / Pose / Swing
- * blocks are left alone so wait=false over=/for= durations stay real
- * and can overlap those holds.
+ * scene + lane + subject, or the scene end. Face pins with no
+ * explicit hold=/over= cap at 2s or the next pin/dialogue, so a
+ * leftover face=yap does not paint the whole shot. Timed Move /
+ * Pose / Swing blocks keep their over=/for= ends.
  */
-function extendActionHolds(events, sceneLengthById) {
+function extendActionHolds(events, sceneLengthById, fps) {
   const out = events.map((event) => ({ ...event }));
+  const faceHold = defaultFaceHoldFrames(fps);
   const byKey = new Map();
   for (let i = 0; i < out.length; i++) {
     const event = out[i];
@@ -100,19 +125,26 @@ function extendActionHolds(events, sceneLengthById) {
       const event = out[indexes[n]];
       const sceneLen = sceneLengthById.get(event.sceneId) || event.startFrame;
       let nextStart = sceneLen;
+      if (event.lane === "face") {
+        nextStart = Math.min(nextStart, event.startFrame + faceHold);
+      }
       if (n + 1 < indexes.length) {
         nextStart = Math.min(nextStart, out[indexes[n + 1]].startFrame);
       }
       for (const other of out) {
-        if (other.lane !== event.lane) continue;
         if (other.sceneId !== event.sceneId) continue;
-        if (other.subject !== event.subject) continue;
-        if (!isInstant(other)) continue;
-        if (other.startFrame > event.startFrame && other.startFrame < nextStart) {
+        if (other.startFrame <= event.startFrame || other.startFrame >= nextStart) continue;
+        const sameSubject = !event.subject || !other.subject || other.subject === event.subject;
+        if (other.lane === event.lane && other.subject === event.subject && isInstant(other)) {
+          nextStart = other.startFrame;
+          continue;
+        }
+        if (event.lane === "face" && other.lane === "dialogue" && sameSubject) {
           nextStart = other.startFrame;
         }
       }
       event.endFrame = Math.max(event.startFrame, nextStart);
+      if (event.lane === "face") event.implicitHold = true;
     }
   }
   return out;
@@ -163,19 +195,31 @@ function mouthLabel(label) {
   return name ? `${name} mouth` : "mouth";
 }
 
+function mouthDedupeKey(block) {
+  const married = block.marriedId || `line:${block.sceneId}:${block.scriptLine}`;
+  return `${married}|${block.startFrame}|${block.endFrame}`;
+}
+
 function addMouthBlocks(blocks) {
   const extra = [];
+  const seen = new Set();
   for (const block of blocks) {
     if (block.lane !== "dialogue") continue;
     if (block.sync !== "synced" && block.sync !== "stale") continue;
     if (!Array.isArray(block.cues) || block.cues.length === 0) continue;
+    const key = mouthDedupeKey(block);
+    if (seen.has(key)) continue;
+    seen.add(key);
     extra.push({
       ...block,
-      id: `face-mouth-${block.sceneId}-${block.scriptLine}`,
-      lane: "face",
+      id: `mouth-${block.sceneId}-${block.scriptLine}-${block.startFrame}`,
+      lane: "mouth",
       role: "mouth",
       label: mouthLabel(block.label),
       movable: false,
+      row: 0,
+      implicitHold: false,
+      faceOverridesMouth: false,
       timing: {
         kind: "dialogue",
         tag: "mouth",
@@ -221,13 +265,14 @@ function buildLaneBlocks(parsed) {
   const { offsets, scenes, totalFrames } = sceneOffsets(parsed.sceneLengths);
   const sceneLengthById = new Map((parsed.sceneLengths || []).map((s) => [s.id, s.frames]));
   const classified = classifyEvents(parsed.laneEvents || []);
-  const local = extendActionHolds(classified, sceneLengthById);
+  const local = extendActionHolds(classified, sceneLengthById, fps);
 
   const blocks = local.map((event, index) => {
     const base = offsets.get(event.sceneId) || 0;
     const startFrame = base + event.startFrame;
     const endFrame = base + event.endFrame;
     const sourceLocal = event.sourceStartFrame != null ? event.sourceStartFrame : event.startFrame;
+    const facePin = event.lane === "face";
     return {
       id: `${event.lane}-${event.sceneId}-${event.scriptLine}-${index}`,
       lane: event.lane,
@@ -251,11 +296,16 @@ function buildLaneBlocks(parsed) {
       audioRel: event.audioRel || null,
       cuesRel: event.cuesRel || null,
       sync: event.sync || null,
-      role: event.role || null,
+      role: event.role || (facePin ? "pin" : null),
+      implicitHold: Boolean(event.implicitHold),
+      faceOverridesMouth: facePin && faceOverridesMouth(event),
     };
   });
   const withMouth = addMouthBlocks(blocks);
   assignOverlapRows(withMouth);
+  for (const block of withMouth) {
+    if (block.lane === "mouth") block.row = 0;
+  }
 
   return { fps, totalFrames, lanes: LANES, scenes, blocks: withMouth };
 }
@@ -263,9 +313,12 @@ function buildLaneBlocks(parsed) {
 module.exports = {
   LANES,
   FACE_KEYS,
+  DEFAULT_FACE_HOLD_SEC,
   assignActionLane,
   assignOverlapRows,
   addMouthBlocks,
   buildLaneBlocks,
   clampFrame,
+  faceOverridesMouth,
+  defaultFaceHoldFrames,
 };

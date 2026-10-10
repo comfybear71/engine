@@ -51,9 +51,9 @@ describe("stage layout", () => {
     assert.equal(clampImagineHeight(DEFAULT_IMAGINE_HEIGHT), DEFAULT_IMAGINE_HEIGHT);
   });
 
-  test("default timeline height fits seven single-row lanes", () => {
+  test("default timeline height fits eight single-row lanes", () => {
     assert.equal(DEFAULT_STAGE_LAYOUT.timelineHeight, defaultTimelinePanelHeight());
-    assert.ok(DEFAULT_STAGE_LAYOUT.timelineHeight >= 7 * LANE_ROW_PX + 60);
+    assert.ok(DEFAULT_STAGE_LAYOUT.timelineHeight >= 8 * LANE_ROW_PX + 60);
     assert.equal(STAGE_LAYOUT_LIMITS.timelineHeight.min, 180);
     assert.equal(STAGE_LAYOUT_LIMITS.timelineHeight.max, 560);
   });

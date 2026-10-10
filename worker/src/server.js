@@ -61,7 +61,9 @@ const {
   readStudioSettings,
   writeStudioSettings,
   patchMouthCue,
+  clearDialogueLipSync,
 } = require("./voices/lipSync");
+const { snapshotScriptWrite, listScriptHistory, restoreScriptSnapshot } = require("./scriptHistory");
 const { describeEngineSettings, saveXaiApiKey } = require("./engineSettings");
 const { generateProjectImage, GenerateImageError } = require("./generateImage");
 const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
@@ -1095,12 +1097,53 @@ function createApp(options = {}) {
     res.type("text/plain").send(fs.readFileSync(scriptPath, "utf8"));
   });
 
+  app.get("/api/projects/:name/script-history", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    res.json({ script: scriptName, snapshots: listScriptHistory(projectDir, scriptName) });
+  });
+
+  app.post("/api/projects/:name/script-history/restore", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const id = typeof body.id === "string" ? body.id : "";
+    const restored = restoreScriptSnapshot(projectDir, scriptName, id);
+    if (!restored.ok) return res.status(404).json({ error: restored.error || "Snapshot not found" });
+
+    let result;
+    let parseError = null;
+    try {
+      result = await parseForWrite(projectDir, parseOpts(skipValidate, scriptName));
+    } catch (err) {
+      parseError = err;
+    }
+    const lint = lintFromResult(result, parseError);
+    try {
+      res.json({
+        ok: lint.errors.length === 0,
+        saved: true,
+        restored: true,
+        id: restored.id,
+        text: restored.text,
+        lint,
+      });
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
   app.put("/api/projects/:name/script", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
     const scriptName = scriptFromRequest(req, res);
     if (!scriptName) return;
     const scriptText = readScriptBody(req);
+    snapshotScriptWrite(projectDir, scriptName, scriptText);
     fs.writeFileSync(path.join(projectDir, scriptName), scriptText);
 
     let result;
@@ -1171,6 +1214,7 @@ function createApp(options = {}) {
     if (!scriptName) return;
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const force = body.force === true;
+    const clear = body.clear === true;
     let result;
     try {
       result = await parseForRead(projectDir, scriptName);
@@ -1180,7 +1224,7 @@ function createApp(options = {}) {
     try {
       let targets = collectDialogueTargets(result.laneEvents);
       if (body.all === true) {
-        if (!force) targets = targets.filter((item) => item.sync !== "synced");
+        if (!force && !clear) targets = targets.filter((item) => item.sync !== "synced");
       } else {
         const lines = new Set();
         if (Number.isInteger(body.scriptLine) && body.scriptLine > 0) lines.add(body.scriptLine);
@@ -1197,12 +1241,14 @@ function createApp(options = {}) {
           return res.status(404).json({ error: "No dialogue line to sync on that script line." });
         }
       }
-      const synced = await syncDialogueLines({
-        projectDir,
-        targets,
-        force,
-        runRhubarb: options.runRhubarb,
-      });
+      const synced = clear
+        ? clearDialogueLipSync({ projectDir, targets })
+        : await syncDialogueLines({
+            projectDir,
+            targets,
+            force,
+            runRhubarb: options.runRhubarb,
+          });
       res.json({
         ok: synced.ok,
         lipSync: readStudioSettings(projectDir).lipSync,

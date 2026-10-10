@@ -16,7 +16,7 @@ export type PlayheadBlock = {
   lane: string;
 };
 
-const LANE_PRIORITY = ["dialogue", "audio", "body", "face", "props", "action", "camera", "sfx"];
+const LANE_PRIORITY = ["dialogue", "audio", "mouth", "body", "face", "props", "action", "camera", "sfx"];
 
 /** Script line covering `frame`, preferring dialogue, else the latest line that has already started. */
 export function scriptLineAtFrame(blocks: PlayheadBlock[], frame: number): number | null {
