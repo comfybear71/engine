@@ -20,17 +20,28 @@ from .timeline_loader import load_timeline
 _loaded: dict = {"path": None, "mtime": None, "timeline": None}
 
 
+def _settings_mtime(project_dir: Path) -> float:
+    studio = project_dir / "studio.json"
+    try:
+        return studio.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def _load(timeline_path: Path, project_dir: Path):
     mtime = timeline_path.stat().st_mtime
+    settings_mtime = _settings_mtime(project_dir)
     if (
         _loaded["timeline"] is not None
         and _loaded["path"] == str(timeline_path)
         and _loaded["mtime"] == mtime
+        and _loaded.get("settings_mtime") == settings_mtime
     ):
         return _loaded["timeline"]
     timeline = load_timeline(timeline_path, project_dir=project_dir)
     _loaded["path"] = str(timeline_path)
     _loaded["mtime"] = mtime
+    _loaded["settings_mtime"] = settings_mtime
     _loaded["timeline"] = timeline
     return timeline
 

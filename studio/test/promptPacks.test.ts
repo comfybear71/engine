@@ -14,6 +14,9 @@ describe("prompt packs", () => {
     const prompt = fillPackPrompt(mouths, { name: "Rodney", styleBlock: pack.styleBlock });
     assert.match(prompt, /battered crimson felt fedora/);
     assert.match(prompt, /never slanted eyes/i);
+    const thirteen = pack.sets.find((set) => set.id === "mouth_13_left_side");
+    assert.ok(thirteen);
+    assert.match(fillPackPrompt(thirteen, { name: "Rodney", styleBlock: pack.styleBlock }), /B_loud/);
     assert.equal(packForCharacter({ id: "hicks", display_name: "Hicks" }), null);
   });
 

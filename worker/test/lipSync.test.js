@@ -62,6 +62,12 @@ describe("lip-sync state", () => {
       assert.equal(readStudioSettings(dir).lipSync, "auto");
       writeStudioSettings(dir, { lipSync: "manual" });
       assert.equal(readStudioSettings(dir).lipSync, "manual");
+      writeStudioSettings(dir, { lipsync: { smoothing: "off", head_bob: "off" } });
+      const natural = readStudioSettings(dir);
+      assert.equal(natural.lipSync, "manual");
+      assert.equal(natural.lipsync.smoothing, "off");
+      assert.equal(natural.lipsync.head_bob, "off");
+      assert.equal(natural.lipsync.blinks, true);
 
       const fake = ({ cuesPath }) => {
         writeCues(cuesPath, [{ start: 0, end: 0.2, value: "B" }]);

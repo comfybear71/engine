@@ -101,6 +101,62 @@ sit next to it: `mouth/` or `mouth_front/` is the front set; `mouth_left_side/`,
 `view=` is set. Missing shapes in a view folder fall back to front, then
 to `mouth/`.
 
+### Thirteen mouths per view
+
+A full head-turn mouth set is **13 drawings per view**, not just Rhubarb's
+nine. Loud variants are optional — if a `*_loud.png` is missing the
+compositor keeps the normal shape.
+
+| File | Shape |
+|---|---|
+| `X.png` | Idle / rest |
+| `A.png` | Closed (M, B, P) |
+| `B.png` | Slightly open |
+| `C.png` | Mid-open (EH) |
+| `D.png` | Wide open (AH) |
+| `E.png` | Rounded (OH) |
+| `F.png` | Puckered (OO, W) |
+| `G.png` | Teeth on lip (F, V) |
+| `H.png` | Tongue (L) |
+| `B_loud.png` | Louder B (optional) |
+| `C_loud.png` | Louder C (optional) |
+| `D_loud.png` | Louder D (optional) |
+| `E_loud.png` | Louder E (optional) |
+
+Folders, one per `view=`:
+
+```
+characters/<id>/mouth/            # legacy front (still used if mouth_front/ is empty)
+characters/<id>/mouth_front/      # front (default)
+characters/<id>/mouth_left_34/
+characters/<id>/mouth_left_side/
+characters/<id>/mouth_right_34/
+characters/<id>/mouth_right_side/
+characters/<id>/mouth_up/
+characters/<id>/mouth_down/
+```
+
+A line with `view=left_side` looks in `mouth_left_side/B_loud.png`, then
+`mouth_left_side/B.png`, then the same names under `mouth_front/` / `mouth/`.
+Lint still only requires rest `X` and A–H on the base mouth folder; loud
+files and extra views are never required.
+
+Optional `character.json` keys (project `studio.json` `lipsync` overrides
+these for a whole episode):
+
+```json
+"lipsync": {
+  "smoothing": "light",
+  "head_bob": "subtle",
+  "loud_threshold": 0.75
+},
+"blinks": { "every": [3, 6], "frames": 5 }
+```
+
+`blinks` is off automatically when the `eyes` slot has no `closed` drawing.
+Auto blinks skip a held `[Action: Name eyes=…]` pin. Head bob only offsets
+`mouth` / `face` / `eyes` slots (not the body).
+
 ### Named cycles
 
 A slot may declare reusable loops so a script can say `body=walk_side`

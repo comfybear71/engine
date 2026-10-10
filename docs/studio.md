@@ -105,7 +105,9 @@ permanent and has its own confirm).
 Inside a project the default tab is **Stage** (Resolve-style workspace).
 Top tabs stay **Assets**, **Stage**, **Script**, **Edit**, **Deliver** for
 the full pages, with a back-to-home link, the project name, and a
-**script picker**. A project may hold several `script*.txt` files
+**script picker**. **Edit** and **Deliver** open a slim **Lip sync**
+settings popover (smoothing, head bob, blinks, loud threshold) that writes
+project `studio.json`. Stage preview uses the same compositor path. A project may hold several `script*.txt` files
 (`script.txt`, `script_mcd.txt`, …). Stage, lanes, the Script page,
 preview, and Render all use the selected file. The orange **Render**
 button parses that script (temp files only) and writes
@@ -352,8 +354,8 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. |
 | `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`, `row`, `tag`, `sourceStartFrame`, `timing`, `movable`, `cues`, `view`, `marriedId`, `trim`, `sourceDurationFrames`, `words`, `sync`, `audioRel`, `cuesRel`, `role`). `timing` says which attribute holds the event (`over=`, `for=`, `hold=`, `at_time=` / `start=`, or a pin / `[Audio:]` / dialogue placement). `sync` on Dialogue is `not_synced` / `synced` / `stale`. Synced Dialogue also emits a Face `role=mouth` block of the same start/end. `trim` is `{ inFrames, outFrames }` in the source file (0 / source length when untrimmed). Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Overlapping blocks in one lane get distinct `row` indexes. Does **not** write `timeline.json`. |
 | `PUT` | `/api/projects/:name/cues` | Patch one mouth cue in an existing `audio/<scene>/<file>.wav.rhubarb.json`. JSON `{ "rel", "start", "end", "value"?, "pinned"? }`. `start`/`end` are seconds in the source file. |
-| `GET` | `/api/projects/:name/settings` | Project `studio.json`. `{ "lipSync": "auto" \| "manual" }` (default auto). |
-| `PUT` | `/api/projects/:name/settings` | JSON `{ "lipSync": "auto" \| "manual" }`. Writes `studio.json`. |
+| `GET` | `/api/projects/:name/settings` | Project `studio.json`. `{ "lipSync": "auto" \| "manual", "lipsync": { "smoothing", "head_bob", "blinks", "loud_threshold" } }`. Defaults: auto, light, subtle, blinks on, loud 0.75. |
+| `PUT` | `/api/projects/:name/settings` | JSON `{ "lipSync"?, "lipsync"? }`. Writes `studio.json`. `lipsync.smoothing` is `off`/`light`/`medium`; `head_bob` is `off`/`subtle`/`strong`; `blinks` is a boolean; `loud_threshold` is a 0–1 percentile. |
 | `POST` | `/api/projects/:name/lipsync?script=` | Run Rhubarb for Dialogue lines. JSON `{ "scriptLine": N }`, `{ "scriptLines": [N] }`, or `{ "all": true }`. `{ "force": true }` redoes a synced line. Writes `<wav>.rhubarb.json` plus an `engine` text fingerprint. Returns `{ ok, results }`. |
 | `GET` | `/api/projects/:name/stage?script=` | Parse the selected script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
 | `GET` | `/api/projects/:name/playback?script=` | Render/proxy freshness (`renders/<stem>.mp4` or `output.mp4`, plus `<stem>_preview.mp4`) vs the script mtime, and audio-lane clips with `exists`. Temp parse only. |
