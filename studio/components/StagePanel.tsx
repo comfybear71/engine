@@ -894,6 +894,7 @@ export default function StagePanel({
                         seekTo(maxFrame, scriptLineAtFrame(lanes?.blocks || [], maxFrame));
                         return;
                       }
+                      setFrame(nextFrame);
                       const upcoming = nextSegmentRef.current;
                       if (upcoming && upcoming.file !== current?.file) {
                         nextSegmentRef.current = null;
