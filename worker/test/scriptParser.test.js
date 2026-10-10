@@ -875,7 +875,7 @@ describe("at_time= / start= explicit start", () => {
     });
     const move = laneEvents.find((e) => e.tag === "move");
     const pin = laneEvents.find((e) => e.tag === "action");
-    const spoken = laneEvents.filter((e) => e.tag === "dialogue");
+    const spoken = laneEvents.filter((e) => e.lane === "dialogue");
     assert.equal(move.startFrame, 24);
     assert.equal(move.endFrame, 48);
     assert.equal(move.timing.attr, "at_time");

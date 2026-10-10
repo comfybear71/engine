@@ -13,7 +13,7 @@ const { ScriptError } = require("./errors");
 
 const BRACKET_TAG_RE = /^\[\s*([A-Za-z]+)\s*:\s*(.*?)\s*\]$/;
 const DECORATIVE_RE = /^=+$/;
-const DIALOGUE_RE = /^([A-Za-z][\w' -]*?)\s*:\s*(.+)$/;
+const DIALOGUE_RE = /^([A-Za-z][^:]*?)\s*:\s*(.+)$/;
 const DIALOGUE_ATTR_RE = /^(at_time|start|view)=(\S+)$/i;
 
 /**
