@@ -7,6 +7,7 @@
 # Node
 node_modules/
 npm-debug.log*
+launcher.err.log
 
 # Python
 worker/python/venv/
