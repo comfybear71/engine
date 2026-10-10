@@ -112,6 +112,7 @@ class DialogueClip:
     cues: list[lipsync.MouthCue]
     text: str | None = None
     estimated: bool = False  # True => no WAV yet; silent preview at duration_frames
+    view: str | None = None  # head/mouth set for this line; compositor falls back to front
 
 
 @dataclass(frozen=True)
@@ -333,6 +334,11 @@ def _build_transform(raw: dict) -> Transform:
 
 def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | None) -> Slot:
     images = {name: _resolve(project_dir, p) for name, p in raw["images"].items()}
+    images_by_view = {
+        str(view_name): {name: _resolve(project_dir, p) for name, p in mapping.items()}
+        for view_name, mapping in (raw.get("images_by_view") or {}).items()
+        if isinstance(mapping, dict)
+    }
     offset = raw.get("offset", {})
 
     cues = None
@@ -368,6 +374,7 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
         cues=cues,
         dialogue=dialogue_ref,
         visible_when=visible_when,
+        images_by_view=images_by_view,
     )
 
 
@@ -513,6 +520,7 @@ def _build_dialogue_clip(
             lipsync_config["dialogue_text"] = raw["text"]
         cues = lipsync.get_cues(lipsync_config, project_dir)
 
+    view = raw.get("view")
     return DialogueClip(
         audio=audio_path,
         start_frame=int(raw["start_frame"]),
@@ -520,6 +528,7 @@ def _build_dialogue_clip(
         cues=cues,
         text=raw.get("text"),
         estimated=estimated,
+        view=str(view) if view else None,
     )
 
 

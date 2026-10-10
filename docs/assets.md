@@ -95,7 +95,11 @@ beyond the generated PNGs/WAVs themselves).
 The `mouth` slot is special: it's always driven by the character's dialogue
 (`lipsync.source: "dialogue"`), so it never has a `default_drawing` and
 can't be set via `[Action: ...]` -- see
-[docs/script-format.md](script-format.md).
+[docs/script-format.md](script-format.md). Optional per-head-view folders
+sit next to it: `mouth/` or `mouth_front/` is the front set; `mouth_left_side/`,
+`mouth_right_34/`, and the other `view=` names are used when that line's
+`view=` is set. Missing shapes in a view folder fall back to front, then
+to `mouth/`.
 
 ### Named cycles
 

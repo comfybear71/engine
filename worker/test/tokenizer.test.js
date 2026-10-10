@@ -22,12 +22,13 @@ describe("tokenizer", () => {
         "[Camera: zoom=1.3 over=2s]",
         "[Pause: 12]",
         "[Audio: Alice file=monologue]",
+        "[View: Alice view=left_side]",
         "Alice: Hello there.",
       ].join("\n")
     );
     assert.deepEqual(
       tokens.map((t) => t.kind),
-      ["scene", "location", "cast", "action", "prop", "layer", "move", "pose", "swing", "camera", "pause", "audio", "dialogue"]
+      ["scene", "location", "cast", "action", "prop", "layer", "move", "pose", "swing", "camera", "pause", "audio", "view", "dialogue"]
     );
   });
 

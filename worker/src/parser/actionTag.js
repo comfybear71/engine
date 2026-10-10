@@ -20,6 +20,7 @@ const KEY_VALUE_RE = /^([A-Za-z_][\w]*)=(\S+)$/;
 const NUMBER_RE = /^[+-]?\d+(?:\.\d+)?$/;
 const XY_RE = /^([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?)$/;
 const SECONDS_RE = /^(\d+(?:\.\d+)?)s$/i;
+const HEAD_VIEWS = ["front", "left_34", "left_side", "right_34", "right_side", "up", "down"];
 
 function parseActionTag(body, options = {}) {
   const words = body.trim().split(/\s+/).filter(Boolean);
@@ -105,6 +106,33 @@ function parsePauseValue(body, lineNumber) {
   throw new ScriptError(lineNumber, `Invalid [Pause: ${body}] -- expected a frame count ("12") or seconds ("0.5s").`);
 }
 
+/**
+ * Optional explicit start for timed tags and dialogue: "2s" / "0.5s" /
+ * "48" (frames). Zero is allowed (scene start). Used by at_time= / start=.
+ */
+function parseAtTimeSpec(value, lineNumber, label = "at_time") {
+  if (value === undefined || value === "") {
+    throw new ScriptError(lineNumber, `${label} is required (e.g. "2s" or "48").`);
+  }
+  const trimmed = String(value).trim();
+  const secondsMatch = trimmed.match(/^(\d+(?:\.\d+)?)s$/i);
+  if (secondsMatch) {
+    const seconds = parseFloat(secondsMatch[1]);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new ScriptError(lineNumber, `Invalid ${label} "${value}" -- must be 0 or greater.`);
+    }
+    return { seconds };
+  }
+  const framesMatch = trimmed.match(/^(\d+)$/);
+  if (framesMatch) {
+    return { frames: parseInt(framesMatch[1], 10) };
+  }
+  throw new ScriptError(
+    lineNumber,
+    `Invalid ${label} "${value}" -- expected seconds like "2s" or a frame count like "48".`
+  );
+}
+
 /** "1s" / "0.5s" -> seconds. Used by [Move]/[Pose]/[Swing] duration fields. */
 function parseSecondsSpec(value, lineNumber, label) {
   if (value === undefined || value === "") {
@@ -120,6 +148,18 @@ function parseSecondsSpec(value, lineNumber, label) {
     throw new ScriptError(lineNumber, `Invalid ${label} "${value}" -- must be greater than 0.`);
   }
   return seconds;
+}
+
+function parseViewValue(value, lineNumber) {
+  if (value === undefined || value === "") return null;
+  const v = String(value).trim().toLowerCase();
+  if (!HEAD_VIEWS.includes(v)) {
+    throw new ScriptError(
+      lineNumber,
+      `Invalid view "${value}". Expected: ${HEAD_VIEWS.join(", ")}.`
+    );
+  }
+  return v;
 }
 
 function parseEaseValue(value, lineNumber) {
@@ -164,7 +204,10 @@ module.exports = {
   noteHasKeyValue,
   parseCastList,
   parsePauseValue,
+  parseAtTimeSpec,
+  parseViewValue,
   parseSecondsSpec,
+  HEAD_VIEWS,
   parseEaseValue,
   parseWaitValue,
   parseNumberValue,

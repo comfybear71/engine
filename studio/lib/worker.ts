@@ -98,6 +98,14 @@ export type RenderResponse = {
 export type LintIssue = { level: "error" | "warning"; line: number | null; message: string };
 export type LintResult = { ok: boolean; lint: { errors: LintIssue[]; warnings: LintIssue[] }; saved?: boolean };
 export type LaneId = "body" | "face" | "props" | "dialogue" | "audio" | "sfx" | "camera";
+export type LaneTimingKind = "over" | "for" | "pin" | "audio" | "dialogue";
+export type LaneTimingAttr = "over" | "for" | "at_time" | "start" | null;
+export type LaneTiming = {
+  kind: LaneTimingKind;
+  tag: string;
+  attr: LaneTimingAttr;
+  movable: boolean;
+};
 export type LaneBlock = {
   id: string;
   lane: LaneId;
@@ -108,6 +116,17 @@ export type LaneBlock = {
   sceneId: string;
   rel: string | null;
   row?: number;
+  tag?: string | null;
+  sourceStartFrame?: number;
+  timing?: LaneTiming | null;
+  movable?: boolean;
+  cues?: { shape: string; start: number; end: number }[];
+  view?: string | null;
+  marriedId?: string | null;
+  trim?: { inFrames: number; outFrames: number };
+  audioRel?: string | null;
+  cuesRel?: string | null;
+  sync?: "not_synced" | "synced" | "stale" | null;
 };
 export type LaneScene = { id: string; startFrame: number; endFrame: number; frames: number };
 export type LanesResponse = {
@@ -504,6 +523,57 @@ export async function loadLanes(name: string, script?: string | null): Promise<L
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lanes`, script));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<LanesResponse>;
+}
+
+export type StudioSettings = { lipSync: "auto" | "manual" };
+export type LipSyncResult = {
+  scriptLine: number;
+  ok: boolean;
+  skipped?: boolean;
+  reason?: string;
+  message?: string;
+  sync?: "not_synced" | "synced" | "stale";
+  cuesPath?: string;
+};
+
+export async function loadStudioSettings(name: string): Promise<StudioSettings> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/settings`);
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<StudioSettings>;
+}
+
+export async function saveStudioSettings(name: string, patch: Partial<StudioSettings>): Promise<StudioSettings> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<StudioSettings>;
+}
+
+export async function syncDialogue(
+  name: string,
+  body: { all?: boolean; scriptLine?: number; scriptLines?: number[]; force?: boolean },
+  script?: string | null
+): Promise<{ ok: boolean; lipSync: "auto" | "manual"; results: LipSyncResult[] }> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lipsync`, script), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    lipSync?: "auto" | "manual";
+    results?: LipSyncResult[];
+    error?: string;
+  };
+  if (!res.ok) throw new Error(payload.error || `Lip-sync failed (${res.status})`);
+  return {
+    ok: payload.ok !== false,
+    lipSync: payload.lipSync === "manual" ? "manual" : "auto",
+    results: payload.results || [],
+  };
 }
 
 export async function startRender(name: string, script?: string | null): Promise<RenderResponse> {

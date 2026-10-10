@@ -9,7 +9,7 @@ import json
 import pytest
 
 from compositor.schema_validate import TimelineValidationError, validate_timeline
-from compositor.slots import active_drawing
+from compositor.slots import Slot, active_drawing
 from compositor.timeline_loader import load_timeline
 
 from .conftest import write_png_1x1, write_wav
@@ -252,6 +252,22 @@ class TestMouthSlotDrivenByDialogue:
         assert active_drawing(mouth, 30, fps=24) == "X"   # gap between lines -> idle
         assert active_drawing(mouth, 60, fps=24) == "H"   # inside line2
         assert active_drawing(mouth, 500, fps=24) == "X"  # after both lines -> idle
+
+    def test_mouth_view_falls_back_to_front_then_default_images(self, tmp_path):
+        front_b = tmp_path / "front_B.png"
+        side_b = tmp_path / "side_B.png"
+        default_b = tmp_path / "default_B.png"
+        write_png_1x1(front_b)
+        write_png_1x1(side_b)
+        write_png_1x1(default_b)
+        slot = Slot(
+            images={"B": default_b},
+            images_by_view={"front": {"B": front_b}, "left_side": {"B": side_b}},
+        )
+        assert slot.resolve_image("B", view="left_side") == side_b
+        assert slot.resolve_image("B", view="up") == front_b
+        empty = Slot(images={"B": default_b})
+        assert empty.resolve_image("B", view="left_side") == default_b
 
     def test_requires_non_empty_dialogue(self, tmp_path):
         _base_project(tmp_path)

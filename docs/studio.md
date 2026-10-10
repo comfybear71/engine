@@ -12,11 +12,13 @@ audio** in Studio (Script tab, or **Import audio** on the Stage transport
 bar / Script drawer) — that calls `POST /api/projects/:name/import-audio` (ElevenLabs
 Speech-to-Text + Rhubarb). You never need the command line for that.
 
-The **script is the source of truth**. Stage lanes are a read-only view of
-a temp parse; dragging/resizing clips comes later. Save, lint, preview,
-lanes, and Render never write `timeline.json` — Render parses the selected
-script to a temp timeline (the same `--script` option as the CLI) and
-writes `renders/<script-stem>.mp4`.
+The **script is the source of truth**. Stage lanes are a view of a temp
+parse. Stage 1 timeline edits (select + move in time) rewrite the matching
+script line(s) with `at_time=` / `start=`, then re-parse; they never write
+`timeline.json`. Save, lint, preview, lanes, and Render still parse the
+selected script to a temp timeline (the same `--script` option as the CLI).
+Render writes `renders/<script-stem>.mp4`. Resize and delete are later
+stages.
 
 ## Starting Engine Studio
 
@@ -147,7 +149,7 @@ clobber the project's `timeline.json`.
   the viewer (centred rewind / play / stop as small flat monochrome icon
   buttons, ~24px; play uses a small accent on the icon only; timecode on
   the left; **Import audio** then `frame N · fps · script` on the right),
-  and **read-only timeline lanes** at the bottom (Body/Move, Face, Props,
+  and **editable timeline lanes** at the bottom (Body/Move, Face, Props,
   Dialogue, Audio, SFX, Camera).
   The old single Action lane is split so overlapping motion is visible:
   `[Move:]` / `[Swing:]` / `[Pose:]` / `body=` cycles on Body/Move,
@@ -180,8 +182,33 @@ clobber the project's `timeline.json`.
   stepped preview with line audio; they do not auto-kick a proxy from
   the first slow frame. The orange playhead handle sits on the
   time ruler; one vertical line continues down through every lane.
-  Click or drag the ruler to seek; click a block to seek and highlight
-  that script line. The timeline zooms like Resolve: `+` / `−` and a
+  Click or drag the empty ruler area to seek. Pointer-down on a block
+  selects it and starts a drag; Shift/Ctrl-click adds to the selection;
+  drag a rubber-band on empty lane area selects several; Esc clears.
+  Drag a selected block (or several) left/right to change its start:
+  Studio writes `at_time=` on the matching script line(s), saves
+  (debounced), and re-parses so the script stays human-readable and the
+  single source of truth. Instant tags with no time concept show a
+  not-allowed cursor. Snap to the playhead, other block edges, whole
+  seconds, and frame boundaries (hold Alt to disable); a vertical guide
+  and a start-time tooltip show while dragging. Ctrl+Z / Ctrl+Y (and
+  Ctrl+Shift+Z) undo/redo as script-text snapshots; the timeline header
+  has the same buttons. Delete and edge trims are later stages (each
+  block already carries `trim: { inFrames, outFrames }` reserved at 0).
+  Dialogue owns its lip-sync: dragging a Dialogue block moves its audio,
+  Rhubarb mouth cues, and mouth track together. Face pins (`face=` /
+  wink) stay independent. A thin mouth-cue strip appears under a Dialogue
+  block only after that line is synced. Each Dialogue chip shows a small
+  status dot (grey = not synced, green = synced, amber = stale) and a
+  14px sync icon on hover or when selected — Sync this line, or Redo
+  sync when it is already green. The thin header has **Sync all**, play
+  selection, loop selection, and an Auto/Manual lip-sync mode (Manual
+  skips Rhubarb after ElevenLabs / Import audio; write `studio.json`
+  `{ "lipSync": "manual" }` or use the header toggle). A selected
+  Dialogue block also gets a small **View** dropdown
+  (`front` / `left_34` / `left_side` / `right_34` / `right_side` / `up` /
+  `down`) that writes `view=` on that script line.
+  The timeline zooms like Resolve: `+` / `−` and a
   slider, Ctrl+wheel centred on the cursor, **Fit** for the whole shot,
   horizontal scroll (wheel / drag / scrollbar) when zoomed in, a ruler
   whose ticks step from frames to seconds to minutes, and the playhead
@@ -210,7 +237,8 @@ clobber the project's `timeline.json`.
   `preview-frame` requests are clamped to `[0, total_frames-1]`; Stage
   uses the compositor's `total_frames` (via `X-Engine-Total-Frames`) so
   lanes and preview share one length even when a lane block extends a
-  couple of frames past the movie. Lane editing by drag is a later PR.
+  couple of frames past the movie. Horizontal scroll (wheel / middle-drag
+  / the pinned scrollbar) and lane-height controls are unchanged.
 - **Script** — full-page line-numbered editor for the selected `script*.txt` with
   Save (Ctrl/Cmd+S) and Lint. Insert Action buttons drop real tag templates
   from [script-format.md](script-format.md) at the cursor, using character
@@ -267,7 +295,10 @@ other media durations are cached by path + mtime + size.
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |
 | `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. |
-| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`, `row`). Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Overlapping blocks in one lane get distinct `row` indexes. Does **not** write `timeline.json`. |
+| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`, `row`, `tag`, `sourceStartFrame`, `timing`, `movable`, `cues`, `view`, `marriedId`, `trim`, `sync`, `audioRel`, `cuesRel`). `timing` says which attribute holds the event (`over=`, `for=`, `at_time=` / `start=`, or a pin / `[Audio:]` / dialogue placement). `sync` on Dialogue is `not_synced` / `synced` / `stale`. Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Overlapping blocks in one lane get distinct `row` indexes. Does **not** write `timeline.json`. |
+| `GET` | `/api/projects/:name/settings` | Project `studio.json`. `{ "lipSync": "auto" \| "manual" }` (default auto). |
+| `PUT` | `/api/projects/:name/settings` | JSON `{ "lipSync": "auto" \| "manual" }`. Writes `studio.json`. |
+| `POST` | `/api/projects/:name/lipsync?script=` | Run Rhubarb for Dialogue lines. JSON `{ "scriptLine": N }`, `{ "scriptLines": [N] }`, or `{ "all": true }`. `{ "force": true }` redoes a synced line. Writes `<wav>.rhubarb.json` plus an `engine` text fingerprint. Returns `{ ok, results }`. |
 | `GET` | `/api/projects/:name/stage?script=` | Parse the selected script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
 | `GET` | `/api/projects/:name/playback?script=` | Render/proxy freshness (`renders/<stem>.mp4` or `output.mp4`, plus `<stem>_preview.mp4`) vs the script mtime, and audio-lane clips with `exists`. Temp parse only. |
 | `GET` | `/api/projects/:name/media?rel=` | Stream a project-local line WAV (`audio/<scene>/<file>.wav` only). |
@@ -291,7 +322,15 @@ keyframes). Instant pins hold until the next instant pin in the same
 lane and subject (or the scene end); duration-bearing `wait=false`
 moves keep their `over=` / `for=` end frame so they can overlap a walk
 cycle or a face change. Frames are global (concatenated scenes),
-matching the Stage scrubber.
+matching the Stage scrubber. Each block also carries `scriptLine`,
+`sourceStartFrame` (the tag's placement — for `[Audio:]` sentence
+blocks this is the file start, not the sentence start), and `timing`
+(`kind` is `over` / `for` / `pin` / `audio` / `dialogue`; `attr` is
+`over`, `for`, `at_time`, `start`, or null). Studio move-in-time always
+writes `at_time=` on that line. Dialogue and its married audio share
+`marriedId` (`line:<scene>:<scriptLine>`); Face blocks never join that
+group. `sync` is only set on Dialogue. `trim` is always
+`{ inFrames: 0, outFrames: 0 }` until Stage 2 edge handles.
 
 ## Image assets (Grok Imagine)
 

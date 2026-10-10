@@ -261,9 +261,18 @@
         },
         "images": {
           "type": "object",
-          "description": "Map of drawing name -> image path (relative to the project folder). For a `lipsync`-driven slot these names must be Rhubarb mouth shapes (A-H, X); for a `keyframes`-driven slot they can be anything (\"fist\", \"open\", \"closed\", ...). At minimum provide one entry to use as the fallback; a missing drawing at render time falls back to \"X\" if present, else the first entry in `images`.",
+          "description": "Map of drawing name -> image path (relative to the project folder). For a `lipsync`-driven slot these names must be Rhubarb mouth shapes (A-H, X); for a `keyframes`-driven slot they can be anything (\"fist\", \"open\", \"closed\", ...). At minimum provide one entry to use as the fallback; a missing drawing at render time falls back to \"X\" if present, else the first entry in `images`. Per-head-view sheets live in `images_by_view` and fall back here.",
           "minProperties": 1,
           "additionalProperties": { "type": "string" }
+        },
+        "images_by_view": {
+          "type": "object",
+          "description": "Optional per-head-view drawing maps (view name -> drawing name -> image path). Used by a dialogue-driven mouth slot when the active clip has `view`. Resolution order: images_by_view[view], then images_by_view.front, then `images`, then drawing X.",
+          "additionalProperties": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": { "type": "string" }
+          }
         },
         "keyframes": {
           "type": "array",
@@ -414,6 +423,11 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "Word-count estimate used when the audio file is missing. The script parser writes this onto the clip; the compositor also accepts the same field from lines.json if the clip itself does not have it."
+        },
+        "view": {
+          "type": "string",
+          "enum": ["front", "left_34", "left_side", "right_34", "right_side", "up", "down"],
+          "description": "Head/mouth drawing set for this line's lip-sync. The compositor looks up slot.images_by_view[view], then front, then slot.images. Omitted or unknown views use front."
         },
         "words": {
           "type": "array",

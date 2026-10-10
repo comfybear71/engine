@@ -14,6 +14,28 @@ const { ScriptError } = require("./errors");
 const BRACKET_TAG_RE = /^\[\s*([A-Za-z]+)\s*:\s*(.*?)\s*\]$/;
 const DECORATIVE_RE = /^=+$/;
 const DIALOGUE_RE = /^([A-Za-z][\w' -]*?)\s*:\s*(.+)$/;
+const DIALOGUE_ATTR_RE = /^(at_time|start|view)=(\S+)$/i;
+
+/**
+ * "Hicks at_time=2s" -> { character: "Hicks", kv: { at_time: "2s" } }.
+ * Leftover words (e.g. "Bill Walk") stay the full character name.
+ */
+function splitDialogueSpeaker(raw) {
+  const words = String(raw || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length <= 1) return { character: String(raw || "").trim(), kv: {} };
+  const kv = {};
+  let i = 1;
+  for (; i < words.length; i++) {
+    const match = words[i].match(DIALOGUE_ATTR_RE);
+    if (!match) break;
+    kv[match[1].toLowerCase()] = match[2];
+  }
+  if (i !== words.length) return { character: String(raw || "").trim(), kv: {} };
+  return { character: words[0], kv };
+}
 
 function stripComment(line) {
   // Earliest of "#" or "//" starts a trailing comment. A line that is
@@ -64,6 +86,7 @@ function tokenize(scriptText) {
         "swing",
         "camera",
         "audio",
+        "view",
       ];
       if (!knownTags.includes(tag)) {
         throw new ScriptError(
@@ -81,11 +104,13 @@ function tokenize(scriptText) {
 
     const dialogueMatch = trimmed.match(DIALOGUE_RE);
     if (dialogueMatch) {
+      const speaker = splitDialogueSpeaker(dialogueMatch[1]);
       tokens.push({
         lineNumber,
         kind: "dialogue",
-        character: dialogueMatch[1].trim(),
+        character: speaker.character,
         text: dialogueMatch[2].trim(),
+        kv: speaker.kv,
         raw: rawLine,
       });
       return;
@@ -100,4 +125,4 @@ function tokenize(scriptText) {
   return tokens;
 }
 
-module.exports = { tokenize };
+module.exports = { tokenize, splitDialogueSpeaker };

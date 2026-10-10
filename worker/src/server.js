@@ -53,6 +53,12 @@ const {
   describePlayback,
 } = require("./studioPlayback");
 const { runImportAudio, readImportAudioRequest, VoicesFatalError } = require("./importAudio");
+const {
+  collectDialogueTargets,
+  syncDialogueLines,
+  readStudioSettings,
+  writeStudioSettings,
+} = require("./voices/lipSync");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
 const DEFAULT_STUDIO_ORIGINS = [
@@ -629,6 +635,72 @@ function createApp(options = {}) {
     const lint = lintFromResult(result, parseError);
     try {
       res.json({ ok: lint.errors.length === 0, lint });
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
+  app.get("/api/projects/:name/settings", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    res.json(readStudioSettings(projectDir));
+  });
+
+  app.put("/api/projects/:name/settings", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const patch = {};
+    if (body.lipSync === "auto" || body.lipSync === "manual") patch.lipSync = body.lipSync;
+    res.json(writeStudioSettings(projectDir, patch));
+  });
+
+  app.post("/api/projects/:name/lipsync", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const force = body.force === true;
+    let result;
+    try {
+      result = await parseForRead(projectDir, scriptName);
+    } catch (err) {
+      return res.status(400).json(parseErrorPayload(err));
+    }
+    try {
+      let targets = collectDialogueTargets(result.laneEvents);
+      if (body.all === true) {
+        if (!force) targets = targets.filter((item) => item.sync !== "synced");
+      } else {
+        const lines = new Set();
+        if (Number.isInteger(body.scriptLine) && body.scriptLine > 0) lines.add(body.scriptLine);
+        if (Array.isArray(body.scriptLines)) {
+          for (const line of body.scriptLines) {
+            if (Number.isInteger(line) && line > 0) lines.add(line);
+          }
+        }
+        if (lines.size === 0) {
+          return res.status(400).json({ error: "Pass scriptLine, scriptLines, or all: true." });
+        }
+        targets = targets.filter((item) => lines.has(item.scriptLine));
+        if (targets.length === 0) {
+          return res.status(404).json({ error: "No dialogue line to sync on that script line." });
+        }
+      }
+      const synced = await syncDialogueLines({
+        projectDir,
+        targets,
+        force,
+        runRhubarb: options.runRhubarb,
+      });
+      res.json({
+        ok: synced.ok,
+        lipSync: readStudioSettings(projectDir).lipSync,
+        results: synced.results,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     } finally {
       cleanupTempParse(result);
     }
