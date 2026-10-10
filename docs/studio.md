@@ -143,18 +143,25 @@ clobber the project's `timeline.json`.
   image-generation API. See [Image assets](#image-assets-grok-imagine)
   below.
 - **Stage** — the main workspace. A large frame preview from
-  `POST /api/projects/:name/preview-frame?script=`, a transport bar under
-  the viewer (centred rewind / larger play / stop; timecode on the left;
-  **Import audio** then `frame N · fps · script` on the right), and **read-only timeline lanes**
-  at the bottom (Body/Move, Face, Props, Dialogue, Audio, SFX, Camera).
+  `POST /api/projects/:name/preview-frame?script=`, a thin transport bar under
+  the viewer (centred rewind / play / stop as small flat monochrome icon
+  buttons, ~24px; play uses a small accent on the icon only; timecode on
+  the left; **Import audio** then `frame N · fps · script` on the right),
+  and **read-only timeline lanes** at the bottom (Body/Move, Face, Props,
+  Dialogue, Audio, SFX, Camera).
   The old single Action lane is split so overlapping motion is visible:
   `[Move:]` / `[Swing:]` / `[Pose:]` / `body=` cycles on Body/Move,
   `face=` / `eyes=` / mouth pins on Face, `[Prop:]` on Props, and
-  `[Camera:]` stays on Camera. Empty category lanes collapse to a thin
-  row. Two blocks that overlap in the same lane stack in sub-rows
-  instead of covering each other. Timed `wait=false` actions use their
-  real `over=` / `for=` start and end, not just script order. Dialogue
-  and audio lanes are unchanged. Space toggles
+  `[Camera:]` stays on Camera. Occupied lanes default to ~30px per stacked
+  sub-row with the label vertically centred in a fixed-width left column;
+  empty category lanes stay thin with a readable label that does not
+  overlap its neighbours. A **Lanes** height slider (`+` / `−`) in the
+  timeline header scales every lane between compact and tall and persists
+  in `localStorage` (`engine.studio.laneHeight.v1`). Two blocks that overlap
+  in the same lane stack in sub-rows instead of covering each other.
+  Timed `wait=false` actions
+  use their real `over=` / `for=` start and end, not just script order.
+  Dialogue and audio lanes are unchanged. Space toggles
   play. Stop returns to frame 0; rewind does the same. Play uses, in
   order: (a) an up-to-date `renders/<script-stem>.mp4` or leftover
   `output.mp4` (mtime ≥ the script) in the viewport with sound and a
@@ -172,7 +179,14 @@ clobber the project's `timeline.json`.
   whose ticks step from frames to seconds to minutes, and the playhead
   scrolls into view during playback. Lanes, blocks, and the playhead
   share one pixel-per-frame scale. Zoom persists per project in
-  `localStorage` (`engine.studio.timelineZoom.v1`).
+  `localStorage` (`engine.studio.timelineZoom.v1`). The timeline panel
+  defaults tall enough to show all seven category lanes; drag its top
+  splitter to resize (persisted in `engine.studio.stageLayout.v1`;
+  double-click resets). If stacked or taller lanes still overflow, the
+  lane area scrolls vertically — labels scroll with the lanes and the
+  time ruler stays fixed at the top. The horizontal scrollbar is a
+  separate bar pinned to the very bottom edge of the timeline panel
+  (always visible, never over the lanes), independent of panel height.
   **Assets / Media / Effects** are a left dock (library characters,
   backgrounds, props) that slides in over the stage — not a full-page
   switch. The right icon rail opens **Marks**, **Layers**, **Script**

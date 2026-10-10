@@ -2,6 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  DEFAULT_LANE_SCALE,
+  H_SCROLLBAR_PX,
+  LABEL_WIDTH,
+  LANE_SCALE_STEP,
+  MAX_LANE_SCALE,
+  MIN_LANE_SCALE,
+  RULER_PX,
+  chipHeightPx,
+  clampLaneScale,
+  laneHeightPx,
+  laneRowCount,
+  laneScaleToSlider,
+  loadLaneScale,
+  occupiedLaneRowPx,
+  saveLaneScale,
+  sliderToLaneScale,
+} from "@/lib/timelineLanes";
+import {
   MAX_ZOOM,
   MIN_ZOOM,
   ZOOM_STEP,
@@ -27,16 +45,6 @@ const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
   { id: "camera", label: "Camera", bar: "bg-violet-500/80", text: "text-violet-50" },
 ];
 
-const LABEL_WIDTH = 80;
-const LANE_ROW_PX = 28;
-const LANE_EMPTY_PX = 12;
-
-function laneHeight(blocks: LaneBlock[]): number {
-  if (blocks.length === 0) return LANE_EMPTY_PX;
-  const rows = Math.max(1, ...blocks.map((block) => (block.row ?? 0) + 1));
-  return rows * LANE_ROW_PX;
-}
-
 export default function TimelineLanes({
   project,
   lanes,
@@ -58,13 +66,28 @@ export default function TimelineLanes({
   const fps = Math.max(lanes?.fps || 24, 1);
   const maxFrame = Math.max(total - 1, 0);
   const [zoom, setZoom] = useState(MIN_ZOOM);
+  const [laneScale, setLaneScale] = useState(DEFAULT_LANE_SCALE);
   const [viewWidth, setViewWidth] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const hScrollRef = useRef<HTMLDivElement | null>(null);
+  const rulerScrollRef = useRef<HTMLDivElement | null>(null);
+  const laneHRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<HTMLDivElement | null>(null);
+  const wheelRef = useRef<HTMLDivElement | null>(null);
   const zoomRef = useRef(zoom);
   const followLockRef = useRef(false);
   zoomRef.current = zoom;
+
+  const rowPx = occupiedLaneRowPx(laneScale);
+  const chipPx = chipHeightPx(laneScale);
+
+  const laneBlocks = useMemo(() => {
+    const blocks = lanes?.blocks || [];
+    return LANE_META.map((lane) => {
+      const list = blocks.filter((b) => b.lane === lane.id);
+      return { ...lane, blocks: list, height: laneHeightPx(list, laneScale), rows: laneRowCount(list) };
+    });
+  }, [lanes, laneScale]);
 
   useEffect(() => {
     if (!project) {
@@ -78,6 +101,14 @@ export default function TimelineLanes({
     if (!project) return;
     saveProjectZoom(project, zoom);
   }, [project, zoom]);
+
+  useEffect(() => {
+    setLaneScale(loadLaneScale());
+  }, []);
+
+  useEffect(() => {
+    saveLaneScale(laneScale);
+  }, [laneScale]);
 
   useEffect(() => {
     const el = viewRef.current;
@@ -104,32 +135,43 @@ export default function TimelineLanes({
     [total, fps, ppf, scrollLeft, viewWidth, trackW]
   );
 
-  const applyScroll = useCallback((next: number) => {
-    const el = scrollRef.current;
+  const applyHScroll = useCallback((next: number) => {
+    const el = hScrollRef.current;
     if (!el) return;
     const max = Math.max(0, el.scrollWidth - el.clientWidth);
     const clamped = Math.max(0, Math.min(max, next));
     el.scrollLeft = clamped;
+    if (rulerScrollRef.current) rulerScrollRef.current.scrollLeft = clamped;
+    if (laneHRef.current) laneHRef.current.scrollLeft = clamped;
     setScrollLeft(clamped);
+  }, []);
+
+  const onHScroll = useCallback(() => {
+    const el = hScrollRef.current;
+    if (!el) return;
+    const left = el.scrollLeft;
+    if (rulerScrollRef.current) rulerScrollRef.current.scrollLeft = left;
+    if (laneHRef.current) laneHRef.current.scrollLeft = left;
+    setScrollLeft(left);
   }, []);
 
   useEffect(() => {
     if (!playing) return;
-    const el = scrollRef.current;
+    const el = hScrollRef.current;
     if (!el || followLockRef.current) return;
     const next = followPlayheadScroll(frame, ppf, el.scrollLeft, el.clientWidth);
-    if (next != null) applyScroll(next);
-  }, [playing, frame, ppf, applyScroll]);
+    if (next != null) applyHScroll(next);
+  }, [playing, frame, ppf, applyHScroll]);
 
   const seekFromClientX = useCallback(
     (clientX: number) => {
-      const el = scrollRef.current;
+      const el = viewRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      const x = el.scrollLeft + (clientX - rect.left);
+      const x = scrollLeft + (clientX - rect.left);
       onSeek(Math.max(0, Math.min(maxFrame, Math.round(x / Math.max(ppf, 1e-6)))), null);
     },
-    [onSeek, maxFrame, ppf]
+    [onSeek, maxFrame, ppf, scrollLeft]
   );
 
   function onRulerPointerDown(event: React.PointerEvent<HTMLDivElement>) {
@@ -161,13 +203,13 @@ export default function TimelineLanes({
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     followLockRef.current = true;
-    panRef.current = { pointerId: event.pointerId, startX: event.clientX, startScroll: scrollRef.current?.scrollLeft || 0 };
+    panRef.current = { pointerId: event.pointerId, startX: event.clientX, startScroll: hScrollRef.current?.scrollLeft || 0 };
   }
 
   function onPanPointerMove(event: React.PointerEvent<HTMLDivElement>) {
     const pan = panRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    applyScroll(pan.startScroll - (event.clientX - pan.startX));
+    applyHScroll(pan.startScroll - (event.clientX - pan.startX));
   }
 
   function onPanPointerUp(event: React.PointerEvent<HTMLDivElement>) {
@@ -176,46 +218,53 @@ export default function TimelineLanes({
   }
 
   useEffect(() => {
-    const el = scrollRef.current;
+    const el = wheelRef.current;
     if (!el) return;
     function onWheel(event: WheelEvent) {
-      if (!el) return;
+      const h = hScrollRef.current;
+      const view = viewRef.current;
+      if (!h) return;
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
-        const rect = el.getBoundingClientRect();
+        const rect = (view || h).getBoundingClientRect();
         const cursorX = event.clientX - rect.left;
+        const width = view?.clientWidth || h.clientWidth;
         const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-        const next = zoomAroundCursor(zoomRef.current, factor, cursorX, el.scrollLeft, total, el.clientWidth);
+        const next = zoomAroundCursor(zoomRef.current, factor, cursorX, h.scrollLeft, total, width);
         setZoom(next.zoom);
-        requestAnimationFrame(() => applyScroll(next.scrollLeft));
+        requestAnimationFrame(() => applyHScroll(next.scrollLeft));
         return;
       }
       if (Math.abs(event.deltaX) > 0.5 || Math.abs(event.deltaY) > 0.5) {
         event.preventDefault();
-        applyScroll(el.scrollLeft + (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY));
+        applyHScroll(h.scrollLeft + (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY));
       }
     }
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [applyScroll, total]);
+  }, [applyHScroll, total]);
 
   function nudgeZoom(factor: number) {
-    const el = scrollRef.current;
-    const width = el?.clientWidth || viewWidth || 1;
+    const h = hScrollRef.current;
+    const width = viewRef.current?.clientWidth || h?.clientWidth || viewWidth || 1;
     const cursorX = width / 2;
-    const next = zoomAroundCursor(zoom, factor, cursorX, el?.scrollLeft || 0, total, width);
+    const next = zoomAroundCursor(zoom, factor, cursorX, h?.scrollLeft || 0, total, width);
     setZoom(next.zoom);
-    requestAnimationFrame(() => applyScroll(next.scrollLeft));
+    requestAnimationFrame(() => applyHScroll(next.scrollLeft));
   }
 
   function onFit() {
     setZoom(MIN_ZOOM);
-    requestAnimationFrame(() => applyScroll(0));
+    requestAnimationFrame(() => applyHScroll(0));
+  }
+
+  function nudgeLaneScale(delta: number) {
+    setLaneScale((current) => clampLaneScale(current + delta));
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-studio-panel" data-testid="timeline-lanes">
-      <div className="flex shrink-0 items-center gap-2 px-3 py-1 text-[11px] text-studio-muted">
+      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-[11px] text-studio-muted">
         <span className="uppercase tracking-[0.14em]">Timeline</span>
         <div className="flex items-center gap-1" data-testid="timeline-zoom-controls">
           <button
@@ -239,13 +288,13 @@ export default function TimelineLanes({
             data-testid="timeline-zoom-slider"
             className="studio-zoom-slider w-28"
             onChange={(event) => {
-              const el = scrollRef.current;
-              const width = el?.clientWidth || viewWidth || 1;
+              const h = hScrollRef.current;
+              const width = viewRef.current?.clientWidth || h?.clientWidth || viewWidth || 1;
               const nextZoom = sliderToZoom(Number(event.target.value));
               const factor = zoom > 0 ? nextZoom / zoom : 1;
-              const next = zoomAroundCursor(zoom, factor, width / 2, el?.scrollLeft || 0, total, width);
+              const next = zoomAroundCursor(zoom, factor, width / 2, h?.scrollLeft || 0, total, width);
               setZoom(next.zoom);
-              requestAnimationFrame(() => applyScroll(next.scrollLeft));
+              requestAnimationFrame(() => applyHScroll(next.scrollLeft));
             }}
           />
           <button
@@ -270,104 +319,159 @@ export default function TimelineLanes({
             Fit
           </button>
         </div>
-        <span className="ml-auto hidden uppercase tracking-[0.14em] sm:inline">Read-only · script is the source of truth</span>
-      </div>
-      <div className="flex min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <div className="shrink-0" style={{ width: LABEL_WIDTH }}>
-          <div className="h-5" />
-          {LANE_META.map((lane) => {
-            const blocks = (lanes?.blocks || []).filter((b) => b.lane === lane.id);
-            const height = laneHeight(blocks);
-            return (
-              <div
-                key={lane.id}
-                className="truncate pt-0.5 text-[11px] font-medium uppercase tracking-wide text-studio-muted"
-                style={{ height }}
-                data-testid={`timeline-label-${lane.id}`}
-                data-empty={blocks.length === 0 ? "true" : "false"}
-              >
-                {lane.label}
-              </div>
-            );
-          })}
+        <div className="flex items-center gap-1" data-testid="timeline-lane-height-controls" title="Lane height">
+          <span className="hidden uppercase tracking-[0.14em] md:inline">Lanes</span>
+          <button
+            type="button"
+            data-testid="timeline-lane-height-down"
+            title="Shorter lanes"
+            aria-label="Shorter lanes"
+            onClick={() => nudgeLaneScale(-LANE_SCALE_STEP)}
+            disabled={laneScale <= MIN_LANE_SCALE}
+            className="flex h-6 w-6 items-center justify-center rounded border border-neutral-600 bg-black/40 text-white hover:bg-neutral-700 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-studio-accent"
+          >
+            −
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={laneScaleToSlider(laneScale)}
+            aria-label="Lane height"
+            data-testid="timeline-lane-height-slider"
+            className="studio-zoom-slider w-16"
+            onChange={(event) => setLaneScale(sliderToLaneScale(Number(event.target.value)))}
+          />
+          <button
+            type="button"
+            data-testid="timeline-lane-height-up"
+            title="Taller lanes"
+            aria-label="Taller lanes"
+            onClick={() => nudgeLaneScale(LANE_SCALE_STEP)}
+            disabled={laneScale >= MAX_LANE_SCALE}
+            className="flex h-6 w-6 items-center justify-center rounded border border-neutral-600 bg-black/40 text-white hover:bg-neutral-700 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-studio-accent"
+          >
+            +
+          </button>
         </div>
-        <div className="relative min-w-0 flex-1" ref={viewRef}>
+        <span className="ml-auto hidden uppercase tracking-[0.14em] lg:inline">Read-only · script is the source of truth</span>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col" ref={wheelRef}>
+        <div className="flex shrink-0">
+          <div className="shrink-0" style={{ width: LABEL_WIDTH, height: RULER_PX }} />
           <div
-            ref={scrollRef}
-            data-testid="timeline-scroll"
-            className="overflow-x-auto"
-            onScroll={(event) => setScrollLeft(event.currentTarget.scrollLeft)}
+            ref={rulerScrollRef}
+            className="min-w-0 flex-1 overflow-hidden"
+            style={{ height: RULER_PX }}
           >
             <div
-              className="relative"
-              style={{ width: trackW, minHeight: "100%" }}
-              data-testid="timeline-track"
-              onPointerDown={onPanPointerDown}
-              onPointerMove={onPanPointerMove}
-              onPointerUp={onPanPointerUp}
-              onPointerCancel={onPanPointerUp}
+              data-testid="timeline-ruler"
+              className="relative cursor-ew-resize border-b border-neutral-800 bg-studio-panel"
+              style={{ width: trackW, height: RULER_PX }}
+              onPointerDown={onRulerPointerDown}
+              onPointerMove={onRulerPointerMove}
+              onPointerUp={onRulerPointerUp}
+              onPointerCancel={onRulerPointerUp}
             >
-              <div
-                data-testid="timeline-ruler"
-                className="relative h-5 cursor-ew-resize border-b border-neutral-800"
-                onPointerDown={onRulerPointerDown}
-                onPointerMove={onRulerPointerMove}
-                onPointerUp={onRulerPointerUp}
-                onPointerCancel={onRulerPointerUp}
-              >
-                {ticks.map((tick) => (
-                  <div
-                    key={`${tick.major ? "M" : "m"}-${tick.frame}`}
-                    className="absolute top-0 h-full"
-                    style={{ left: tick.frame * ppf }}
-                  >
-                    <div className={`w-px ${tick.major ? "h-3 bg-neutral-300" : "h-1.5 bg-neutral-600"}`} />
-                    {tick.label ? (
-                      <span className="absolute left-1 top-0 font-mono text-[9px] tabular-nums text-neutral-300">
-                        {tick.label}
-                      </span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-              <div data-testid="timeline-scrubber" className="relative">
-                {LANE_META.map((lane) => {
-                  const blocks = (lanes?.blocks || []).filter((b) => b.lane === lane.id);
-                  const height = laneHeight(blocks);
-                  return (
-                    <div
-                      key={lane.id}
-                      className="relative"
-                      style={{ height }}
-                      data-testid={`timeline-lane-${lane.id}`}
-                      data-rows={blocks.length === 0 ? 0 : Math.max(1, ...blocks.map((b) => (b.row ?? 0) + 1))}
-                    >
-                      <div className="absolute inset-x-0 inset-y-0.5 rounded-sm bg-black/40" />
-                      {blocks.map((block) => (
-                        <LaneChip
-                          key={block.id}
-                          block={block}
-                          ppf={ppf}
-                          selected={selectedLine != null && block.scriptLine === selectedLine}
-                          bar={lane.bar}
-                          text={lane.text}
-                          onSeek={onSeek}
-                        />
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
-              <div
-                className="pointer-events-none absolute bottom-0 top-0 z-10"
-                style={{ left: playheadX }}
-                data-testid="timeline-playhead"
-              >
+              {ticks.map((tick) => (
+                <div
+                  key={`${tick.major ? "M" : "m"}-${tick.frame}`}
+                  className="absolute top-0 h-full"
+                  style={{ left: tick.frame * ppf }}
+                >
+                  <div className={`w-px ${tick.major ? "h-3 bg-neutral-300" : "h-1.5 bg-neutral-600"}`} />
+                  {tick.label ? (
+                    <span className="absolute left-1 top-0 font-mono text-[9px] tabular-nums text-neutral-300">
+                      {tick.label}
+                    </span>
+                  ) : null}
+                </div>
+              ))}
+              <div className="pointer-events-none absolute top-0 z-10" style={{ left: playheadX }}>
                 <div className="studio-playhead-handle pointer-events-none" />
-                <div className="studio-playhead-line" />
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1 overflow-y-auto overflow-x-hidden" data-testid="timeline-lanes-body">
+          <div className="flex w-full">
+            <div className="shrink-0" style={{ width: LABEL_WIDTH }} data-testid="timeline-label-column">
+              {laneBlocks.map((lane) => (
+                <div
+                  key={lane.id}
+                  className="flex items-center overflow-hidden whitespace-nowrap px-1.5 text-[10px] font-medium uppercase leading-none tracking-wide text-studio-muted"
+                  style={{ height: lane.height }}
+                  data-testid={`timeline-label-${lane.id}`}
+                  data-empty={lane.blocks.length === 0 ? "true" : "false"}
+                  title={lane.label}
+                >
+                  {lane.label}
+                </div>
+              ))}
+            </div>
+            <div className="relative min-w-0 flex-1" ref={viewRef}>
+              <div ref={laneHRef} className="overflow-x-hidden" data-testid="timeline-scroll">
+                <div
+                  className="relative"
+                  style={{ width: trackW }}
+                  data-testid="timeline-track"
+                  onPointerDown={onPanPointerDown}
+                  onPointerMove={onPanPointerMove}
+                  onPointerUp={onPanPointerUp}
+                  onPointerCancel={onPanPointerUp}
+                >
+                  <div data-testid="timeline-scrubber" className="relative">
+                    {laneBlocks.map((lane) => (
+                      <div
+                        key={lane.id}
+                        className="relative"
+                        style={{ height: lane.height }}
+                        data-testid={`timeline-lane-${lane.id}`}
+                        data-rows={lane.rows}
+                      >
+                        <div className="absolute inset-x-0 inset-y-0.5 rounded-sm bg-black/40" />
+                        {lane.blocks.map((block) => (
+                          <LaneChip
+                            key={block.id}
+                            block={block}
+                            ppf={ppf}
+                            rowPx={rowPx}
+                            chipPx={chipPx}
+                            selected={selectedLine != null && block.scriptLine === selectedLine}
+                            bar={lane.bar}
+                            text={lane.text}
+                            onSeek={onSeek}
+                          />
+                        ))}
+                      </div>
+                    ))}
+                    <div
+                      className="pointer-events-none absolute bottom-0 top-0 z-10"
+                      style={{ left: playheadX }}
+                      data-testid="timeline-playhead"
+                    >
+                      <div className="studio-playhead-line studio-playhead-line--lanes" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex shrink-0 border-t border-neutral-800 bg-studio-panel" data-testid="timeline-h-scroll-row">
+        <div className="shrink-0" style={{ width: LABEL_WIDTH, height: H_SCROLLBAR_PX }} />
+        <div
+          ref={hScrollRef}
+          data-testid="timeline-h-scroll"
+          className="studio-timeline-hscroll min-w-0 flex-1"
+          onScroll={onHScroll}
+        >
+          <div style={{ width: trackW, height: 1 }} aria-hidden="true" />
         </div>
       </div>
     </div>
@@ -377,6 +481,8 @@ export default function TimelineLanes({
 function LaneChip({
   block,
   ppf,
+  rowPx,
+  chipPx,
   selected,
   bar,
   text,
@@ -384,14 +490,16 @@ function LaneChip({
 }: {
   block: LaneBlock;
   ppf: number;
+  rowPx: number;
+  chipPx: number;
   selected: boolean;
   bar: string;
   text: string;
   onSeek: (frame: number, scriptLine: number | null) => void;
 }) {
   const left = block.startFrame * ppf;
-  const width = Math.max((Math.max(block.endFrame - block.startFrame, 1)) * ppf, 2);
-  const top = (block.row ?? 0) * LANE_ROW_PX + 2;
+  const width = Math.max(Math.max(block.endFrame - block.startFrame, 1) * ppf, 2);
+  const top = (block.row ?? 0) * rowPx + 2;
   return (
     <button
       type="button"
@@ -399,10 +507,10 @@ function LaneChip({
         block.scriptLine ? ` · line ${block.scriptLine}` : ""
       }`}
       onClick={() => onSeek(block.startFrame, block.scriptLine)}
-      className={`absolute z-[1] h-6 overflow-hidden rounded-sm px-1.5 text-left text-[10px] leading-6 ${bar} ${text} ${
+      className={`absolute z-[1] overflow-hidden rounded-sm px-1.5 text-left text-[10px] ${bar} ${text} ${
         selected ? "ring-2 ring-white" : ""
       }`}
-      style={{ left, width, top }}
+      style={{ left, width, top, height: chipPx, lineHeight: `${chipPx}px` }}
       data-row={block.row ?? 0}
     >
       <span className="block truncate">{block.label}</span>
