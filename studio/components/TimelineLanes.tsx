@@ -488,7 +488,7 @@ export default function TimelineLanes({
     return frame > take.start && frame < take.end;
   }
 
-  function onTrimPointerDown(event: React.PointerEvent<HTMLDivElement>, block: LaneBlock, edge: "in" | "out") {
+  function onTrimPointerDown(event: React.PointerEvent<HTMLElement>, block: LaneBlock, edge: "in" | "out") {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1251,7 +1251,7 @@ function LaneChip({
   viewStartFrame?: number;
   viewEndFrame?: number;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock) => void;
-  onTrimPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock, edge: "in" | "out") => void;
+  onTrimPointerDown: (event: React.PointerEvent<HTMLElement>, block: LaneBlock, edge: "in" | "out") => void;
   onToggleMouth?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onCueClick?: (cue: { shape: string; start: number; end: number; pinned?: boolean }, index: number, x: number, y: number) => void;
   onSyncLine?: () => void;

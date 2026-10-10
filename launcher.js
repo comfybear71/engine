@@ -21,6 +21,9 @@ const DEFAULTS = {
   studioOrigin: "http://localhost:3001",
 };
 
+const LAUNCHER_ERR_LOG = "launcher.err.log";
+const BUILD_RETRY_MS = 30_000;
+
 function readEnvFile(filePath) {
   const out = {};
   if (!fs.existsSync(filePath)) return out;
@@ -134,6 +137,58 @@ function writeBuildStamp(paths) {
   fs.writeFileSync(buildStampPath(paths.studioDir), JSON.stringify(stamp) + "\n");
 }
 
+function launcherErrLogPath(rootDir) {
+  return path.join(rootDir, LAUNCHER_ERR_LOG);
+}
+
+function appendLauncherError(rootDir, text) {
+  const body = String(text || "").trimEnd();
+  fs.appendFileSync(launcherErrLogPath(rootDir), `[${new Date().toISOString()}]\n${body}\n\n`);
+}
+
+function buildFailureStampPath(studioDir) {
+  return path.join(studioDir, ".next", "engine-build-failure.json");
+}
+
+function readBuildFailureStamp(studioDir) {
+  const file = buildFailureStampPath(studioDir);
+  if (!fs.existsSync(file)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeBuildFailureStamp(paths) {
+  const stamp = {
+    sourceMtime: studioSourceMtime(paths.studioDir),
+    failedAt: new Date().toISOString(),
+  };
+  fs.mkdirSync(path.join(paths.studioDir, ".next"), { recursive: true });
+  fs.writeFileSync(buildFailureStampPath(paths.studioDir), JSON.stringify(stamp) + "\n");
+  return stamp;
+}
+
+function clearBuildFailureStamp(studioDir) {
+  const file = buildFailureStampPath(studioDir);
+  if (fs.existsSync(file)) fs.unlinkSync(file);
+}
+
+function sourceUnchangedSinceBuildFailure(paths) {
+  const failure = readBuildFailureStamp(paths.studioDir);
+  if (!failure || typeof failure.sourceMtime !== "number") return false;
+  return studioSourceMtime(paths.studioDir) <= failure.sourceMtime;
+}
+
+function formatSpawnOutput(result) {
+  const chunks = [];
+  if (result.stdout) chunks.push(String(result.stdout));
+  if (result.stderr) chunks.push(String(result.stderr));
+  if (result.error) chunks.push(result.error.stack || result.error.message);
+  return chunks.join("\n").trim();
+}
+
 function studioNeedsRebuild(paths) {
   const buildId = path.join(paths.studioDir, ".next", "BUILD_ID");
   if (!fs.existsSync(buildId)) return true;
@@ -145,22 +200,36 @@ function studioNeedsRebuild(paths) {
 }
 
 function ensureStudioBuild(paths, env) {
-  if (isStudioDev(env)) return { built: false, skipped: true };
-  if (!studioNeedsRebuild(paths)) return { built: false, skipped: true };
+  if (isStudioDev(env)) return { built: false, skipped: true, useDev: false };
+  if (!studioNeedsRebuild(paths)) return { built: false, skipped: true, useDev: false };
+  if (sourceUnchangedSinceBuildFailure(paths)) {
+    return { built: false, skipped: true, useDev: true };
+  }
   console.log("Building Studio…");
   const result = spawnSync(process.execPath, [paths.nextBin, "build"], {
     cwd: paths.studioDir,
     env,
-    stdio: "inherit",
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  if (result.status !== 0) {
+  if (result.status !== 0 || result.error) {
+    const output = formatSpawnOutput(result) || `Studio build exited with status ${result.status}.`;
+    writeBuildFailureStamp(paths);
+    appendLauncherError(
+      paths.root,
+      `Studio production build failed (status ${result.status == null ? "error" : result.status}).\n${output}`
+    );
+    if (output) console.error(output);
     const err = new Error("Studio build failed.");
     err.code = "STUDIO_BUILD";
+    err.output = output;
     throw err;
   }
+  clearBuildFailureStamp(paths.studioDir);
   writeBuildStamp(paths);
-  return { built: true };
+  return { built: true, useDev: false };
 }
 
 function waitForHttp(url, timeoutMs) {
@@ -228,6 +297,8 @@ function createSupervisor(options) {
   const children = { worker: null, studio: null };
   const delays = { worker: 1000, studio: 1000 };
   let openedBrowser = false;
+  let buildRetryTimer = null;
+  let studioDevFallback = false;
 
   function restartDelay(name) {
     const next = Math.min(delays[name] * 2, 8000);
@@ -252,6 +323,31 @@ function createSupervisor(options) {
     delays.worker = 1000;
   }
 
+  function clearBuildRetryTimer() {
+    if (buildRetryTimer) {
+      clearTimeout(buildRetryTimer);
+      buildRetryTimer = null;
+    }
+  }
+
+  function scheduleProductionBuildRetry() {
+    if (stopping.value || buildRetryTimer) return;
+    buildRetryTimer = setTimeout(() => {
+      buildRetryTimer = null;
+      if (stopping.value || !studioDevFallback) return;
+      if (sourceUnchangedSinceBuildFailure(paths)) {
+        scheduleProductionBuildRetry();
+        return;
+      }
+      console.log("Studio source changed. Retrying the production build…");
+      if (children.studio && !children.studio.killed) {
+        children.studio.kill();
+        return;
+      }
+      startStudio();
+    }, BUILD_RETRY_MS);
+  }
+
   function startStudio() {
     if (stopping.value) return;
     if (!fs.existsSync(paths.nextBin)) {
@@ -259,20 +355,26 @@ function createSupervisor(options) {
       return;
     }
     const studioEnv = { ...baseEnv, PORT: studioPort };
-    const dev = isStudioDev(studioEnv);
+    let dev = isStudioDev(studioEnv);
+    studioDevFallback = false;
     if (!dev) {
       try {
-        ensureStudioBuild(paths, studioEnv);
+        const result = ensureStudioBuild(paths, studioEnv);
+        if (result.useDev) {
+          dev = true;
+          studioDevFallback = true;
+        }
       } catch (err) {
         console.error(err instanceof Error ? err.message : "Studio build failed.");
-        if (!fs.existsSync(path.join(paths.studioDir, ".next", "BUILD_ID"))) {
-          const wait = restartDelay("studio");
-          console.error(`Trying the Studio build again in ${Math.round(wait / 1000)}s…`);
-          setTimeout(startStudio, wait);
-          return;
-        }
+        console.error(
+          `Starting next dev on port ${studioPort} so Studio stays up. The production build error is in ${LAUNCHER_ERR_LOG}. It will be retried when Studio source changes.`
+        );
+        dev = true;
+        studioDevFallback = true;
       }
     }
+    if (studioDevFallback) scheduleProductionBuildRetry();
+    else clearBuildRetryTimer();
     children.studio = spawnChild(
       "studio",
       studioLaunchArgs(paths.nextBin, studioPort, { dev }),
@@ -304,6 +406,7 @@ function createSupervisor(options) {
 
   function stop() {
     stopping.value = true;
+    clearBuildRetryTimer();
     for (const child of Object.values(children)) {
       if (child && !child.killed) child.kill();
     }
@@ -337,4 +440,8 @@ module.exports = {
   studioNeedsRebuild,
   studioSourceMtime,
   ensureStudioBuild,
+  appendLauncherError,
+  launcherErrLogPath,
+  sourceUnchangedSinceBuildFailure,
+  readBuildFailureStamp,
 };
