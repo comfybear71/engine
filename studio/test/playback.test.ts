@@ -75,6 +75,8 @@ describe("stage playback helpers", () => {
     assert.ok(tail.frames <= 24);
     assert.equal(frameInSegment(250, mid), true);
     assert.equal(frameInSegment(239, mid), false);
+    assert.equal(frameInSegment(mid.endFrame, mid), false);
+    assert.equal(frameInSegment(mid.endFrame, mid, 2), true);
   });
 
   test("clipDurationSec prefers the WAV header, else the lane span", () => {

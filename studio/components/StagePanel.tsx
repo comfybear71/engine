@@ -150,9 +150,10 @@ export default function StagePanel({
 
   const videoChoice = chooseVideoFile(playback);
   const fullVideoSrc = project && videoChoice ? renderVideoUrl(project, renderNonce || undefined, script, videoChoice.file) : null;
-  const segmentSrc = project && segment?.file ? previewSegmentUrl(project, segment.file) : null;
-  const videoSrc = fullVideoSrc || (playing && segmentSrc ? segmentSrc : null);
-  const playOriginFrame = fullVideoSrc ? 0 : segment?.startFrame || 0;
+  const segmentLive = Boolean(segment && frameInSegment(frame, segment, 2));
+  const segmentSrc = project && segment?.file && (fullVideoSrc || segmentLive) ? previewSegmentUrl(project, segment.file) : null;
+  const videoSrc = fullVideoSrc || (playing && segmentLive && segmentSrc ? segmentSrc : null);
+  const playOriginFrame = fullVideoSrc ? 0 : segmentLive ? segment?.startFrame || 0 : 0;
 
   useEffect(() => {
     setLayout(loadStageLayout());
@@ -598,9 +599,10 @@ export default function StagePanel({
 
   useEffect(() => {
     if (!playing || !segmentSrc || fullVideoSrc) return;
+    const current = segmentRef.current;
+    if (!frameInSegment(frameRef.current, current, 2)) return;
     const video = videoRef.current;
     if (!video) return;
-    const current = segmentRef.current;
     const origin = current?.startFrame || 0;
     video.currentTime = Math.max(0, (frameRef.current - origin) / Math.max(fps, 1));
     void video.play().catch(() => undefined);
@@ -880,8 +882,25 @@ export default function StagePanel({
                     playsInline
                     onTimeUpdate={onVideoTimeUpdate}
                     onEnded={() => {
-                      setPlaying(false);
-                      seekTo(maxFrame, scriptLineAtFrame(lanes?.blocks || [], maxFrame));
+                      if (fullVideoSrc) {
+                        setPlaying(false);
+                        seekTo(maxFrame, scriptLineAtFrame(lanes?.blocks || [], maxFrame));
+                        return;
+                      }
+                      const current = segmentRef.current;
+                      const nextFrame = current ? current.startFrame + current.frames : frameRef.current + 1;
+                      if (nextFrame >= maxFrame) {
+                        setPlaying(false);
+                        seekTo(maxFrame, scriptLineAtFrame(lanes?.blocks || [], maxFrame));
+                        return;
+                      }
+                      const upcoming = nextSegmentRef.current;
+                      if (upcoming && upcoming.file !== current?.file) {
+                        nextSegmentRef.current = null;
+                        setSegment(upcoming);
+                        return;
+                      }
+                      void ensurePlaySegment(nextFrame);
                     }}
                     onError={() => {
                       setPlayback((current) =>

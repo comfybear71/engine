@@ -62,10 +62,11 @@ export function segmentWindow(
 
 export function frameInSegment(
   frame: number,
-  segment: { startFrame: number; frames: number } | null | undefined
+  segment: { startFrame: number; frames: number } | null | undefined,
+  slackFrames = 0
 ): boolean {
   if (!segment) return false;
-  return frame >= segment.startFrame && frame < segment.startFrame + segment.frames;
+  return frame >= segment.startFrame && frame < segment.startFrame + segment.frames + Math.max(0, slackFrames);
 }
 
 export function shouldFallbackToProxy(frameFetchMs: number, fps: number, _totalFrames = 0): boolean {
