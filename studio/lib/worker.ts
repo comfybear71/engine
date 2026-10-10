@@ -615,7 +615,24 @@ export async function loadLanes(name: string, script?: string | null): Promise<L
   return res.json() as Promise<LanesResponse>;
 }
 
-export type StudioSettings = { lipSync: "auto" | "manual" };
+export type LipSyncNaturalSettings = {
+  smoothing: "off" | "light" | "medium";
+  head_bob: "off" | "subtle" | "strong";
+  blinks: boolean;
+  loud_threshold: number;
+};
+
+export type StudioSettings = {
+  lipSync: "auto" | "manual";
+  lipsync?: LipSyncNaturalSettings;
+};
+
+export const DEFAULT_LIPSYNC_SETTINGS: LipSyncNaturalSettings = {
+  smoothing: "light",
+  head_bob: "subtle",
+  blinks: true,
+  loud_threshold: 0.75,
+};
 export type LipSyncResult = {
   scriptLine: number;
   ok: boolean;

@@ -11,10 +11,11 @@ deals with fully-resolved, frame-accurate data.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import lipsync
+from . import lipsync_natural
 from .camera import Camera, CameraKeyframe, Shake
 from .interpolate import interpolate_scalar
 from .media_probe import probe_duration_seconds
@@ -94,6 +95,13 @@ class Child:
 
 
 @dataclass(frozen=True)
+class WordTiming:
+    word: str
+    start: float
+    end: float
+
+
+@dataclass(frozen=True)
 class DialogueClip:
     """One spoken line's audio, placed at a layer-local frame.
 
@@ -115,6 +123,7 @@ class DialogueClip:
     view: str | None = None  # head/mouth set for this line; compositor falls back to front
     trim_in: float = 0.0  # seconds into the source file
     source_duration_seconds: float | None = None
+    words: list[WordTiming] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -584,6 +593,11 @@ def _build_dialogue_clip(
         cues = _slice_cues(lipsync.get_cues(lipsync_config, project_dir), trim_in, trim_out)
 
     view = raw.get("view")
+    words = [
+        WordTiming(word=str(w["word"]), start=float(w["start"]), end=float(w["end"]))
+        for w in raw.get("words") or []
+        if isinstance(w, dict) and w.get("word") is not None
+    ]
     return DialogueClip(
         audio=audio_path,
         start_frame=int(raw["start_frame"]),
@@ -594,7 +608,143 @@ def _build_dialogue_clip(
         view=str(view) if view else None,
         trim_in=trim_in,
         source_duration_seconds=source_s,
+        words=words,
     )
+
+
+def _find_named_slot(layer: Layer, name: str) -> Slot | None:
+    if name in layer.slots:
+        return layer.slots[name]
+    for child in layer.children:
+        if name in child.slots:
+            return child.slots[name]
+    return None
+
+
+def _remap_slots(
+    slots: dict[str, Slot],
+    *,
+    dialogue: list[DialogueClip] | None,
+    bob_starts: list[int],
+    bob_amp: float,
+    bob_rot: float,
+    blink_slot: Slot | None,
+) -> dict[str, Slot]:
+    remapped: dict[str, Slot] = {}
+    for name, slot in slots.items():
+        next_slot = slot
+        if slot.dialogue is not None:
+            next_slot = replace(next_slot, dialogue=dialogue)
+        if blink_slot is not None and name == "eyes":
+            next_slot = replace(next_slot, keyframes=blink_slot.keyframes)
+        if name in lipsync_natural.HEAD_SLOT_NAMES:
+            next_slot = replace(
+                next_slot,
+                head_bob_starts=list(bob_starts),
+                head_bob_amp=bob_amp,
+                head_bob_rotation=bob_rot,
+            )
+        remapped[name] = next_slot
+    return remapped
+
+
+def apply_natural_lipsync(
+    layer: Layer,
+    *,
+    fps: int,
+    scene_frames: int,
+    settings: lipsync_natural.LipSyncSettings,
+    seed: int,
+) -> Layer:
+    """Min-hold, smoothing, loud mouths, blinks, and head bob on one layer."""
+
+    mouth = _find_named_slot(layer, "mouth")
+    dialogue: list[DialogueClip] = []
+    bob_starts: list[int] = []
+    layer_end = layer.end_frame if layer.end_frame is not None else scene_frames
+    visible_frames = max(0, layer_end - layer.start_frame)
+
+    for clip in layer.dialogue:
+        cues = lipsync_natural.process_mouth_cues(
+            clip.cues,
+            duration_frames=clip.duration_frames,
+            fps=fps,
+            smoothing=settings.smoothing,
+        )
+        available = lipsync_natural.drawing_names(mouth, clip.view)
+        if not clip.estimated and clip.audio.is_file():
+            cues = lipsync_natural.apply_loud_to_cues(
+                cues,
+                clip.audio,
+                trim_in=clip.trim_in,
+                threshold_percentile=settings.loud_threshold,
+                available=available,
+            )
+            play_s = clip.duration_frames / float(fps) if fps else 0.0
+            stress = lipsync_natural.clip_stress_times(
+                clip.words,
+                clip.audio,
+                trim_in=clip.trim_in,
+                play_seconds=play_s,
+                threshold_percentile=settings.loud_threshold,
+            )
+            bob_starts.extend(
+                lipsync_natural.head_bob_starts(
+                    stress,
+                    trim_in=clip.trim_in,
+                    clip_start_frame=clip.start_frame,
+                    fps=fps,
+                    duration_frames=visible_frames,
+                )
+            )
+        dialogue.append(replace(clip, cues=cues))
+
+    if settings.head_bob == "off":
+        bob_starts = []
+        bob_amp = 0.0
+        bob_rot = 0.0
+    else:
+        bob_amp = settings.head_bob_amp
+        bob_rot = settings.head_bob_rotation
+
+    eyes = _find_named_slot(layer, "eyes")
+    blink_slot = None
+    if settings.blinks and eyes is not None:
+        blink_kfs = lipsync_natural.insert_auto_blinks(
+            eyes.keyframes,
+            eyes.images,
+            duration_frames=visible_frames,
+            fps=fps,
+            seed=seed,
+            every=settings.blink_every,
+            blink_frames=settings.blink_frames,
+        )
+        blink_slot = replace(eyes, keyframes=blink_kfs)
+
+    dialogue_ref = dialogue or None
+    new_slots = _remap_slots(
+        layer.slots,
+        dialogue=dialogue_ref,
+        bob_starts=bob_starts,
+        bob_amp=bob_amp,
+        bob_rot=bob_rot,
+        blink_slot=blink_slot,
+    )
+    new_children = [
+        replace(
+            child,
+            slots=_remap_slots(
+                child.slots,
+                dialogue=dialogue_ref,
+                bob_starts=bob_starts,
+                bob_amp=bob_amp,
+                bob_rot=bob_rot,
+                blink_slot=blink_slot,
+            ),
+        )
+        for child in layer.children
+    ]
+    return replace(layer, dialogue=dialogue, slots=new_slots, children=new_children)
 
 
 def _build_layer(
@@ -602,6 +752,10 @@ def _build_layer(
     project_dir: Path,
     fps: int,
     lines_by_audio: dict[str, dict],
+    *,
+    scene_frames: int,
+    studio_lipsync: dict,
+    seed: int,
 ) -> Layer:
     timing = raw.get("timing", {})
     start_frame = int(timing.get("start_frame", 0))
@@ -649,6 +803,16 @@ def _build_layer(
         slots=_build_slots(raw.get("slots"), project_dir, dialogue=dialogue or None),
         children=[_build_child(c, project_dir) for c in raw.get("children", [])],
         transform_keyframes=transform_keyframes,
+    )
+    character = lipsync_natural.load_character_config(project_dir, layer.character_id)
+    settings = lipsync_natural.merge_lipsync_settings(studio_lipsync, character)
+    char_seed = lipsync_natural.project_seed(project_dir, layer.character_id or layer.id)
+    return apply_natural_lipsync(
+        layer,
+        fps=fps,
+        scene_frames=scene_frames,
+        settings=settings,
+        seed=seed ^ char_seed,
     )
 
 
@@ -728,7 +892,20 @@ def _build_scene(raw: dict, project_dir: Path, fps: int, lines_by_audio: dict[st
         asset=_resolve(project_dir, raw["background"]["asset"]),
         fit=raw["background"].get("fit", "cover"),
     )
-    layers = [_build_layer(l, project_dir, fps, lines_by_audio) for l in raw.get("layers", [])]
+    studio_lipsync = lipsync_natural.load_studio_lipsync(project_dir)
+    seed = lipsync_natural.project_seed(project_dir)
+    layers = [
+        _build_layer(
+            l,
+            project_dir,
+            fps,
+            lines_by_audio,
+            scene_frames=total_frames,
+            studio_lipsync=studio_lipsync,
+            seed=seed,
+        )
+        for l in raw.get("layers", [])
+    ]
     scene_audio = _resolve(project_dir, raw["audio"]) if "audio" in raw else None
     return Scene(
         id=raw["id"],

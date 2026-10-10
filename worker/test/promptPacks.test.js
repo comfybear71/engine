@@ -40,6 +40,16 @@ describe("Rodney prompt pack", () => {
     assert.match(prompt, /X relaxed smirk/);
     assert.doesNotMatch(prompt, /{{styleBlock}}/);
     assert.match(prompt, /never slanted eyes/i);
+
+    for (const view of ["front", "left_34", "left_side", "right_34", "right_side", "up", "down"]) {
+      const sheet = pack.sets.find((set) => set.id === `mouth_13_${view}`);
+      assert.ok(sheet, `missing 13-mouth set for ${view}`);
+      const filled = fillPackPrompt(sheet, { styleBlock: pack.styleBlock, name: "Rodney" });
+      assert.match(filled, /crimson felt fedora/);
+      assert.match(filled, /B_loud/);
+      assert.match(filled, /never slanted eyes/i);
+      assert.equal(sheet.cells.filter((cell) => cell.name && cell.name !== "empty" && cell.name !== "empty2").length, 13);
+    }
   });
 
   test("pack sets resolve to ingest destinations and never request a mocking eye gesture", () => {
