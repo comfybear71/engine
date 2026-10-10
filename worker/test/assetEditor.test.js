@@ -1,6 +1,6 @@
 "use strict";
 
-const { test, describe } = require("node:test");
+const { test, describe, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
@@ -209,5 +209,50 @@ describe("asset editor", { concurrency: 1 }, () => {
         deleteDrawing(fixture.projectDir, fixture.globalAssetsDir, "alice", "mouth", "A", { confirm: true }),
       /shared library/
     );
+  });
+});
+
+describe("asset editor episode/show/global paths", { concurrency: 1 }, () => {
+  const tmp = fs.mkdtempSync(path.join(require("os").tmpdir(), "engine-asset-editor-show-"));
+  const globalAssetsDir = path.join(tmp, "_global_assets");
+  const showDir = path.join(tmp, "shows", "sunny");
+  const episodeDir = path.join(showDir, "episodes", "pilot");
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  fs.mkdirSync(path.join(globalAssetsDir, "characters", "alice", "mouth"), { recursive: true });
+  fs.mkdirSync(path.join(showDir, "characters", "alice", "mouth_left_side"), { recursive: true });
+  fs.mkdirSync(path.join(episodeDir, "characters", "alice", "mouth"), { recursive: true });
+  fs.writeFileSync(path.join(showDir, "show.json"), JSON.stringify({ name: "Sunny" }));
+  fs.writeFileSync(
+    path.join(globalAssetsDir, "characters", "alice", "character.json"),
+    JSON.stringify({
+      id: "alice",
+      display_name: "Alice",
+      aliases: ["Alice"],
+      asset: "body.png",
+      z: 10,
+      slots: { mouth: { offset: { x: 0, y: -10 }, drawings_dir: "mouth" } },
+      children: [],
+    })
+  );
+  writePng(path.join(globalAssetsDir, "characters", "alice", "mouth", "X.png"));
+  writePng(path.join(globalAssetsDir, "characters", "alice", "mouth", "C.png"));
+  writePng(path.join(showDir, "characters", "alice", "mouth", "B.png"));
+  writePng(path.join(showDir, "characters", "alice", "mouth_left_side", "X.png"));
+  writePng(path.join(episodeDir, "characters", "alice", "mouth", "A.png"));
+  fs.writeFileSync(path.join(episodeDir, "script.txt"), "[Scene: Intro]\n[Cast: Alice]\n");
+
+  test("lists episode, show, and global drawings and show view folders", () => {
+    const slot = describeSlot(episodeDir, globalAssetsDir, "alice", "mouth");
+    const byName = Object.fromEntries(slot.drawings.map((drawing) => [drawing.name, drawing]));
+    assert.equal(byName.A.source, "project");
+    assert.equal(byName.B.source, "show");
+    assert.equal(byName.C.source, "global");
+    assert.ok(slot.views.some((view) => view.id === "left_side"));
+    const side = describeSlot(episodeDir, globalAssetsDir, "alice", "mouth", "left_side");
+    assert.equal(side.view, "left_side");
+    assert.equal(side.drawings[0].source, "show");
+    const drawing = describeDrawing(episodeDir, globalAssetsDir, "alice", "mouth", "B");
+    assert.equal(drawing.drawing.source, "show");
   });
 });

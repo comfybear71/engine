@@ -3,7 +3,7 @@
  * and worker calls for inspect / replace / add / rename / delete.
  */
 
-import { WORKER_URL, WorkerUnreachableError } from "./worker.ts";
+import { workerFetch } from "./worker.ts";
 
 export const RHUBARB_SHAPES = ["X", "A", "B", "C", "D", "E", "F", "G", "H"] as const;
 export const MOUTH_SOUNDS: Record<(typeof RHUBARB_SHAPES)[number], string> = {
@@ -39,7 +39,7 @@ export type EditorDrawing = {
   height: number | null;
   bytes?: number;
   hash?: string;
-  source: "project" | "global";
+  source: "project" | "show" | "global";
   loud?: boolean;
   shape?: string | null;
   view?: string;
@@ -108,17 +108,6 @@ export type DeleteConflict = {
   error: string;
   usages: DrawingUsage[];
 };
-
-async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
-  try {
-    return await fetch(`${WORKER_URL}${path}`, init);
-  } catch (err) {
-    if (init?.signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
-      throw err instanceof Error ? err : Object.assign(new Error("Aborted"), { name: "AbortError" });
-    }
-    throw new WorkerUnreachableError();
-  }
-}
 
 async function readError(res: Response): Promise<string> {
   try {

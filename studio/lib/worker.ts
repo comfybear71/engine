@@ -199,7 +199,7 @@ function withScript(path: string, script?: string | null): string {
   return `${path}${join}script=${encodeURIComponent(script)}`;
 }
 
-async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
+export async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
   const next = path.startsWith("/api/projects/") ? withShow(path) : path;
   try {
     return await fetch(`${WORKER_URL}${next}`, init);

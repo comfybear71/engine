@@ -10,7 +10,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-const { loadCharacter, scanDrawingsDir, resolveAsset } = require("./parser/assetLibrary");
+const { loadCharacter, scanDrawingsDir, resolveAsset, assetSearchRoots } = require("./parser/assetLibrary");
 const { tokenize } = require("./parser/tokenizer");
 const { parseActionTag, HEAD_VIEWS } = require("./parser/actionTag");
 const { listScriptFiles, isSafeFolderName } = require("./studioProjects");
@@ -138,8 +138,8 @@ function isMouthSlot(slotName, drawingsDir) {
 
 function listCharacterSubdirs(projectDir, globalAssetsDir, characterId) {
   const names = new Set();
-  for (const root of [globalAssetsDir, projectDir]) {
-    const dir = path.join(root, "characters", characterId);
+  for (const root of assetSearchRoots(projectDir, globalAssetsDir)) {
+    const dir = path.join(root.dir, "characters", characterId);
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -148,6 +148,15 @@ function listCharacterSubdirs(projectDir, globalAssetsDir, characterId) {
     }
   }
   return names;
+}
+
+function sourceOfAbs(projectDir, globalAssetsDir, absPath) {
+  const resolved = path.resolve(absPath);
+  for (const root of assetSearchRoots(projectDir, globalAssetsDir)) {
+    const rel = path.relative(root.dir, resolved);
+    if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return root.source;
+  }
+  return "global";
 }
 
 function discoverSlotViews(projectDir, globalAssetsDir, characterId, slotName, slotSpec) {
@@ -193,15 +202,21 @@ function describeDrawingFile(projectDir, globalAssetsDir, characterId, drawingsD
     if (!hit) return null;
     resolved = {
       absPath: hit.absPath,
-      source: path.resolve(hit.absPath).startsWith(path.resolve(projectDir)) ? "project" : "global",
+      source: sourceOfAbs(projectDir, globalAssetsDir, hit.absPath),
     };
     const ext = path.extname(hit.absPath) || ".png";
-    return finishDrawing(projectDir, drawingName, posixJoin("characters", characterId, drawingsDir, `${drawingName}${ext}`), resolved);
+    return finishDrawing(
+      projectDir,
+      globalAssetsDir,
+      drawingName,
+      posixJoin("characters", characterId, drawingsDir, `${drawingName}${ext}`),
+      resolved
+    );
   }
-  return finishDrawing(projectDir, drawingName, rel, resolved);
+  return finishDrawing(projectDir, globalAssetsDir, drawingName, rel, resolved);
 }
 
-function finishDrawing(projectDir, drawingName, rel, resolved) {
+function finishDrawing(projectDir, globalAssetsDir, drawingName, rel, resolved) {
   const buf = fs.readFileSync(resolved.absPath);
   const size = pngSize(buf) || { width: null, height: null };
   let mtime = null;
@@ -212,9 +227,7 @@ function finishDrawing(projectDir, drawingName, rel, resolved) {
   }
   const bytes = buf.length;
   const hash = crypto.createHash("sha256").update(buf).digest("hex");
-  const source =
-    resolved.source ||
-    (path.resolve(resolved.absPath).startsWith(path.resolve(projectDir)) ? "project" : "global");
+  const source = resolved.source || sourceOfAbs(projectDir, globalAssetsDir, resolved.absPath);
   return {
     name: drawingName,
     rel,
