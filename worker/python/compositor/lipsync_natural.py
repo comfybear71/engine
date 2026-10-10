@@ -342,10 +342,13 @@ def process_mouth_cues(
     duration_frames: int,
     fps: int,
     smoothing: str = DEFAULT_SMOOTHING,
+    excluded: object = None,
+    available: Iterable[str] | None = None,
 ) -> list[lipsync.MouthCue]:
     if not cues or duration_frames <= 0 or fps <= 0:
         return list(cues)
-    frames = cues_to_frames(cues, duration_frames, fps)
+    remapped = lipsync.remap_cues(cues, excluded, available=available)
+    frames = cues_to_frames(remapped, duration_frames, fps)
     frames = apply_min_hold(frames)
     frames = apply_smoothing(frames, smoothing)
     return frames_to_cues(frames, fps)

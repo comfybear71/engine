@@ -83,6 +83,49 @@ export function formatAtTime(sceneLocalFrames: number, fps: number): string {
   return String(frames);
 }
 
+/** `2s` / `0.5s` / `48` (frames) → frame count. Null if the token is missing or junk. */
+export function parseTimeTokenToFrames(raw: string | null | undefined, fps: number): number | null {
+  if (raw == null) return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+  const safeFps = Math.max(1, Math.round(fps) || 24);
+  const seconds = text.match(/^(\d+(?:\.\d+)?)s$/i);
+  if (seconds) {
+    const sec = Number(seconds[1]);
+    if (!Number.isFinite(sec) || sec < 0) return null;
+    return Math.round(sec * safeFps);
+  }
+  const frames = text.match(/^(\d+)$/);
+  if (!frames) return null;
+  return parseInt(frames[1], 10);
+}
+
+export function lineTrimFrames(
+  line: string,
+  fps: number
+): { inFrames: number | null; outFrames: number | null } {
+  const inMatch = line.match(/\btrim_in=([^\s\]]+)/i);
+  const outMatch = line.match(/\btrim_out=([^\s\]]+)/i);
+  return {
+    inFrames: parseTimeTokenToFrames(inMatch?.[1], fps),
+    outFrames: parseTimeTokenToFrames(outMatch?.[1], fps),
+  };
+}
+
+export function shiftLanesForView<T extends MovableLanes>(
+  lanes: T,
+  scriptLine: number,
+  view: string | null
+): T {
+  const nextView = !view || view === "front" ? null : view;
+  return {
+    ...lanes,
+    blocks: lanes.blocks.map((block) =>
+      block.scriptLine === scriptLine ? { ...block, view: nextView } : block
+    ),
+  };
+}
+
 export function setViewOnLine(line: string, view: string | null): string {
   const tag = line.match(TIMED_TAG_RE);
   if (tag) {
@@ -180,6 +223,384 @@ export function moveBlocksInScript(script: string, moves: BlockMove[], fps: numb
     }
   }
   return lines.join("\n");
+}
+
+export type MovableLaneBlock = {
+  id: string;
+  lane?: string;
+  startFrame: number;
+  endFrame: number;
+  scriptLine?: number | null;
+  sourceStartFrame?: number;
+  sceneId?: string;
+  rel?: string | null;
+  trim?: { inFrames: number; outFrames: number } | null;
+  sourceDurationFrames?: number | null;
+  timing?: { kind?: string; attr?: string | null } | null;
+  tag?: string | null;
+  movable?: boolean;
+  role?: string | null;
+  view?: string | null;
+  cuesRel?: string | null;
+  sync?: string | null;
+  cues?: { shape?: string; start: number; end: number; pinned?: boolean }[] | null;
+};
+
+export type MovableLanes = {
+  fps: number;
+  totalFrames: number;
+  lanes: string[];
+  scenes: { id: string; startFrame: number; endFrame: number; frames: number }[];
+  blocks: MovableLaneBlock[];
+};
+
+export type ScriptEditMeta = {
+  lanes?: MovableLanes;
+  delta?: number;
+  ids?: string[];
+  /** Script-only edit (e.g. view=). Keep current lane cues; do not reload /lanes. */
+  keepLanes?: boolean;
+};
+
+/** Keep mouth cues when a /lanes reload returns empty slices for the same chips. */
+export function preserveLaneCues<T extends MovableLanes>(current: T, incoming: T): T {
+  const prior = new Map<string, (typeof current.blocks)[number]>();
+  for (const block of current.blocks) {
+    if ((block.lane === "dialogue" || block.lane === "mouth" || block.role === "mouth") && block.cues && block.cues.length) {
+      prior.set(`${block.lane}|${block.cuesRel || ""}|${block.startFrame}|${block.endFrame}`, block);
+    }
+  }
+  const blocks = incoming.blocks.map((block) => {
+    if (block.cues && block.cues.length) return block;
+    const kept = prior.get(`${block.lane}|${block.cuesRel || ""}|${block.startFrame}|${block.endFrame}`);
+    if (!kept || !kept.cues || !kept.cues.length) return block;
+    return { ...block, cues: kept.cues, sync: kept.sync || block.sync || "synced" };
+  });
+  const incomingHasMouth = incoming.blocks.some((block) => block.lane === "mouth");
+  const keptMouth = current.blocks.filter((block) => block.lane === "mouth" && block.cues && block.cues.length);
+  if (!incomingHasMouth && keptMouth.length) {
+    for (const mouth of keptMouth) {
+      if (blocks.some((block) => block.id === mouth.id)) continue;
+      const dialogue = blocks.find(
+        (block) =>
+          block.lane === "dialogue" &&
+          block.startFrame === mouth.startFrame &&
+          block.endFrame === mouth.endFrame
+      );
+      blocks.push(dialogue ? { ...mouth, view: dialogue.view } : mouth);
+    }
+  }
+  return { ...incoming, blocks };
+}
+
+function shiftFrame(value: number, delta: number): number {
+  return Math.max(0, Math.round(value + delta));
+}
+
+/** Shift selected (and same-line married) blocks in memory — no re-parse. */
+export function shiftLanesForMove<T extends MovableLanes>(lanes: T, ids: Iterable<string>, delta: number): T {
+  const amount = Math.round(delta);
+  if (!amount) return lanes;
+  const wanted = new Set(ids);
+  const lines = new Set<number>();
+  for (const block of lanes.blocks) {
+    if (wanted.has(block.id) && block.scriptLine != null) lines.add(block.scriptLine);
+  }
+  const blocks = lanes.blocks.map((block) => {
+    const sameLine = block.scriptLine != null && lines.has(block.scriptLine);
+    if (!wanted.has(block.id) && !sameLine) return block;
+    const start = shiftFrame(block.startFrame, amount);
+    const span = Math.max(1, block.endFrame - block.startFrame);
+    return {
+      ...block,
+      startFrame: start,
+      endFrame: start + span,
+      sourceStartFrame:
+        block.sourceStartFrame == null ? block.sourceStartFrame : shiftFrame(block.sourceStartFrame, amount),
+    };
+  });
+  const byScene = new Map<string, { start: number; end: number }>();
+  for (const block of blocks) {
+    if (!block.sceneId) continue;
+    const cur = byScene.get(block.sceneId);
+    if (!cur) byScene.set(block.sceneId, { start: block.startFrame, end: block.endFrame });
+    else {
+      cur.start = Math.min(cur.start, block.startFrame);
+      cur.end = Math.max(cur.end, block.endFrame);
+    }
+  }
+  const scenes = (lanes.scenes || []).map((scene) => {
+    const span = byScene.get(scene.id);
+    if (!span) return scene;
+    return {
+      ...scene,
+      startFrame: span.start,
+      endFrame: span.end,
+      frames: Math.max(1, span.end - span.start),
+    };
+  });
+  const maxEnd = blocks.reduce((max, block) => Math.max(max, block.endFrame), 0);
+  return { ...lanes, blocks, scenes, totalFrames: Math.max(1, maxEnd) };
+}
+
+/** Apply an in/out trim to selected (and same-line) blocks — no re-parse. */
+export function shiftLanesForTrim<T extends MovableLanes>(
+  lanes: T,
+  ids: Iterable<string>,
+  edge: "in" | "out",
+  newEdgeFrame: number
+): T {
+  const take = takeWindowForIds(lanes.blocks, ids);
+  if (!take) return lanes;
+  const clamped = clampTrimEdge({ edge, rawFrame: newEdgeFrame, take });
+  const newStart = edge === "in" ? clamped.frame : take.start;
+  const newEnd = edge === "out" ? clamped.frame : take.end;
+  if (newStart === take.start && newEnd === take.end) return lanes;
+  const wanted = new Set(ids);
+  const newTrimIn = Math.max(0, take.trimIn + (newStart - take.start));
+  const newTrimOut = Math.max(newTrimIn + 1, take.trimIn + (newEnd - take.start));
+  const blocks = lanes.blocks.map((block) => {
+    if (!wanted.has(block.id)) return block;
+    let start = block.startFrame;
+    let end = block.endFrame;
+    if (block.startFrame <= take.start) start = newStart;
+    else start = Math.max(newStart, Math.min(start, newEnd - 1));
+    if (block.endFrame >= take.end) end = newEnd;
+    else end = Math.min(newEnd, Math.max(end, newStart + 1));
+    if (end <= start) end = start + 1;
+    return {
+      ...block,
+      startFrame: start,
+      endFrame: end,
+      trim: { inFrames: newTrimIn, outFrames: newTrimOut },
+    };
+  });
+  const byScene = new Map<string, { start: number; end: number }>();
+  for (const block of blocks) {
+    if (!block.sceneId) continue;
+    const cur = byScene.get(block.sceneId);
+    if (!cur) byScene.set(block.sceneId, { start: block.startFrame, end: block.endFrame });
+    else {
+      cur.start = Math.min(cur.start, block.startFrame);
+      cur.end = Math.max(cur.end, block.endFrame);
+    }
+  }
+  const scenes = (lanes.scenes || []).map((scene) => {
+    const span = byScene.get(scene.id);
+    if (!span) return scene;
+    return {
+      ...scene,
+      startFrame: span.start,
+      endFrame: span.end,
+      frames: Math.max(1, span.end - span.start),
+    };
+  });
+  const maxEnd = blocks.reduce((max, block) => Math.max(max, block.endFrame), 0);
+  return { ...lanes, blocks, scenes, totalFrames: Math.max(1, maxEnd) };
+}
+
+export const MAX_SYNC_WINDOW_SEC = 8;
+
+export function expandDialogueSyncWindows(
+  window: { inSec: number; outSec: number },
+  maxSec = MAX_SYNC_WINDOW_SEC
+): { inSec: number; outSec: number }[] {
+  const inSec = Number(window.inSec) || 0;
+  const outSec = Number(window.outSec);
+  if (!Number.isFinite(outSec) || outSec - inSec <= maxSec + 1e-6) return [{ inSec, outSec }];
+  const parts: { inSec: number; outSec: number }[] = [];
+  for (let start = inSec; start < outSec - 0.04; start += maxSec) {
+    parts.push({
+      inSec: Math.round(start * 1000) / 1000,
+      outSec: Math.round(Math.min(outSec, start + maxSec) * 1000) / 1000,
+    });
+  }
+  return parts;
+}
+
+export function dialogueSourceWindowSec(
+  block: { startFrame: number; endFrame: number; sourceStartFrame?: number; trim?: { inFrames: number; outFrames: number } | null },
+  fps: number
+): { inSec: number; outSec: number } {
+  const safeFps = Math.max(1, Number(fps) || 24);
+  const trimIn = Number(block.trim && block.trim.inFrames) || 0;
+  const sourceStart = block.sourceStartFrame == null ? block.startFrame : block.sourceStartFrame;
+  const localIn = Math.max(0, (block.startFrame - sourceStart) / safeFps);
+  const localOut = Math.max(localIn + 1 / safeFps, (block.endFrame - sourceStart) / safeFps);
+  return {
+    inSec: Math.round((trimIn / safeFps + localIn) * 1000) / 1000,
+    outSec: Math.round((trimIn / safeFps + localOut) * 1000) / 1000,
+  };
+}
+
+export function dialogueSyncText(block: { label?: string | null; words?: { word: string }[] | null }): string {
+  const label = String(block.label || "");
+  const cut = label.indexOf(": ");
+  if (cut >= 0) return label.slice(cut + 2).trim();
+  if (Array.isArray(block.words) && block.words.length) {
+    return block.words.map((word) => word.word).join(" ").replace(/\s+([,.!?;:])/g, "$1");
+  }
+  return "";
+}
+
+export function sliceMouthCuesForWindow(
+  cues: { start: number; end: number; value?: string; shape?: string; pinned?: boolean }[] | null | undefined,
+  inSec: number,
+  outSec: number
+): { shape: string; start: number; end: number; pinned?: boolean }[] {
+  return (cues || [])
+    .filter((cue) => Number(cue.end) > inSec && Number(cue.start) < outSec)
+    .map((cue) => ({
+      shape: String(cue.shape || cue.value || "X"),
+      start: Math.max(0, Number(cue.start) - inSec),
+      end: Math.max(0, Math.min(outSec, Number(cue.end)) - inSec),
+      ...(cue.pinned ? { pinned: true } : {}),
+    }))
+    .filter((cue) => cue.end > cue.start);
+}
+
+function assignOptimisticRows<T extends { lane?: string; startFrame: number; endFrame: number; row?: number }>(blocks: T[]): T[] {
+  const byLane = new Map<string, T[]>();
+  for (const block of blocks) {
+    const lane = block.lane || "";
+    const list = byLane.get(lane) || [];
+    list.push(block);
+    byLane.set(lane, list);
+  }
+  for (const list of byLane.values()) {
+    const sorted = [...list].sort(
+      (a, b) => a.startFrame - b.startFrame || a.endFrame - b.endFrame
+    );
+    const rowEnds: number[] = [];
+    for (const block of sorted) {
+      let row = 0;
+      for (; row < rowEnds.length; row++) {
+        if (rowEnds[row] <= block.startFrame) break;
+      }
+      if (row === rowEnds.length) rowEnds.push(block.endFrame);
+      else rowEnds[row] = block.endFrame;
+      block.row = block.lane === "mouth" ? 0 : row;
+    }
+  }
+  return blocks;
+}
+
+/** Split selected chips at the playhead in memory — no re-parse. */
+export function shiftLanesForSplit<T extends MovableLanes>(
+  lanes: T,
+  writes: LineSplitWrite[],
+  playhead: number,
+  fps?: number
+): T {
+  if (!writes.length) return lanes;
+  const ordered = [...writes].sort((a, b) => b.scriptLine - a.scriptLine);
+  let blocks = lanes.blocks.map((block) => ({ ...block }));
+  for (const write of ordered) {
+    const line = write.scriptLine;
+    const members = blocks.filter((block) => block.scriptLine === line);
+    if (!members.length) continue;
+    const take = takeWindowForIds(blocks, members.map((block) => block.id));
+    if (!take || playhead <= take.start || playhead >= take.end) continue;
+    const fromWrite =
+      fps != null
+        ? parseTimeTokenToFrames(write.right.trimIn, fps) ?? parseTimeTokenToFrames(write.left.trimOut, fps)
+        : null;
+    const splitSource = fromWrite != null ? fromWrite : take.trimIn + (playhead - take.start);
+    const leftInFrames =
+      fromWrite != null ? Math.max(0, splitSource - (playhead - take.start)) : take.trimIn;
+    const rightOutFramesFor = (block: (typeof blocks)[number]) => {
+      const fromBlock = block.trim?.outFrames || 0;
+      if (fromBlock > splitSource) return fromBlock;
+      if (take.trimOut > splitSource) return take.trimOut;
+      const remain = Math.max(1, (block.endFrame > playhead ? block.endFrame : take.end) - playhead);
+      return splitSource + remain;
+    };
+    blocks = blocks.map((block) =>
+      block.scriptLine != null && block.scriptLine > line
+        ? { ...block, scriptLine: block.scriptLine + 1 }
+        : block
+    );
+    const next: typeof blocks = [];
+    for (const block of blocks) {
+      if (block.scriptLine !== line) {
+        next.push(block);
+        continue;
+      }
+      const marriedRight = block.marriedId ? `${block.marriedId}:r` : null;
+      const leftIn = (block.trim?.inFrames || 0) > 0 ? block.trim!.inFrames : leftInFrames;
+      const rightOut = rightOutFramesFor(block);
+      if (block.endFrame <= playhead) {
+        next.push({
+          ...block,
+          trim: { inFrames: leftIn, outFrames: splitSource },
+        });
+      } else if (block.startFrame >= playhead) {
+        next.push({
+          ...block,
+          id: `${block.id}-r`,
+          scriptLine: line + 1,
+          marriedId: marriedRight,
+          sourceStartFrame: playhead,
+          trim: { inFrames: splitSource, outFrames: rightOut },
+        });
+      } else {
+        next.push({
+          ...block,
+          endFrame: playhead,
+          trim: { inFrames: leftIn, outFrames: splitSource },
+        });
+        next.push({
+          ...block,
+          id: `${block.id}-r`,
+          scriptLine: line + 1,
+          startFrame: playhead,
+          sourceStartFrame: playhead,
+          marriedId: marriedRight,
+          trim: { inFrames: splitSource, outFrames: rightOut },
+        });
+      }
+    }
+    blocks = next;
+  }
+  assignOptimisticRows(blocks);
+  const byScene = new Map<string, { start: number; end: number }>();
+  for (const block of blocks) {
+    if (!block.sceneId) continue;
+    const cur = byScene.get(block.sceneId);
+    if (!cur) byScene.set(block.sceneId, { start: block.startFrame, end: block.endFrame });
+    else {
+      cur.start = Math.min(cur.start, block.startFrame);
+      cur.end = Math.max(cur.end, block.endFrame);
+    }
+  }
+  const scenes = (lanes.scenes || []).map((scene) => {
+    const span = byScene.get(scene.id);
+    if (!span) return scene;
+    return {
+      ...scene,
+      startFrame: span.start,
+      endFrame: span.end,
+      frames: Math.max(1, span.end - span.start),
+    };
+  });
+  const maxEnd = blocks.reduce((max, block) => Math.max(max, block.endFrame), 0);
+  return { ...lanes, blocks, scenes, totalFrames: Math.max(1, maxEnd) };
+}
+
+export function shiftPlaybackAudio<T extends { startFrame: number; endFrame: number; rel?: string | null }>(
+  clips: T[],
+  delta: number,
+  movedStarts: Iterable<number>
+): T[] {
+  const amount = Math.round(delta);
+  if (!amount) return clips;
+  const starts = new Set(movedStarts);
+  return clips.map((clip) => {
+    if (!starts.has(clip.startFrame)) return clip;
+    const start = shiftFrame(clip.startFrame, amount);
+    const span = Math.max(1, clip.endFrame - clip.startFrame);
+    return { ...clip, startFrame: start, endFrame: start + span };
+  });
 }
 
 export type SnapKind = "playhead" | "block" | "second" | "frame";
@@ -354,9 +775,12 @@ export function takeWindowForIds(
   if (!kind) return null;
   const start = Math.min(...members.map((block) => block.startFrame));
   const end = Math.max(...members.map((block) => block.endFrame));
-  const trimIn = primary.trim?.inFrames ?? 0;
-  const source = primary.sourceDurationFrames ?? null;
-  let trimOut = primary.trim?.outFrames ?? 0;
+  const trimIn = primary.trim?.inFrames && primary.trim.inFrames > 0 ? primary.trim.inFrames : 0;
+  const source =
+    primary.sourceDurationFrames != null && primary.sourceDurationFrames > 0
+      ? primary.sourceDurationFrames
+      : null;
+  let trimOut = primary.trim?.outFrames && primary.trim.outFrames > 0 ? primary.trim.outFrames : 0;
   if (!(trimOut > trimIn)) trimOut = source != null && source > trimIn ? source : trimIn + Math.max(1, end - start);
   return {
     scriptLine: primary.scriptLine,
@@ -487,11 +911,27 @@ export function planSplit(opts: {
   const rightAt = formatAtTime(Math.max(0, opts.playhead - sceneStart), opts.fps);
   const line = opts.script.split("\n")[take.scriptLine - 1] || "";
   if (take.kind === "media") {
-    const splitFrames = take.trimIn + (opts.playhead - take.start);
+    const lineTrim = lineTrimFrames(line, opts.fps);
+    const trimIn = lineTrim.inFrames != null && lineTrim.inFrames >= 0 ? lineTrim.inFrames : take.trimIn;
+    const rawSplit = trimIn + (opts.playhead - take.start);
+    const knownSource =
+      take.sourceDuration != null && take.sourceDuration > trimIn + 1 ? take.sourceDuration : null;
+    const trimOutHint =
+      lineTrim.outFrames != null && lineTrim.outFrames > trimIn
+        ? lineTrim.outFrames
+        : take.trimOut > trimIn
+          ? take.trimOut
+          : rawSplit + Math.max(1, take.end - opts.playhead);
+    const sourceCap = knownSource ?? trimOutHint;
+    const splitFrames = Math.min(rawSplit, Math.max(trimIn + 1, sourceCap - 1));
     const splitSec = splitFrames / Math.max(1, opts.fps);
-    const leftIn = take.trimIn > 0 ? formatAtTime(take.trimIn, opts.fps) : null;
+    const leftIn = trimIn > 0 ? formatAtTime(trimIn, opts.fps) : null;
     const rightOut =
-      take.sourceDuration != null && take.trimOut >= take.sourceDuration ? null : formatAtTime(take.trimOut, opts.fps);
+      lineTrim.outFrames != null && lineTrim.outFrames > splitFrames
+        ? formatAtTime(lineTrim.outFrames, opts.fps)
+        : knownSource != null && trimOutHint < knownSource && trimOutHint > splitFrames
+          ? formatAtTime(trimOutHint, opts.fps)
+          : null;
     const texts = splitDialogueText(
       "",
       take.primary.words,

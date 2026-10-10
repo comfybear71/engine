@@ -433,6 +433,8 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
         for name, drawings in raw.get("visible_when", {}).items()
     }
 
+    excluded = frozenset(str(name) for name in (raw.get("exclude_from_lipsync") or []) if name)
+
     return Slot(
         images=images,
         offset_x=float(offset.get("x", 0.0)),
@@ -444,6 +446,7 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
         dialogue=dialogue_ref,
         visible_when=visible_when,
         images_by_view=images_by_view,
+        exclude_from_lipsync=excluded,
     )
 
 
@@ -665,13 +668,15 @@ def apply_natural_lipsync(
     visible_frames = max(0, layer_end - layer.start_frame)
 
     for clip in layer.dialogue:
+        available = lipsync_natural.drawing_names(mouth, clip.view)
         cues = lipsync_natural.process_mouth_cues(
             clip.cues,
             duration_frames=clip.duration_frames,
             fps=fps,
             smoothing=settings.smoothing,
+            excluded=mouth.exclude_from_lipsync if mouth is not None else None,
+            available=available,
         )
-        available = lipsync_natural.drawing_names(mouth, clip.view)
         if not clip.estimated and clip.audio.is_file():
             cues = lipsync_natural.apply_loud_to_cues(
                 cues,

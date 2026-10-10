@@ -6,7 +6,9 @@ import {
   IMPORT_AUDIO_STAGES,
   acceptAudioFile,
   buildAudioTag,
+  buildChunkAudioTags,
   explainImportAudioError,
+  shouldOfferSplit,
   suggestedLabelFromFilename,
   summarizeDryRun,
   type DryRunSummary,
@@ -32,6 +34,7 @@ export default function ImportAudioDialog({
   const [file, setFile] = useState<File | null>(null);
   const [label, setLabel] = useState("");
   const [noTranscribe, setNoTranscribe] = useState(false);
+  const [splitLong, setSplitLong] = useState(true);
   const [step, setStep] = useState<Step>("pick");
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -90,6 +93,7 @@ export default function ImportAudioDialog({
         noTranscribe,
       });
       setDryRun(result);
+      setSplitLong(result.willSplit !== false && shouldOfferSplit(result.durationSeconds));
       setStep("review");
     } catch (err) {
       setError(explainImportAudioError(err instanceof Error ? err.message : "Could not check the recording"));
@@ -106,6 +110,7 @@ export default function ImportAudioDialog({
         character: characterId,
         name: label.trim() || undefined,
         noTranscribe,
+        splitLong,
       });
       setImported(result);
       setStep("done");
@@ -118,11 +123,16 @@ export default function ImportAudioDialog({
   async function onInsert() {
     if (!imported || inserting) return;
     const name = selected?.display_name || imported.character;
-    const tag = imported.tag && imported.tag.includes(name) ? imported.tag : buildAudioTag(name, imported.label);
+    const tags =
+      imported.chunks && imported.chunks.length > 1
+        ? buildChunkAudioTags(name, imported.chunks)
+        : imported.tags && imported.tags.length
+          ? imported.tags
+          : [imported.tag && imported.tag.includes(name) ? imported.tag : buildAudioTag(name, imported.label)];
     setInserting(true);
     setError(null);
     try {
-      await onInsertTag(tag);
+      await onInsertTag(tags.join("\n"));
       onClose();
     } catch (err) {
       setError(explainImportAudioError(err instanceof Error ? err.message : "Could not insert into the script"));
@@ -253,6 +263,23 @@ export default function ImportAudioDialog({
                 />
                 Skip transcription
               </label>
+              {dryRun && shouldOfferSplit(dryRun.durationSeconds) ? (
+                <label className="flex items-center gap-2 text-xs text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={splitLong}
+                    onChange={(event) => setSplitLong(event.target.checked)}
+                    data-testid="import-audio-split"
+                  />
+                  Split into shorter clips (30–60s at silences)
+                </label>
+              ) : null}
+              {dryRun && splitLong && shouldOfferSplit(dryRun.durationSeconds) ? (
+                <p className="text-xs text-neutral-400" data-testid="import-audio-split-note">
+                  About {dryRun.estimatedChunks || Math.ceil(dryRun.durationSeconds / 45)} clips. Stage plays each as a
+                  short shot. Existing word timings are reused — no extra transcription.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -276,9 +303,15 @@ export default function ImportAudioDialog({
 
           {step === "done" && imported ? (
             <div className="space-y-3" data-testid="import-audio-done">
-              <p className="text-sm text-neutral-200">Imported. Insert the tag so the Audio and Dialogue lanes show it.</p>
-              <p className="font-mono text-xs text-neutral-300">
-                {buildAudioTag(selected?.display_name || imported.character, imported.label)}
+              <p className="text-sm text-neutral-200">
+                {imported.split && imported.chunks && imported.chunks.length > 1
+                  ? `Imported and split into ${imported.chunks.length} clips. Insert the tags so the Audio lane shows them.`
+                  : "Imported. Insert the tag so the Audio and Dialogue lanes show it."}
+              </p>
+              <p className="whitespace-pre-wrap font-mono text-xs text-neutral-300">
+                {imported.chunks && imported.chunks.length > 1
+                  ? buildChunkAudioTags(selected?.display_name || imported.character, imported.chunks).join("\n")
+                  : buildAudioTag(selected?.display_name || imported.character, imported.label)}
               </p>
             </div>
           ) : null}

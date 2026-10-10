@@ -11,6 +11,9 @@ const {
   stampCuesMeta,
   syncDialogueLines,
   collectDialogueTargets,
+  mergeMouthCues,
+  expandSyncTargets,
+  sourceWindowFromEvent,
   readStudioSettings,
   writeStudioSettings,
   patchMouthCue,
@@ -104,6 +107,93 @@ describe("lip-sync state", () => {
     }
   });
 
+  test("later lines that share a WAV stay targetable and windowed redo merges cues", async () => {
+    const dir = tmpDir();
+    try {
+      const wavRel = "audio/mono/001_alice.wav";
+      const cuesRel = `${wavRel}.rhubarb.json`;
+      writeSilentWav(path.join(dir, wavRel), 4);
+      writeCues(path.join(dir, cuesRel), [{ start: 0, end: 0.8, value: "A" }], { text: "Hello later." });
+      const events = [
+        {
+          lane: "dialogue",
+          scriptLine: 4,
+          startFrame: 0,
+          endFrame: 48,
+          sourceStartFrame: 0,
+          trim: { inFrames: 0, outFrames: 96 },
+          cuesRel,
+          audioRel: wavRel,
+          syncText: "Hello",
+        },
+        {
+          lane: "dialogue",
+          scriptLine: 5,
+          startFrame: 48,
+          endFrame: 96,
+          sourceStartFrame: 48,
+          trim: { inFrames: 48, outFrames: 96 },
+          cuesRel,
+          audioRel: wavRel,
+          syncText: "later.",
+        },
+      ];
+      assert.equal(collectDialogueTargets(events).length, 1);
+      const perLine = collectDialogueTargets(events, { uniqueCuesRel: false, fps: 24 });
+      assert.equal(perLine.length, 2);
+      assert.equal(perLine[1].scriptLine, 5);
+      const later = sourceWindowFromEvent(events[1], 24);
+      assert.ok(later.inSec >= 1.9 && later.inSec <= 2.1);
+
+      const extracts = [];
+      const synced = await syncDialogueLines({
+        projectDir: dir,
+        force: true,
+        extractSlice: async (_from, to, start, dur) => {
+          extracts.push({ start, dur });
+          fs.writeFileSync(to, "slice");
+        },
+        runRhubarb: ({ wavPath, cuesPath }) => {
+          assert.match(wavPath, /engine-lipsync-/);
+          writeCues(cuesPath, [{ start: 0, end: 0.4, value: "B" }]);
+          return { ok: true, cuesPath };
+        },
+        targets: [{ scriptLine: 5, wavRel, cuesRel, text: "later.", inSec: 2, outSec: 3 }],
+      });
+      assert.equal(synced.ok, true);
+      assert.equal(synced.results[0].windowed, true);
+      assert.deepEqual(extracts, [{ start: 2, dur: 1 }]);
+      const saved = JSON.parse(fs.readFileSync(path.join(dir, cuesRel), "utf8"));
+      assert.equal(saved.mouthCues[0].value, "A");
+      assert.equal(saved.mouthCues[1].start, 2);
+      assert.equal(saved.mouthCues[1].value, "B");
+      assert.deepEqual(
+        mergeMouthCues([{ start: 0, end: 1, value: "X" }], [{ start: 0, end: 0.5, value: "C" }], 4, 5).map((c) => c.start),
+        [0, 4]
+      );
+
+      const allTargets = collectDialogueTargets(events, { uniqueCuesRel: false, fps: 24 });
+      assert.equal(allTargets.length, 2);
+      const all = await syncDialogueLines({
+        projectDir: dir,
+        extractSlice: async (_from, to) => {
+          fs.writeFileSync(to, "slice");
+        },
+        runRhubarb: () => {
+          throw new Error("should skip windows that already have cues");
+        },
+        targets: allTargets,
+      });
+      assert.equal(all.ok, true);
+      assert.equal(all.results.length, 2);
+      assert.equal(all.results.filter((item) => item.skipped).length, 2);
+      assert.ok(all.results[0].mouthCues.length > 0);
+      assert.equal(all.results[0].cuesPath, cuesRel);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("patchMouthCue swaps a shape and pins it", () => {
     const dir = tmpDir();
     try {
@@ -125,6 +215,45 @@ describe("lip-sync state", () => {
       const saved = JSON.parse(fs.readFileSync(abs, "utf8"));
       assert.equal(saved.mouthCues[0].value, "G");
       assert.equal(saved.mouthCues[0].pinned, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("SYNC ALL covers a late 8:40 window, not only the first 4s", async () => {
+    const parts = expandSyncTargets([{ scriptLine: 2, wavRel: "audio/a/001_a.wav", cuesRel: "audio/a/001_a.wav.rhubarb.json", inSec: 0, outSec: 540 }]);
+    assert.ok(parts.length >= 67, `expected ~68 windows, got ${parts.length}`);
+    assert.ok(parts[parts.length - 1].inSec >= 520);
+    assert.equal(parts[parts.length - 1].outSec, 540);
+
+    const dir = tmpDir();
+    try {
+      const wavRel = "audio/mono/001_alice.wav";
+      const cuesRel = `${wavRel}.rhubarb.json`;
+      writeSilentWav(path.join(dir, wavRel), 4);
+      writeCues(path.join(dir, cuesRel), [{ start: 0, end: 4.2, value: "A" }]);
+      const extracts = [];
+      const synced = await syncDialogueLines({
+        projectDir: dir,
+        extractSlice: async (_from, to, start, dur) => {
+          extracts.push({ start, dur });
+          fs.writeFileSync(to, "slice");
+        },
+        runRhubarb: ({ cuesPath }) => {
+          writeCues(cuesPath, [{ start: 0, end: 0.4, value: "Z" }]);
+          return { ok: true, cuesPath };
+        },
+        targets: [
+          { scriptLine: 2, wavRel, cuesRel, text: "Hello", inSec: 0, outSec: 5 },
+          { scriptLine: 40, wavRel, cuesRel, text: "Last line.", inSec: 520, outSec: 524 },
+        ],
+      });
+      assert.equal(synced.ok, true);
+      assert.ok(extracts.some((item) => item.start >= 520), `extracts ${JSON.stringify(extracts)}`);
+      const saved = JSON.parse(fs.readFileSync(path.join(dir, cuesRel), "utf8"));
+      const late = saved.mouthCues.filter((cue) => Number(cue.start) >= 520);
+      assert.ok(late.length > 0, "expected mouth cues at ~8:40");
+      assert.equal(late[0].value, "Z");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

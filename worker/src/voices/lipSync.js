@@ -9,9 +9,11 @@
  */
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const { runRhubarbOnWav } = require("./rhubarb");
+const { extractWavSlice } = require("../splitLongAudio");
 
 const STUDIO_SETTINGS_FILE = "studio.json";
 const SYNC_STATES = ["not_synced", "synced", "stale"];
@@ -99,7 +101,7 @@ function stampCuesMeta(cuesPath, { text, wavPath } = {}) {
     wavSize: stat ? stat.size : null,
     wavMtimeMs: stat ? stat.mtimeMs : null,
   };
-  fs.writeFileSync(cuesPath, `${JSON.stringify(data, null, 2)}\n`);
+  writeJsonAtomic(cuesPath, data);
   return data.engine;
 }
 
@@ -136,7 +138,23 @@ function computeSyncState({ projectDir, cuesRel, wavRel, text } = {}) {
   return "synced";
 }
 
-function collectDialogueTargets(laneEvents) {
+function sourceWindowFromEvent(event, fps) {
+  const safeFps = Math.max(1, Number(fps) || 24);
+  const trimIn = Number(event && event.trim && event.trim.inFrames) || 0;
+  const start = Number(event && event.startFrame) || 0;
+  const end = Number(event && event.endFrame) || start + 1;
+  const sourceStart = event && event.sourceStartFrame != null ? Number(event.sourceStartFrame) : start;
+  const localIn = Math.max(0, (start - sourceStart) / safeFps);
+  const localOut = Math.max(localIn + 1 / safeFps, (end - sourceStart) / safeFps);
+  return {
+    inSec: Math.round((trimIn / safeFps + localIn) * 1000) / 1000,
+    outSec: Math.round((trimIn / safeFps + localOut) * 1000) / 1000,
+  };
+}
+
+function collectDialogueTargets(laneEvents, opts = {}) {
+  const uniqueCuesRel = opts.uniqueCuesRel !== false;
+  const fps = opts.fps;
   const seen = new Set();
   const targets = [];
   for (const event of laneEvents || []) {
@@ -144,27 +162,105 @@ function collectDialogueTargets(laneEvents) {
     const cuesRel = event.cuesRel;
     const wavRel = event.audioRel;
     if (!cuesRel || !wavRel) continue;
-    if (seen.has(cuesRel)) continue;
-    seen.add(cuesRel);
+    const key = uniqueCuesRel ? cuesRel : `${cuesRel}:${event.scriptLine}:${event.startFrame}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const window = sourceWindowFromEvent(event, fps);
     targets.push({
       scriptLine: event.scriptLine,
+      startFrame: event.startFrame,
       wavRel,
       cuesRel,
       text: event.syncText || "",
       sync: event.sync || "not_synced",
+      inSec: uniqueCuesRel ? 0 : window.inSec,
+      outSec: uniqueCuesRel ? null : window.outSec,
     });
   }
   return targets;
+}
+
+function mergeMouthCues(existing, incoming, inSec, outSec) {
+  const kept = (Array.isArray(existing) ? existing : []).filter((cue) => {
+    const start = Number(cue.start);
+    const end = Number(cue.end);
+    return end <= inSec + 1e-6 || start >= outSec - 1e-6;
+  });
+  const shifted = (Array.isArray(incoming) ? incoming : [])
+    .map((cue) => ({
+      start: Math.round((Number(cue.start) + inSec) * 1000) / 1000,
+      end: Math.round((Math.min(outSec, Number(cue.end) + inSec)) * 1000) / 1000,
+      value: cue.value || cue.shape || "X",
+      ...(cue.pinned ? { pinned: true } : {}),
+    }))
+    .filter((cue) => cue.end > cue.start);
+  return kept.concat(shifted).sort((a, b) => a.start - b.start);
+}
+
+function writeJsonAtomic(abs, data) {
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const tmp = `${abs}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
+  fs.renameSync(tmp, abs);
+}
+
+function writeMouthCues(abs, cues, engine) {
+  const data = { mouthCues: cues };
+  if (engine) data.engine = engine;
+  writeJsonAtomic(abs, data);
+}
+
+function windowHasCues(cues, inSec, outSec) {
+  const from = Number(inSec) || 0;
+  const to = Number(outSec);
+  if (!Number.isFinite(to)) {
+    return Array.isArray(cues) && cues.length > 0;
+  }
+  return (Array.isArray(cues) ? cues : []).some((cue) => Number(cue.end) > from && Number(cue.start) < to);
+}
+
+function isWindowedTarget(target) {
+  const inSec = Number(target && target.inSec) || 0;
+  const outSec = Number(target && target.outSec);
+  return Number.isFinite(outSec) && outSec - inSec >= 0.04;
+}
+
+const MAX_SYNC_WINDOW_SEC = 8;
+
+function expandSyncTargets(targets) {
+  const out = [];
+  for (const target of targets || []) {
+    if (!isWindowedTarget(target)) {
+      out.push(target);
+      continue;
+    }
+    const inSec = Number(target.inSec) || 0;
+    const outSec = Number(target.outSec);
+    if (outSec - inSec <= MAX_SYNC_WINDOW_SEC + 1e-6) {
+      out.push(target);
+      continue;
+    }
+    for (let start = inSec; start < outSec - 0.04; start += MAX_SYNC_WINDOW_SEC) {
+      const end = Math.round(Math.min(outSec, start + MAX_SYNC_WINDOW_SEC) * 1000) / 1000;
+      out.push({
+        ...target,
+        inSec: Math.round(start * 1000) / 1000,
+        outSec: end,
+      });
+    }
+  }
+  return out;
 }
 
 /**
  * Run Rhubarb for the given dialogue targets (one WAV/cues pair each).
  * @returns {Promise<{ ok: boolean, results: object[] }>}
  */
-async function syncDialogueLines({ projectDir, targets, force = false, runRhubarb } = {}) {
+async function syncDialogueLines({ projectDir, targets, force = false, runRhubarb, extractSlice } = {}) {
   const run = runRhubarb || runRhubarbOnWav;
+  const extract = extractSlice || extractWavSlice;
   const results = [];
-  for (const target of targets || []) {
+  for (const target of expandSyncTargets(targets)) {
     const wavAbs = path.join(projectDir, target.wavRel);
     const cuesAbs = path.join(projectDir, target.cuesRel);
     if (!target.wavRel || !fs.existsSync(wavAbs)) {
@@ -183,7 +279,8 @@ async function syncDialogueLines({ projectDir, targets, force = false, runRhubar
       wavRel: target.wavRel,
       text: target.text,
     });
-    if (!force && state === "synced") {
+    const windowed = isWindowedTarget(target);
+    if (!force && !windowed && state === "synced") {
       results.push({
         scriptLine: target.scriptLine,
         ok: true,
@@ -192,32 +289,98 @@ async function syncDialogueLines({ projectDir, targets, force = false, runRhubar
       });
       continue;
     }
-    const rhubarb = run({
-      wavPath: wavAbs,
-      cuesPath: cuesAbs,
-      text: target.text,
-    });
-    if (!rhubarb.ok) {
-      const message =
-        rhubarb.reason === "missing"
-          ? "Rhubarb is not installed (set RHUBARB_PATH or add rhubarb to PATH)."
-          : rhubarb.message || "Rhubarb failed.";
+    if (!force && windowed) {
+      const existing = readCuesFile(cuesAbs);
+      if (windowHasCues(existing && existing.mouthCues, target.inSec, target.outSec)) {
+        results.push({
+          scriptLine: target.scriptLine,
+          ok: true,
+          skipped: true,
+          sync: state === "stale" ? "stale" : "synced",
+          windowed: true,
+          cuesPath: target.cuesRel,
+          inSec: target.inSec,
+          outSec: target.outSec,
+          mouthCues: existing && Array.isArray(existing.mouthCues) ? existing.mouthCues : [],
+        });
+        continue;
+      }
+    }
+    let slicePath = null;
+    let tempCues = null;
+    try {
+      let wavPath = wavAbs;
+      let cuesPath = cuesAbs;
+      if (windowed) {
+        slicePath = path.join(os.tmpdir(), `engine-lipsync-${process.pid}-${Date.now()}-${results.length}.wav`);
+        tempCues = `${slicePath}.rhubarb.json`;
+        await extract(wavAbs, slicePath, target.inSec, target.outSec - target.inSec);
+        wavPath = slicePath;
+        cuesPath = tempCues;
+      }
+      const rhubarb = run({
+        wavPath,
+        cuesPath,
+        text: target.text,
+      });
+      if (!rhubarb.ok) {
+        const message =
+          rhubarb.reason === "missing"
+            ? "Rhubarb is not installed (set RHUBARB_PATH or add rhubarb to PATH)."
+            : rhubarb.message || "Rhubarb failed.";
+        results.push({
+          scriptLine: target.scriptLine,
+          ok: false,
+          reason: rhubarb.reason || "failed",
+          message,
+          sync: state,
+        });
+        continue;
+      }
+      let keepText = target.text;
+      if (windowed) {
+        const incoming = readCuesFile(tempCues);
+        const existing = readCuesFile(cuesAbs);
+        keepText = (existing && existing.engine && existing.engine.text) || target.text;
+        const merged = mergeMouthCues(
+          existing && existing.mouthCues,
+          incoming && incoming.mouthCues,
+          target.inSec,
+          target.outSec
+        );
+        writeMouthCues(cuesAbs, merged);
+      }
+      stampCuesMeta(cuesAbs, {
+        text: keepText,
+        wavPath: wavAbs,
+      });
+      const saved = readCuesFile(cuesAbs);
       results.push({
         scriptLine: target.scriptLine,
-        ok: false,
-        reason: rhubarb.reason || "failed",
-        message,
-        sync: state,
+        ok: true,
+        sync: "synced",
+        cuesPath: target.cuesRel,
+        inSec: windowed ? target.inSec : 0,
+        outSec: windowed ? target.outSec : null,
+        mouthCues: saved && Array.isArray(saved.mouthCues) ? saved.mouthCues : [],
+        windowed,
       });
-      continue;
+    } finally {
+      if (slicePath) {
+        try {
+          fs.unlinkSync(slicePath);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (tempCues) {
+        try {
+          fs.unlinkSync(tempCues);
+        } catch {
+          /* ignore */
+        }
+      }
     }
-    stampCuesMeta(cuesAbs, { text: target.text, wavPath: wavAbs });
-    results.push({
-      scriptLine: target.scriptLine,
-      ok: true,
-      sync: "synced",
-      cuesPath: target.cuesRel,
-    });
   }
   return {
     ok: results.every((item) => item.ok),
@@ -226,12 +389,21 @@ async function syncDialogueLines({ projectDir, targets, force = false, runRhubar
 }
 
 const CUES_REL_RE = /^audio\/[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*\.wav\.rhubarb\.json$/i;
+const WAV_REL_RE = /^audio\/[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*\.wav$/i;
 
-function isSafeCuesRel(rel) {
+function isSafeRel(rel, pattern) {
   if (typeof rel !== "string" || !rel) return false;
   const posix = rel.replace(/\\/g, "/");
   if (posix.includes("..") || posix.startsWith("/") || posix.includes("//")) return false;
-  return CUES_REL_RE.test(posix);
+  return pattern.test(posix);
+}
+
+function isSafeCuesRel(rel) {
+  return isSafeRel(rel, CUES_REL_RE);
+}
+
+function isSafeWavRel(rel) {
+  return isSafeRel(rel, WAV_REL_RE);
 }
 
 function resolveProjectCues(projectDir, rel) {
@@ -302,8 +474,14 @@ module.exports = {
   SYNC_STATES,
   computeSyncState,
   stampCuesMeta,
+  sourceWindowFromEvent,
   collectDialogueTargets,
+  mergeMouthCues,
+  windowHasCues,
+  expandSyncTargets,
+  MAX_SYNC_WINDOW_SEC,
   syncDialogueLines,
+  isSafeWavRel,
   readStudioSettings,
   writeStudioSettings,
   isSafeCuesRel,

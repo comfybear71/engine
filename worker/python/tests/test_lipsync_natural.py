@@ -13,6 +13,7 @@ from compositor.lipsync_natural import (
     head_bob_at,
     head_bob_starts,
     load_character_config,
+    process_mouth_cues,
     project_seed,
     schedule_blinks,
     select_loud_variants,
@@ -60,6 +61,21 @@ class TestSmoothing:
         frames = ["C", "C", "B", "B", "C", "C"]
         assert apply_smoothing(frames, "medium") == ["C"] * 6
         assert apply_smoothing(frames, "light") == frames
+
+
+class TestExcludeFromLipSync:
+    def test_process_mouth_cues_remaps_h_before_hold(self):
+        cues = [_cue(0.0, 0.2, "B"), _cue(0.2, 0.5, "H"), _cue(0.5, 0.8, "B")]
+        out = process_mouth_cues(
+            cues,
+            duration_frames=20,
+            fps=24,
+            smoothing="off",
+            excluded={"H"},
+            available={"B", "C", "H", "X"},
+        )
+        assert all(cue.shape != "H" for cue in out)
+        assert any(cue.shape == "C" for cue in out)
 
 
 class TestLoudSelection:

@@ -8,6 +8,7 @@ export type PlaybackAudioClip = {
   startFrame: number;
   endFrame: number;
   exists: boolean;
+  durationSeconds?: number | null;
   trimInSec?: number;
   trimOutSec?: number | null;
 };
@@ -41,23 +42,64 @@ export function frameFromElapsedMs(elapsedMs: number, startFrame: number, fps: n
   return Math.max(0, Math.min(maxFrame, next));
 }
 
-/** Auto-kick a proxy only for shots at most this long. Longer stays on stepped preview. */
-export const AUTO_PROXY_MAX_DURATION_SEC = 120;
+/** Upcoming play window rendered as a low-res proxy segment. */
+export const PROXY_SEGMENT_SEC = 25;
+/** First window after Play — short so the mouth can start without a 30s wait. */
+export const PROXY_SEGMENT_FIRST_SEC = 6;
+export const PROXY_SEGMENT_SIZE = { width: 960, height: 540 };
+/** Start the next window when this much of the current segment remains. */
+export const PROXY_SEGMENT_PREFETCH_SEC = 8;
+/** Reseek line audio when it drifts this far from the picture clock. */
+export const AUDIO_SYNC_SLACK_SEC = 0.35;
 
-export function allowsAutoProxyFallback(fps: number, totalFrames: number): boolean {
-  if (!Number.isFinite(totalFrames) || totalFrames <= 0) return true;
-  return totalFrames / Math.max(fps, 1) <= AUTO_PROXY_MAX_DURATION_SEC;
+export function playSegmentDurationSec(firstWindow: boolean): number {
+  return firstWindow ? PROXY_SEGMENT_FIRST_SEC : PROXY_SEGMENT_SEC;
 }
 
-export function shouldFallbackToProxy(frameFetchMs: number, fps: number, totalFrames = 0): boolean {
+/** Hold line audio until the proxy picture is actually playing. */
+export function shouldHoldLineAudio(buffering: boolean, picturePlaying: boolean): boolean {
+  return buffering === true || picturePlaying !== true;
+}
+
+export function segmentWindow(
+  startFrame: number,
+  fps: number,
+  totalFrames: number,
+  durationSec = PROXY_SEGMENT_SEC
+): { startFrame: number; frames: number; endFrame: number } {
+  const safeFps = Math.max(fps, 1);
+  const start = Math.max(0, Math.min(Math.floor(startFrame) || 0, Math.max(0, totalFrames - 1)));
+  const frames = Math.max(1, Math.min(Math.round(durationSec * safeFps), Math.max(1, totalFrames - start)));
+  return { startFrame: start, frames, endFrame: start + frames };
+}
+
+export function frameInSegment(
+  frame: number,
+  segment: { startFrame: number; frames: number } | null | undefined,
+  slackFrames = 0
+): boolean {
+  if (!segment) return false;
+  return frame >= segment.startFrame && frame < segment.startFrame + segment.frames + Math.max(0, slackFrames);
+}
+
+export function shouldFallbackToProxy(frameFetchMs: number, fps: number, _totalFrames = 0): boolean {
   const budget = 1000 / Math.max(fps, 1);
-  if (!Number.isFinite(frameFetchMs) || frameFetchMs <= budget * 1.5) return false;
-  return allowsAutoProxyFallback(fps, totalFrames);
+  return Number.isFinite(frameFetchMs) && frameFetchMs > budget * 1.5;
 }
 
-/** Bump the Stage Web Audio start generation so in-flight starts abort. */
+/** Bump the Stage audio start generation so in-flight starts abort. */
 export function bumpAudioGeneration(generation: number): number {
   return generation + 1;
+}
+
+export function clipDurationSec(
+  clip: { startFrame: number; endFrame: number; durationSeconds?: number | null },
+  fps: number
+): number {
+  if (clip.durationSeconds != null && Number.isFinite(clip.durationSeconds) && clip.durationSeconds > 0) {
+    return clip.durationSeconds;
+  }
+  return Math.max(0, (clip.endFrame - clip.startFrame) / Math.max(fps, 1));
 }
 
 /** True when this startLineAudio invocation may still create sources. */
@@ -94,6 +136,33 @@ export function audioClipsFromBlocks(
     .filter((clip) => clip.endFrame > clip.startFrame);
 }
 
+/** Rebuild playback clips from optimistic lane blocks, keeping file duration by rel. */
+export function mergePlaybackAudioFromLanes<T extends PlaybackAudioClip>(
+  current: T[],
+  blocks: {
+    lane?: string;
+    rel?: string | null;
+    startFrame: number;
+    endFrame: number;
+    trim?: { inFrames: number; outFrames: number } | null;
+  }[],
+  totalFrames: number,
+  fps = 24
+): PlaybackAudioClip[] {
+  const prior = new Map<string, T>();
+  for (const clip of current) {
+    if (clip.rel && !prior.has(clip.rel)) prior.set(clip.rel, clip);
+  }
+  return audioClipsFromBlocks(blocks, totalFrames, fps).map((clip) => {
+    const prev = prior.get(clip.rel);
+    return {
+      ...clip,
+      exists: prev?.exists ?? true,
+      durationSeconds: prev?.durationSeconds ?? null,
+    };
+  });
+}
+
 /** Where to start a clip in Web Audio relative to the current playhead. */
 export function webAudioSchedule(
   clip: { startFrame: number; endFrame: number; durationSec: number; trimInSec?: number; trimOutSec?: number | null },
@@ -106,7 +175,9 @@ export function webAudioSchedule(
   if (clipEnd <= playheadFrame) return null;
   if (clip.startFrame >= totalFrames) return null;
   const trimIn = Math.max(0, clip.trimInSec || 0);
-  const trimOut = clip.trimOutSec != null && clip.trimOutSec > trimIn ? clip.trimOutSec : trimIn + clip.durationSec;
+  const spanSec = Math.max(0, (clip.endFrame - clip.startFrame) / safeFps);
+  const fallbackOut = clip.durationSec > trimIn ? clip.durationSec : trimIn + spanSec;
+  const trimOut = clip.trimOutSec != null && clip.trimOutSec > trimIn ? clip.trimOutSec : fallbackOut;
   const intoClip = Math.max(0, playheadFrame - clip.startFrame) / safeFps;
   const offsetSec = trimIn + intoClip;
   if (offsetSec >= trimOut - 1e-6) return null;
@@ -115,6 +186,11 @@ export function webAudioSchedule(
   if (playSec <= 0) return null;
   const delaySec = Math.max(0, (clip.startFrame - playheadFrame) / safeFps);
   return { offsetSec, delaySec, playSec };
+}
+
+export function audioClockDriftSec(elementTime: number, expectedOffsetSec: number): number {
+  if (!Number.isFinite(elementTime) || !Number.isFinite(expectedOffsetSec)) return Infinity;
+  return Math.abs(elementTime - expectedOffsetSec);
 }
 
 export type FrameCache = {

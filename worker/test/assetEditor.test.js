@@ -11,10 +11,12 @@ const {
   describeSlot,
   describeDrawing,
   findDrawingUsages,
+  promoteSlotView,
   confirmReplace,
   confirmAdd,
   renameDrawing,
   deleteDrawing,
+  saveDrawingFlags,
   listLipsyncPreview,
   missingMouthShapes,
   rhubarbShapeOf,
@@ -89,6 +91,29 @@ describe("asset editor", { concurrency: 1 }, () => {
     );
   });
 
+  test("default mouth view is mouth_front when that folder exists, and promote points the slot at it", () => {
+    writePng(path.join(deeDir, "mouth_front", "X.png"));
+    writePng(path.join(deeDir, "mouth_front", "A.png"));
+    const slot = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth");
+    assert.equal(slot.view, "front");
+    assert.equal(slot.drawingsDir, "mouth_front");
+    assert.equal(slot.isDefaultView, false);
+    assert.equal(slot.defaultDrawingsDir, "mouth");
+    assert.equal(slot.canRealign, true);
+
+    const promoted = promoteSlotView(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", { view: "front" });
+    assert.equal(promoted.drawingsDir, "mouth_front");
+    assert.equal(promoted.alreadyDefault, false);
+    const after = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth");
+    assert.equal(after.drawingsDir, "mouth_front");
+    assert.equal(after.isDefaultView, true);
+    assert.equal(after.defaultDrawingsDir, "mouth_front");
+    const character = JSON.parse(fs.readFileSync(path.join(deeDir, "character.json"), "utf8"));
+    character.slots.mouth.drawings_dir = "mouth";
+    fs.writeFileSync(path.join(deeDir, "character.json"), JSON.stringify(character, null, 2) + "\n");
+    fs.rmSync(path.join(deeDir, "mouth_front"), { recursive: true, force: true });
+  });
+
   test("describeDrawing includes script and cycle usage", () => {
     const mouthA = describeDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "A");
     assert.equal(mouthA.drawing.width, 1);
@@ -148,6 +173,25 @@ describe("asset editor", { concurrency: 1 }, () => {
     const result = confirmAdd(fixture.projectDir, fixture.globalAssetsDir, "dee", { sessionId: sid, name: "C" });
     assert.equal(result.drawing, "C");
     assert.ok(fs.existsSync(path.join(deeDir, "mouth", "C.png")));
+  });
+
+  test("exclude from lip sync persists per drawing and follows rename", () => {
+    writePng(path.join(deeDir, "mouth", "H.png"));
+    const saved = saveDrawingFlags(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "H", {
+      excludeFromLipSync: true,
+    });
+    assert.equal(saved.excludeFromLipSync, true);
+    const slot = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth");
+    const h = slot.drawings.find((d) => d.name === "H");
+    assert.equal(h.excludeFromLipSync, true);
+    const json = JSON.parse(fs.readFileSync(path.join(deeDir, "character.json"), "utf8"));
+    assert.equal(json.slots.mouth.drawings.H.excludeFromLipSync, true);
+    const renamed = renameDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "H", { name: "H2" });
+    assert.equal(renamed.drawing, "H2");
+    const after = JSON.parse(fs.readFileSync(path.join(deeDir, "character.json"), "utf8"));
+    assert.equal(after.slots.mouth.drawings.H2.excludeFromLipSync, true);
+    assert.equal(after.slots.mouth.drawings.H, undefined);
+    renameDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "H2", { name: "H" });
   });
 
   test("rename updates cycle lists in the project-local character.json", () => {

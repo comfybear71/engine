@@ -3,7 +3,10 @@ import { describe, test } from "node:test";
 import {
   acceptAudioFile,
   buildAudioTag,
+  buildChunkAudioTags,
   explainImportAudioError,
+  replaceLineWithAudioChunks,
+  shouldOfferSplit,
   suggestedLabelFromFilename,
   summarizeDryRun,
 } from "../lib/importAudio.ts";
@@ -18,6 +21,22 @@ describe("import audio helpers", () => {
     if (!bad.ok) assert.match(bad.error, /mp3 or wav/);
     assert.equal(suggestedLabelFromFilename("My Take 01.mp3"), "my_take_01");
     assert.equal(buildAudioTag("Hicks", "My Take 01"), "[Audio: Hicks file=my_take_01]");
+    assert.equal(shouldOfferSplit(60), false);
+    assert.equal(shouldOfferSplit(60.5), true);
+    assert.deepEqual(
+      buildChunkAudioTags("Hicks", [
+        { label: "mono_01", offsetSec: 0 },
+        { label: "mono_02", offsetSec: 47.2 },
+      ]),
+      ["[Audio: Hicks file=mono_01 at_time=0s]", "[Audio: Hicks file=mono_02 at_time=47.2s]"]
+    );
+    assert.deepEqual(
+      replaceLineWithAudioChunks("[Audio: Hicks file=mono at_time=10s]", [
+        { label: "mono_01", offsetSec: 0 },
+        { label: "mono_02", offsetSec: 40 },
+      ]),
+      ["[Audio: Hicks file=mono_01 at_time=10s]", "[Audio: Hicks file=mono_02 at_time=50s]"]
+    );
   });
 
   test("Insert Action cursor insert puts the audio tag on its own line", () => {

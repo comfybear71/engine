@@ -21,12 +21,12 @@ function cacheDir() {
   return dir;
 }
 
-function previewCacheKey(projectDir, scriptName, frame, format, quality) {
+function previewCacheKey(projectDir, scriptName, frame, format, quality, width, height) {
   const parseFp = fingerprintParseInputs(projectDir, scriptName);
   const assetFp = fingerprintAssets(projectDir);
   return crypto
     .createHash("sha1")
-    .update(`${parseFp}|${assetFp}|${frame}|${format}|${quality || ""}`)
+    .update(`${parseFp}|${assetFp}|${frame}|${format}|${quality || ""}|${width || ""}|${height || ""}`)
     .digest("hex");
 }
 
@@ -66,8 +66,8 @@ function writeDisk(key, type, buffer, meta) {
   return file;
 }
 
-function getCachedPreview(projectDir, scriptName, frame, format, quality) {
-  const key = previewCacheKey(projectDir, scriptName, frame, format, quality);
+function getCachedPreview(projectDir, scriptName, frame, format, quality, width, height) {
+  const key = previewCacheKey(projectDir, scriptName, frame, format, quality, width, height);
   const type = format === "png" ? "image/png" : "image/jpeg";
   const mem = memory.get(key);
   if (mem) {

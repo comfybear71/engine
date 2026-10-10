@@ -1914,23 +1914,28 @@ class ScriptParser {
       emitSentenceLines && words && words.length > 0 ? wordsToSentences(words) : [];
     if (sentences.length > 0) {
       for (const sentence of sentences) {
-        const lineStart = startFrame + framesFromSeconds(sentence.start - window.inSec, this.fps);
-        const lineEnd = startFrame + framesFromSeconds(sentence.end - window.inSec, this.fps);
+        if (sentence.end <= window.inSec || sentence.start >= window.outSec) continue;
+        if (sentence.start < window.inSec - 1e-6) continue;
+        const sentStart = Math.max(sentence.start, window.inSec);
+        const sentEnd = Math.min(sentence.end, window.outSec);
+        const lineStart = startFrame + framesFromSeconds(sentStart - window.inSec, this.fps);
+        const lineEnd = startFrame + framesFromSeconds(sentEnd - window.inSec, this.fps);
+        const chipEnd = Math.min(startFrame + window.durationFrames, Math.max(lineEnd, lineStart + 1));
         this._emitLane({
           lane: "dialogue",
           token,
           startFrame: lineStart,
-          endFrame: Math.max(lineEnd, lineStart + 1),
+          endFrame: chipEnd,
           label: `${scriptName}: ${sentence.text}`,
           subject: characterId,
           kv,
           sourceStartFrame: startFrame,
-          cues: this._sliceMouthCues(mouthCues, sentence.start, sentence.end),
+          cues: this._sliceMouthCues(mouthCues, sentStart, sentEnd),
           view: lineView,
           marriedId,
           audioRel: imported.wav,
           cuesRel: imported.cues,
-          syncText: text,
+          syncText: sentence.text || text,
           trim,
           sourceDurationFrames: window.sourceFrames,
           words,
@@ -2291,11 +2296,21 @@ class ScriptParser {
     return { images: byView.front && Object.keys(byView.front).length > 0 ? byView.front : images, images_by_view: byView };
   }
 
+  _excludeFromLipSync(slotConfig) {
+    const drawings = slotConfig && slotConfig.drawings;
+    if (!drawings || typeof drawings !== "object") return [];
+    return Object.entries(drawings)
+      .filter(([, meta]) => meta && meta.excludeFromLipSync)
+      .map(([name]) => name);
+  }
+
   _buildSlotJson(characterId, slotName, slotConfig, keyframes) {
     if (slotName === "mouth") {
       const { images, images_by_view } = this._scanMouthViewImages(characterId, slotConfig);
       const mouth = { offset: slotConfig.offset || { x: 0, y: 0 }, images, images_by_view, lipsync: { source: "dialogue" } };
       if (slotConfig.visible_when) mouth.visible_when = slotConfig.visible_when;
+      const excluded = this._excludeFromLipSync(slotConfig);
+      if (excluded.length) mouth.exclude_from_lipsync = excluded;
       return this._applySlotTransform(mouth, slotConfig);
     }
     const sorted = [...keyframes].sort((a, b) => a.frame - b.frame);

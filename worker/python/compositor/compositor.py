@@ -29,7 +29,7 @@ import numpy as np
 from .asset_cache import AssetCache, anchor_after_rotation
 from .background import fit_to_canvas
 from .blend import draw_image
-from .camera import apply_camera
+from .camera import apply_camera, scale_camera
 from .ffmpeg_writer import write_frames
 from .lipsync_natural import slot_head_bob
 from .slots import Slot, _find_active_clip, active_drawing, slot_is_visible
@@ -73,10 +73,11 @@ def _place_child_on_parent(parent: _Placed, child: Child, local_frame: int) -> _
     )
 
 
-def _resolve_layer_placements(layer: Layer, local_frame: int = 0) -> list[_Placed]:
+def _resolve_layer_placements(layer: Layer, local_frame: int = 0, world_scale: float = 1.0) -> list[_Placed]:
     t = transform_at(layer, local_frame)
+    s = float(world_scale) if world_scale else 1.0
     root = _Placed(
-        z=0, x=t.x, y=t.y, scale=t.scale, flip_x=t.flip_x, rotation=t.rotation,
+        z=0, x=t.x * s, y=t.y * s, scale=t.scale * s, flip_x=t.flip_x, rotation=t.rotation,
         opacity=t.opacity, anchor=t.anchor, asset=layer.asset, slots=layer.slots,
     )
     placements = [root]
@@ -180,9 +181,16 @@ def _draw_slot(
     )
 
 
-def _draw_layer(canvas: np.ndarray, layer: Layer, cache: AssetCache, layer_local_frame_idx: int, fps: int) -> None:
+def _draw_layer(
+    canvas: np.ndarray,
+    layer: Layer,
+    cache: AssetCache,
+    layer_local_frame_idx: int,
+    fps: int,
+    world_scale: float = 1.0,
+) -> None:
     drawings = _collect_slot_drawings(layer, layer_local_frame_idx, fps)
-    for placed in _resolve_layer_placements(layer, layer_local_frame_idx):
+    for placed in _resolve_layer_placements(layer, layer_local_frame_idx, world_scale=world_scale):
         _draw_transformed(
             canvas, cache, placed.asset,
             placed.x, placed.y, placed.scale, placed.flip_x, placed.rotation,
@@ -200,8 +208,23 @@ def compose_scene_frame(
     fps: int,
     cache: AssetCache,
     bg_fitted: np.ndarray | None = None,
+    out_width: int | None = None,
+    out_height: int | None = None,
 ) -> np.ndarray:
-    """Compose one scene-local frame, honoring ``frame_step`` hold cadence."""
+    """Compose one scene-local frame, honoring ``frame_step`` hold cadence.
+
+    ``out_width`` / ``out_height`` compose onto a smaller canvas (preview /
+    proxy segments) by scaling placements and camera into that space so
+    assets are pre-scaled instead of blending a full 1080p frame.
+    """
+
+    orig_w, orig_h = canvas_w, canvas_h
+    world_scale = 1.0
+    if out_width and out_height:
+        canvas_w = max(2, int(out_width) - int(out_width) % 2)
+        canvas_h = max(2, int(out_height) - int(out_height) % 2)
+        world_scale = min(canvas_w / float(orig_w), canvas_h / float(orig_h))
+        bg_fitted = None
 
     if bg_fitted is None:
         bg_raw = cache.get_raw(scene.background.asset)
@@ -212,8 +235,10 @@ def compose_scene_frame(
     canvas = bg_fitted.copy()
     for layer in sorted(scene.layers, key=lambda l: l.z):
         if layer.is_visible_at(composed_idx, scene.total_frames):
-            _draw_layer(canvas, layer, cache, composed_idx - layer.start_frame, fps)
-    return apply_camera(canvas, scene.camera, composed_idx, fps)
+            _draw_layer(
+                canvas, layer, cache, composed_idx - layer.start_frame, fps, world_scale=world_scale
+            )
+    return apply_camera(canvas, scale_camera(scene.camera, world_scale), composed_idx, fps)
 
 
 def iter_scene_frames(scene: Scene, canvas_w: int, canvas_h: int, fps: int, cache: AssetCache) -> Iterator[np.ndarray]:
@@ -266,13 +291,26 @@ def scene_at_frame(timeline: Timeline, frame_index: int) -> tuple[Scene, int]:
     )
 
 
-def compose_frame(timeline: Timeline, frame_index: int, cache: AssetCache | None = None) -> np.ndarray:
+def compose_frame(
+    timeline: Timeline,
+    frame_index: int,
+    cache: AssetCache | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> np.ndarray:
     """Compose one global timeline frame (used by the Studio preview-frame API)."""
 
     cache = cache if cache is not None else AssetCache()
     scene, local_frame = scene_at_frame(timeline, frame_index)
     return compose_scene_frame(
-        scene, local_frame, timeline.canvas.width, timeline.canvas.height, timeline.fps, cache
+        scene,
+        local_frame,
+        timeline.canvas.width,
+        timeline.canvas.height,
+        timeline.fps,
+        cache,
+        out_width=width,
+        out_height=height,
     )
 
 

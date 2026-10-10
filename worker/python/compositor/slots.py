@@ -64,17 +64,27 @@ class Slot:
     head_bob_starts: list[int] = field(default_factory=list)
     head_bob_amp: float = 0.0
     head_bob_rotation: float = 0.0
+    # Drawing names skipped by automatic lip sync (still valid as pins).
+    exclude_from_lipsync: frozenset[str] = field(default_factory=frozenset)
 
     def resolve_image(self, drawing: str | None, view: str | None = None) -> Path | None:
         pools: list[dict[str, Path]] = []
-        if view:
-            named = self.images_by_view.get(view)
+        # No view= (and empty view) means the default head: mouth_front/
+        # when that set exists, then mouth/. Named views still fall back
+        # to front, then to ``images``.
+        wanted = (view or "").strip() or None
+        if wanted:
+            named = self.images_by_view.get(wanted)
             if named:
                 pools.append(named)
-            if view != "front":
+            if wanted != "front":
                 front = self.images_by_view.get("front")
                 if front:
                     pools.append(front)
+        else:
+            front = self.images_by_view.get("front")
+            if front:
+                pools.append(front)
         pools.append(self.images)
         names: list[str] = []
         if drawing:
@@ -106,16 +116,23 @@ def active_drawing(slot: Slot, owner_local_frame_idx: int, fps: int) -> str | No
     """Which drawing name is active at ``owner_local_frame_idx`` (frames
     since the slot's owner became visible)."""
 
+    excluded = slot.exclude_from_lipsync
+    available = set(slot.images)
+    for pool in slot.images_by_view.values():
+        available.update(pool)
+
     if slot.dialogue is not None:
         clip = _find_active_clip(slot.dialogue, owner_local_frame_idx)
         if clip is None:
             return FALLBACK_SHAPE  # between lines: idle/closed mouth
         clip_local_seconds = (owner_local_frame_idx - clip.start_frame) / float(fps)
-        return lipsync.shape_at_time(clip.cues, clip_local_seconds)
+        return lipsync.shape_at_time(
+            clip.cues, clip_local_seconds, excluded=excluded, available=available
+        )
 
     if slot.cues is not None:
         t_seconds = owner_local_frame_idx / float(fps)
-        return lipsync.shape_at_time(slot.cues, t_seconds)
+        return lipsync.shape_at_time(slot.cues, t_seconds, excluded=excluded, available=available)
 
     if slot.keyframes:
         held_kf: SlotKeyframe | None = None

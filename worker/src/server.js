@@ -58,7 +58,10 @@ const {
   cancelEdit,
   renameDrawing,
   deleteDrawing,
+  saveDrawingFlags,
   listLipsyncPreview,
+  promoteSlotView,
+  realignSlotView,
 } = require("./assetEditor");
 const {
   PROXY_SIZE,
@@ -66,7 +69,9 @@ const {
   resolveProjectAudio,
   describePlayback,
 } = require("./studioPlayback");
+const { requestPreviewSegment, resolveSegmentFile, SEGMENT_SEC, SEGMENT_SIZE } = require("./previewSegments");
 const { runImportAudio, readImportAudioRequest, VoicesFatalError } = require("./importAudio");
+const { splitExistingAudio, formatChunkAtTime } = require("./splitLongAudio");
 const {
   collectDialogueTargets,
   syncDialogueLines,
@@ -74,6 +79,8 @@ const {
   writeStudioSettings,
   patchMouthCue,
   clearDialogueLipSync,
+  isSafeWavRel,
+  isSafeCuesRel,
 } = require("./voices/lipSync");
 const { snapshotScriptWrite, listScriptHistory, restoreScriptSnapshot } = require("./scriptHistory");
 const { describeEngineSettings, saveXaiApiKey } = require("./engineSettings");
@@ -1026,6 +1033,36 @@ function createApp(options = {}) {
     }
   });
 
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/promote-view", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(promoteSlotView(projectDir, globalAssetsDir, characterId, slotName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/realign", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(await realignSlotView(projectDir, globalAssetsDir, characterId, slotName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
   app.get("/api/projects/:name/characters/:characterId/slots/:slotName/lipsync-preview", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
@@ -1140,6 +1177,23 @@ function createApp(options = {}) {
     if (!characterId) return;
     try {
       res.json(cancelEdit(projectDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/flags", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const drawingName = drawingNameFromRequest(req, res);
+    if (!drawingName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(saveDrawingFlags(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.body || {}));
     } catch (err) {
       sendIngestError(res, err);
     }
@@ -1345,6 +1399,16 @@ function createApp(options = {}) {
     snapshotScriptWrite(projectDir, scriptName, scriptText);
     fs.writeFileSync(path.join(projectDir, scriptName), scriptText);
 
+    const skipParse = req.query && (req.query.parse === "0" || req.query.parse === "false");
+    if (skipParse) {
+      return res.json({
+        ok: true,
+        saved: true,
+        parsed: false,
+        lint: { errors: [], warnings: [] },
+      });
+    }
+
     let result;
     let parseError = null;
     try {
@@ -1415,30 +1479,58 @@ function createApp(options = {}) {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const force = body.force === true;
     const clear = body.clear === true;
-    let result;
+    const directWav = typeof body.wavRel === "string" ? body.wavRel.replace(/\\/g, "/") : "";
+    const directCues = typeof body.cuesRel === "string" ? body.cuesRel.replace(/\\/g, "/") : "";
+    const canDirect =
+      !body.all &&
+      !clear &&
+      Number.isInteger(body.scriptLine) &&
+      body.scriptLine > 0 &&
+      isSafeWavRel(directWav) &&
+      isSafeCuesRel(directCues);
+    let result = null;
     try {
-      result = await parseForRead(projectDir, scriptName);
-    } catch (err) {
-      return res.status(400).json(parseErrorPayload(err));
-    }
-    try {
-      let targets = collectDialogueTargets(result.laneEvents);
-      if (body.all === true) {
-        if (!force && !clear) targets = targets.filter((item) => item.sync !== "synced");
+      let targets;
+      if (canDirect) {
+        const inSec = Number(body.inSec);
+        const outSec = Number(body.outSec);
+        targets = [
+          {
+            scriptLine: body.scriptLine,
+            startFrame: body.startFrame,
+            wavRel: directWav,
+            cuesRel: directCues,
+            text: body.text == null ? "" : String(body.text),
+            inSec: Number.isFinite(inSec) ? inSec : 0,
+            outSec: Number.isFinite(outSec) ? outSec : null,
+          },
+        ];
       } else {
-        const lines = new Set();
-        if (Number.isInteger(body.scriptLine) && body.scriptLine > 0) lines.add(body.scriptLine);
-        if (Array.isArray(body.scriptLines)) {
-          for (const line of body.scriptLines) {
-            if (Number.isInteger(line) && line > 0) lines.add(line);
+        result = await parseForRead(projectDir, scriptName);
+        const fps = (result.timeline && result.timeline.fps) || 24;
+        targets = collectDialogueTargets(result.laneEvents, {
+          uniqueCuesRel: clear === true,
+          fps,
+        });
+        if (body.all !== true) {
+          const lines = new Set();
+          if (Number.isInteger(body.scriptLine) && body.scriptLine > 0) lines.add(body.scriptLine);
+          if (Array.isArray(body.scriptLines)) {
+            for (const line of body.scriptLines) {
+              if (Number.isInteger(line) && line > 0) lines.add(line);
+            }
           }
-        }
-        if (lines.size === 0) {
-          return res.status(400).json({ error: "Pass scriptLine, scriptLines, or all: true." });
-        }
-        targets = targets.filter((item) => lines.has(item.scriptLine));
-        if (targets.length === 0) {
-          return res.status(404).json({ error: "No dialogue line to sync on that script line." });
+          if (lines.size === 0) {
+            return res.status(400).json({ error: "Pass scriptLine, scriptLines, or all: true." });
+          }
+          targets = targets.filter((item) => lines.has(item.scriptLine));
+          if (Number.isInteger(body.startFrame)) {
+            const hit = targets.filter((item) => item.startFrame === body.startFrame);
+            if (hit.length) targets = hit;
+          }
+          if (targets.length === 0) {
+            return res.status(404).json({ error: "No dialogue line to sync on that script line." });
+          }
         }
       }
       const synced = clear
@@ -1455,7 +1547,8 @@ function createApp(options = {}) {
         results: synced.results,
       });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      const status = /not found|required|Pass scriptLine/i.test(err.message) ? 400 : 500;
+      res.status(status).json({ error: err.message });
     } finally {
       cleanupTempParse(result);
     }
@@ -1541,6 +1634,8 @@ function createApp(options = {}) {
     frame = clampFrame(frame, playableFrames);
     const format = body.format === "png" ? "png" : "jpeg";
     const quality = 85;
+    const width = body.width != null ? Number(body.width) : format === "jpeg" ? 960 : null;
+    const height = body.height != null ? Number(body.height) : format === "jpeg" ? 540 : null;
 
     function sendPreview(type, buffer, meta) {
       const totalFrames =
@@ -1556,7 +1651,7 @@ function createApp(options = {}) {
       res.type(type).send(buffer);
     }
 
-    const cached = getCachedPreview(projectDir, scriptName, frame, format, quality);
+    const cached = getCachedPreview(projectDir, scriptName, frame, format, quality, width, height);
     if (!cached.miss) {
       sendPreview(cached.type, cached.buffer, cached.meta || {});
       cleanupTempParse(result);
@@ -1573,6 +1668,8 @@ function createApp(options = {}) {
       previewOpts.timeline = result.timelinePath;
       previewOpts.format = format;
       previewOpts.quality = quality;
+      if (width) previewOpts.width = width;
+      if (height) previewOpts.height = height;
       const preview = await previewFrame(projectDir, frame, tmp, previewOpts);
       const meta = preview.meta || {};
       const buffer = fs.readFileSync(tmp);
@@ -1617,7 +1714,110 @@ function createApp(options = {}) {
     if (!abs) {
       return res.status(404).json({ error: `Audio not found: ${rel}` });
     }
-    res.type("audio/wav").sendFile(abs);
+    res.sendFile(abs, {
+      acceptRanges: true,
+      headers: {
+        "Content-Type": "audio/wav",
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, max-age=3600",
+      },
+    });
+  });
+
+  function segmentPayload(req, projectDir, scriptName, status) {
+    return {
+      ok: !status.error,
+      ready: Boolean(status.ready),
+      progress: status.progress || 0,
+      framesDone: status.framesDone || 0,
+      framesTotal: status.framesTotal || status.frames || 0,
+      startFrame: status.startFrame,
+      frames: status.frames,
+      fps: status.fps,
+      width: status.width,
+      height: status.height,
+      file: status.file,
+      error: status.error || undefined,
+      url: status.file
+        ? `/api/projects/${encodeURIComponent(req.params.name)}/preview-segments/${encodeURIComponent(status.file)}`
+        : null,
+    };
+  }
+
+  app.post("/api/projects/:name/preview-segment", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    let result;
+    try {
+      result = await parseForRead(projectDir, scriptName);
+    } catch (err) {
+      return res.status(400).json(parseErrorPayload(err));
+    }
+    try {
+      const body = req.body || {};
+      const lanes = buildLaneBlocks(result);
+      const status = requestPreviewSegment(projectDir, scriptName, {
+        timeline: result.timelinePath,
+        startFrame: body.startFrame,
+        durationSec: body.durationSec || SEGMENT_SEC,
+        frames: body.frames,
+        width: body.width || SEGMENT_SIZE.width,
+        height: body.height || SEGMENT_SIZE.height,
+        fps: lanes.fps,
+        pythonBin: options.pythonBin,
+      });
+      res.status(status.ready ? 200 : 202).json(segmentPayload(req, projectDir, scriptName, status));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
+  app.get("/api/projects/:name/preview-segment", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    let result;
+    try {
+      result = await parseForRead(projectDir, scriptName);
+    } catch (err) {
+      return res.status(400).json(parseErrorPayload(err));
+    }
+    try {
+      const lanes = buildLaneBlocks(result);
+      const status = requestPreviewSegment(projectDir, scriptName, {
+        timeline: result.timelinePath,
+        startFrame: req.query.startFrame,
+        durationSec: req.query.durationSec || SEGMENT_SEC,
+        frames: req.query.frames,
+        width: req.query.width || SEGMENT_SIZE.width,
+        height: req.query.height || SEGMENT_SIZE.height,
+        fps: lanes.fps,
+        pythonBin: options.pythonBin,
+      });
+      res.status(status.ready ? 200 : 202).json(segmentPayload(req, projectDir, scriptName, status));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
+  app.get("/api/projects/:name/preview-segments/:file", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const abs = resolveSegmentFile(req.params.file);
+    if (!abs) {
+      return res.status(404).json({ error: "Preview segment not found" });
+    }
+    res.sendFile(abs, {
+      acceptRanges: true,
+      headers: { "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
+    });
   });
 
   app.post("/api/projects/:name/import-audio", async (req, res) => {
@@ -1643,7 +1843,12 @@ function createApp(options = {}) {
         name: parsed.name,
         dryRun: parsed.dryRun,
         noTranscribe: parsed.noTranscribe,
+        splitLong: parsed.splitLong,
       });
+      const chunks = result.chunks || [];
+      const tags = chunks.length
+        ? chunks.map((chunk) => `[Audio: ${result.character} file=${chunk.label} at_time=${formatChunkAtTime(chunk.offsetSec)}]`)
+        : [`[Audio: ${result.character} file=${result.label}]`];
       res.json({
         ok: result.ok,
         dryRun: result.dryRun,
@@ -1656,7 +1861,13 @@ function createApp(options = {}) {
         cuesPath: result.cuesPath,
         wordsPath: result.wordsPath,
         transcribed: result.transcribed,
-        tag: `[Audio: ${result.character} file=${result.label}]`,
+        tag: tags[0],
+        tags,
+        split: Boolean(result.split),
+        willSplit: Boolean(result.willSplit),
+        estimatedChunks: result.estimatedChunks || null,
+        chunks,
+        splitMs: result.splitMs || null,
       });
     } catch (err) {
       const status =
@@ -1671,6 +1882,28 @@ function createApp(options = {}) {
       res.status(status).json({ error: err.message });
     } finally {
       if (parsed && parsed.cleanup) parsed.cleanup();
+    }
+  });
+
+  app.post("/api/projects/:name/split-audio", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const rel = typeof body.rel === "string" ? body.rel.trim() : "";
+    if (!rel) return res.status(400).json({ error: "rel is required (audio/<label>/<file>.wav)" });
+    try {
+      const result = await splitExistingAudio(projectDir, {
+        rel,
+        characterId: body.character || body.characterId,
+        label: body.label,
+      });
+      const tags = (result.chunks || []).map(
+        (chunk) => `[Audio: ${result.character} file=${chunk.label} at_time=${formatChunkAtTime(chunk.offsetSec)}]`
+      );
+      res.json({ ...result, tags });
+    } catch (err) {
+      const status = /not found|required|rel must/i.test(err.message) ? 400 : 500;
+      res.status(status).json({ error: err.message });
     }
   });
 

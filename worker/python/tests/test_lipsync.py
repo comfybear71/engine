@@ -10,6 +10,24 @@ import pytest
 from compositor import lipsync
 
 
+def test_remap_excluded_h_prefers_open_mouth():
+    assert lipsync.remap_shape("H", {"H"}) == "C"
+    assert lipsync.remap_shape("H", {"H"}, previous="D") == "C"
+    assert lipsync.remap_shape("H", {"H", "C"}) == "D"
+    assert lipsync.remap_shape("H", {"H", "C", "D"}, previous="B") == "B"
+    assert lipsync.remap_shape("B", {"H"}) == "B"
+    assert lipsync.remap_shape("H_loud", {"H"}, available={"C", "C_loud"}) == "C_loud"
+
+
+def test_shape_at_time_skips_excluded_letter():
+    cues = [
+        lipsync.MouthCue(start=0.0, end=0.5, shape="B"),
+        lipsync.MouthCue(start=0.5, end=1.0, shape="H"),
+    ]
+    assert lipsync.shape_at_time(cues, 0.25, excluded={"H"}) == "B"
+    assert lipsync.shape_at_time(cues, 0.75, excluded={"H"}) == "C"
+
+
 def _write_cues(path, cues):
     data = {"metadata": {"duration": cues[-1]["end"] if cues else 0}, "mouthCues": cues}
     path.write_text(json.dumps(data))

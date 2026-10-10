@@ -18,7 +18,12 @@ import {
   neighborDrawing,
   previewAddDrawing,
   previewReplaceDrawing,
+  promoteSlotView,
+  realignSlotView,
+  remapLipSyncShape,
+  excludedLipSyncShapes,
   renameEditorDrawing,
+  saveDrawingFlags,
   type AssetFocus,
   type DrawingEditor,
   type DrawingUsage,
@@ -27,6 +32,7 @@ import {
   type LipsyncPreview,
   type SlotEditor,
 } from "@/lib/assetEditor";
+import { clampHeadNudge, defaultHeadNudge } from "@/lib/headAlign";
 import { packForCharacter } from "@/lib/promptPacks";
 import { assetUrl, loadCharacters, type Character } from "@/lib/worker";
 
@@ -81,6 +87,8 @@ export default function AssetEditorOverlay({
   const [lipsync, setLipsync] = useState<LipsyncPreview | null>(null);
   const [sampleId, setSampleId] = useState<string>("builtin:hello");
   const [playShape, setPlayShape] = useState<string | null>(null);
+  const [nudge, setNudge] = useState(defaultHeadNudge());
+  const [overlayDefault, setOverlayDefault] = useState(true);
   const playRef = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const addFileRef = useRef<HTMLInputElement | null>(null);
@@ -302,12 +310,47 @@ export default function AssetEditorOverlay({
     }
   }
 
+  async function onPromoteView() {
+    setBusy("Setting default…");
+    setError(null);
+    try {
+      await promoteSlotView(project, focus.characterId, focus.slot, view);
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not promote set");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onRealign(drawing?: string, opts?: { collarY?: number; cropToHead?: boolean }) {
+    setBusy("Re-aligning…");
+    setError(null);
+    try {
+      await realignSlotView(project, focus.characterId, focus.slot, {
+        view,
+        drawing,
+        nudge: clampHeadNudge(nudge),
+        cropToHead: opts?.cropToHead !== false,
+        collarY: opts?.collarY,
+      });
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not re-align");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function playSample() {
     const sample = lipsync?.samples.find((item) => item.id === sampleId);
     if (!sample) return;
     if (playRef.current != null) window.cancelAnimationFrame(playRef.current);
     const started = performance.now();
     const last = sample.cues[sample.cues.length - 1]?.end || 1;
+    const excluded = excludedLipSyncShapes(slot?.drawings || []);
     const tick = (now: number) => {
       const t = (now - started) / 1000;
       if (t >= last) {
@@ -315,10 +358,28 @@ export default function AssetEditorOverlay({
         playRef.current = null;
         return;
       }
-      setPlayShape(cueAtTime(sample.cues, t));
+      setPlayShape(remapLipSyncShape(cueAtTime(sample.cues, t), excluded));
       playRef.current = window.requestAnimationFrame(tick);
     };
     playRef.current = window.requestAnimationFrame(tick);
+  }
+
+  async function onExcludeFromLipSync(exclude: boolean) {
+    if (focus.mode !== "drawing") return;
+    setBusy(exclude ? "Excluding…" : "Including…");
+    setError(null);
+    try {
+      await saveDrawingFlags(project, focus.characterId, focus.slot, focus.drawing, {
+        excludeFromLipSync: exclude,
+        view,
+      });
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update lip sync");
+    } finally {
+      setBusy(null);
+    }
   }
 
   function openImagine() {
@@ -433,6 +494,19 @@ export default function AssetEditorOverlay({
           onReplace={() => fileRef.current?.click()}
           onRename={() => setRenameTo(current.name)}
           onDelete={() => setDeleteState({ force: false, usages: detail?.usages || [] })}
+          project={project}
+          canRealign={Boolean(slot?.canRealign)}
+          overlayDefault={overlayDefault}
+          onOverlayDefault={setOverlayDefault}
+          nudge={nudge}
+          onNudge={(next) => setNudge(clampHeadNudge(next))}
+          onRealign={(opts) => void onRealign(current.name, opts)}
+          onExcludeFromLipSync={slot?.mouth ? (value) => void onExcludeFromLipSync(value) : undefined}
+          defaultRel={
+            slot?.canRealign && slot.defaultDrawingsDir
+              ? `characters/${focus.characterId}/${slot.defaultDrawingsDir}/${current.name}.png`
+              : null
+          }
         />
       ) : slot ? (
         <SlotGrid
@@ -460,6 +534,8 @@ export default function AssetEditorOverlay({
             void ingestFile(file, "replace");
           }}
           onOpenImagine={openImagine}
+          onPromote={() => void onPromoteView()}
+          onRealign={() => void onRealign()}
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-[11px] text-studio-muted">Loading…</div>
@@ -542,6 +618,15 @@ function DrawingView({
   onReplace,
   onRename,
   onDelete,
+  project,
+  canRealign,
+  overlayDefault,
+  onOverlayDefault,
+  nudge,
+  onNudge,
+  onRealign,
+  onExcludeFromLipSync,
+  defaultRel,
 }: {
   slot: SlotEditor | null;
   detail: DrawingEditor | null;
@@ -554,10 +639,41 @@ function DrawingView({
   onReplace: () => void;
   onRename: () => void;
   onDelete: () => void;
+  project: string;
+  canRealign: boolean;
+  overlayDefault: boolean;
+  onOverlayDefault: (value: boolean) => void;
+  nudge: { x: number; y: number; scale: number };
+  onNudge: (nudge: { x: number; y: number; scale: number }) => void;
+  onRealign: (opts?: { collarY?: number; cropToHead?: boolean }) => void;
+  onExcludeFromLipSync?: (exclude: boolean) => void;
+  defaultRel: string | null;
 }) {
+  const defaultSrc = defaultRel ? assetUrl(project, defaultRel) : null;
+  const [cropToHead, setCropToHead] = useState(true);
+  const [collarY, setCollarY] = useState(0.72);
   return (
     <div className="flex min-h-0 flex-1">
-      <ZoomPane src={src} label={current.name} bg={bg} playShape={playShape} />
+      <div className="relative min-h-0 min-w-0 flex-1">
+        <ZoomPane
+          src={src}
+          label={current.name}
+          bg={bg}
+          playShape={playShape}
+          cropToHead={canRealign && cropToHead}
+          collarY={collarY}
+          onCollarY={setCollarY}
+        />
+        {canRealign && overlayDefault && defaultSrc ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={defaultSrc}
+            alt=""
+            className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-40 mix-blend-screen"
+            data-testid="asset-align-overlay"
+          />
+        ) : null}
+      </div>
       <aside className="studio-asset-editor-meta">
         <MetaRow label="Name" value={current.name} />
         <MetaRow
@@ -571,6 +687,17 @@ function DrawingView({
         />
         <MetaRow label="Scale" value={slot ? String(slot.scale) : "—"} />
         {current.shape ? <MetaRow label="Shape" value={`${current.shape} · ${mouthSound(current.name) || ""}`} /> : null}
+        {onExcludeFromLipSync ? (
+          <label className="flex items-center gap-1 text-[10px] text-neutral-400">
+            <input
+              type="checkbox"
+              checked={Boolean(current.excludeFromLipSync)}
+              onChange={(event) => onExcludeFromLipSync(event.target.checked)}
+              data-testid="asset-exclude-lipsync"
+            />
+            Exclude from lip sync
+          </label>
+        ) : null}
         {current.duplicateOf ? (
           <p className="text-[10px] text-amber-300" data-testid="asset-duplicate">
             Duplicate of {current.duplicateOf}
@@ -604,6 +731,82 @@ function DrawingView({
             </button>
           ))}
         </div>
+        {canRealign ? (
+          <div className="space-y-1 border-t border-studio-border pt-2" data-testid="asset-nudge">
+            <label className="flex items-center gap-1 text-[10px] text-neutral-400">
+              <input
+                type="checkbox"
+                checked={overlayDefault}
+                onChange={(event) => onOverlayDefault(event.target.checked)}
+              />
+              Overlay default
+            </label>
+            <label className="flex items-center gap-1 text-[10px] text-neutral-400">
+              <input
+                type="checkbox"
+                checked={cropToHead}
+                onChange={(event) => setCropToHead(event.target.checked)}
+                data-testid="asset-crop-to-head"
+              />
+              Crop to head
+            </label>
+            {cropToHead ? (
+              <label className="block text-[10px] text-neutral-500">
+                Collar line
+                <input
+                  type="range"
+                  min={20}
+                  max={95}
+                  value={Math.round(collarY * 100)}
+                  className="w-full"
+                  data-testid="asset-collar-slider"
+                  onChange={(event) => setCollarY(Number(event.target.value) / 100)}
+                />
+              </label>
+            ) : null}
+            <label className="block text-[10px] text-neutral-500">
+              Nudge X
+              <input
+                type="range"
+                min={-80}
+                max={80}
+                value={nudge.x}
+                className="w-full"
+                onChange={(event) => onNudge({ ...nudge, x: Number(event.target.value) })}
+              />
+            </label>
+            <label className="block text-[10px] text-neutral-500">
+              Nudge Y
+              <input
+                type="range"
+                min={-80}
+                max={80}
+                value={nudge.y}
+                className="w-full"
+                onChange={(event) => onNudge({ ...nudge, y: Number(event.target.value) })}
+              />
+            </label>
+            <label className="block text-[10px] text-neutral-500">
+              Scale
+              <input
+                type="range"
+                min={50}
+                max={150}
+                value={Math.round(nudge.scale * 100)}
+                className="w-full"
+                onChange={(event) => onNudge({ ...nudge, scale: Number(event.target.value) / 100 })}
+              />
+            </label>
+            <button
+              type="button"
+              className="studio-header-textbtn"
+              data-testid="asset-realign-one"
+              onClick={() => onRealign({ cropToHead, collarY: cropToHead ? collarY : undefined })}
+            >
+              Re-align this drawing
+            </button>
+          </div>
+        ) : null}
         <div className="flex flex-wrap gap-1">
           <button type="button" className="studio-header-textbtn" onClick={onReplace} data-testid="asset-replace">
             Replace
@@ -626,16 +829,40 @@ function ZoomPane({
   label,
   bg,
   playShape,
+  cropToHead = false,
+  collarY = 0.72,
+  onCollarY,
 }: {
   src: string | null;
   label: string;
   bg: BgKind;
   playShape: string | null;
+  cropToHead?: boolean;
+  collarY?: number;
+  onCollarY?: (y: number) => void;
 }) {
   const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [imgBox, setImgBox] = useState({ top: 0, left: 0, w: 0, h: 0 });
+
+  function measureImage() {
+    const img = imgRef.current;
+    const stage = stageRef.current;
+    if (!img || !stage) return;
+    const parent = stage.getBoundingClientRect();
+    const r = img.getBoundingClientRect();
+    setImgBox({ top: r.top - parent.top, left: r.left - parent.left, w: r.width, h: r.height });
+  }
+
+  useEffect(() => {
+    measureImage();
+  }, [src, zoom.scale, zoom.x, zoom.y, cropToHead]);
+
   return (
     <div
+      ref={stageRef}
       className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${bg === "checker" ? "studio-checker" : ""}`}
       style={bg === "checker" ? undefined : { background: BG[bg] }}
       data-testid="asset-viewer-stage"
@@ -655,9 +882,11 @@ function ZoomPane({
           x: drag.current.ox + (event.clientX - drag.current.x),
           y: drag.current.oy + (event.clientY - drag.current.y),
         });
+        measureImage();
       }}
       onPointerUp={() => {
         drag.current = null;
+        measureImage();
       }}
     >
       <div
@@ -667,11 +896,47 @@ function ZoomPane({
         {src ? (
           // Worker-served PNG
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={src} alt={label} className="max-h-[70%] max-w-[70%] object-contain" draggable={false} />
+          <img
+            ref={imgRef}
+            src={src}
+            alt={label}
+            className="max-h-[70%] max-w-[70%] object-contain"
+            draggable={false}
+            onLoad={measureImage}
+          />
         ) : (
           <span className="text-[11px] text-studio-muted">No drawing</span>
         )}
       </div>
+      {cropToHead && imgBox.h > 0 ? (
+        <button
+          type="button"
+          data-testid="asset-collar-handle"
+          aria-label="Collar line"
+          className="absolute z-10 h-3 w-full cursor-ns-resize border-0 bg-transparent p-0"
+          style={{ top: imgBox.top + collarY * imgBox.h - 6, left: imgBox.left, width: imgBox.w }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const startY = event.clientY;
+            const start = collarY;
+            const height = imgBox.h || 1;
+            function move(ev: PointerEvent) {
+              const next = Math.min(0.95, Math.max(0.2, start + (ev.clientY - startY) / height));
+              onCollarY?.(next);
+            }
+            function up() {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            }
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          }}
+        >
+          <span className="absolute left-0 right-0 top-1/2 border-t-2 border-studio-accent" />
+          <span className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-white bg-studio-accent" />
+        </button>
+      ) : null}
       <div className="absolute bottom-1 left-1 flex items-center gap-1">
         <button type="button" className="studio-header-textbtn" onClick={() => setZoom({ scale: 1, x: 0, y: 0 })}>
           Reset
@@ -697,6 +962,8 @@ function SlotGrid({
   onDropAdd,
   onDropReplace,
   onOpenImagine,
+  onPromote,
+  onRealign,
 }: {
   project: string;
   slot: SlotEditor;
@@ -711,6 +978,8 @@ function SlotGrid({
   onDropAdd: (file: File) => void;
   onDropReplace: (drawing: string, file: File) => void;
   onOpenImagine: () => void;
+  onPromote: () => void;
+  onRealign: () => void;
 }) {
   const cells = slot.mouth
     ? slot.shapes.map((shape) => {
@@ -764,6 +1033,16 @@ function SlotGrid({
             </button>
           </>
         ) : null}
+        {slot.mouth && !slot.isDefaultView ? (
+          <button type="button" className="studio-header-textbtn" data-testid="asset-promote-view" onClick={onPromote}>
+            Use this set as default
+          </button>
+        ) : null}
+        {slot.canRealign ? (
+          <button type="button" className="studio-header-textbtn" data-testid="asset-realign" onClick={onRealign}>
+            Re-align to default
+          </button>
+        ) : null}
         <button type="button" className="studio-header-textbtn" data-testid="asset-imagine" onClick={onOpenImagine}>
           Open Grok Imagine for this slot
         </button>
@@ -812,6 +1091,11 @@ function SlotGrid({
                 <span className="text-[9px] text-amber-300">dup {cell.drawing.duplicateOf}</span>
               ) : null}
               {cell.loud ? <span className="text-[9px] text-neutral-400">loud</span> : null}
+              {cell.drawing?.excludeFromLipSync ? (
+                <span className="text-[9px] text-amber-200" data-testid="asset-manual-only">
+                  manual only
+                </span>
+              ) : null}
             </button>
           ))}
           <button
@@ -851,6 +1135,9 @@ function SlotGrid({
                   <img src={assetUrl(project, drawing.rel, { v: drawing.mtime }) || ""} alt={drawing.name} />
                 </span>
                 <span className="truncate text-[11px] text-neutral-200">{drawing.name}</span>
+                {drawing.excludeFromLipSync ? (
+                  <span className="text-[9px] text-amber-200">manual only</span>
+                ) : null}
               </button>
             ))}
           </div>

@@ -399,7 +399,11 @@ one line into two. Timed tags become two tags whose durations add up.
 Audio/dialogue become two lines: the first keeps `trim_out=` at the
 split, the second gets `at_time=` at the playhead and `trim_in=` at the
 same source time. Word timings stay on the source file; spoken text is
-split on those words when they exist.
+split on those words when they exist. A sentence that starts in one
+window stays on that half only — split pieces do not emit overlapping
+Dialogue chips. An untrimmed last piece (no `trim_out=`) still becomes
+two `[Audio:]` lines; the right half keeps the same file with
+`trim_in=` at the split and no `trim_out=`.
 
 ```text
 [Move: Hicks to=right over=1s]

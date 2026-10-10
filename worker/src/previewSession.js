@@ -1,9 +1,9 @@
 "use strict";
 
 /**
- * One long-lived Python compositor process for Studio preview-frame.
- * Avoids re-importing numpy/cv2 on every scrub. Falls back to a one-shot
- * spawn when the session is unavailable.
+ * Long-lived Python compositor processes for Studio preview.
+ * One process serves single frames (scrub). A second process renders
+ * proxy segments so play buffering never blocks scrub.
  */
 
 const { spawn } = require("child_process");
@@ -11,18 +11,19 @@ const path = require("path");
 
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 
-let child = null;
-let starting = null;
-let nextId = 1;
-const pending = new Map();
-let stdoutBuf = "";
-
-function rejectAll(err) {
-  for (const waiter of pending.values()) waiter.reject(err);
-  pending.clear();
+function makePool() {
+  return { child: null, starting: null, nextId: 1, pending: new Map(), stdoutBuf: "" };
 }
 
-function handleLine(line) {
+const framePool = makePool();
+const segmentPool = makePool();
+
+function rejectAll(pool, err) {
+  for (const waiter of pool.pending.values()) waiter.reject(err);
+  pool.pending.clear();
+}
+
+function handleLine(pool, line) {
   if (!line.trim()) return;
   let msg;
   try {
@@ -30,75 +31,74 @@ function handleLine(line) {
   } catch {
     return;
   }
-  const waiter = pending.get(msg.id);
+  const waiter = pool.pending.get(msg.id);
   if (!waiter) return;
-  pending.delete(msg.id);
+  pool.pending.delete(msg.id);
   if (msg.ok) waiter.resolve(msg);
   else waiter.reject(new Error(msg.error || "preview session failed"));
 }
 
-function attach(proc) {
-  stdoutBuf = "";
+function attach(pool, proc) {
+  pool.stdoutBuf = "";
   proc.stdout.on("data", (chunk) => {
-    stdoutBuf += chunk.toString();
+    pool.stdoutBuf += chunk.toString();
     let idx;
-    while ((idx = stdoutBuf.indexOf("\n")) >= 0) {
-      const line = stdoutBuf.slice(0, idx);
-      stdoutBuf = stdoutBuf.slice(idx + 1);
-      handleLine(line);
+    while ((idx = pool.stdoutBuf.indexOf("\n")) >= 0) {
+      const line = pool.stdoutBuf.slice(0, idx);
+      pool.stdoutBuf = pool.stdoutBuf.slice(idx + 1);
+      handleLine(pool, line);
     }
   });
   proc.stderr.on("data", () => {
     /* compositor logs stay quiet for preview */
   });
   proc.on("exit", () => {
-    if (child === proc) child = null;
-    rejectAll(new Error("preview session exited"));
+    if (pool.child === proc) pool.child = null;
+    rejectAll(pool, new Error("preview session exited"));
   });
   proc.on("error", (err) => {
-    if (child === proc) child = null;
-    rejectAll(err);
+    if (pool.child === proc) pool.child = null;
+    rejectAll(pool, err);
   });
 }
 
 function spawnSession(options = {}) {
   const pythonBin = options.pythonBin || resolvePythonBin();
-  const proc = spawn(pythonBin, ["-m", "compositor.preview_server"], {
+  return spawn(pythonBin, ["-m", "compositor.preview_server"], {
     cwd: PYTHON_DIR,
     stdio: ["pipe", "pipe", "pipe"],
     env: process.env,
   });
-  attach(proc);
-  return proc;
 }
 
-async function ensureSession(options = {}) {
-  if (child && !child.killed) return child;
-  if (starting) return starting;
-  starting = new Promise((resolve, reject) => {
+async function ensurePool(pool, options = {}) {
+  if (pool.child && !pool.child.killed) return pool.child;
+  if (pool.starting) return pool.starting;
+  pool.starting = new Promise((resolve, reject) => {
     try {
       const proc = spawnSession(options);
-      child = proc;
+      attach(pool, proc);
+      pool.child = proc;
       resolve(proc);
     } catch (err) {
       reject(err);
     } finally {
-      starting = null;
+      pool.starting = null;
     }
   });
-  return starting;
+  return pool.starting;
 }
 
-function previewViaSession(projectDir, frame, outputPath, options = {}) {
+function requestViaPool(pool, payload, options = {}) {
   return new Promise((resolve, reject) => {
-    ensureSession(options)
+    ensurePool(pool, options)
       .then((proc) => {
-        const id = nextId++;
+        const id = pool.nextId++;
         const timer = setTimeout(() => {
-          pending.delete(id);
+          pool.pending.delete(id);
           reject(new Error("preview session timed out"));
         }, options.timeoutMs || 60_000);
-        pending.set(id, {
+        pool.pending.set(id, {
           resolve: (msg) => {
             clearTimeout(timer);
             resolve(msg);
@@ -108,18 +108,9 @@ function previewViaSession(projectDir, frame, outputPath, options = {}) {
             reject(err);
           },
         });
-        const payload = {
-          id,
-          projectDir: path.resolve(projectDir),
-          timeline: options.timeline ? path.resolve(options.timeline) : null,
-          frame,
-          output: path.resolve(outputPath),
-          format: options.format || "png",
-          quality: options.quality || 85,
-        };
-        proc.stdin.write(`${JSON.stringify(payload)}\n`, (err) => {
+        proc.stdin.write(`${JSON.stringify({ ...payload, id })}\n`, (err) => {
           if (err) {
-            pending.delete(id);
+            pool.pending.delete(id);
             clearTimeout(timer);
             reject(err);
           }
@@ -129,17 +120,62 @@ function previewViaSession(projectDir, frame, outputPath, options = {}) {
   });
 }
 
-function closePreviewSession() {
-  rejectAll(new Error("preview session closed"));
-  if (child && !child.killed) {
+function previewViaSession(projectDir, frame, outputPath, options = {}) {
+  return requestViaPool(
+    framePool,
+    {
+      projectDir: path.resolve(projectDir),
+      timeline: options.timeline ? path.resolve(options.timeline) : null,
+      frame,
+      output: path.resolve(outputPath),
+      format: options.format || "png",
+      quality: options.quality || 85,
+      width: options.width || null,
+      height: options.height || null,
+    },
+    options
+  );
+}
+
+function segmentViaSession(projectDir, options = {}) {
+  return requestViaPool(
+    segmentPool,
+    {
+      cmd: "segment",
+      projectDir: path.resolve(projectDir),
+      timeline: options.timeline ? path.resolve(options.timeline) : null,
+      startFrame: options.startFrame || 0,
+      frames: options.frames,
+      output: path.resolve(options.output),
+      progressPath: options.progressPath ? path.resolve(options.progressPath) : null,
+      width: options.width || 960,
+      height: options.height || 540,
+    },
+    { ...options, timeoutMs: options.timeoutMs || 10 * 60 * 1000 }
+  );
+}
+
+function killPool(pool) {
+  rejectAll(pool, new Error("preview session closed"));
+  if (pool.child && !pool.child.killed) {
     try {
-      child.stdin.end();
-      child.kill();
+      pool.child.stdin.end();
+      pool.child.kill();
     } catch {
       /* ignore */
     }
   }
-  child = null;
+  pool.child = null;
 }
 
-module.exports = { previewViaSession, closePreviewSession, ensureSession };
+function closePreviewSession() {
+  killPool(framePool);
+  killPool(segmentPool);
+}
+
+module.exports = {
+  previewViaSession,
+  segmentViaSession,
+  closePreviewSession,
+  ensureSession: (options) => ensurePool(framePool, options),
+};

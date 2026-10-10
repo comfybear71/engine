@@ -15,6 +15,7 @@ export default function TransportBar({
   playing,
   usingVideo,
   previewStatus,
+  bufferHint,
   onRewind,
   onTogglePlay,
   onStop,
@@ -26,13 +27,14 @@ export default function TransportBar({
   script: string;
   playing: boolean;
   usingVideo: boolean;
-  previewStatus?: "idle" | "rendering" | null;
+  previewStatus?: "idle" | "rendering" | "buffering" | null;
+  bufferHint?: string | null;
   onRewind: () => void;
   onTogglePlay: () => void;
   onStop: () => void;
   onImportAudio?: () => void;
 }) {
-  const rendering = previewStatus === "rendering";
+  const rendering = previewStatus === "rendering" || previewStatus === "buffering";
   return (
     <div
       className="z-10 shrink-0 border-t border-studio-border bg-studio-panel px-3"
@@ -106,7 +108,9 @@ export default function TransportBar({
           ) : null}
           {rendering ? (
             <span className="text-studio-accent" data-testid="preview-render-status">
-              Rendering preview…
+              {previewStatus === "buffering"
+                ? `Buffering preview…${bufferHint ? ` ${bufferHint}` : ""}`
+                : "Rendering preview…"}
             </span>
           ) : null}
           <span className="min-w-0 truncate">

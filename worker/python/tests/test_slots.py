@@ -57,6 +57,20 @@ class TestLipsyncDrivenSlot:
         # frame 13 at 24fps -> t ~= 0.542s -> within the second cue.
         assert active_drawing(slot, 13, fps=24) == "D"
 
+    def test_excluded_h_falls_back_to_c(self):
+        cues = [
+            lipsync.MouthCue(start=0.0, end=0.5, shape="X"),
+            lipsync.MouthCue(start=0.5, end=1.0, shape="H"),
+        ]
+        slot = Slot(
+            images={"X": Path("x.png"), "C": Path("c.png"), "H": Path("h.png")},
+            cues=cues,
+            exclude_from_lipsync=frozenset({"H"}),
+        )
+        assert active_drawing(slot, 0, fps=24) == "X"
+        assert active_drawing(slot, 13, fps=24) == "C"
+        assert slot.resolve_image("H") == Path("h.png")
+
 
 class TestSlotResolveImageFallback:
     def test_resolves_known_drawing(self):

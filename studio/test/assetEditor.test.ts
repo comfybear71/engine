@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { clampHeadNudge, defaultHeadNudge, fitBodyPlusHead } from "../lib/headAlign.ts";
 import {
   cueAtTime,
   formatUsage,
   mouthSound,
   needIdForSlot,
   neighborDrawing,
+  remapLipSyncShape,
   RHUBARB_SHAPES,
 } from "../lib/assetEditor.ts";
 
@@ -58,5 +60,37 @@ describe("asset editor helpers", () => {
     assert.equal(cueAtTime(cues, 0.2), "A");
     assert.equal(cueAtTime(cues, 0.7), "D");
     assert.match(formatUsage({ kind: "dialogue", script: "script.txt", line: 4, text: "Dee: Hi." }), /script.txt:4/);
+  });
+
+  test("excluded H remaps to an open mouth, not the tongue drawing", () => {
+    assert.equal(remapLipSyncShape("H", ["H"]), "C");
+    assert.equal(remapLipSyncShape("H", ["H", "C"]), "D");
+    assert.equal(remapLipSyncShape("H", ["H", "C", "D"], "B"), "B");
+    assert.equal(remapLipSyncShape("B", ["H"]), "B");
+  });
+
+  test("head nudge clamps to a small usable range", () => {
+    assert.deepEqual(defaultHeadNudge(), { x: 0, y: 0, scale: 1 });
+    const clamped = clampHeadNudge({ x: 999, y: -999, scale: 8 });
+    assert.equal(clamped.x, 400);
+    assert.equal(clamped.y, -400);
+    assert.equal(clamped.scale, 3);
+  });
+
+  test("align viewport fits a head that sits above the body", () => {
+    const fit = fitBodyPlusHead({
+      bodyW: 200,
+      bodyH: 400,
+      headCenter: { x: 100, y: -20 },
+      headW: 80,
+      headH: 80,
+      headScale: 1,
+      boxW: 400,
+      boxH: 400,
+    });
+    assert.ok(fit.bodyTop > 0);
+    const headTop = fit.bodyTop + (-20) * fit.scale - 40 * fit.scale;
+    assert.ok(headTop >= 0, `head top ${headTop}`);
+    assert.ok(fit.bodyTop + fit.bodyHeight <= 400);
   });
 });

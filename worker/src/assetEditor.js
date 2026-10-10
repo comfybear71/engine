@@ -26,6 +26,7 @@ const {
   DRAWING_NAME,
   SAFE_SESSION,
   runCutout,
+  runAlign,
   decodeImageBuffer,
   previewDir,
   sessionId,
@@ -247,6 +248,35 @@ function rhubarbShapeOf(name) {
   return RHUBARB_SHAPES.includes(base) ? base : null;
 }
 
+function slotDrawingMeta(spec) {
+  const drawings = spec && spec.drawings;
+  return drawings && typeof drawings === "object" && !Array.isArray(drawings) ? drawings : {};
+}
+
+function isExcludedFromLipSync(spec, drawingName) {
+  const meta = slotDrawingMeta(spec);
+  const name = String(drawingName || "");
+  const base = name.replace(/_loud$/i, "");
+  return Boolean((meta[name] && meta[name].excludeFromLipSync) || (meta[base] && meta[base].excludeFromLipSync));
+}
+
+function applyDrawingFlags(drawings, spec) {
+  return drawings.map((drawing) => ({
+    ...drawing,
+    excludeFromLipSync: isExcludedFromLipSync(spec, drawing.name),
+  }));
+}
+
+function setDrawingFlag(spec, drawingName, key, value) {
+  spec.drawings = spec.drawings && typeof spec.drawings === "object" ? spec.drawings : {};
+  const current = spec.drawings[drawingName] && typeof spec.drawings[drawingName] === "object" ? { ...spec.drawings[drawingName] } : {};
+  if (value) current[key] = true;
+  else delete current[key];
+  if (Object.keys(current).length) spec.drawings[drawingName] = current;
+  else delete spec.drawings[drawingName];
+  if (Object.keys(spec.drawings).length === 0) delete spec.drawings;
+}
+
 function markDuplicates(drawings) {
   const byHash = new Map();
   for (const drawing of drawings) {
@@ -388,13 +418,14 @@ function drawingsForView(projectDir, globalAssetsDir, characterId, view) {
   return markDuplicates(drawings);
 }
 
+
 function describeSlot(projectDir, globalAssetsDir, characterId, slotName, viewId) {
   const { character, spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
   const views = discoverSlotViews(projectDir, globalAssetsDir, characterId, slotName, spec);
   const wanted = normalizeView(viewId);
   const view = views.find((item) => item.id === wanted) || views[0];
   if (!view) throw editorError(`No drawings folder for slot ${slotName}`, "ENOTFOUND");
-  const drawings = drawingsForView(projectDir, globalAssetsDir, characterId, view);
+  const drawings = applyDrawingFlags(drawingsForView(projectDir, globalAssetsDir, characterId, view), spec);
   const mouth = isMouthSlot(slotName, spec.drawings_dir);
   const offset = spec.offset || { x: 0, y: 0 };
   return {
@@ -413,6 +444,9 @@ function describeSlot(projectDir, globalAssetsDir, characterId, slotName, viewId
     offset: { x: offset.x == null ? 0 : offset.x, y: offset.y == null ? 0 : offset.y },
     scale: spec.scale == null ? 1 : spec.scale,
     rotation: spec.rotation == null ? 0 : spec.rotation,
+    defaultDrawingsDir: spec.drawings_dir || slotName,
+    isDefaultView: view.drawingsDir === ((spec && spec.drawings_dir) || slotName),
+    canRealign: Boolean(findAlignReferenceDir(projectDir, globalAssetsDir, characterId, slotName, spec, view)),
     defaultDrawing: spec.default_drawing || null,
     cycles: spec.cycles || {},
     mouth,
@@ -453,6 +487,113 @@ function describeDrawing(projectDir, globalAssetsDir, characterId, slotName, dra
     prev: index > 0 ? names[index - 1] : names[names.length - 1] || null,
     next: index >= 0 && index < names.length - 1 ? names[index + 1] : names[0] || null,
   };
+}
+
+function findAlignReferenceDir(projectDir, globalAssetsDir, characterId, slotName, spec, view) {
+  const candidates = [];
+  const defaultDir = (spec && spec.drawings_dir) || slotName;
+  if (view && view.drawingsDir !== "mouth") candidates.push("mouth");
+  if (view && view.drawingsDir !== defaultDir) candidates.push(defaultDir);
+  const seen = new Set();
+  for (const dir of candidates) {
+    if (!dir || seen.has(dir) || (view && dir === view.drawingsDir)) continue;
+    seen.add(dir);
+    const scanned = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${dir}`);
+    if (scanned.size > 0) return dir;
+  }
+  return null;
+}
+
+function promoteSlotView(projectDir, globalAssetsDir, characterId, slotName, body) {
+  const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
+  const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
+  const previousDir = spec.drawings_dir || slotName;
+  if (previousDir === view.drawingsDir) {
+    return { ok: true, drawingsDir: previousDir, alreadyDefault: true };
+  }
+  const scanned = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${previousDir}`);
+  const replaced = [];
+  for (const [, file] of scanned) {
+    const rel = posixJoin("characters", characterId, previousDir, path.basename(file.absPath));
+    const dest = writeHistoryCopy(projectDir, characterId, "replaced", rel, file.absPath);
+    if (dest) replaced.push(dest);
+  }
+  spec.drawings_dir = view.drawingsDir;
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  const live = findSlotSpec(character, slotName);
+  if (live) live.drawings_dir = view.drawingsDir;
+  writeCharacterJson(projectDir, characterId, character, null);
+  return {
+    ok: true,
+    drawingsDir: view.drawingsDir,
+    previousDir,
+    replaced,
+    alreadyDefault: false,
+  };
+}
+
+async function realignSlotView(projectDir, globalAssetsDir, characterId, slotName, body, options = {}) {
+  const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
+  const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
+  const refDir = findAlignReferenceDir(projectDir, globalAssetsDir, characterId, slotName, spec, view);
+  if (!refDir) throw editorError("No default set to align to", "ENOTFOUND");
+  const srcAbs = path.join(characterDir(projectDir, characterId), view.drawingsDir);
+  const refAbs = path.join(characterDir(projectDir, characterId), refDir);
+  if (!fs.existsSync(srcAbs)) throw editorError("View folder not found", "ENOTFOUND");
+  // Reference may live in global assets; copy names from scan.
+  const refScan = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${refDir}`);
+  const srcScan = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${view.drawingsDir}`);
+  const nudge = (body && body.nudge) || {};
+  const names = body && body.drawing ? [body.drawing] : null;
+  const sid = sessionId();
+  const sessionRoot = previewDir(projectDir, characterId, sid);
+  const outDir = path.join(sessionRoot, "aligned");
+  fs.mkdirSync(outDir, { recursive: true });
+  const tmpRef = path.join(outDir, "_ref");
+  const tmpSrc = path.join(outDir, "_src");
+  fs.mkdirSync(tmpRef, { recursive: true });
+  fs.mkdirSync(tmpSrc, { recursive: true });
+  for (const [name, file] of refScan) {
+    if (names && !names.includes(name)) continue;
+    fs.copyFileSync(file.absPath, path.join(tmpRef, `${name}${path.extname(file.absPath) || ".png"}`));
+  }
+  for (const [name, file] of srcScan) {
+    if (names && !names.includes(name)) continue;
+    if (!refScan.has(name)) continue;
+    fs.copyFileSync(file.absPath, path.join(tmpSrc, `${name}${path.extname(file.absPath) || ".png"}`));
+  }
+  const args = ["--src-dir", tmpSrc, "--ref-dir", tmpRef, "--out-dir", outDir];
+  if (body && body.cropToHead === false) args.push("--no-crop-to-head");
+  else args.push("--crop-to-head");
+  if (body && body.collarY != null && Number.isFinite(Number(body.collarY))) {
+    args.push("--collar-y", String(body.collarY));
+  }
+  if (nudge.x) args.push("--nudge-x", String(nudge.x));
+  if (nudge.y) args.push("--nudge-y", String(nudge.y));
+  if (nudge.scale != null && nudge.scale !== 1) args.push("--nudge-scale", String(nudge.scale));
+  if (names) {
+    for (const name of names) args.push("--name", name);
+  }
+  const result = await runAlign(args, options);
+  const written = [];
+  for (const item of result.written || []) {
+    const destName = path.basename(item.out);
+    const destRel = posixJoin("characters", characterId, view.drawingsDir, destName);
+    const destAbs = absFromProjectRel(projectDir, destRel);
+    const prev = srcScan.get(path.basename(destName, path.extname(destName)));
+    if (prev) writeHistoryCopy(projectDir, characterId, "replaced", destRel, prev.absPath);
+    fs.mkdirSync(path.dirname(destAbs), { recursive: true });
+    fs.copyFileSync(item.out, destAbs);
+    written.push({ name: path.basename(destName, path.extname(destName)), rel: destRel });
+  }
+  fs.rmSync(sessionRoot, { recursive: true, force: true });
+  const overlay = written[0]
+    ? {
+        afterRel: written[0].rel,
+        beforeRel: posixJoin("characters", characterId, refDir, `${written[0].name}.png`),
+      }
+    : null;
+  return { ok: true, view: view.id, referenceDir: refDir, written, overlay };
 }
 
 function resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, viewId) {
@@ -727,6 +868,11 @@ function renameDrawing(projectDir, globalAssetsDir, characterId, slotName, drawi
         if (changed) jsonDirty = true;
       }
     }
+    if (live.drawings && live.drawings[drawingName]) {
+      live.drawings[next] = live.drawings[drawingName];
+      delete live.drawings[drawingName];
+      jsonDirty = true;
+    }
   }
   if (jsonDirty) writeCharacterJson(projectDir, characterId, character, null);
   return { ok: true, drawing: next, rel: destRel, renamed: true };
@@ -784,9 +930,35 @@ function deleteDrawing(projectDir, globalAssetsDir, characterId, slotName, drawi
         }
       }
     }
+    if (live.drawings && live.drawings[drawingName]) {
+      delete live.drawings[drawingName];
+      if (Object.keys(live.drawings).length === 0) delete live.drawings;
+      jsonDirty = true;
+    }
   }
   if (jsonDirty) writeCharacterJson(projectDir, characterId, character, null);
   return { ok: true, drawing: drawingName, trash: historyRel, usages };
+}
+
+function saveDrawingFlags(projectDir, globalAssetsDir, characterId, slotName, drawingName, body) {
+  assertDrawingName(drawingName);
+  const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
+  const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
+  const current = describeDrawingFile(projectDir, globalAssetsDir, characterId, view.drawingsDir, drawingName);
+  if (!current) throw editorError(`Unknown drawing: ${drawingName}`, "ENOTFOUND");
+  if (body == null || typeof body !== "object" || !("excludeFromLipSync" in body)) {
+    throw editorError("excludeFromLipSync is required");
+  }
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  const live = findSlotSpec(character, slotName);
+  if (!live) throw editorError(`Unknown slot: ${slotName}`, "ENOTFOUND");
+  setDrawingFlag(live, drawingName, "excludeFromLipSync", Boolean(body.excludeFromLipSync));
+  writeCharacterJson(projectDir, characterId, character, null);
+  return {
+    ok: true,
+    drawing: drawingName,
+    excludeFromLipSync: isExcludedFromLipSync(live, drawingName),
+  };
 }
 
 function readRhubarbCues(absPath) {
@@ -862,7 +1034,12 @@ module.exports = {
   cancelEdit,
   renameDrawing,
   deleteDrawing,
+  saveDrawingFlags,
   listLipsyncPreview,
   missingMouthShapes,
   rhubarbShapeOf,
+  promoteSlotView,
+  realignSlotView,
+  findAlignReferenceDir,
+  pngSize,
 };

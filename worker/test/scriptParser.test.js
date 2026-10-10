@@ -857,6 +857,141 @@ describe("[Audio: Name file=<label>]", () => {
 
     fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
   });
+
+  test("trim_in=/trim_out= on a split [Audio:] piece shorten that lane only", async () => {
+    const audioDir = path.join(fixture.projectDir, "audio", "monologue");
+    wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 4.0);
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Audio: Alice file=monologue trim_out=2s]",
+      "[Audio: Alice file=monologue at_time=2s trim_in=2.5s trim_out=3.5s]",
+    ].join("\n");
+    const { laneEvents, timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, {
+      fps: 24,
+    });
+    const audioLanes = laneEvents.filter((e) => e.lane === "audio");
+    assert.equal(audioLanes.length, 2);
+    assert.equal(audioLanes[0].startFrame, 0);
+    assert.equal(audioLanes[0].endFrame, 48);
+    assert.deepEqual(audioLanes[0].trim, { inFrames: 0, outFrames: 48 });
+    assert.equal(audioLanes[1].startFrame, 48);
+    assert.equal(audioLanes[1].endFrame, 72);
+    assert.deepEqual(audioLanes[1].trim, { inFrames: 60, outFrames: 84 });
+    const clips = timeline.scenes[0].layers[0].dialogue;
+    assert.equal(clips[0].trim_out, 2);
+    assert.equal(clips[1].trim_in, 2.5);
+    assert.equal(clips[1].trim_out, 3.5);
+    fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
+  });
+
+  test("split [Audio:] windows do not emit overlapping dialogue chips", async () => {
+    const audioDir = path.join(fixture.projectDir, "audio", "monologue");
+    wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 4.0);
+    fs.writeFileSync(
+      path.join(audioDir, "001_alice.words.json"),
+      JSON.stringify([
+        { word: "Hello", start: 0.0, end: 0.4 },
+        { word: "there.", start: 0.4, end: 0.8 },
+        { word: "Later", start: 1.8, end: 2.1 },
+        { word: "on.", start: 2.1, end: 2.4 },
+      ])
+    );
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Audio: Alice file=monologue trim_out=2s]",
+      "[Audio: Alice file=monologue at_time=2s trim_in=2s]",
+    ].join("\n");
+    const { laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const dialogue = laneEvents.filter((e) => e.lane === "dialogue");
+    assert.ok(dialogue.length >= 2);
+    for (let i = 0; i < dialogue.length; i++) {
+      for (let j = i + 1; j < dialogue.length; j++) {
+        const overlap = dialogue[i].startFrame < dialogue[j].endFrame && dialogue[j].startFrame < dialogue[i].endFrame;
+        assert.equal(overlap, false, `${dialogue[i].label} overlaps ${dialogue[j].label}`);
+      }
+    }
+    assert.ok(dialogue.every((e) => e.syncText !== "Hello there. Later on."));
+    fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
+  });
+
+  test("last untrimmed [Audio:] piece split stays two playable same-file lanes", async () => {
+    const audioDir = path.join(fixture.projectDir, "audio", "monologue");
+    wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 9.0);
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Audio: Alice file=monologue at_time=8s trim_in=8s trim_out=8.67s]",
+      "[Audio: Alice file=monologue at_time=8.67s trim_in=8.67s]",
+    ].join("\n");
+    const { laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const audio = laneEvents.filter((e) => e.lane === "audio");
+    assert.equal(audio.length, 2);
+    assert.equal(audio[0].startFrame, 192);
+    assert.equal(audio[0].endFrame, 208);
+    assert.deepEqual(audio[0].trim, { inFrames: 192, outFrames: 208 });
+    assert.equal(audio[1].startFrame, 208);
+    assert.equal(audio[1].endFrame, 216);
+    assert.equal(audio[1].trim.inFrames, 208);
+    assert.ok(audio[1].trim.outFrames > 208);
+    assert.equal(audio[1].rel, audio[0].rel);
+    fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
+  });
+
+  test("view= on [Audio:] does not drop existing mouth cues", async () => {
+    const audioDir = path.join(fixture.projectDir, "audio", "monologue");
+    wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 3.0);
+    fs.writeFileSync(
+      path.join(audioDir, "001_alice.words.json"),
+      JSON.stringify([
+        { word: "Hello", start: 0.0, end: 0.4 },
+        { word: "there.", start: 0.4, end: 0.8 },
+        { word: "Later", start: 1.5, end: 1.9 },
+        { word: "on.", start: 1.9, end: 2.3 },
+      ])
+    );
+    fs.writeFileSync(
+      path.join(audioDir, "001_alice.wav.rhubarb.json"),
+      JSON.stringify({
+        mouthCues: [
+          { start: 0.0, end: 0.5, value: "A" },
+          { start: 1.5, end: 2.1, value: "B" },
+        ],
+        engine: { text: "Hello there. Later on." },
+      })
+    );
+    const base = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Audio: Alice file=monologue]",
+    ].join("\n");
+    const before = (await parseScript(fixture.projectDir, fixture.globalAssetsDir, base, { fps: 24 })).laneEvents.filter(
+      (e) => e.lane === "dialogue"
+    );
+    const after = (
+      await parseScript(
+        fixture.projectDir,
+        fixture.globalAssetsDir,
+        base.replace("[Audio: Alice file=monologue]", "[Audio: Alice file=monologue view=left_side]"),
+        { fps: 24 }
+      )
+    ).laneEvents.filter((e) => e.lane === "dialogue");
+    assert.ok(before.length >= 2);
+    assert.equal(after.length, before.length);
+    assert.ok(before.every((e) => Array.isArray(e.cues) && e.cues.length > 0));
+    assert.ok(after.every((e) => Array.isArray(e.cues) && e.cues.length > 0));
+    assert.deepEqual(
+      after.map((e) => e.cues.map((c) => c.shape)),
+      before.map((e) => e.cues.map((c) => c.shape))
+    );
+    assert.ok(after.every((e) => e.view === "left_side"));
+    fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
+  });
 });
 
 describe("at_time= / start= explicit start", () => {
@@ -912,6 +1047,32 @@ describe("at_time= / start= explicit start", () => {
     assert.equal(dlg[0].trim.inFrames, 0);
     assert.ok(dlg[0].trim.outFrames > 0);
     assert.equal(dlg[0].sync, "not_synced");
+  });
+
+  test("mouth_front/ is the default image set when view is omitted", async () => {
+    const aliceDir = path.join(fixture.projectDir, "characters", "alice");
+    const globalMouth = path.join(fixture.globalAssetsDir, "characters", "alice", "mouth");
+    fs.mkdirSync(path.join(aliceDir, "mouth_front"), { recursive: true });
+    fs.copyFileSync(path.join(globalMouth, "X.png"), path.join(aliceDir, "mouth_front", "X.png"));
+    fs.copyFileSync(path.join(globalMouth, "A.png"), path.join(aliceDir, "mouth_front", "A.png"));
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hello."].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const mouth = timeline.scenes[0].layers[0].slots.mouth;
+    const x = String(mouth.images.X || "");
+    assert.match(x, /mouth_front/);
+    assert.match(String(mouth.images_by_view.front.X || ""), /mouth_front/);
+  });
+
+  test("excludeFromLipSync on a mouth drawing is copied onto the timeline slot", async () => {
+    const aliceDir = path.join(fixture.projectDir, "characters", "alice");
+    const globalJson = path.join(fixture.globalAssetsDir, "characters", "alice", "character.json");
+    const character = JSON.parse(fs.readFileSync(globalJson, "utf8"));
+    character.slots.mouth.drawings = { H: { excludeFromLipSync: true } };
+    fs.mkdirSync(aliceDir, { recursive: true });
+    fs.writeFileSync(path.join(aliceDir, "character.json"), JSON.stringify(character, null, 2) + "\n");
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hello."].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    assert.deepEqual(timeline.scenes[0].layers[0].slots.mouth.exclude_from_lipsync, ["H"]);
   });
 
   test("trim_in=/trim_out= shorten dialogue and over= holds a face pin", async () => {

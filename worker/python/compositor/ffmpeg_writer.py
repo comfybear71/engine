@@ -167,6 +167,56 @@ class FfmpegFrameWriter:
             raise RuntimeError(f"ffmpeg exited with code {returncode} (see its output above)")
 
 
+def build_preview_segment_cmd(
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+) -> list[str]:
+    """Video-only ultrafast H.264 for Stage proxy windows (no audio mix)."""
+
+    return [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{width}x{height}", "-r", str(fps),
+        "-i", "-",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p",
+        "-an", "-movflags", "+faststart",
+        str(output_path),
+    ]
+
+
+def write_preview_segment(
+    frames: Iterable[np.ndarray],
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+) -> Path:
+    """Encode a short preview window. Audio is streamed separately by Studio."""
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = build_preview_segment_cmd(output_path, width, height, fps)
+    process = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    assert process.stdin is not None
+    try:
+        for frame_bgr in frames:
+            if frame_bgr.ndim == 3 and frame_bgr.shape[2] == 4:
+                frame_bgr = frame_bgr[:, :, :3]
+            if frame_bgr.shape[:2] != (height, width):
+                raise ValueError(
+                    f"Frame shape {frame_bgr.shape[:2]} does not match canvas {(height, width)}"
+                )
+            process.stdin.write(np.ascontiguousarray(frame_bgr, dtype=np.uint8).tobytes())
+        process.stdin.close()
+    except BrokenPipeError:
+        pass
+    returncode = process.wait()
+    if returncode != 0:
+        raise RuntimeError(f"ffmpeg preview segment exited with code {returncode}")
+    return output_path
+
+
 def write_frames(
     frames: Iterable[np.ndarray],
     output_path: Path,
