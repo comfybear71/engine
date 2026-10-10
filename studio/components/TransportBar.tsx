@@ -13,6 +13,7 @@ export default function TransportBar({
   onRewind,
   onTogglePlay,
   onStop,
+  onImportAudio,
 }: {
   frame: number;
   maxFrame: number;
@@ -24,6 +25,7 @@ export default function TransportBar({
   onRewind: () => void;
   onTogglePlay: () => void;
   onStop: () => void;
+  onImportAudio?: () => void;
 }) {
   const rendering = previewStatus === "rendering";
   return (
@@ -86,14 +88,26 @@ export default function TransportBar({
             </button>
           </div>
         </div>
-        <div className="min-w-0 flex-1 truncate text-right text-xs text-neutral-300">
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-2 truncate text-right text-xs text-neutral-300">
+          {onImportAudio ? (
+            <button
+              type="button"
+              data-testid="import-audio-open"
+              onClick={onImportAudio}
+              className="shrink-0 rounded-md border border-studio-accent/50 bg-studio-raised px-2 py-1 text-[11px] text-neutral-200 hover:border-studio-accent hover:text-white"
+            >
+              Import audio
+            </button>
+          ) : null}
           {rendering ? (
             <span className="mr-2 text-studio-accent" data-testid="preview-render-status">
               Rendering preview…
             </span>
           ) : null}
-          frame {frame} · {fps} fps · {script}
-          {usingVideo ? <span className="ml-2 text-[10px] uppercase tracking-wide text-studio-accent">render</span> : null}
+          <span className="min-w-0 truncate">
+            frame {frame} · {fps} fps · {script}
+            {usingVideo ? <span className="ml-2 text-[10px] uppercase tracking-wide text-studio-accent">render</span> : null}
+          </span>
         </div>
       </div>
     </div>

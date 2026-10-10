@@ -293,7 +293,8 @@ node src/cli.js import-audio ../projects/my_ep interview.mp3 --character hicks -
 node src/cli.js import-audio ../projects/my_ep interview.mp3 --character hicks --name monologue --no-transcribe
 ```
 
-Single speaker only. Studio can call the same work later via
+Single speaker only. Studio **Import audio** (Script tab, or Stage
+transport / Script drawer) calls the same work via
 `POST /api/projects/:name/import-audio` -- see [docs/studio.md](studio.md).
 
 ### `Character: dialogue text`

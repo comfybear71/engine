@@ -83,12 +83,14 @@ export function ScriptInspector({
   playheadLine,
   blocks,
   onSeek,
+  onImportAudio,
   onClose,
 }: {
   lines: string[];
   playheadLine: number | null;
   blocks: LaneBlock[];
   onSeek: (frame: number, scriptLine: number | null) => void;
+  onImportAudio?: () => void;
   onClose: () => void;
 }) {
   const listRef = useRef<HTMLOListElement | null>(null);
@@ -103,9 +105,21 @@ export function ScriptInspector({
     <div className="flex h-full min-h-0 flex-col" data-testid="script-drawer">
       <DrawerHeader title="Script" onClose={onClose} />
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <p className="mb-2 px-1 text-[11px] text-studio-muted">
-          Read-only. Playhead line is highlighted. Edit on the Script tab.
-        </p>
+        <div className="mb-2 flex items-start justify-between gap-2 px-1">
+          <p className="text-[11px] text-studio-muted">
+            Read-only. Playhead line is highlighted. Edit on the Script tab.
+          </p>
+          {onImportAudio ? (
+            <button
+              type="button"
+              data-testid="import-audio-open"
+              onClick={onImportAudio}
+              className="shrink-0 rounded-md border border-studio-accent/50 bg-studio-raised px-2 py-1 text-[11px] text-neutral-200 hover:border-studio-accent hover:text-white"
+            >
+              Import audio
+            </button>
+          ) : null}
+        </div>
         <ol ref={listRef} className="space-y-0.5 font-mono text-[11px] leading-5">
           {lines.map((line, index) => {
             const n = index + 1;

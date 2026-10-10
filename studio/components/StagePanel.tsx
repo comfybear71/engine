@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AssetsPanel from "@/components/AssetsPanel";
 import CameraDrawer from "@/components/CameraDrawer";
+import ImportAudioDialog from "@/components/ImportAudioDialog";
 import PanelSplitter from "@/components/PanelSplitter";
 import { LayersInspector, MarksInspector, ScriptInspector } from "@/components/StageInspectors";
 import { LeftIconRail, RightIconRail, type LeftPoolId, type RightDrawerId } from "@/components/StageRails";
 import TimelineLanes from "@/components/TimelineLanes";
 import TransportBar from "@/components/TransportBar";
+import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import {
   chooseVideoFile,
   createFrameCache,
@@ -29,6 +31,7 @@ import {
   loadPlayback,
   loadScript,
   loadStage,
+  saveScript,
   mediaUrl,
   renderVideoUrl,
   startPreviewRender,
@@ -75,6 +78,7 @@ export default function StagePanel({
   const [previewStatus, setPreviewStatus] = useState<"idle" | "rendering">("idle");
   const [leftPool, setLeftPool] = useState<LeftPoolId | null>(null);
   const [rightDrawer, setRightDrawer] = useState<RightDrawerId | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [layout, setLayout] = useState<StageLayout>(DEFAULT_STAGE_LAYOUT);
   const previewUrlRef = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -461,6 +465,14 @@ export default function StagePanel({
     setPlaying((value) => !value);
   }
 
+  async function insertImportedAudio(tag: string) {
+    if (!project) return;
+    const after = findInsertAfterLine(scriptText, playheadLine ?? selectedLine, sceneId);
+    const next = insertLineAfter(scriptText, after, tag);
+    await saveScript(project, next, script);
+    onSaved();
+  }
+
   if (!project) {
     return <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">Pick a project to open the stage.</div>;
   }
@@ -578,6 +590,7 @@ export default function StagePanel({
               onRewind={onRewind}
               onTogglePlay={onTogglePlay}
               onStop={onStop}
+              onImportAudio={() => setImportOpen(true)}
             />
 
             {rightDrawer ? (
@@ -621,6 +634,7 @@ export default function StagePanel({
                     playheadLine={playheadLine ?? selectedLine}
                     blocks={lanes?.blocks || []}
                     onSeek={seekTo}
+                    onImportAudio={() => setImportOpen(true)}
                     onClose={() => setRightDrawer(null)}
                   />
                 ) : null}
@@ -674,6 +688,13 @@ export default function StagePanel({
         active={rightDrawer}
         onToggle={(id) => setRightDrawer((current) => (current === id ? null : id))}
       />
+      {importOpen && project ? (
+        <ImportAudioDialog
+          project={project}
+          onClose={() => setImportOpen(false)}
+          onInsertTag={insertImportedAudio}
+        />
+      ) : null}
     </div>
   );
 }

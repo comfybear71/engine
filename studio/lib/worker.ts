@@ -569,3 +569,42 @@ export async function renderExists(name: string, script?: string | null): Promis
     return false;
   }
 }
+
+export type ImportAudioResponse = {
+  ok: boolean;
+  dryRun: boolean;
+  noTranscribe: boolean;
+  label: string;
+  character: string;
+  durationSeconds: number;
+  creditNote: string;
+  wavPath?: string;
+  cuesPath?: string;
+  wordsPath?: string;
+  transcribed?: boolean;
+  tag?: string;
+  estimatedCost?: string | number | null;
+  cost?: string | number | null;
+  estimatedCredits?: string | number | null;
+  creditEstimate?: string | number | null;
+};
+
+export async function importProjectAudio(
+  name: string,
+  file: File,
+  options: { character: string; name?: string; dryRun?: boolean; noTranscribe?: boolean }
+): Promise<ImportAudioResponse> {
+  const body = new FormData();
+  body.append("file", file, file.name);
+  body.append("character", options.character);
+  if (options.name) body.append("name", options.name);
+  if (options.dryRun) body.append("dryRun", "true");
+  if (options.noTranscribe) body.append("noTranscribe", "true");
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/import-audio`, {
+    method: "POST",
+    body,
+  });
+  const payload = (await res.json().catch(() => ({}))) as ImportAudioResponse & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Import failed (${res.status})`);
+  return payload;
+}

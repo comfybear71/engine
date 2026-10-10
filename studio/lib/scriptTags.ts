@@ -57,3 +57,23 @@ export const INSERT_ACTIONS: InsertActionDef[] = [
     template: () => `[Prop: name hide]`,
   },
 ];
+
+/**
+ * Insert Action drop: put `snippet` at the textarea selection, adding a
+ * leading newline when the cursor is mid-line, and a trailing newline.
+ */
+export function insertSnippetAtCursor(
+  text: string,
+  snippet: string,
+  selectionStart: number,
+  selectionEnd: number = selectionStart
+): { next: string; cursor: number } {
+  const start = Math.max(0, Math.min(text.length, Number(selectionStart) || 0));
+  const end = Math.max(start, Math.min(text.length, Number(selectionEnd) || 0));
+  const before = text.slice(0, start);
+  const after = text.slice(end);
+  const prefix = before.length && !before.endsWith("\n") ? "\n" : "";
+  const next = `${before}${prefix}${snippet}\n${after}`;
+  const cursor = start + prefix.length + snippet.length + 1;
+  return { next, cursor };
+}

@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ImportAudioDialog from "@/components/ImportAudioDialog";
 import InsertActionPanel from "@/components/InsertActionPanel";
+import { insertSnippetAtCursor } from "@/lib/scriptTags";
 import {
   lintScript,
   loadCharacters,
@@ -39,6 +41,7 @@ export default function ScriptPanel({
   const [issues, setIssues] = useState<LintIssue[]>([]);
   const [castNames, setCastNames] = useState<string[]>([]);
   const [castName, setCastName] = useState("Name");
+  const [importOpen, setImportOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const gutterRef = useRef<HTMLDivElement | null>(null);
 
@@ -122,22 +125,38 @@ export default function ScriptPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [onSave]);
 
-  function insertAtCursor(snippet: string) {
+  function insertAtCursor(snippet: string): string {
     const el = textareaRef.current;
     const start = el?.selectionStart ?? text.length;
     const end = el?.selectionEnd ?? text.length;
-    const before = text.slice(0, start);
-    const after = text.slice(end);
-    const prefix = before.length && !before.endsWith("\n") ? "\n" : "";
-    const next = `${before}${prefix}${snippet}\n${after}`;
+    const { next, cursor } = insertSnippetAtCursor(text, snippet, start, end);
     setText(next);
     setDirty(true);
-    const cursor = start + prefix.length + snippet.length + 1;
     requestAnimationFrame(() => {
       if (!el) return;
       el.focus();
       el.setSelectionRange(cursor, cursor);
     });
+    return next;
+  }
+
+  async function insertImportedAudio(tag: string) {
+    const next = insertAtCursor(tag);
+    if (!project) return;
+    setSaving(true);
+    setStatus("Saving…");
+    try {
+      const result = await saveScript(project, next, script);
+      setIssues(flattenLint(result));
+      setDirty(false);
+      setStatus(result.ok ? "Inserted imported audio." : "Inserted, with lint issues.");
+      onSaved();
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Save failed");
+      throw err;
+    } finally {
+      setSaving(false);
+    }
   }
 
   function syncScroll() {
@@ -243,8 +262,17 @@ export default function ScriptPanel({
           selectedName={castName}
           onSelectName={setCastName}
           onInsert={insertAtCursor}
+          onImportAudio={() => setImportOpen(true)}
         />
       </div>
+      {importOpen && project ? (
+        <ImportAudioDialog
+          project={project}
+          defaultCharacter={castName}
+          onClose={() => setImportOpen(false)}
+          onInsertTag={insertImportedAudio}
+        />
+      ) : null}
     </div>
   );
 }

@@ -7,10 +7,10 @@ user's PC (`WORKER_PORT`, default `4100` from the repo-root `.env`). That
 server is bound to `127.0.0.1` only.
 
 No Vercel Blob, no database, no auth. Voices TTS stays on the CLI
-(`node src/cli.js voices`). The worker also exposes
-`POST /api/projects/:name/import-audio` for a later Studio UI (ElevenLabs
-Speech-to-Text + Rhubarb on a pre-recorded file); there is no Studio UI
-for it in this change.
+(`node src/cli.js voices`). Pre-recorded mp3/wav lip-sync is **Import
+audio** in Studio (Script tab, or **Import audio** on the Stage transport
+bar / Script drawer) — that calls `POST /api/projects/:name/import-audio` (ElevenLabs
+Speech-to-Text + Rhubarb). You never need the command line for that.
 
 The **script is the source of truth**. Stage lanes are a read-only view of
 a temp parse; dragging/resizing clips comes later. Save, lint, preview,
@@ -134,7 +134,7 @@ clobber the project's `timeline.json`.
 - **Stage** — the main workspace. A large frame preview from
   `POST /api/projects/:name/preview-frame?script=`, a transport bar under
   the viewer (centred rewind / larger play / stop; timecode on the left;
-  `frame N · fps · script` on the right), and **read-only timeline lanes**
+  **Import audio** then `frame N · fps · script` on the right), and **read-only timeline lanes**
   at the bottom (Body/Move, Face, Props, Dialogue, Audio, SFX, Camera).
   The old single Action lane is split so overlapping motion is visible:
   `[Move:]` / `[Swing:]` / `[Pose:]` / `body=` cycles on Body/Move,
@@ -165,8 +165,9 @@ clobber the project's `timeline.json`.
   **Assets / Media / Effects** are a left dock (library characters,
   backgrounds, props) that slides in over the stage — not a full-page
   switch. The right icon rail opens **Marks**, **Layers**, **Script**
-  (read-only, playhead line highlighted), and **Camera** drawers; they
-  are closed by default so the stage and timeline keep their space.
+  (read-only, playhead line highlighted, plus **Import audio**), and
+  **Camera** drawers; they are closed by default so the stage and
+  timeline keep their space.
   Camera lists `[Camera:]` moves for the shot and an **Add camera move**
   form (zoom, pan, tilt, to, reset, over, ease) that inserts the tag
   through the existing script save path. Splitters between the left
@@ -180,8 +181,18 @@ clobber the project's `timeline.json`.
 - **Script** — full-page line-numbered editor for the selected `script*.txt` with
   Save (Ctrl/Cmd+S) and Lint. Insert Action buttons drop real tag templates
   from [script-format.md](script-format.md) at the cursor, using character
-  names from the project cast. The Stage Script drawer is the read-only
-  counterpart; edits still happen here.
+  names from the project cast. **Import audio (mp3/wav)** (also **Import
+  audio** on the Stage transport bar and Script drawer) is a drop zone / file picker: pick a character (defaults to
+  the first project character), optional label, then a dry-run summary
+  (length, that speech-to-text uses ElevenLabs credits, estimated cost when
+  the worker sends one) with Import / Cancel and **Skip transcription**.
+  Progress lists converting, mouth shapes, and transcribing; errors such as a
+  missing API key or Rhubarb are in plain words. On success, **Insert into
+  script** drops `[Audio: Name file=<label>]` at the cursor (Stage: at the
+  playhead line, else the end of the shot) through the same Insert Action
+  path, saves, and refreshes the lanes so Audio and Dialogue show the take.
+  The Stage Script drawer is the read-only counterpart; other edits still
+  happen here.
 
 ## Worker API (`127.0.0.1:4100`)
 
@@ -225,7 +236,7 @@ project root). Those paths parse to **temp** files and never write
 | `POST` | `/api/projects/:name/preview-frame?script=` | Parse the selected script to a temp timeline, compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a PNG. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. |
 | `POST` | `/api/projects/:name/render?script=` | Parse the selected script to a temp timeline (never `timeline.json`), run the compositor with `--output renders/<script-stem>.mp4`. Same `--script` choice as the CLI. One render at a time. |
 | `POST` | `/api/projects/:name/preview-render?script=` | Same temp parse as Render, but writes a 960×540 H.264 proxy to `renders/<script-stem>_preview.mp4` for Stage playback. Shares the one-at-a-time render lock. |
-| `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?" }` or multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe`). Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Dry-run prints length + the STT credit note and writes nothing. No Studio UI for this yet. |
+| `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). Studio **Import audio** sends multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe`); JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?" }` still works. Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Dry-run returns length + the STT credit note and writes nothing. |
 | `GET` | `/api/projects/:name/renders/:file` | Stream a render (`script.mp4`, `script_mcd.mp4`, `script_preview.mp4`, or a leftover `output.mp4`). |
 | `POST` | `/render` | Original CLI-oriented contract: `{ "projectDir": "..." }`. |
 
