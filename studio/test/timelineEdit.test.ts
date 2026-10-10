@@ -14,6 +14,7 @@ import {
   pinDurationWriteAttr,
   shiftLanesForMove,
   shiftLanesForSplit,
+  shiftLanesForView,
   shiftLanesForTrim,
   shiftPlaybackAudio,
   planSplit,
@@ -335,6 +336,91 @@ describe("timeline script rewrite", () => {
     const at20 = dialogue.filter((block) => block.startFrame <= 24 && block.endFrame > 24);
     assert.equal(at20.length, 1);
     assert.ok(ms < 5, `optimistic split ${ms}ms`);
+  });
+
+  test("split near the end of an untrimmed Audio line keeps both halves", () => {
+    const script = ["[Scene: Intro]", "[Audio: Alice file=monologue]"].join("\n");
+    const blocks = [
+      {
+        id: "a",
+        scriptLine: 2,
+        sceneId: "intro",
+        startFrame: 0,
+        endFrame: 216,
+        lane: "audio",
+        timing: { kind: "audio" as const },
+        trim: { inFrames: 0, outFrames: 216 },
+        sourceDurationFrames: 216,
+        sourceStartFrame: 0,
+        movable: true,
+      },
+    ];
+    const write = planSplit({
+      blocks,
+      ids: ["a"],
+      playhead: 192,
+      scenes: [{ id: "intro", startFrame: 0 }],
+      fps: 24,
+      script,
+    });
+    assert.ok(write);
+    const next = applySplitWrite(script, write);
+    const lines = next.split("\n");
+    assert.match(lines[1], /trim_out=/);
+    assert.match(lines[2], /\[Audio: Alice file=monologue /);
+    assert.match(lines[2], /trim_in=/);
+    assert.equal(/\btrim_out=/.test(lines[2]), false);
+    const optimistic = shiftLanesForSplit(
+      {
+        fps: 24,
+        totalFrames: 216,
+        lanes: ["audio"],
+        scenes: [{ id: "intro", startFrame: 0, endFrame: 216, frames: 216 }],
+        blocks,
+      },
+      [write],
+      192
+    );
+    const audio = optimistic.blocks.filter((block) => block.lane === "audio");
+    assert.equal(audio.length, 2);
+    assert.equal(audio[0].endFrame, 192);
+    assert.equal(audio[1].startFrame, 192);
+    assert.ok((audio[1].trim?.outFrames || 0) > (audio[1].trim?.inFrames || 0));
+  });
+
+  test("changing view does not drop mouth cues on other chips", () => {
+    const lanes = {
+      fps: 24,
+      totalFrames: 48,
+      lanes: ["dialogue", "mouth"],
+      scenes: [{ id: "intro", startFrame: 0, endFrame: 48, frames: 48 }],
+      blocks: [
+        {
+          id: "d1",
+          scriptLine: 2,
+          startFrame: 0,
+          endFrame: 24,
+          lane: "dialogue",
+          view: null,
+          cues: [{ shape: "A", start: 0, end: 0.4 }],
+        },
+        {
+          id: "d2",
+          scriptLine: 3,
+          startFrame: 24,
+          endFrame: 48,
+          lane: "dialogue",
+          view: null,
+          cues: [{ shape: "B", start: 0, end: 0.3 }],
+        },
+      ],
+    };
+    const next = shiftLanesForView(lanes, 2, "left_side");
+    assert.equal(next.blocks[0].view, "left_side");
+    assert.deepEqual(next.blocks[0].cues, [{ shape: "A", start: 0, end: 0.4 }]);
+    assert.equal(next.blocks[1].view, null);
+    assert.deepEqual(next.blocks[1].cues, [{ shape: "B", start: 0, end: 0.3 }]);
+    assert.equal(setViewOnLine("[Audio: Alice file=monologue]", "left_side"), "[Audio: Alice file=monologue view=left_side]");
   });
 
   test("trim dialogue writes trim_in=/trim_out= and split keeps word timings", () => {

@@ -101,7 +101,7 @@ function stampCuesMeta(cuesPath, { text, wavPath } = {}) {
     wavSize: stat ? stat.size : null,
     wavMtimeMs: stat ? stat.mtimeMs : null,
   };
-  fs.writeFileSync(cuesPath, `${JSON.stringify(data, null, 2)}\n`);
+  writeJsonAtomic(cuesPath, data);
   return data.engine;
 }
 
@@ -197,11 +197,26 @@ function mergeMouthCues(existing, incoming, inSec, outSec) {
   return kept.concat(shifted).sort((a, b) => a.start - b.start);
 }
 
+function writeJsonAtomic(abs, data) {
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const tmp = `${abs}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
+  fs.renameSync(tmp, abs);
+}
+
 function writeMouthCues(abs, cues, engine) {
   const data = { mouthCues: cues };
   if (engine) data.engine = engine;
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, `${JSON.stringify(data, null, 2)}\n`);
+  writeJsonAtomic(abs, data);
+}
+
+function windowHasCues(cues, inSec, outSec) {
+  const from = Number(inSec) || 0;
+  const to = Number(outSec);
+  if (!Number.isFinite(to)) {
+    return Array.isArray(cues) && cues.length > 0;
+  }
+  return (Array.isArray(cues) ? cues : []).some((cue) => Number(cue.end) > from && Number(cue.start) < to);
 }
 
 function isWindowedTarget(target) {
@@ -237,7 +252,8 @@ async function syncDialogueLines({ projectDir, targets, force = false, runRhubar
       wavRel: target.wavRel,
       text: target.text,
     });
-    if (!force && state === "synced" && !isWindowedTarget(target)) {
+    const windowed = isWindowedTarget(target);
+    if (!force && !windowed && state === "synced") {
       results.push({
         scriptLine: target.scriptLine,
         ok: true,
@@ -246,7 +262,19 @@ async function syncDialogueLines({ projectDir, targets, force = false, runRhubar
       });
       continue;
     }
-    const windowed = isWindowedTarget(target);
+    if (!force && windowed) {
+      const existing = readCuesFile(cuesAbs);
+      if (windowHasCues(existing && existing.mouthCues, target.inSec, target.outSec)) {
+        results.push({
+          scriptLine: target.scriptLine,
+          ok: true,
+          skipped: true,
+          sync: state === "stale" ? "stale" : "synced",
+          windowed: true,
+        });
+        continue;
+      }
+    }
     let slicePath = null;
     let tempCues = null;
     try {
@@ -418,6 +446,7 @@ module.exports = {
   sourceWindowFromEvent,
   collectDialogueTargets,
   mergeMouthCues,
+  windowHasCues,
   syncDialogueLines,
   isSafeWavRel,
   readStudioSettings,

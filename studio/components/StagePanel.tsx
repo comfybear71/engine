@@ -40,6 +40,8 @@ import {
   historyUndo,
   shiftPlaybackAudio,
   sliceMouthCuesForWindow,
+  dialogueSourceWindowSec,
+  dialogueSyncText,
   type ScriptEditMeta,
 } from "@/lib/timelineEdit";
 import { replaceLineWithAudioChunks } from "@/lib/importAudio";
@@ -127,6 +129,7 @@ export default function StagePanel({
   const [lanesEpoch, setLanesEpoch] = useState(0);
   const [historyTick, setHistoryTick] = useState(0);
   const [syncing, setSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<string | null>(null);
   const [lipSyncMode, setLipSyncMode] = useState<"auto" | "manual">("auto");
   const [loopSelection, setLoopSelection] = useState(false);
   const [assetFocus, setAssetFocus] = useState<AssetFocus | null>(null);
@@ -790,6 +793,62 @@ export default function StagePanel({
     playSelection(next);
   }
 
+  function patchLanesFromCues(
+    cuesPath: string,
+    mouthCues: { start: number; end: number; value?: string; shape?: string; pinned?: boolean }[]
+  ) {
+    setLanes((current) => {
+      if (!current) return current;
+      const fpsNow = Math.max(1, current.fps || fps);
+      return {
+        ...current,
+        blocks: current.blocks.map((block) => {
+          if ((block.cuesRel || "") !== cuesPath) return block;
+          const window =
+            block.lane === "dialogue" || block.role === "mouth"
+              ? {
+                  inSec:
+                    ((block.trim?.inFrames || 0) +
+                      (block.startFrame - (block.sourceStartFrame ?? block.startFrame))) /
+                    fpsNow,
+                  outSec:
+                    ((block.trim?.inFrames || 0) +
+                      (block.endFrame - (block.sourceStartFrame ?? block.startFrame))) /
+                    fpsNow,
+                }
+              : { inSec: 0, outSec: Number.POSITIVE_INFINITY };
+          return {
+            ...block,
+            sync: "synced" as const,
+            cues: sliceMouthCuesForWindow(mouthCues, window.inSec, window.outSec),
+          };
+        }),
+      };
+    });
+    frameCacheRef.current.clear();
+    setLanesEpoch((n) => n + 1);
+  }
+
+  async function syncOneChip(block: LaneBlock, force?: boolean) {
+    const window = dialogueSourceWindowSec(block, fps);
+    const body = {
+      scriptLine: block.scriptLine ?? undefined,
+      force,
+      startFrame: block.startFrame,
+      endFrame: block.endFrame,
+      wavRel: block.audioRel || block.rel || undefined,
+      cuesRel: block.cuesRel || undefined,
+      inSec: window.inSec,
+      outSec: window.outSec,
+      text: dialogueSyncText(block),
+    };
+    try {
+      return await syncDialogue(project as string, body, script);
+    } catch {
+      return syncDialogue(project as string, body, script);
+    }
+  }
+
   async function runLipSync(opts: {
     all?: boolean;
     scriptLine?: number;
@@ -808,41 +867,31 @@ export default function StagePanel({
     setSyncing(true);
     setError(null);
     try {
+      if (opts.all && !opts.clear) {
+        const chips = (lanes?.blocks || []).filter(
+          (block) => block.lane === "dialogue" && block.cuesRel && (block.audioRel || block.rel)
+        );
+        const failedMessages: string[] = [];
+        for (let i = 0; i < chips.length; i++) {
+          setSyncProgress(`${i + 1}/${chips.length}`);
+          const result = await syncOneChip(chips[i], opts.force);
+          const failed = result.results.find((item) => !item.ok);
+          if (failed) failedMessages.push(failed.message || `Line ${chips[i].scriptLine} failed`);
+          const patched = result.results.find((item) => item.ok && item.mouthCues && item.cuesPath);
+          if (patched && patched.mouthCues && patched.cuesPath) {
+            patchLanesFromCues(patched.cuesPath, patched.mouthCues);
+          }
+        }
+        if (failedMessages.length) setError(failedMessages[0]);
+        setSyncProgress(null);
+        return;
+      }
       const result = await syncDialogue(project, opts, script);
       const failed = result.results.find((item) => !item.ok);
       if (failed) setError(failed.message || "Lip-sync failed");
       const patched = result.results.find((item) => item.ok && item.mouthCues && item.cuesPath);
-      if (patched && !opts.all && !opts.clear) {
-        setLanes((current) => {
-          if (!current) return current;
-          const fpsNow = Math.max(1, current.fps || fps);
-          return {
-            ...current,
-            blocks: current.blocks.map((block) => {
-              if ((block.cuesRel || "") !== patched.cuesPath) return block;
-              const window =
-                block.lane === "dialogue" || block.role === "mouth"
-                  ? {
-                      inSec:
-                        ((block.trim?.inFrames || 0) +
-                          (block.startFrame - (block.sourceStartFrame ?? block.startFrame))) /
-                        fpsNow,
-                      outSec:
-                        ((block.trim?.inFrames || 0) +
-                          (block.endFrame - (block.sourceStartFrame ?? block.startFrame))) /
-                        fpsNow,
-                    }
-                  : { inSec: 0, outSec: Number.POSITIVE_INFINITY };
-              return {
-                ...block,
-                sync: "synced" as const,
-                cues: sliceMouthCuesForWindow(patched.mouthCues, window.inSec, window.outSec),
-              };
-            }),
-          };
-        });
-        frameCacheRef.current.clear();
-        setLanesEpoch((n) => n + 1);
+      if (patched && patched.mouthCues && patched.cuesPath && !opts.clear) {
+        patchLanesFromCues(patched.cuesPath, patched.mouthCues);
       } else {
         const nextLanes = await loadLanes(project, script);
         setLanes(nextLanes);
@@ -854,6 +903,7 @@ export default function StagePanel({
       setError(err instanceof Error ? err.message : "Lip-sync failed");
     } finally {
       setSyncing(false);
+      setSyncProgress(null);
     }
   }
 
@@ -1223,6 +1273,7 @@ export default function StagePanel({
             onToggleLoopSelection={toggleLoopSelection}
             onSelectionRange={setSelectionRange}
             syncing={syncing}
+            syncProgress={syncProgress}
             lipSyncMode={lipSyncMode}
             onToggleLipSyncMode={() => void toggleLipSyncMode()}
             loopSelection={loopSelection}

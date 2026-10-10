@@ -316,10 +316,14 @@ clobber the project's `timeline.json`.
   not re-parse the script or wipe the rest of the file. The thin header has **Sync all**, play
   selection, loop selection, and an Auto/Manual lip-sync mode (Manual
   skips Rhubarb after ElevenLabs / Import audio; write `studio.json`
-  `{ "lipSync": "manual" }` or use the header toggle). A selected
+  `{ "lipSync": "manual" }` or use the header toggle). **Sync all**
+  walks every Dialogue chip (progress `n/146`), retries a failed line
+  once, and merges cues per window so it cannot wipe later lines.
+  A selected
   Dialogue block also gets a small **View** dropdown
   (`front` / `left_34` / `left_side` / `right_34` / `right_side` / `up` /
-  `down`) that writes `view=` on that script line.
+  `down`) that writes `view=` on that script line only — it does not
+  delete, invalidate, or re-run lip-sync cues.
   The timeline zooms like Resolve: `+` / `−` and a
   slider, Ctrl+wheel centred on the cursor, **Fit** for the whole shot,
   horizontal scroll (wheel / drag / scrollbar) when zoomed in, a ruler

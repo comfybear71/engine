@@ -1490,7 +1490,10 @@ function createApp(options = {}) {
       } else {
         result = await parseForRead(projectDir, scriptName);
         const fps = (result.timeline && result.timeline.fps) || 24;
-        targets = collectDialogueTargets(result.laneEvents, { uniqueCuesRel: body.all === true, fps });
+        targets = collectDialogueTargets(result.laneEvents, {
+          uniqueCuesRel: clear === true,
+          fps,
+        });
         if (body.all === true) {
           if (!force && !clear) targets = targets.filter((item) => item.sync !== "synced");
         } else {

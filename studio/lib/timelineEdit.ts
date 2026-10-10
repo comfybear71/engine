@@ -83,6 +83,20 @@ export function formatAtTime(sceneLocalFrames: number, fps: number): string {
   return String(frames);
 }
 
+export function shiftLanesForView<T extends MovableLanes>(
+  lanes: T,
+  scriptLine: number,
+  view: string | null
+): T {
+  const nextView = !view || view === "front" ? null : view;
+  return {
+    ...lanes,
+    blocks: lanes.blocks.map((block) =>
+      block.scriptLine === scriptLine ? { ...block, view: nextView } : block
+    ),
+  };
+}
+
 export function setViewOnLine(line: string, view: string | null): string {
   const tag = line.match(TIMED_TAG_RE);
   if (tag) {
@@ -197,6 +211,8 @@ export type MovableLaneBlock = {
   tag?: string | null;
   movable?: boolean;
   role?: string | null;
+  view?: string | null;
+  cues?: { shape?: string; start: number; end: number; pinned?: boolean }[] | null;
 };
 
 export type MovableLanes = {
@@ -793,11 +809,22 @@ export function planSplit(opts: {
   const rightAt = formatAtTime(Math.max(0, opts.playhead - sceneStart), opts.fps);
   const line = opts.script.split("\n")[take.scriptLine - 1] || "";
   if (take.kind === "media") {
-    const splitFrames = take.trimIn + (opts.playhead - take.start);
+    const rawSplit = take.trimIn + (opts.playhead - take.start);
+    const sourceCap =
+      take.sourceDuration != null && take.sourceDuration > take.trimIn + 1
+        ? take.sourceDuration
+        : take.trimOut > take.trimIn
+          ? take.trimOut
+          : rawSplit + Math.max(1, take.end - opts.playhead);
+    const splitFrames = Math.min(rawSplit, Math.max(take.trimIn + 1, sourceCap - 1));
     const splitSec = splitFrames / Math.max(1, opts.fps);
     const leftIn = take.trimIn > 0 ? formatAtTime(take.trimIn, opts.fps) : null;
     const rightOut =
-      take.sourceDuration != null && take.trimOut >= take.sourceDuration ? null : formatAtTime(take.trimOut, opts.fps);
+      take.sourceDuration != null && take.trimOut >= take.sourceDuration
+        ? null
+        : take.trimOut > splitFrames
+          ? formatAtTime(take.trimOut, opts.fps)
+          : null;
     const texts = splitDialogueText(
       "",
       take.primary.words,

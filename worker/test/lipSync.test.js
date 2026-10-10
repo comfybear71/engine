@@ -170,6 +170,22 @@ describe("lip-sync state", () => {
         mergeMouthCues([{ start: 0, end: 1, value: "X" }], [{ start: 0, end: 0.5, value: "C" }], 4, 5).map((c) => c.start),
         [0, 4]
       );
+
+      const allTargets = collectDialogueTargets(events, { uniqueCuesRel: false, fps: 24 });
+      assert.equal(allTargets.length, 2);
+      const all = await syncDialogueLines({
+        projectDir: dir,
+        extractSlice: async (_from, to) => {
+          fs.writeFileSync(to, "slice");
+        },
+        runRhubarb: () => {
+          throw new Error("should skip windows that already have cues");
+        },
+        targets: allTargets,
+      });
+      assert.equal(all.ok, true);
+      assert.equal(all.results.length, 2);
+      assert.equal(all.results.filter((item) => item.skipped).length, 2);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

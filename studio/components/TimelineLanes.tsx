@@ -32,6 +32,7 @@ import {
   moveBlocksInScript,
   shiftLanesForMove,
   shiftLanesForSplit,
+  shiftLanesForView,
   shiftLanesForTrim,
   dialogueSourceWindowSec,
   dialogueSyncText,
@@ -148,6 +149,7 @@ export default function TimelineLanes({
   onToggleLoopSelection,
   onSelectionRange,
   syncing = false,
+  syncProgress = null,
   lipSyncMode = "auto",
   onToggleLipSyncMode,
   loopSelection = false,
@@ -184,6 +186,7 @@ export default function TimelineLanes({
   onToggleLoopSelection?: () => void;
   onSelectionRange?: (range: { start: number; end: number; scriptLine: number | null } | null) => void;
   syncing?: boolean;
+  syncProgress?: string | null;
   lipSyncMode?: "auto" | "manual";
   onToggleLipSyncMode?: () => void;
   loopSelection?: boolean;
@@ -474,7 +477,9 @@ export default function TimelineLanes({
     if (!lines[index]) return;
     lines[index] = setViewOnLine(lines[index], view);
     const next = lines.join("\n");
-    if (next !== scriptText) onEditScript(next);
+    if (next === scriptText) return;
+    const optimistic = lanes ? shiftLanesForView(lanes, block.scriptLine, view) : undefined;
+    onEditScript(next, { lanes: optimistic });
   }
 
   function snapEdge(raw: number, ignoreIds: Iterable<string>, alt: boolean): { frame: number; snappedTo: number | null } {
@@ -1125,11 +1130,11 @@ export default function TimelineLanes({
             type="button"
             className="studio-header-textbtn"
             data-testid="timeline-sync-all"
-            title="Run Rhubarb on every unsynced or stale line"
+            title="Run Rhubarb on every Dialogue line"
             disabled={syncing || !onSyncLines}
             onClick={() => onSyncLines?.({ all: true })}
           >
-            Sync all
+            {syncing && syncProgress ? `Sync ${syncProgress}` : "Sync all"}
           </button>
           <button
             type="button"
