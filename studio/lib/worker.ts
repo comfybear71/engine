@@ -146,7 +146,12 @@ function withScript(path: string, script?: string | null): string {
 async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(`${WORKER_URL}${path}`, init);
-  } catch {
+  } catch (err) {
+    if (init?.signal?.aborted || (err instanceof DOMException && err.name === "AbortError") || (err instanceof Error && err.name === "AbortError")) {
+      const abort = err instanceof Error ? err : new Error("Aborted");
+      abort.name = "AbortError";
+      throw abort;
+    }
     throw new WorkerUnreachableError();
   }
 }
