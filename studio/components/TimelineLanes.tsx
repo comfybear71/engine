@@ -1,7 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import TimelineContextMenu, { type TimelineContextAction } from "@/components/TimelineContextMenu";
 import { formatTimecode } from "@/lib/playhead";
+import {
+  ASSET_DRAG_MIME,
+  applyAssetDropToScript,
+  parseAssetDrag,
+} from "@/lib/stageAssets";
+import {
+  clipboardFromBlocks,
+  clipboardItemFitsLane,
+  deleteBlocksInScript,
+  duplicateBlocksInScript,
+  pasteClipboardInScript,
+  relatedEditIds,
+  type TimelineClipboard,
+} from "@/lib/timelineClipboard";
 import {
   HEAD_VIEWS,
   applyTrimWrite,
@@ -187,6 +202,13 @@ export default function TimelineLanes({
     y: number;
   } | null>(null);
   const [rubber, setRubber] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const [clipboard, setClipboard] = useState<TimelineClipboard>({ items: [] });
+  const [dropLane, setDropLane] = useState<LaneId | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    lane: LaneId | null;
+  } | null>(null);
   const hScrollRef = useRef<HTMLDivElement | null>(null);
   const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const laneHRef = useRef<HTMLDivElement | null>(null);
@@ -254,6 +276,15 @@ export default function TimelineLanes({
   useEffect(() => {
     saveLaneScale(laneScale);
   }, [laneScale]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    function onClose() {
+      setContextMenu(null);
+    }
+    window.addEventListener("pointerdown", onClose);
+    return () => window.removeEventListener("pointerdown", onClose);
+  }, [contextMenu]);
 
   useEffect(() => {
     const el = viewRef.current;
@@ -486,6 +517,118 @@ export default function TimelineLanes({
     const take = takeWindowForIds(allBlocks, relatedMoveIds(allBlocks, seeds));
     if (!take) return false;
     return frame > take.start && frame < take.end;
+  }
+
+  function selectionSeeds(): Set<string> {
+    if (selectedIds.size > 0) return selectedIds;
+    return new Set(allBlocks.filter((block) => block.scriptLine === selectedLine).map((block) => block.id));
+  }
+
+  function applyCopy() {
+    const seeds = selectionSeeds();
+    if (seeds.size === 0) return;
+    setClipboard(clipboardFromBlocks(scriptText, allBlocks, seeds));
+  }
+
+  function applyDelete(ripple: boolean) {
+    if (!onEditScript || !scriptText) return;
+    const seeds = selectionSeeds();
+    if (seeds.size === 0) return;
+    const next = deleteBlocksInScript({
+      script: scriptText,
+      blocks: allBlocks,
+      ids: seeds,
+      scenes,
+      fps,
+      ripple,
+    });
+    if (next !== scriptText) onEditScript(next);
+  }
+
+  function applyCut() {
+    applyCopy();
+    applyDelete(false);
+  }
+
+  function applyPaste(lane: LaneId | null = null) {
+    if (!onEditScript || !scriptText || clipboard.items.length === 0) return;
+    const next = pasteClipboardInScript({
+      script: scriptText,
+      clipboard,
+      playhead: frame,
+      fps,
+      scenes,
+      playheadLine: selectedLine,
+      lane,
+    });
+    if (next !== scriptText) onEditScript(next);
+  }
+
+  function applyDuplicate() {
+    if (!onEditScript || !scriptText) return;
+    const seeds = selectionSeeds();
+    if (seeds.size === 0) return;
+    const next = duplicateBlocksInScript({
+      script: scriptText,
+      blocks: allBlocks,
+      ids: seeds,
+      fps,
+      scenes,
+    });
+    if (next !== scriptText) onEditScript(next);
+  }
+
+  function applyContextAction(action: TimelineContextAction) {
+    const lane = contextMenu?.lane ?? null;
+    if (action === "copy") applyCopy();
+    else if (action === "cut") applyCut();
+    else if (action === "paste") applyPaste(lane);
+    else if (action === "duplicate") applyDuplicate();
+    else if (action === "delete") applyDelete(false);
+    else if (action === "ripple") applyDelete(true);
+    else if (action === "sync" || action === "redo-sync") {
+      const block = allBlocks.find((item) => selectedIds.has(item.id) && item.lane === "dialogue");
+      if (block?.scriptLine != null) onSyncLines?.({ scriptLine: block.scriptLine, force: action === "redo-sync" });
+    }
+  }
+
+  function openContextMenu(event: React.MouseEvent, block: LaneBlock | null, lane: LaneId | null) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (block) {
+      const next = selectedIds.has(block.id) ? new Set(selectedIds) : new Set<string>([block.id]);
+      commitSelection(relatedEditIds(allBlocks, next));
+    }
+    setContextMenu({ x: event.clientX, y: event.clientY, lane });
+  }
+
+  function onAssetDragOver(event: React.DragEvent<HTMLDivElement>, lane: LaneId) {
+    if (![...event.dataTransfer.types].some((type) => type === ASSET_DRAG_MIME || type === "text/plain")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setDropLane(lane);
+  }
+
+  function onAssetDrop(event: React.DragEvent<HTMLDivElement>, lane: LaneId) {
+    event.preventDefault();
+    event.stopPropagation();
+    setDropLane(null);
+    if (!onEditScript || !scriptText) return;
+    const asset = parseAssetDrag(event.dataTransfer.getData(ASSET_DRAG_MIME) || event.dataTransfer.getData("text/plain"));
+    if (!asset) return;
+    const rect = viewRef.current?.getBoundingClientRect();
+    const x = rect ? scrollLeft + (event.clientX - rect.left) : 0;
+    const dropFrame = Math.max(0, Math.min(maxFrame, Math.round(x / Math.max(ppf, 1e-6))));
+    const next = applyAssetDropToScript({
+      script: scriptText,
+      asset,
+      lane,
+      frame: dropFrame,
+      fps,
+      scenes,
+      playheadLine: selectedLine,
+    });
+    if (next !== scriptText) onEditScript(next);
   }
 
   function onTrimPointerDown(event: React.PointerEvent<HTMLDivElement>, block: LaneBlock, edge: "in" | "out") {
@@ -738,6 +881,7 @@ export default function TimelineLanes({
       if (event.key === "Escape") {
         clearSelection();
         setRubber(null);
+        setContextMenu(null);
         return;
       }
       const key = event.key.toLowerCase();
@@ -746,7 +890,32 @@ export default function TimelineLanes({
         applySplit();
         return;
       }
+      if ((event.key === "Delete" || event.key === "Backspace") && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        applyDelete(event.shiftKey);
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey)) return;
+      if (key === "c") {
+        event.preventDefault();
+        applyCopy();
+        return;
+      }
+      if (key === "x") {
+        event.preventDefault();
+        applyCut();
+        return;
+      }
+      if (key === "v") {
+        event.preventDefault();
+        applyPaste(null);
+        return;
+      }
+      if (key === "d") {
+        event.preventDefault();
+        applyDuplicate();
+        return;
+      }
       if (key === "z" && event.shiftKey) {
         event.preventDefault();
         onRedo?.();
@@ -764,7 +933,7 @@ export default function TimelineLanes({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onUndo, onRedo, applySplit, scriptText, selectedIds, selectedLine, frame, allBlocks, scenes, fps]);
+  }, [onUndo, onRedo, applySplit, scriptText, selectedIds, selectedLine, frame, allBlocks, scenes, fps, clipboard, onEditScript, onSyncLines]);
 
   function nudgeZoom(factor: number) {
     const h = hScrollRef.current;
@@ -1060,10 +1229,19 @@ export default function TimelineLanes({
                     {laneBlocks.map((lane) => (
                       <div
                         key={lane.id}
-                        className="relative"
+                        className="studio-lane-drop relative"
                         style={{ height: lane.height }}
                         data-testid={`timeline-lane-${lane.id}`}
+                        data-lane={lane.id}
                         data-rows={lane.rows}
+                        data-drop-active={dropLane === lane.id ? "true" : "false"}
+                        onDragOver={(event) => onAssetDragOver(event, lane.id)}
+                        onDragLeave={() => setDropLane((current) => (current === lane.id ? null : current))}
+                        onDrop={(event) => onAssetDrop(event, lane.id)}
+                        onContextMenu={(event) => {
+                          if ((event.target as HTMLElement).closest("[data-lane-chip]")) return;
+                          openContextMenu(event, null, lane.id);
+                        }}
                       >
                         <div className="absolute inset-x-0 inset-y-0.5 rounded-sm bg-black/40" />
                         {blocksIntersectingView(
@@ -1106,6 +1284,7 @@ export default function TimelineLanes({
                               showOutHandle={blockIsTrimmable(block) && block.endFrame === groupEnd}
                               syncing={syncing}
                               onPointerDown={onChipPointerDown}
+                              onContextMenu={(event) => openContextMenu(event, block, lane.id)}
                               onTrimPointerDown={onTrimPointerDown}
                               mouthExpanded={isMouthBlock(block) && expandedMouthIds.has(block.id)}
                               viewStartFrame={scrollLeft / Math.max(ppf, 1e-6) - fps}
@@ -1203,6 +1382,26 @@ export default function TimelineLanes({
           onPatch={onPatchCue}
         />
       ) : null}
+      {contextMenu ? (
+        <TimelineContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          canEdit={Boolean(onEditScript)}
+          canPaste={
+            clipboard.items.length > 0 &&
+            clipboard.items.some((item) => clipboardItemFitsLane(item, contextMenu.lane))
+          }
+          hasSelection={selectedIds.size > 0}
+          showSync={allBlocks.some((block) => block.lane === "dialogue" && selectedIds.has(block.id))}
+          syncLabel={
+            allBlocks.find((block) => block.lane === "dialogue" && selectedIds.has(block.id))?.sync === "synced"
+              ? "Redo sync"
+              : "Sync"
+          }
+          onAction={applyContextAction}
+          onClose={() => setContextMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1227,6 +1426,7 @@ function LaneChip({
   viewStartFrame = 0,
   viewEndFrame = 0,
   onPointerDown,
+  onContextMenu,
   onTrimPointerDown,
   onToggleMouth,
   onCueClick,
@@ -1251,6 +1451,7 @@ function LaneChip({
   viewStartFrame?: number;
   viewEndFrame?: number;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock) => void;
+  onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
   onTrimPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock, edge: "in" | "out") => void;
   onToggleMouth?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onCueClick?: (cue: { shape: string; start: number; end: number; pinned?: boolean }, index: number, x: number, y: number) => void;
@@ -1291,6 +1492,7 @@ function LaneChip({
         block.timing?.attr ? ` · ${block.timing.attr}=` : ""
       }`}
       onPointerDown={(event) => onPointerDown(event, block)}
+      onContextMenu={onContextMenu}
       className={`absolute z-[1] select-none rounded-sm px-1 text-left text-[10px] ${bar} ${text} ${
         selected ? "ring-1 ring-white/80" : ""
       } ${mouthExpanded ? "overflow-visible" : "overflow-hidden"} ${

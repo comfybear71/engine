@@ -22,6 +22,7 @@ const { validateTimelineFile } = require("./parser/validateTimelineFile");
 const { resolveAsset } = require("./parser/assetLibrary");
 const { getCachedPreview, storePreview } = require("./previewCache");
 const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = require("./studioLibrary");
+const { listProjectAudio } = require("./studioAudio");
 const { buildLaneBlocks, clampFrame } = require("./studioLanes");
 const {
   DEFAULT_SCRIPT,
@@ -538,6 +539,13 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     const used = collectUsedAssets(projectDir, globalAssetsDir);
     res.json(listStaging(projectDir, globalAssetsDir, { locationIds: used.locationIds }));
+  });
+
+  app.get("/api/projects/:name/audio", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    res.json({ files: listProjectAudio(projectDir, globalAssetsDir) });
   });
 
   app.get("/api/projects/:name/asset", (req, res) => {
