@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  AUTO_PROXY_MAX_DURATION_SEC,
+  bumpAudioGeneration,
   chooseVideoFile,
   frameFromElapsedMs,
+  isLiveAudioStart,
   isRenderUpToDate,
   shouldFallbackToProxy,
   webAudioSchedule,
@@ -54,6 +57,28 @@ describe("stage playback helpers", () => {
   test("shouldFallbackToProxy when a frame fetch misses real time", () => {
     assert.equal(shouldFallbackToProxy(20, 24), false);
     assert.equal(shouldFallbackToProxy(80, 24), true);
+    assert.equal(shouldFallbackToProxy(80, 24, 24 * 60), true);
+    assert.equal(shouldFallbackToProxy(80, 24, 24 * AUTO_PROXY_MAX_DURATION_SEC), true);
+    assert.equal(shouldFallbackToProxy(80, 24, 24 * AUTO_PROXY_MAX_DURATION_SEC + 1), false);
+  });
+
+  test("generation token keeps only the latest audio start live", () => {
+    let gen = 0;
+    const first = (gen = bumpAudioGeneration(gen));
+    assert.equal(isLiveAudioStart(first, gen, true), true);
+
+    gen = bumpAudioGeneration(gen);
+    const second = (gen = bumpAudioGeneration(gen));
+    assert.equal(isLiveAudioStart(first, gen, true), false);
+    assert.equal(isLiveAudioStart(second, gen, true), true);
+
+    gen = bumpAudioGeneration(gen);
+    assert.equal(isLiveAudioStart(second, gen, true), false);
+    assert.equal(isLiveAudioStart(second, gen, false), false);
+
+    const third = (gen = bumpAudioGeneration(gen));
+    assert.equal(isLiveAudioStart(third, gen, false), false);
+    assert.equal(isLiveAudioStart(third, gen, true), true);
   });
 
   test("webAudioSchedule offsets into a clip already under the playhead", () => {

@@ -11,9 +11,12 @@ import TimelineLanes from "@/components/TimelineLanes";
 import TransportBar from "@/components/TransportBar";
 import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import {
+  AUTO_PROXY_MAX_DURATION_SEC,
+  bumpAudioGeneration,
   chooseVideoFile,
   createFrameCache,
   frameFromElapsedMs,
+  isLiveAudioStart,
   shouldFallbackToProxy,
   webAudioSchedule,
 } from "@/lib/playback";
@@ -79,6 +82,7 @@ export default function StagePanel({
   const [leftPool, setLeftPool] = useState<LeftPoolId | null>(null);
   const [rightDrawer, setRightDrawer] = useState<RightDrawerId | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [audioLoading, setAudioLoading] = useState(false);
   const [layout, setLayout] = useState<StageLayout>(DEFAULT_STAGE_LAYOUT);
   const previewUrlRef = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -89,11 +93,15 @@ export default function StagePanel({
   const frameCacheRef = useRef(createFrameCache());
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map());
+  const audioInflightRef = useRef<Map<string, Promise<void>>>(new Map());
   const audioSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const audioGenRef = useRef(0);
+  const projectRef = useRef(project);
   const proxyKickRef = useRef(false);
 
   playingRef.current = playing;
   frameRef.current = frame;
+  projectRef.current = project;
 
   const videoChoice = chooseVideoFile(playback);
   const videoSrc = project && videoChoice ? renderVideoUrl(project, renderNonce || undefined, script, videoChoice.file) : null;
@@ -167,6 +175,28 @@ export default function StagePanel({
   }, [project, script, workerUp, renderNonce, scriptEpoch, previewStatus]);
 
   useEffect(() => {
+    if (!project || !playback) {
+      setAudioLoading(false);
+      return;
+    }
+    const missing = playback.audio.some((clip) => clip.exists && !audioBuffersRef.current.has(clip.rel));
+    if (!missing) {
+      setAudioLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setAudioLoading(true);
+    void loadAudioBuffers().finally(() => {
+      if (!cancelled) setAudioLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // loadAudioBuffers reads the latest project/playback from the render that scheduled this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, playback]);
+
+  useEffect(() => {
     if (!project || !workerUp) return;
     if (playing && videoSrc) return;
     const cached = frameCacheRef.current.get(frame);
@@ -197,7 +227,11 @@ export default function StagePanel({
           }
           if (meta.sceneId) setSceneId(meta.sceneId);
           setError(null);
-          if (playingRef.current && !videoSrc && shouldFallbackToProxy(performance.now() - started, meta.fps || fps)) {
+          if (
+            playingRef.current &&
+            !videoSrc &&
+            shouldFallbackToProxy(performance.now() - started, meta.fps || fps, nextTotal)
+          ) {
             void kickProxyRender();
           }
         })
@@ -271,6 +305,7 @@ export default function StagePanel({
   );
 
   function stopAudio() {
+    audioGenRef.current = bumpAudioGeneration(audioGenRef.current);
     for (const source of audioSourcesRef.current) {
       try {
         source.stop();
@@ -284,42 +319,63 @@ export default function StagePanel({
   async function ensureAudioContext(): Promise<AudioContext | null> {
     const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctor) return null;
-    if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
-      audioCtxRef.current = new Ctor();
+    try {
+      if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+        audioCtxRef.current = new Ctor();
+      }
+      if (audioCtxRef.current.state === "suspended") {
+        await audioCtxRef.current.resume().catch(() => undefined);
+      }
+      return audioCtxRef.current;
+    } catch {
+      return null;
     }
-    if (audioCtxRef.current.state === "suspended") {
-      await audioCtxRef.current.resume();
-    }
-    return audioCtxRef.current;
   }
 
   async function loadAudioBuffers() {
     if (!project || !playback) return;
     const ctx = await ensureAudioContext();
     if (!ctx) return;
+    const expectedProject = project;
     await Promise.all(
       playback.audio
         .filter((clip) => clip.exists)
         .map(async (clip) => {
           if (audioBuffersRef.current.has(clip.rel)) return;
-          try {
-            const res = await fetch(mediaUrl(project, clip.rel));
-            if (!res.ok) return;
-            const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
-            audioBuffersRef.current.set(clip.rel, buffer);
-          } catch {
-            /* missing or undecodable line audio */
+          const pending = audioInflightRef.current.get(clip.rel);
+          if (pending) {
+            await pending;
+            return;
           }
+          const work = (async () => {
+            try {
+              const res = await fetch(mediaUrl(expectedProject, clip.rel));
+              if (!res.ok) return;
+              const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
+              if (projectRef.current !== expectedProject) return;
+              audioBuffersRef.current.set(clip.rel, buffer);
+            } catch {
+              /* missing or undecodable line audio */
+            }
+          })().finally(() => {
+            audioInflightRef.current.delete(clip.rel);
+          });
+          audioInflightRef.current.set(clip.rel, work);
+          await work;
         })
     );
   }
 
   async function startLineAudio(fromFrame: number) {
     stopAudio();
+    const gen = bumpAudioGeneration(audioGenRef.current);
+    audioGenRef.current = gen;
     if (!playback) return;
     const ctx = await ensureAudioContext();
+    if (!isLiveAudioStart(gen, audioGenRef.current, playingRef.current)) return;
     if (!ctx) return;
     await loadAudioBuffers();
+    if (!isLiveAudioStart(gen, audioGenRef.current, playingRef.current)) return;
     for (const clip of playback.audio) {
       if (!clip.exists) continue;
       const buffer = audioBuffersRef.current.get(clip.rel);
@@ -342,6 +398,7 @@ export default function StagePanel({
   async function kickProxyRender() {
     if (!project || proxyKickRef.current || previewStatus === "rendering") return;
     if (playback?.proxy?.upToDate || playback?.render?.upToDate) return;
+    if (totalFrames / Math.max(fps, 1) > AUTO_PROXY_MAX_DURATION_SEC) return;
     proxyKickRef.current = true;
     setPlaying(false);
     stopAudio();
@@ -363,13 +420,17 @@ export default function StagePanel({
       if (video) video.pause();
       return;
     }
+    // Seek-before-play must not look like a mid-play scrub on the first tick.
+    userSeekRef.current = false;
     if (videoSrc) {
+      stopAudio();
       const video = videoRef.current;
       if (!video) return;
       video.currentTime = frameRef.current / Math.max(fps, 1);
       void video.play().catch(() => setPlaying(false));
       return () => {
         video.pause();
+        stopAudio();
       };
     }
     let cancelled = false;
@@ -560,6 +621,14 @@ export default function StagePanel({
                     data-testid="preview-render-overlay"
                   >
                     Rendering preview…
+                  </div>
+                ) : null}
+                {audioLoading && !showVideo ? (
+                  <div
+                    className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded bg-black/70 px-2 py-1 text-[11px] text-white"
+                    data-testid="audio-loading"
+                  >
+                    Loading audio…
                   </div>
                 ) : null}
                 {previewUrl && selectedMark && !showVideo ? (
