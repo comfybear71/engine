@@ -191,6 +191,12 @@ export type MovableLaneBlock = {
   sourceStartFrame?: number;
   sceneId?: string;
   rel?: string | null;
+  trim?: { inFrames: number; outFrames: number } | null;
+  sourceDurationFrames?: number | null;
+  timing?: { kind?: string; attr?: string | null } | null;
+  tag?: string | null;
+  movable?: boolean;
+  role?: string | null;
 };
 
 export type MovableLanes = {
@@ -231,6 +237,62 @@ export function shiftLanesForMove<T extends MovableLanes>(lanes: T, ids: Iterabl
       endFrame: start + span,
       sourceStartFrame:
         block.sourceStartFrame == null ? block.sourceStartFrame : shiftFrame(block.sourceStartFrame, amount),
+    };
+  });
+  const byScene = new Map<string, { start: number; end: number }>();
+  for (const block of blocks) {
+    if (!block.sceneId) continue;
+    const cur = byScene.get(block.sceneId);
+    if (!cur) byScene.set(block.sceneId, { start: block.startFrame, end: block.endFrame });
+    else {
+      cur.start = Math.min(cur.start, block.startFrame);
+      cur.end = Math.max(cur.end, block.endFrame);
+    }
+  }
+  const scenes = (lanes.scenes || []).map((scene) => {
+    const span = byScene.get(scene.id);
+    if (!span) return scene;
+    return {
+      ...scene,
+      startFrame: span.start,
+      endFrame: span.end,
+      frames: Math.max(1, span.end - span.start),
+    };
+  });
+  const maxEnd = blocks.reduce((max, block) => Math.max(max, block.endFrame), 0);
+  return { ...lanes, blocks, scenes, totalFrames: Math.max(1, maxEnd) };
+}
+
+/** Apply an in/out trim to selected (and same-line) blocks — no re-parse. */
+export function shiftLanesForTrim<T extends MovableLanes>(
+  lanes: T,
+  ids: Iterable<string>,
+  edge: "in" | "out",
+  newEdgeFrame: number
+): T {
+  const take = takeWindowForIds(lanes.blocks, ids);
+  if (!take) return lanes;
+  const clamped = clampTrimEdge({ edge, rawFrame: newEdgeFrame, take });
+  const newStart = edge === "in" ? clamped.frame : take.start;
+  const newEnd = edge === "out" ? clamped.frame : take.end;
+  if (newStart === take.start && newEnd === take.end) return lanes;
+  const wanted = new Set(ids);
+  const newTrimIn = Math.max(0, take.trimIn + (newStart - take.start));
+  const newTrimOut = Math.max(newTrimIn + 1, take.trimIn + (newEnd - take.start));
+  const blocks = lanes.blocks.map((block) => {
+    if (!wanted.has(block.id)) return block;
+    let start = block.startFrame;
+    let end = block.endFrame;
+    if (block.startFrame <= take.start) start = newStart;
+    else start = Math.max(newStart, Math.min(start, newEnd - 1));
+    if (block.endFrame >= take.end) end = newEnd;
+    else end = Math.min(newEnd, Math.max(end, newStart + 1));
+    if (end <= start) end = start + 1;
+    return {
+      ...block,
+      startFrame: start,
+      endFrame: end,
+      trim: { inFrames: newTrimIn, outFrames: newTrimOut },
     };
   });
   const byScene = new Map<string, { start: number; end: number }>();

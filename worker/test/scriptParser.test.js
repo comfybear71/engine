@@ -857,6 +857,34 @@ describe("[Audio: Name file=<label>]", () => {
 
     fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
   });
+
+  test("trim_in=/trim_out= on a split [Audio:] piece shorten that lane only", async () => {
+    const audioDir = path.join(fixture.projectDir, "audio", "monologue");
+    wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 4.0);
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Audio: Alice file=monologue trim_out=2s]",
+      "[Audio: Alice file=monologue at_time=2s trim_in=2.5s trim_out=3.5s]",
+    ].join("\n");
+    const { laneEvents, timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, {
+      fps: 24,
+    });
+    const audioLanes = laneEvents.filter((e) => e.lane === "audio");
+    assert.equal(audioLanes.length, 2);
+    assert.equal(audioLanes[0].startFrame, 0);
+    assert.equal(audioLanes[0].endFrame, 48);
+    assert.deepEqual(audioLanes[0].trim, { inFrames: 0, outFrames: 48 });
+    assert.equal(audioLanes[1].startFrame, 48);
+    assert.equal(audioLanes[1].endFrame, 72);
+    assert.deepEqual(audioLanes[1].trim, { inFrames: 60, outFrames: 84 });
+    const clips = timeline.scenes[0].layers[0].dialogue;
+    assert.equal(clips[0].trim_out, 2);
+    assert.equal(clips[1].trim_in, 2.5);
+    assert.equal(clips[1].trim_out, 3.5);
+    fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
+  });
 });
 
 describe("at_time= / start= explicit start", () => {

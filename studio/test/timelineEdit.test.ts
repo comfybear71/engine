@@ -13,6 +13,7 @@ import {
   moveBlocksInScript,
   pinDurationWriteAttr,
   shiftLanesForMove,
+  shiftLanesForTrim,
   shiftPlaybackAudio,
   planSplit,
   planTrim,
@@ -133,6 +134,101 @@ describe("timeline script rewrite", () => {
     });
     assert.ok(left);
     assert.equal(applyTrimWrite(script, left).split("\n")[1], "[Move: Alice to=right over=1s at_time=1s]");
+  });
+
+  test("trim a split Audio block writes source in/out and keeps both pieces", () => {
+    const script = ["[Scene: Intro]", "[Audio: Alice file=monologue]"].join("\n");
+    const audio = {
+      id: "a",
+      scriptLine: 2,
+      sceneId: "intro",
+      startFrame: 0,
+      endFrame: 96,
+      lane: "audio" as const,
+      timing: { kind: "audio" as const },
+      trim: { inFrames: 0, outFrames: 96 },
+      sourceDurationFrames: 96,
+      tag: "audio",
+      movable: true,
+    };
+    const scenes = [{ id: "intro", startFrame: 0 }];
+    const split = planSplit({
+      blocks: [audio],
+      ids: ["a"],
+      playhead: 48,
+      scenes,
+      fps: 24,
+      script,
+    });
+    assert.ok(split);
+    const splitScript = applySplitWrite(script, split);
+    assert.equal(splitScript.split("\n")[1], "[Audio: Alice file=monologue trim_out=2s]");
+    assert.equal(splitScript.split("\n")[2], "[Audio: Alice file=monologue at_time=2s trim_in=2s]");
+
+    const left = {
+      ...audio,
+      id: "l",
+      endFrame: 48,
+      trim: { inFrames: 0, outFrames: 48 },
+    };
+    const right = {
+      ...audio,
+      id: "r",
+      scriptLine: 3,
+      startFrame: 48,
+      sourceStartFrame: 48,
+      trim: { inFrames: 48, outFrames: 96 },
+    };
+    const afterSplit = [left, right];
+    const rightOut = planTrim({
+      blocks: afterSplit,
+      ids: ["r"],
+      edge: "out",
+      newEdgeFrame: 72,
+      scenes,
+      fps: 24,
+      script: splitScript,
+    });
+    assert.ok(rightOut);
+    assert.equal(
+      applyTrimWrite(splitScript, rightOut).split("\n")[2],
+      "[Audio: Alice file=monologue at_time=2s trim_in=2s trim_out=3s]"
+    );
+    const leftIn = planTrim({
+      blocks: afterSplit,
+      ids: ["l"],
+      edge: "in",
+      newEdgeFrame: 12,
+      scenes,
+      fps: 24,
+      script: splitScript,
+    });
+    assert.ok(leftIn);
+    assert.equal(
+      applyTrimWrite(splitScript, leftIn).split("\n")[1],
+      "[Audio: Alice file=monologue at_time=0.5s trim_in=0.5s trim_out=2s]"
+    );
+
+    const lanes = {
+      fps: 24,
+      totalFrames: 96,
+      lanes: ["audio"],
+      scenes: [{ id: "intro", startFrame: 0, endFrame: 96, frames: 96 }],
+      blocks: afterSplit,
+    };
+    const trimmedRight = shiftLanesForTrim(lanes, ["r"], "out", 72);
+    const rightBlock = trimmedRight.blocks.find((block) => block.id === "r");
+    assert.equal(rightBlock?.startFrame, 48);
+    assert.equal(rightBlock?.endFrame, 72);
+    assert.deepEqual(rightBlock?.trim, { inFrames: 48, outFrames: 72 });
+    const trimmedLeft = shiftLanesForTrim(lanes, ["l"], "in", 12);
+    const leftBlock = trimmedLeft.blocks.find((block) => block.id === "l");
+    assert.equal(leftBlock?.startFrame, 12);
+    assert.equal(leftBlock?.endFrame, 48);
+    assert.deepEqual(leftBlock?.trim, { inFrames: 12, outFrames: 48 });
+    const undo = historyUndo(historyPush(emptyScriptHistory(), splitScript), applyTrimWrite(splitScript, rightOut));
+    assert.ok(undo);
+    assert.equal(undo.text, splitScript);
   });
 
   test("trim dialogue writes trim_in=/trim_out= and split keeps word timings", () => {

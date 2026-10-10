@@ -31,6 +31,7 @@ import {
   lineHasPinHold,
   moveBlocksInScript,
   shiftLanesForMove,
+  shiftLanesForTrim,
   type ScriptEditMeta,
   planSplit,
   planTrim,
@@ -490,7 +491,9 @@ export default function TimelineLanes({
     });
     if (!write) return;
     const next = applyTrimWrite(scriptText, write);
-    if (next !== scriptText) onEditScript(next);
+    if (next === scriptText) return;
+    const optimistic = lanes ? shiftLanesForTrim(lanes, ids, edge, newEdgeFrame) : undefined;
+    onEditScript(next, { lanes: optimistic, ids: [...ids] });
   }
 
   function applySplit() {
