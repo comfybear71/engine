@@ -10,7 +10,7 @@ export class WorkerUnreachableError extends Error {
   }
 }
 
-export type Drawing = { name: string; rel: string };
+export type Drawing = { name: string; rel: string; mtime?: number | null };
 export type SlotCycle = { drawings: string[]; fps: number };
 export type CharacterSlot = {
   name: string;
@@ -32,11 +32,18 @@ export type Character = {
   asset: string | null;
   thumbRel: string | null;
   bodyRel: string | null;
+  mtime?: number | null;
   reference: string | null;
   referenceRel: string | null;
+  referenceMtime?: number | null;
   slots: CharacterSlot[];
 };
-export type Background = { id: string; source: "global" | "project"; thumbRel: string | null };
+export type Background = {
+  id: string;
+  source: "global" | "project";
+  thumbRel: string | null;
+  mtime?: number | null;
+};
 export type PropAsset = {
   id: string;
   location: string;
@@ -46,6 +53,7 @@ export type PropAsset = {
   scale: number;
   anchor: string;
   thumbRel: string | null;
+  mtime?: number | null;
 };
 export type Mark = { x: number; y: number; scale?: number; flip_x?: boolean };
 export type Staging = {
@@ -113,6 +121,7 @@ export type ProjectSummary = {
   name: string;
   scripts: string[];
   thumbRel: string | null;
+  thumbMtime?: number | null;
   durationSeconds: number | null;
   sceneCount: number;
   lastRenderAt: string | null;
@@ -363,11 +372,13 @@ export async function loadStage(name: string, script?: string | null): Promise<S
 export function assetUrl(
   project: string,
   rel: string | null | undefined,
-  opts?: { thumb?: boolean }
+  opts?: { thumb?: boolean; v?: number | string | null }
 ): string | null {
   if (!rel) return null;
-  const thumb = opts?.thumb ? "&thumb=1" : "";
-  return `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/asset?rel=${encodeURIComponent(rel)}${thumb}`;
+  const params = new URLSearchParams({ rel });
+  if (opts?.thumb) params.set("thumb", "1");
+  if (opts?.v != null && opts.v !== "") params.set("v", String(opts.v));
+  return `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/asset?${params.toString()}`;
 }
 
 export async function loadProjectContents(name: string): Promise<ProjectContents> {

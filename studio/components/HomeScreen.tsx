@@ -102,10 +102,39 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const workerUpRef = useRef(workerUp);
+  workerUpRef.current = workerUp;
+
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    function onFocus() {
+      if (document.visibilityState === "visible") void refresh();
+    }
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [refresh]);
+
+  useEffect(() => {
     const ms = workerUp === true ? 4000 : 2000;
-    const id = window.setInterval(() => void refresh(), ms);
+    const id = window.setInterval(async () => {
+      const up = await checkWorker();
+      if (!up) {
+        setWorkerUp(false);
+        return;
+      }
+      if (workerUpRef.current !== true) {
+        await refresh();
+        return;
+      }
+      setWorkerUp(true);
+    }, ms);
     return () => window.clearInterval(id);
   }, [refresh, workerUp]);
 
@@ -193,7 +222,9 @@ export default function HomeScreen() {
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {projects.map((project) => {
-            const src = previews[project.name] || assetUrl(project.name, project.thumbRel, { thumb: true });
+            const src =
+              previews[project.name] ||
+              assetUrl(project.name, project.thumbRel, { thumb: true, v: project.thumbMtime });
             return (
               <article
                 key={project.name}

@@ -5,7 +5,14 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { DEFAULTS, readEnvFile, resolveEnginePaths } = require("../../launcher.js");
+const {
+  DEFAULTS,
+  readEnvFile,
+  resolveEnginePaths,
+  isStudioDev,
+  studioLaunchArgs,
+  studioNeedsRebuild,
+} = require("../../launcher.js");
 
 describe("launcher", () => {
   test("defaults to worker 4100 and Studio on 3001", () => {
@@ -19,6 +26,22 @@ describe("launcher", () => {
     const paths = resolveEnginePaths(root);
     assert.equal(paths.workerDir, path.join(root, "worker"));
     assert.ok(fs.existsSync(paths.workerEntry));
+  });
+
+  test("defaults to next start and opts into next dev via STUDIO_DEV", () => {
+    assert.equal(isStudioDev({}), false);
+    assert.equal(isStudioDev({ STUDIO_DEV: "1" }), true);
+    assert.equal(isStudioDev({ ENGINE_STUDIO_DEV: "true" }), true);
+    assert.deepEqual(studioLaunchArgs("/next", "3001", { dev: false }), ["/next", "start", "-p", "3001"]);
+    assert.deepEqual(studioLaunchArgs("/next", "3001", { dev: true }), ["/next", "dev", "-p", "3001"]);
+  });
+
+  test("studioNeedsRebuild is true when there is no Next build", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "engine-studio-build-"));
+    const paths = { root: tmp, studioDir: path.join(tmp, "studio") };
+    fs.mkdirSync(paths.studioDir, { recursive: true });
+    assert.equal(studioNeedsRebuild(paths), true);
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 
   test("readEnvFile skips comments and quotes", () => {

@@ -28,7 +28,10 @@ You do not need a terminal. After the computer has been set up once
 Double-click `start-studio.bat` in the engine folder. A minimised window
 starts the engine (port `4100`, `STUDIO_ORIGIN=http://localhost:3001`)
 and Studio together, restarts either if it stops, and opens the browser
-at `http://localhost:3001`. That is `node launcher.js` under the hood.
+at `http://localhost:3001`. That is `node launcher.js` under the hood:
+it runs `next build` when Studio source (or git HEAD) changed since the
+last build, then `next start` on port `3001`. Set `STUDIO_DEV=1` to keep
+the old `next dev` path.
 
 **Desktop shortcut**
 
@@ -52,9 +55,11 @@ directly. The Studio UI never shows shell commands.
 
 ### Developers
 
-`node launcher.js` from the repo root is the same supervisor. One-time
-machine setup (Node, packages, Python venv, FFmpeg) stays in the
-[README](../README.md#setup).
+`node launcher.js` from the repo root is the same supervisor (one worker,
+one Studio, self-healing restart). It serves the production Next build by
+default. `STUDIO_DEV=1` (or `ENGINE_STUDIO_DEV=1`) opts back into
+`next dev`. One-time machine setup (Node, packages, Python venv, FFmpeg)
+stays in the [README](../README.md#setup).
 
 ## Config
 
@@ -63,6 +68,7 @@ machine setup (Node, packages, Python venv, FFmpeg) stays in the
 | `WORKER_PORT` | repo-root `.env` | `4100` | Port the worker listens on (`127.0.0.1` only). |
 | `STUDIO_ORIGIN` | repo-root `.env` | unset | Extra CORS origin, for a future Vercel URL. `http://localhost:3000`, `http://127.0.0.1:3000`, and the same pair on port `3001` are always allowed. |
 | `NEXT_PUBLIC_WORKER_URL` | `studio/.env.local` (see `studio/.env.example`) | `http://localhost:4100` | Worker URL the browser uses. Change this if `WORKER_PORT` is not 4100. |
+| `STUDIO_DEV` | process env / repo-root `.env` | unset | `1` or `true` keeps Studio on `next dev` instead of `next build` + `next start`. |
 
 Copy `studio/.env.example` to `studio/.env.local` only if you need to
 override the worker URL.
@@ -73,11 +79,14 @@ The default route `/` is a **home screen**: a grid of project cards
 (thumbnail = first-frame preview if the worker can compose it, otherwise
 a cached ~480px JPEG of the first used background; name; length; last
 render time) plus a **New project** card. Card length is the latest
-render's real duration (`ffprobe`, then the MP4 `mvhd` header). If there
+render's real duration (MP4 `mvhd` header, then cached `ffprobe`). If there
 is no render yet, it uses parsed timeline frames/fps — not a dialogue-text
 guess. New project creates an empty folder under `projects/` from a small
 text template (`script.txt` + `library.json`) — no art is copied. Click a
-card to open `/p/<name>`.
+card to open `/p/<name>`. The home list is fetched on load, when the
+window is focused, and after create/rename/duplicate/delete/restore. While
+the page stays open it only polls `GET /health` so a down engine can come
+back; it does not re-walk every project every few seconds.
 
 Each card has an actions menu: **Duplicate** (copy the folder to
 `<name>-copy`, then `<name>-copy-2`, …), **Rename** (folder rename, same
@@ -119,7 +128,9 @@ clobber the project's `timeline.json`.
   `characters/<id>/_reference/`), and **Align head** (overlay the current
   head/mouth on the body or reference, then save slot offset/scale/rotation
   into a project-local `character.json`). Character thumbnails use
-  `object-fit: contain` so the whole figure is visible.
+  `object-fit: contain` so the whole figure is visible. Character body and
+  prop cards in the Assets lists use the same cached ~480px JPEG as
+  background cards (`?thumb=1&v=<mtime>`).
   **Grok Imagine** lives in a bottom dock (hidden by default): open it with
   the **Grok Imagine** tab on the bottom edge, or the same-named button on
   the Assets page. Drag the dock's top splitter to resize (persisted in
@@ -188,12 +199,17 @@ clobber the project's `timeline.json`.
 Parse / preview / lanes / lint / Render endpoints accept `?script=`
 (`script.txt` by default; only `script.txt` or `script_<name>.txt` in the
 project root). Those paths parse to **temp** files and never write
-`timeline.json`.
+`timeline.json`. `/lanes`, `/stage`, `/playback`, and `/preview-frame`
+share one in-memory parse cache (fingerprint of the script, character /
+staging / library JSON, and audio files; in-flight parses are
+de-duplicated) and skip the Python timeline validator. Save, lint, and
+Render still validate. WAV duration is read from the RIFF header;
+other media durations are cached by path + mtime + size.
 
 | Method | Path | What |
 |---|---|---|
 | `GET` | `/health` | Liveness. |
-| `GET` | `/api/projects` | Folders under `projects/`, excluding `_global_assets` and `_trash`. Each item has `name`, `scripts`, `thumbRel`, `durationSeconds`, `sceneCount`, `lastRenderAt`. `durationSeconds` is the latest render length, else parsed timeline frames/fps. |
+| `GET` | `/api/projects` | Folders under `projects/`, excluding `_global_assets` and `_trash`. Each item has `name`, `scripts`, `thumbRel`, `thumbMtime`, `durationSeconds`, `sceneCount`, `lastRenderAt`. Summaries are cached per project by a shallow directory fingerprint and built in parallel. `durationSeconds` is the latest render length, else parsed timeline frames/fps. |
 | `POST` | `/api/projects` | Create an empty project from the template. JSON `{ "name": "episode_01" }`. |
 | `GET` | `/api/projects/:name/contents` | What Delete will list: script files, audio/renders/local-asset file counts and bytes. |
 | `POST` | `/api/projects/:name/trash` | Move the folder to `projects/_trash/<name>-<timestamp>`. JSON `{ "confirmName": "<name>" }` must match. Never deletes `_global_assets` or `_trash`. |
@@ -214,7 +230,7 @@ project root). Those paths parse to **temp** files and never write
 | `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }] }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames), backs up overwritten **local** files to `_backup/<timestamp>/`, merges new slots/cycles into project-local `character.json` without deleting other entries. |
 | `POST` | `/api/projects/:name/characters/:id/ingest/cancel` | JSON `{ "sessionId" }`. Deletes the preview session dir. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks for locations this project uses. |
-| `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for background cards. |
+| `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for Assets-list character / background / prop cards. Pass `?v=<mtime>` (Studio does this) for `Cache-Control: public, max-age=31536000, immutable`. |
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |
 | `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. |
@@ -222,7 +238,7 @@ project root). Those paths parse to **temp** files and never write
 | `GET` | `/api/projects/:name/stage?script=` | Parse the selected script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
 | `GET` | `/api/projects/:name/playback?script=` | Render/proxy freshness (`renders/<stem>.mp4` or `output.mp4`, plus `<stem>_preview.mp4`) vs the script mtime, and audio-lane clips with `exists`. Temp parse only. |
 | `GET` | `/api/projects/:name/media?rel=` | Stream a project-local line WAV (`audio/<scene>/<file>.wav` only). |
-| `POST` | `/api/projects/:name/preview-frame?script=` | Parse the selected script to a temp timeline, compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a PNG. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. |
+| `POST` | `/api/projects/:name/preview-frame?script=` | Parse the selected script to a temp timeline (shared cache), compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a JPEG (quality 85) for scrubbing. `{ "format": "png" }` keeps exact pixels. Frames are cached on disk/memory by script fingerprint + asset mtimes + frame. `Cache-Control: private, max-age=3600`. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. A persistent Python compositor process stays warm so numpy/cv2 are not re-imported per frame. |
 | `POST` | `/api/projects/:name/render?script=` | Parse the selected script to a temp timeline (never `timeline.json`), run the compositor with `--output renders/<script-stem>.mp4`. Same `--script` choice as the CLI. One render at a time. |
 | `POST` | `/api/projects/:name/preview-render?script=` | Same temp parse as Render, but writes a 960×540 H.264 proxy to `renders/<script-stem>_preview.mp4` for Stage playback. Shares the one-at-a-time render lock. |
 | `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?" }` or multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe`). Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Dry-run prints length + the STT credit note and writes nothing. No Studio UI for this yet. |

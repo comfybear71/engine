@@ -17,7 +17,10 @@ const express = require("express");
 
 const { renderProject, previewFrame, parseEstimatedSilent } = require("./render");
 const { parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
+const { getCachedParse } = require("./parser/parseCache");
+const { validateTimelineFile } = require("./parser/validateTimelineFile");
 const { resolveAsset } = require("./parser/assetLibrary");
+const { getCachedPreview, storePreview } = require("./previewCache");
 const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = require("./studioLibrary");
 const { buildLaneBlocks, clampFrame } = require("./studioLanes");
 const {
@@ -27,7 +30,7 @@ const {
   resolveScriptName,
   listScriptFiles,
   collectUsedAssets,
-  summarizeProject,
+  summarizeProjectCached,
   describeProjectContents,
   moveProjectToTrash,
   listTrash,
@@ -189,8 +192,37 @@ function parseOpts(skipValidate, scriptName) {
 }
 
 function cleanupTempParse(result) {
-  if (result && result.tmpDir) {
+  if (result && result.tmpDir && !result.cached) {
     fs.rmSync(result.tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function parseForRead(projectDir, scriptName) {
+  return getCachedParse(projectDir, { script: scriptName || DEFAULT_SCRIPT });
+}
+
+async function parseForWrite(projectDir, opts) {
+  if (opts.scriptText != null) {
+    return parseProjectToTemp(projectDir, opts);
+  }
+  const cached = await getCachedParse(projectDir, { script: opts.script || DEFAULT_SCRIPT });
+  if (opts.skipValidate) return cached;
+  const validation = await validateTimelineFile(cached.timelinePath, { projectDir });
+  return { ...cached, validation };
+}
+
+function setAssetCacheControl(req, res, absPath) {
+  let mtime = 0;
+  try {
+    mtime = Math.round(fs.statSync(absPath).mtimeMs);
+  } catch {
+    mtime = 0;
+  }
+  const v = req.query && req.query.v;
+  if (v != null && String(v) === String(mtime)) {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  } else {
+    res.setHeader("Cache-Control", "public, max-age=86400");
   }
 }
 
@@ -228,7 +260,7 @@ function createApp(options = {}) {
 
   async function summarized(projectDir, name) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
-    return summarizeProject(projectDir, name, globalAssetsDir);
+    return summarizeProjectCached(projectDir, name, globalAssetsDir);
   }
 
   function sendLifecycleError(res, err) {
@@ -248,11 +280,9 @@ function createApp(options = {}) {
       .map((entry) => entry.name)
       .sort();
     try {
-      const projects = [];
-      for (const name of names) {
-        const projectDir = path.join(projectsDir, name);
-        projects.push(await summarized(projectDir, name));
-      }
+      const projects = await Promise.all(
+        names.map((name) => summarized(path.join(projectsDir, name), name))
+      );
       res.json({ projects });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -526,7 +556,7 @@ function createApp(options = {}) {
         .then((thumbPath) => {
           const file = thumbPath || resolved.absPath;
           const sendType = thumbPath ? "image/jpeg" : type;
-          res.setHeader("Cache-Control", "no-cache");
+          setAssetCacheControl(req, res, resolved.absPath);
           res.type(sendType).sendFile(file);
         })
         .catch((err) => {
@@ -534,6 +564,7 @@ function createApp(options = {}) {
         });
       return;
     }
+    setAssetCacheControl(req, res, resolved.absPath);
     res.type(type).sendFile(resolved.absPath);
   });
 
@@ -560,7 +591,7 @@ function createApp(options = {}) {
     let result;
     let parseError = null;
     try {
-      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
+      result = await parseForWrite(projectDir, parseOpts(skipValidate, scriptName));
     } catch (err) {
       parseError = err;
     }
@@ -591,7 +622,7 @@ function createApp(options = {}) {
     let result;
     let parseError = null;
     try {
-      result = await parseProjectToTemp(projectDir, opts);
+      result = await parseForWrite(projectDir, opts);
     } catch (err) {
       parseError = err;
     }
@@ -610,14 +641,11 @@ function createApp(options = {}) {
     if (!scriptName) return;
     let result;
     try {
-      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
+      result = await parseForRead(projectDir, scriptName);
     } catch (err) {
       return res.status(400).json(parseErrorPayload(err));
     }
     try {
-      if (result.validation && result.validation.ok === false) {
-        return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
-      }
       res.json(buildLaneBlocks(result));
     } finally {
       cleanupTempParse(result);
@@ -632,14 +660,11 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     let result;
     try {
-      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
+      result = await parseForRead(projectDir, scriptName);
     } catch (err) {
       return res.status(400).json(parseErrorPayload(err));
     }
     try {
-      if (result.validation && result.validation.ok === false) {
-        return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
-      }
       const staging = listStaging(projectDir, globalAssetsDir);
       res.json({
         ...summarizeStage(result.timeline),
@@ -658,13 +683,9 @@ function createApp(options = {}) {
 
     let result;
     try {
-      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
+      result = await parseForRead(projectDir, scriptName);
     } catch (err) {
       return res.status(400).json(parseErrorPayload(err));
-    }
-    if (result.validation && result.validation.ok === false) {
-      cleanupTempParse(result);
-      return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
     }
 
     const fps = (result.timeline && result.timeline.fps) || 24;
@@ -682,16 +703,10 @@ function createApp(options = {}) {
     const lanes = buildLaneBlocks(result);
     const playableFrames = lanes.totalFrames;
     frame = clampFrame(frame, playableFrames);
+    const format = body.format === "png" ? "png" : "jpeg";
+    const quality = 85;
 
-    const tmp = path.join(
-      os.tmpdir(),
-      `engine-preview-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.png`
-    );
-    try {
-      const previewOpts = options.pythonBin ? { pythonBin: options.pythonBin } : {};
-      previewOpts.timeline = result.timelinePath;
-      const preview = await previewFrame(projectDir, frame, tmp, previewOpts);
-      const meta = preview.meta || {};
+    function sendPreview(type, buffer, meta) {
       const totalFrames =
         Number(meta.totalFrames) > 0 ? Number(meta.totalFrames) : playableFrames;
       const servedFrame = clampFrame(meta.frame != null ? meta.frame : frame, totalFrames);
@@ -701,18 +716,38 @@ function createApp(options = {}) {
       if (meta.canvas && meta.canvas.width) res.setHeader("X-Engine-Canvas-Width", String(meta.canvas.width));
       if (meta.canvas && meta.canvas.height) res.setHeader("X-Engine-Canvas-Height", String(meta.canvas.height));
       if (meta.sceneId) res.setHeader("X-Engine-Scene-Id", String(meta.sceneId));
-      res.type("image/png");
-      res.sendFile(tmp, (err) => {
-        fs.unlink(tmp, () => {});
-        if (err && !res.headersSent) {
-          res.status(500).json({ error: err.message });
-        }
-      });
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.type(type).send(buffer);
+    }
+
+    const cached = getCachedPreview(projectDir, scriptName, frame, format, quality);
+    if (!cached.miss) {
+      sendPreview(cached.type, cached.buffer, cached.meta || {});
+      cleanupTempParse(result);
+      return;
+    }
+
+    const ext = format === "png" ? "png" : "jpg";
+    const tmp = path.join(
+      os.tmpdir(),
+      `engine-preview-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.${ext}`
+    );
+    try {
+      const previewOpts = options.pythonBin ? { pythonBin: options.pythonBin } : {};
+      previewOpts.timeline = result.timelinePath;
+      previewOpts.format = format;
+      previewOpts.quality = quality;
+      const preview = await previewFrame(projectDir, frame, tmp, previewOpts);
+      const meta = preview.meta || {};
+      const buffer = fs.readFileSync(tmp);
+      const type = format === "png" ? "image/png" : "image/jpeg";
+      storePreview(cached.key, type, buffer, meta);
+      sendPreview(type, buffer, meta);
     } catch (err) {
-      fs.unlink(tmp, () => {});
       const status = /past the end|must be >= 0/.test(err.message) ? 400 : 500;
-      res.status(status).json({ error: err.message });
+      if (!res.headersSent) res.status(status).json({ error: err.message });
     } finally {
+      fs.unlink(tmp, () => {});
       cleanupTempParse(result);
     }
   });
@@ -724,14 +759,11 @@ function createApp(options = {}) {
     if (!scriptName) return;
     let result;
     try {
-      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
+      result = await parseForRead(projectDir, scriptName);
     } catch (err) {
       return res.status(400).json(parseErrorPayload(err));
     }
     try {
-      if (result.validation && result.validation.ok === false) {
-        return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
-      }
       res.json(describePlayback(projectDir, scriptName, buildLaneBlocks(result)));
     } finally {
       cleanupTempParse(result);
@@ -823,7 +855,7 @@ function createApp(options = {}) {
     let parsed;
     try {
       try {
-        parsed = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
+        parsed = await parseForWrite(projectDir, parseOpts(skipValidate, scriptName));
       } catch (err) {
         return res.status(400).json(parseErrorPayload(err));
       }
@@ -870,7 +902,7 @@ function createApp(options = {}) {
     let parsed;
     try {
       try {
-        parsed = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
+        parsed = await parseForWrite(projectDir, parseOpts(skipValidate, scriptName));
       } catch (err) {
         return res.status(400).json(parseErrorPayload(err));
       }

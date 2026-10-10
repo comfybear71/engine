@@ -21,6 +21,17 @@ function toPosix(p) {
   return String(p).split(path.sep).join("/");
 }
 
+function resolvedMtime(projectDir, globalAssetsDir, rel) {
+  if (!rel) return null;
+  const resolved = resolveAsset(projectDir, globalAssetsDir, rel);
+  if (!resolved) return null;
+  try {
+    return Math.round(fs.statSync(resolved.absPath).mtimeMs);
+  } catch {
+    return null;
+  }
+}
+
 function locationFromBackgroundAsset(asset) {
   const match = toPosix(asset || "").match(/(?:^|\/)backgrounds\/([^/]+)\//);
   return match ? match[1] : null;
@@ -35,9 +46,11 @@ function collectSlots(character, projectDir, globalAssetsDir, characterId) {
       const relDir = `characters/${characterId}/${drawingsDir}`;
       const drawings = [];
       for (const [drawingName, file] of scanDrawingsDir(projectDir, globalAssetsDir, relDir)) {
+        const rel = `${relDir}/${path.basename(file.absPath)}`;
         drawings.push({
           name: drawingName,
-          rel: `${relDir}/${path.basename(file.absPath)}`,
+          rel,
+          mtime: resolvedMtime(projectDir, globalAssetsDir, rel),
         });
       }
       drawings.sort((a, b) => a.name.localeCompare(b.name));
@@ -96,6 +109,7 @@ function describeCharacter(projectDir, globalAssetsDir, id) {
   const character = loadCharacter(projectDir, globalAssetsDir, id);
   if (!resolved || !character) return null;
   const thumbRel = characterThumbRel(character, projectDir, globalAssetsDir, id);
+  const referenceRel = characterReferenceRel(character, projectDir, globalAssetsDir, id);
   return {
     id,
     display_name: character.display_name || id,
@@ -106,8 +120,10 @@ function describeCharacter(projectDir, globalAssetsDir, id) {
     asset: character.asset || null,
     thumbRel,
     bodyRel: thumbRel,
+    mtime: resolvedMtime(projectDir, globalAssetsDir, thumbRel),
     reference: typeof character.reference === "string" ? character.reference : null,
-    referenceRel: characterReferenceRel(character, projectDir, globalAssetsDir, id),
+    referenceRel,
+    referenceMtime: resolvedMtime(projectDir, globalAssetsDir, referenceRel),
     slots: collectSlots(character, projectDir, globalAssetsDir, id),
   };
 }
@@ -150,6 +166,7 @@ function listStaging(projectDir, globalAssetsDir, options = {}) {
       id: loc,
       source: bg ? bg.source : "global",
       thumbRel: bg ? bgRel : null,
+      mtime: bg ? resolvedMtime(projectDir, globalAssetsDir, bgRel) : null,
     });
     marksByLocation[loc] = staging.marks || {};
 
@@ -168,6 +185,7 @@ function listStaging(projectDir, globalAssetsDir, options = {}) {
         scale: spec.scale == null ? 1 : spec.scale,
         anchor: spec.anchor || "bottom-center",
         thumbRel: resolved ? fullRel : null,
+        mtime: resolved ? resolvedMtime(projectDir, globalAssetsDir, fullRel) : null,
       });
     }
   }
