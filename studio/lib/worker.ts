@@ -147,10 +147,9 @@ async function workerFetch(path: string, init?: RequestInit): Promise<Response> 
   try {
     return await fetch(`${WORKER_URL}${path}`, init);
   } catch (err) {
-    if (init?.signal?.aborted || (err instanceof DOMException && err.name === "AbortError") || (err instanceof Error && err.name === "AbortError")) {
-      const abort = err instanceof Error ? err : new Error("Aborted");
-      abort.name = "AbortError";
-      throw abort;
+    if (init?.signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
+      if (err instanceof Error && err.name === "AbortError") throw err;
+      throw Object.assign(new Error("Aborted"), { name: "AbortError" });
     }
     throw new WorkerUnreachableError();
   }
