@@ -317,8 +317,9 @@ clobber the project's `timeline.json`.
   selection, loop selection, and an Auto/Manual lip-sync mode (Manual
   skips Rhubarb after ElevenLabs / Import audio; write `studio.json`
   `{ "lipSync": "manual" }` or use the header toggle). **Sync all**
-  walks every Dialogue chip (progress `n/146`), retries a failed line
-  once, and merges cues per window so it cannot wipe later lines.
+  walks every Dialogue chip (progress `n/N`), splits a long take into
+  8 s windows so the last line (~8:40) is synced, retries a failed
+  window once, and merges cues so it cannot wipe later lines.
   A selected
   Dialogue block also gets a small **View** dropdown
   (`front` / `left_34` / `left_side` / `right_34` / `right_side` / `up` /

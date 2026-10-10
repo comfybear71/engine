@@ -25,6 +25,7 @@ import {
   setTrimOnLine,
   setViewOnLine,
   splitDialogueText,
+  expandDialogueSyncWindows,
 } from "../lib/timelineEdit.ts";
 
 describe("timeline script rewrite", () => {
@@ -430,6 +431,14 @@ describe("timeline script rewrite", () => {
     assert.deepEqual(preserved.blocks[0].cues, [{ shape: "A", start: 0, end: 0.4 }]);
     assert.deepEqual(preserved.blocks[1].cues, [{ shape: "B", start: 0, end: 0.3 }]);
     assert.equal(preserved.blocks[0].view, "left_side");
+  });
+
+  test("SYNC ALL expands a 9-minute chip so the last window is near 8:40", () => {
+    const parts = expandDialogueSyncWindows({ inSec: 0, outSec: 540 });
+    assert.ok(parts.length >= 67);
+    assert.ok(parts[parts.length - 1].inSec >= 520);
+    assert.equal(parts[parts.length - 1].outSec, 540);
+    assert.deepEqual(expandDialogueSyncWindows({ inSec: 520, outSec: 524 }), [{ inSec: 520, outSec: 524 }]);
   });
 
   test("trim dialogue writes trim_in=/trim_out= and split keeps word timings", () => {

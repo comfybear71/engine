@@ -12,6 +12,7 @@ const {
   syncDialogueLines,
   collectDialogueTargets,
   mergeMouthCues,
+  expandSyncTargets,
   sourceWindowFromEvent,
   readStudioSettings,
   writeStudioSettings,
@@ -214,6 +215,45 @@ describe("lip-sync state", () => {
       const saved = JSON.parse(fs.readFileSync(abs, "utf8"));
       assert.equal(saved.mouthCues[0].value, "G");
       assert.equal(saved.mouthCues[0].pinned, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("SYNC ALL covers a late 8:40 window, not only the first 4s", async () => {
+    const parts = expandSyncTargets([{ scriptLine: 2, wavRel: "audio/a/001_a.wav", cuesRel: "audio/a/001_a.wav.rhubarb.json", inSec: 0, outSec: 540 }]);
+    assert.ok(parts.length >= 67, `expected ~68 windows, got ${parts.length}`);
+    assert.ok(parts[parts.length - 1].inSec >= 520);
+    assert.equal(parts[parts.length - 1].outSec, 540);
+
+    const dir = tmpDir();
+    try {
+      const wavRel = "audio/mono/001_alice.wav";
+      const cuesRel = `${wavRel}.rhubarb.json`;
+      writeSilentWav(path.join(dir, wavRel), 4);
+      writeCues(path.join(dir, cuesRel), [{ start: 0, end: 4.2, value: "A" }]);
+      const extracts = [];
+      const synced = await syncDialogueLines({
+        projectDir: dir,
+        extractSlice: async (_from, to, start, dur) => {
+          extracts.push({ start, dur });
+          fs.writeFileSync(to, "slice");
+        },
+        runRhubarb: ({ cuesPath }) => {
+          writeCues(cuesPath, [{ start: 0, end: 0.4, value: "Z" }]);
+          return { ok: true, cuesPath };
+        },
+        targets: [
+          { scriptLine: 2, wavRel, cuesRel, text: "Hello", inSec: 0, outSec: 5 },
+          { scriptLine: 40, wavRel, cuesRel, text: "Last line.", inSec: 520, outSec: 524 },
+        ],
+      });
+      assert.equal(synced.ok, true);
+      assert.ok(extracts.some((item) => item.start >= 520), `extracts ${JSON.stringify(extracts)}`);
+      const saved = JSON.parse(fs.readFileSync(path.join(dir, cuesRel), "utf8"));
+      const late = saved.mouthCues.filter((cue) => Number(cue.start) >= 520);
+      assert.ok(late.length > 0, "expected mouth cues at ~8:40");
+      assert.equal(late[0].value, "Z");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

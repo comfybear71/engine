@@ -42,6 +42,7 @@ import {
   sliceMouthCuesForWindow,
   dialogueSourceWindowSec,
   dialogueSyncText,
+  expandDialogueSyncWindows,
   preserveLaneCues,
   type ScriptEditMeta,
 } from "@/lib/timelineEdit";
@@ -851,17 +852,22 @@ export default function StagePanel({
     setLanesEpoch((n) => n + 1);
   }
 
-  async function syncOneChip(block: LaneBlock, force?: boolean) {
-    const window = dialogueSourceWindowSec(block, fps);
+  async function syncOneChip(
+    block: LaneBlock,
+    force?: boolean,
+    window?: { inSec: number; outSec: number }
+  ) {
+    const span = window || dialogueSourceWindowSec(block, fps);
+    const wavRel = block.audioRel || block.rel || undefined;
     const body = {
       scriptLine: block.scriptLine ?? undefined,
       force,
       startFrame: block.startFrame,
       endFrame: block.endFrame,
-      wavRel: block.audioRel || block.rel || undefined,
-      cuesRel: block.cuesRel || undefined,
-      inSec: window.inSec,
-      outSec: window.outSec,
+      wavRel,
+      cuesRel: block.cuesRel || (wavRel ? `${wavRel}.rhubarb.json` : undefined),
+      inSec: span.inSec,
+      outSec: span.outSec,
       text: dialogueSyncText(block),
     };
     try {
@@ -891,14 +897,17 @@ export default function StagePanel({
     try {
       if (opts.all && !opts.clear) {
         const chips = (lanes?.blocks || []).filter(
-          (block) => block.lane === "dialogue" && block.cuesRel && (block.audioRel || block.rel)
+          (block) => block.lane === "dialogue" && (block.audioRel || block.rel)
+        );
+        const jobs = chips.flatMap((block) =>
+          expandDialogueSyncWindows(dialogueSourceWindowSec(block, fps)).map((window) => ({ block, window }))
         );
         const failedMessages: string[] = [];
-        for (let i = 0; i < chips.length; i++) {
-          setSyncProgress(`${i + 1}/${chips.length}`);
-          const result = await syncOneChip(chips[i], opts.force);
+        for (let i = 0; i < jobs.length; i++) {
+          setSyncProgress(`${i + 1}/${jobs.length}`);
+          const result = await syncOneChip(jobs[i].block, opts.force, jobs[i].window);
           const failed = result.results.find((item) => !item.ok);
-          if (failed) failedMessages.push(failed.message || `Line ${chips[i].scriptLine} failed`);
+          if (failed) failedMessages.push(failed.message || `Line ${jobs[i].block.scriptLine} failed`);
           const patched = result.results.find((item) => item.ok && item.mouthCues && item.cuesPath);
           if (patched && patched.mouthCues && patched.cuesPath) {
             patchLanesFromCues(patched.cuesPath, patched.mouthCues);

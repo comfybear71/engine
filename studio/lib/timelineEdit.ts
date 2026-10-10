@@ -370,6 +370,25 @@ export function shiftLanesForTrim<T extends MovableLanes>(
   return { ...lanes, blocks, scenes, totalFrames: Math.max(1, maxEnd) };
 }
 
+export const MAX_SYNC_WINDOW_SEC = 8;
+
+export function expandDialogueSyncWindows(
+  window: { inSec: number; outSec: number },
+  maxSec = MAX_SYNC_WINDOW_SEC
+): { inSec: number; outSec: number }[] {
+  const inSec = Number(window.inSec) || 0;
+  const outSec = Number(window.outSec);
+  if (!Number.isFinite(outSec) || outSec - inSec <= maxSec + 1e-6) return [{ inSec, outSec }];
+  const parts: { inSec: number; outSec: number }[] = [];
+  for (let start = inSec; start < outSec - 0.04; start += maxSec) {
+    parts.push({
+      inSec: Math.round(start * 1000) / 1000,
+      outSec: Math.round(Math.min(outSec, start + maxSec) * 1000) / 1000,
+    });
+  }
+  return parts;
+}
+
 export function dialogueSourceWindowSec(
   block: { startFrame: number; endFrame: number; sourceStartFrame?: number; trim?: { inFrames: number; outFrames: number } | null },
   fps: number

@@ -225,6 +225,33 @@ function isWindowedTarget(target) {
   return Number.isFinite(outSec) && outSec - inSec >= 0.04;
 }
 
+const MAX_SYNC_WINDOW_SEC = 8;
+
+function expandSyncTargets(targets) {
+  const out = [];
+  for (const target of targets || []) {
+    if (!isWindowedTarget(target)) {
+      out.push(target);
+      continue;
+    }
+    const inSec = Number(target.inSec) || 0;
+    const outSec = Number(target.outSec);
+    if (outSec - inSec <= MAX_SYNC_WINDOW_SEC + 1e-6) {
+      out.push(target);
+      continue;
+    }
+    for (let start = inSec; start < outSec - 0.04; start += MAX_SYNC_WINDOW_SEC) {
+      const end = Math.round(Math.min(outSec, start + MAX_SYNC_WINDOW_SEC) * 1000) / 1000;
+      out.push({
+        ...target,
+        inSec: Math.round(start * 1000) / 1000,
+        outSec: end,
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Run Rhubarb for the given dialogue targets (one WAV/cues pair each).
  * @returns {Promise<{ ok: boolean, results: object[] }>}
@@ -233,7 +260,7 @@ async function syncDialogueLines({ projectDir, targets, force = false, runRhubar
   const run = runRhubarb || runRhubarbOnWav;
   const extract = extractSlice || extractWavSlice;
   const results = [];
-  for (const target of targets || []) {
+  for (const target of expandSyncTargets(targets)) {
     const wavAbs = path.join(projectDir, target.wavRel);
     const cuesAbs = path.join(projectDir, target.cuesRel);
     if (!target.wavRel || !fs.existsSync(wavAbs)) {
@@ -451,6 +478,8 @@ module.exports = {
   collectDialogueTargets,
   mergeMouthCues,
   windowHasCues,
+  expandSyncTargets,
+  MAX_SYNC_WINDOW_SEC,
   syncDialogueLines,
   isSafeWavRel,
   readStudioSettings,
