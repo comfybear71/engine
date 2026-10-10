@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { alignableSlots, containedImageLayout, slotCenter } from "@/lib/headAlign";
+import { alignableSlots, fitBodyPlusHead, slotCenter } from "@/lib/headAlign";
 import {
   assetUrl,
   fetchPreviewFrame,
@@ -114,13 +114,23 @@ export default function AlignHeadModal({
     };
   }, [previewUrl]);
 
-  const layout = useMemo(
-    () => containedImageLayout(bodySize?.w || 0, bodySize?.h || 0, box.w, box.h),
-    [bodySize, box]
-  );
   const center = useMemo(
     () => slotCenter(bodySize?.w || 0, bodySize?.h || 0, offset),
     [bodySize, offset]
+  );
+  const layout = useMemo(
+    () =>
+      fitBodyPlusHead({
+        bodyW: bodySize?.w || 0,
+        bodyH: bodySize?.h || 0,
+        headCenter: center,
+        headW: headSize?.w || 0,
+        headH: headSize?.h || 0,
+        headScale: scale,
+        boxW: box.w,
+        boxH: box.h,
+      }),
+    [bodySize, headSize, center, scale, box]
   );
 
   function onPointerMove(event: PointerEvent) {
@@ -132,8 +142,8 @@ export default function AlignHeadModal({
       setOffset({ x: drag.offset.x + dx, y: drag.offset.y + dy });
       return;
     }
-    const cx = layout.left + center.x * layout.scale;
-    const cy = layout.top + center.y * layout.scale;
+    const cx = layout.bodyLeft + center.x * layout.scale;
+    const cy = layout.bodyTop + center.y * layout.scale;
     const dist = Math.hypot(event.clientX - (stageRef.current?.getBoundingClientRect().left || 0) - cx, event.clientY - (stageRef.current?.getBoundingClientRect().top || 0) - cy);
     if (drag.dist < 4) return;
     const next = Math.min(4, Math.max(0.15, drag.scale * (dist / drag.dist)));
@@ -165,8 +175,8 @@ export default function AlignHeadModal({
     event.stopPropagation();
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const cx = layout.left + center.x * layout.scale;
-    const cy = layout.top + center.y * layout.scale;
+    const cx = layout.bodyLeft + center.x * layout.scale;
+    const cy = layout.bodyTop + center.y * layout.scale;
     dragRef.current = {
       kind: handle,
       startX: event.clientX,
@@ -197,8 +207,8 @@ export default function AlignHeadModal({
     }
   }
 
-  const overlayLeft = layout.left + center.x * layout.scale;
-  const overlayTop = layout.top + center.y * layout.scale;
+  const overlayLeft = layout.bodyLeft + center.x * layout.scale;
+  const overlayTop = layout.bodyTop + center.y * layout.scale;
   const overlayW = (headSize?.w || 0) * layout.scale;
   const overlayH = (headSize?.h || 0) * layout.scale;
 
@@ -270,7 +280,8 @@ export default function AlignHeadModal({
 
           <div
             ref={stageRef}
-            className="studio-checker relative h-[min(62vh,640px)] w-full overflow-hidden rounded-md border border-studio-border"
+            className="studio-checker relative h-[min(72vh,760px)] w-full overflow-hidden rounded-md border border-studio-border"
+            data-testid="align-head-stage"
           >
             {bodySrc ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -278,7 +289,7 @@ export default function AlignHeadModal({
                 src={bodySrc}
                 alt=""
                 className="pointer-events-none absolute"
-                style={{ left: layout.left, top: layout.top, width: layout.width, height: layout.height }}
+                style={{ left: layout.bodyLeft, top: layout.bodyTop, width: layout.bodyWidth, height: layout.bodyHeight }}
               />
             ) : (
               <p className="absolute inset-0 flex items-center justify-center text-sm text-studio-muted">

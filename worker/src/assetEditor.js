@@ -533,6 +533,11 @@ async function realignSlotView(projectDir, globalAssetsDir, characterId, slotNam
     fs.copyFileSync(file.absPath, path.join(tmpSrc, `${name}${path.extname(file.absPath) || ".png"}`));
   }
   const args = ["--src-dir", tmpSrc, "--ref-dir", tmpRef, "--out-dir", outDir];
+  if (body && body.cropToHead === false) args.push("--no-crop-to-head");
+  else args.push("--crop-to-head");
+  if (body && body.collarY != null && Number.isFinite(Number(body.collarY))) {
+    args.push("--collar-y", String(body.collarY));
+  }
   if (nudge.x) args.push("--nudge-x", String(nudge.x));
   if (nudge.y) args.push("--nudge-y", String(nudge.y));
   if (nudge.scale != null && nudge.scale !== 1) args.push("--nudge-scale", String(nudge.scale));

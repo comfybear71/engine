@@ -169,9 +169,13 @@ clobber the project's `timeline.json`.
   `mouth_front/` first when it exists, then `mouth/`. Generate/ingest of
   a front head sheet writes `mouth_front/` and points the slot at it.
   **Use this set as default** promotes the open view (old files stay in
-  `_replaced/`). **Re-align to default** matches hat-top / chin / neck
-  to the previous default canvas, with a before/after overlay and x/y/scale
-  nudge in the drawing viewer. **Play sample** animates the head through a chosen sample
+  `_replaced/`).   **Re-align to default** crops each drawing to the head-only region
+  (above the collar / shoulder flare, or the old default's head bbox),
+  then matches hat-top / chin / neck to the previous default canvas,
+  with a before/after overlay and x/y/scale nudge. The drawing viewer
+  has **Crop to head** and a draggable collar-line handle. The Align
+  head tool fits the full body plus the head overlay so handles stay
+  on-screen. **Play sample** animates the head through a chosen sample
   sentence (or a project take that already has Rhubarb cues). Drop or
   paste an image onto a drawing/cell to replace it through the green-screen
   cut-out + trim pipeline (before/after, Accept/Cancel); the old file is
@@ -441,7 +445,7 @@ other media durations are cached by path + mtime + size.
 | `PUT` | `/api/projects/:name/characters/:id/slots/:slot` | JSON `{ "offset"?: {x,y}, "scale"?: number, "rotation"?: number }`. Copy-on-write into project-local `character.json`. Used by **Align head**. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot` | Slot editor payload: drawings (size, hash, source), view folders (`?view=`), offset/scale, cycles, mouth-shape labels, duplicates, missing Rhubarb shapes. No `view=` resolves `mouth_front/` first when it exists. Resolves `characters/<id>/` episode → show → global (`?show=` for episodes). |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/promote-view` | JSON `{ "view" }`. Point the slot `drawings_dir` at that set; copy the previous default files to `_replaced/<timestamp>/`. |
-| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"? }`. Align the view (or one drawing) to the previous default canvas (hat / chin / neck). |
+| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"?, "cropToHead"?, "collarY?" }`. Crop to the head-only region (default on; `collarY` is 0–1 of image height, or pixel Y), then align to the previous default canvas (hat / chin / neck). |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing` | Drawing viewer payload plus script/cycle usages and prev/next names in that view. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/lipsync-preview` | Builtin sample cue tracks plus project audio that already has `.rhubarb.json`. Mouth slots only. |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing/replace` | JSON `{ "imageBase64", "filename?", "view?" }`. Green-screen cut-out + trim preview (before/after). |
@@ -576,10 +580,12 @@ body-as-a-slot pattern in [docs/assets.md](assets.md#the-body-as-a-slot)
 character currently uses an opaque `body.png`.
 
 **Align head** (character detail panel) overlays the current mouth/head
-drawing on the body drawing or the full-body reference. Drag to move,
-corner handles or the slider to scale around the head center, and a
-rotation slider for clockwise degrees. A dropdown previews each mouth
-drawing. Save writes the slot into project-local `character.json` and
+drawing on the body drawing or the full-body reference. The viewport
+fits the full body plus the head (including a head that sits above the
+body top) so move/scale handles stay on-screen. Drag to move, corner
+handles or the slider to scale around the head center, and a rotation
+slider for clockwise degrees. A dropdown previews each mouth drawing.
+Save writes the slot into project-local `character.json` and
 re-renders a preview frame to confirm. Slot `scale` / `rotation` are
 optional on the timeline slot and are applied around the attachment
 point (see [docs/timeline-schema.md](timeline-schema.md)).

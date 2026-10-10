@@ -298,7 +298,13 @@ export async function realignSlotView(
   project: string,
   characterId: string,
   slot: string,
-  body: { view?: string; drawing?: string; nudge?: { x: number; y: number; scale: number } }
+  body: {
+    view?: string;
+    drawing?: string;
+    nudge?: { x: number; y: number; scale: number };
+    cropToHead?: boolean;
+    collarY?: number;
+  }
 ): Promise<{ ok: boolean; written: { name: string; rel: string }[]; overlay?: { afterRel: string; beforeRel: string } | null }> {
   const res = await workerFetch(slotPath(project, characterId, slot, "/realign"), {
     method: "POST",

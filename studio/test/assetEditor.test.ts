@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { clampHeadNudge, defaultHeadNudge } from "../lib/headAlign.ts";
+import { clampHeadNudge, defaultHeadNudge, fitBodyPlusHead } from "../lib/headAlign.ts";
 import {
   cueAtTime,
   formatUsage,
@@ -67,5 +67,22 @@ describe("asset editor helpers", () => {
     assert.equal(clamped.x, 400);
     assert.equal(clamped.y, -400);
     assert.equal(clamped.scale, 3);
+  });
+
+  test("align viewport fits a head that sits above the body", () => {
+    const fit = fitBodyPlusHead({
+      bodyW: 200,
+      bodyH: 400,
+      headCenter: { x: 100, y: -20 },
+      headW: 80,
+      headH: 80,
+      headScale: 1,
+      boxW: 400,
+      boxH: 400,
+    });
+    assert.ok(fit.bodyTop > 0);
+    const headTop = fit.bodyTop + (-20) * fit.scale - 40 * fit.scale;
+    assert.ok(headTop >= 0, `head top ${headTop}`);
+    assert.ok(fit.bodyTop + fit.bodyHeight <= 400);
   });
 });

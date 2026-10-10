@@ -321,7 +321,7 @@ export default function AssetEditorOverlay({
     }
   }
 
-  async function onRealign(drawing?: string) {
+  async function onRealign(drawing?: string, opts?: { collarY?: number; cropToHead?: boolean }) {
     setBusy("Re-aligning…");
     setError(null);
     try {
@@ -329,6 +329,8 @@ export default function AssetEditorOverlay({
         view,
         drawing,
         nudge: clampHeadNudge(nudge),
+        cropToHead: opts?.cropToHead !== false,
+        collarY: opts?.collarY,
       });
       onChanged();
       await reload();
@@ -476,7 +478,7 @@ export default function AssetEditorOverlay({
           onOverlayDefault={setOverlayDefault}
           nudge={nudge}
           onNudge={(next) => setNudge(clampHeadNudge(next))}
-          onRealign={() => void onRealign(current.name)}
+          onRealign={(opts) => void onRealign(current.name, opts)}
           defaultRel={
             slot?.canRealign && slot.defaultDrawingsDir
               ? `characters/${focus.characterId}/${slot.defaultDrawingsDir}/${current.name}.png`
@@ -619,14 +621,24 @@ function DrawingView({
   onOverlayDefault: (value: boolean) => void;
   nudge: { x: number; y: number; scale: number };
   onNudge: (nudge: { x: number; y: number; scale: number }) => void;
-  onRealign: () => void;
+  onRealign: (opts?: { collarY?: number; cropToHead?: boolean }) => void;
   defaultRel: string | null;
 }) {
   const defaultSrc = defaultRel ? assetUrl(project, defaultRel) : null;
+  const [cropToHead, setCropToHead] = useState(true);
+  const [collarY, setCollarY] = useState(0.72);
   return (
     <div className="flex min-h-0 flex-1">
       <div className="relative min-h-0 min-w-0 flex-1">
-        <ZoomPane src={src} label={current.name} bg={bg} playShape={playShape} />
+        <ZoomPane
+          src={src}
+          label={current.name}
+          bg={bg}
+          playShape={playShape}
+          cropToHead={canRealign && cropToHead}
+          collarY={collarY}
+          onCollarY={setCollarY}
+        />
         {canRealign && overlayDefault && defaultSrc ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -693,6 +705,29 @@ function DrawingView({
               />
               Overlay default
             </label>
+            <label className="flex items-center gap-1 text-[10px] text-neutral-400">
+              <input
+                type="checkbox"
+                checked={cropToHead}
+                onChange={(event) => setCropToHead(event.target.checked)}
+                data-testid="asset-crop-to-head"
+              />
+              Crop to head
+            </label>
+            {cropToHead ? (
+              <label className="block text-[10px] text-neutral-500">
+                Collar line
+                <input
+                  type="range"
+                  min={20}
+                  max={95}
+                  value={Math.round(collarY * 100)}
+                  className="w-full"
+                  data-testid="asset-collar-slider"
+                  onChange={(event) => setCollarY(Number(event.target.value) / 100)}
+                />
+              </label>
+            ) : null}
             <label className="block text-[10px] text-neutral-500">
               Nudge X
               <input
@@ -726,7 +761,12 @@ function DrawingView({
                 onChange={(event) => onNudge({ ...nudge, scale: Number(event.target.value) / 100 })}
               />
             </label>
-            <button type="button" className="studio-header-textbtn" data-testid="asset-realign-one" onClick={onRealign}>
+            <button
+              type="button"
+              className="studio-header-textbtn"
+              data-testid="asset-realign-one"
+              onClick={() => onRealign({ cropToHead, collarY: cropToHead ? collarY : undefined })}
+            >
               Re-align this drawing
             </button>
           </div>
@@ -753,16 +793,40 @@ function ZoomPane({
   label,
   bg,
   playShape,
+  cropToHead = false,
+  collarY = 0.72,
+  onCollarY,
 }: {
   src: string | null;
   label: string;
   bg: BgKind;
   playShape: string | null;
+  cropToHead?: boolean;
+  collarY?: number;
+  onCollarY?: (y: number) => void;
 }) {
   const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [imgBox, setImgBox] = useState({ top: 0, left: 0, w: 0, h: 0 });
+
+  function measureImage() {
+    const img = imgRef.current;
+    const stage = stageRef.current;
+    if (!img || !stage) return;
+    const parent = stage.getBoundingClientRect();
+    const r = img.getBoundingClientRect();
+    setImgBox({ top: r.top - parent.top, left: r.left - parent.left, w: r.width, h: r.height });
+  }
+
+  useEffect(() => {
+    measureImage();
+  }, [src, zoom.scale, zoom.x, zoom.y, cropToHead]);
+
   return (
     <div
+      ref={stageRef}
       className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${bg === "checker" ? "studio-checker" : ""}`}
       style={bg === "checker" ? undefined : { background: BG[bg] }}
       data-testid="asset-viewer-stage"
@@ -782,9 +846,11 @@ function ZoomPane({
           x: drag.current.ox + (event.clientX - drag.current.x),
           y: drag.current.oy + (event.clientY - drag.current.y),
         });
+        measureImage();
       }}
       onPointerUp={() => {
         drag.current = null;
+        measureImage();
       }}
     >
       <div
@@ -794,11 +860,47 @@ function ZoomPane({
         {src ? (
           // Worker-served PNG
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={src} alt={label} className="max-h-[70%] max-w-[70%] object-contain" draggable={false} />
+          <img
+            ref={imgRef}
+            src={src}
+            alt={label}
+            className="max-h-[70%] max-w-[70%] object-contain"
+            draggable={false}
+            onLoad={measureImage}
+          />
         ) : (
           <span className="text-[11px] text-studio-muted">No drawing</span>
         )}
       </div>
+      {cropToHead && imgBox.h > 0 ? (
+        <button
+          type="button"
+          data-testid="asset-collar-handle"
+          aria-label="Collar line"
+          className="absolute z-10 h-3 w-full cursor-ns-resize border-0 bg-transparent p-0"
+          style={{ top: imgBox.top + collarY * imgBox.h - 6, left: imgBox.left, width: imgBox.w }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const startY = event.clientY;
+            const start = collarY;
+            const height = imgBox.h || 1;
+            function move(ev: PointerEvent) {
+              const next = Math.min(0.95, Math.max(0.2, start + (ev.clientY - startY) / height));
+              onCollarY?.(next);
+            }
+            function up() {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            }
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          }}
+        >
+          <span className="absolute left-0 right-0 top-1/2 border-t-2 border-studio-accent" />
+          <span className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-white bg-studio-accent" />
+        </button>
+      ) : null}
       <div className="absolute bottom-1 left-1 flex items-center gap-1">
         <button type="button" className="studio-header-textbtn" onClick={() => setZoom({ scale: 1, x: 0, y: 0 })}>
           Reset

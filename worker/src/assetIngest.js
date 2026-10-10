@@ -177,7 +177,7 @@ async function alignCellToReference(projectDir, globalAssetsDir, characterId, ce
   const refAbs = findAlignReferenceAbs(projectDir, globalAssetsDir, characterId, cell.dest, name);
   if (!refAbs) return cell;
   const outPath = `${cell.path}.aligned.png`;
-  await runAlign(["--src", cell.path, "--ref", refAbs, "--out", outPath], options);
+  await runAlign(["--src", cell.path, "--ref", refAbs, "--out", outPath, "--crop-to-head"], options);
   if (fs.existsSync(outPath)) {
     fs.copyFileSync(cell.path, `${cell.path}.raw.png`);
     fs.copyFileSync(outPath, cell.path);

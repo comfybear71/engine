@@ -19,6 +19,8 @@ from .asset_cache import _to_bgra
 
 ALPHA_MIN = 16
 NECK_BAND = 0.15
+SHOULDER_FLARE = 1.22
+REF_ASPECT_SLACK = 1.12
 
 
 def alpha_bbox(bgra: np.ndarray, threshold: int = ALPHA_MIN) -> tuple[int, int, int, int] | None:
@@ -53,15 +55,94 @@ def landmarks(bgra: np.ndarray) -> dict:
     return {"hat": hat, "chin": chin, "neck": neck, "bbox": bbox, "canvas": (w, h)}
 
 
+def row_widths(bgra: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
+    x0, y0, x1, y1 = bbox
+    alpha = bgra[y0:y1, x0:x1, 3] > ALPHA_MIN
+    return alpha.sum(axis=1)
+
+
+def detect_collar_y(bgra: np.ndarray, bbox: tuple[int, int, int, int] | None = None) -> int | None:
+    """Y where the silhouette flares from neck into collar/shoulders."""
+    box = bbox or alpha_bbox(bgra)
+    if box is None:
+        return None
+    x0, y0, x1, y1 = box
+    height = y1 - y0
+    if height < 12:
+        return y1
+    widths = row_widths(bgra, box).astype(np.float64)
+    k = max(3, height // 40)
+    if k % 2 == 0:
+        k += 1
+    kernel = np.ones(k) / k
+    smooth = np.convolve(widths, kernel, mode="same")
+    upper = smooth[: max(1, int(height * 0.5))]
+    head_w = float(np.percentile(upper, 80)) if upper.size else 0.0
+    if head_w < 4:
+        return None
+    for i in range(int(height * 0.35), height):
+        if smooth[i] > head_w * SHOULDER_FLARE:
+            return int(y0 + i)
+    return None
+
+
+def collar_from_reference(src: np.ndarray, ref: np.ndarray) -> int | None:
+    """If the source is taller than the old head bbox, cut at that aspect."""
+    src_box = alpha_bbox(src)
+    ref_box = alpha_bbox(ref)
+    if src_box is None or ref_box is None:
+        return None
+    src_h = src_box[3] - src_box[1]
+    src_w = max(1, src_box[2] - src_box[0])
+    ref_h = max(1, ref_box[3] - ref_box[1])
+    ref_w = max(1, ref_box[2] - ref_box[0])
+    if src_h / src_w <= (ref_h / ref_w) * REF_ASPECT_SLACK:
+        return None
+    return src_box[1] + int(round(src_w * (ref_h / ref_w)))
+
+
+def resolve_collar_y(src: np.ndarray, ref: np.ndarray | None = None, collar_y: float | None = None) -> int | None:
+    height = src.shape[0]
+    if collar_y is not None and np.isfinite(collar_y):
+        value = float(collar_y)
+        y = int(round(value * height)) if 0 < value <= 1 else int(round(value))
+        return max(2, min(height - 1, y))
+    found = detect_collar_y(src)
+    if found is not None:
+        return found
+    if ref is not None:
+        return collar_from_reference(src, ref)
+    return None
+
+
+def crop_below_collar(bgra: np.ndarray, collar_y: int) -> np.ndarray:
+    out = bgra.copy()
+    y = max(1, min(out.shape[0], int(collar_y)))
+    out[y:, :, 3] = 0
+    return out
+
+
+def crop_to_head(src: np.ndarray, ref: np.ndarray | None = None, collar_y: float | None = None) -> np.ndarray:
+    src = _to_bgra(src)
+    y = resolve_collar_y(src, ref if ref is None else _to_bgra(ref), collar_y)
+    if y is None:
+        return src
+    return crop_below_collar(src, y)
+
+
 def align_to_reference(
     src: np.ndarray,
     ref: np.ndarray,
     nudge_x: float = 0.0,
     nudge_y: float = 0.0,
     nudge_scale: float = 1.0,
+    crop: bool = True,
+    collar_y: float | None = None,
 ) -> np.ndarray:
     src = _to_bgra(src)
     ref = _to_bgra(ref)
+    if crop:
+        src = crop_to_head(src, ref, collar_y)
     sl = landmarks(src)
     rl = landmarks(ref)
     src_h = max(1.0, sl["chin"][1] - sl["hat"][1])
@@ -92,6 +173,8 @@ def align_file(
     nudge_x: float = 0.0,
     nudge_y: float = 0.0,
     nudge_scale: float = 1.0,
+    crop: bool = True,
+    collar_y: float | None = None,
 ) -> dict:
     src = cv2.imread(str(src_path), cv2.IMREAD_UNCHANGED)
     ref = cv2.imread(str(ref_path), cv2.IMREAD_UNCHANGED)
@@ -99,7 +182,9 @@ def align_file(
         raise FileNotFoundError(f"Could not read source: {src_path}")
     if ref is None:
         raise FileNotFoundError(f"Could not read reference: {ref_path}")
-    aligned = align_to_reference(src, ref, nudge_x=nudge_x, nudge_y=nudge_y, nudge_scale=nudge_scale)
+    aligned = align_to_reference(
+        src, ref, nudge_x=nudge_x, nudge_y=nudge_y, nudge_scale=nudge_scale, crop=crop, collar_y=collar_y
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ok = cv2.imwrite(str(out_path), aligned)
     if not ok:
@@ -123,6 +208,8 @@ def align_dirs(
     nudge_x: float = 0.0,
     nudge_y: float = 0.0,
     nudge_scale: float = 1.0,
+    crop: bool = True,
+    collar_y: float | None = None,
 ) -> list[dict]:
     results = []
     wanted = {n.lower() for n in names} if names else None
@@ -136,7 +223,16 @@ def align_dirs(
             continue
         out_path = out_dir / src_path.name
         results.append(
-            align_file(src_path, ref_path, out_path, nudge_x=nudge_x, nudge_y=nudge_y, nudge_scale=nudge_scale)
+            align_file(
+                src_path,
+                ref_path,
+                out_path,
+                nudge_x=nudge_x,
+                nudge_y=nudge_y,
+                nudge_scale=nudge_scale,
+                crop=crop,
+                collar_y=collar_y,
+            )
         )
     return results
 
@@ -153,6 +249,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--nudge-x", type=float, default=0.0)
     parser.add_argument("--nudge-y", type=float, default=0.0)
     parser.add_argument("--nudge-scale", type=float, default=1.0)
+    parser.add_argument("--crop-to-head", dest="crop", action="store_true", default=True)
+    parser.add_argument("--no-crop-to-head", dest="crop", action="store_false")
+    parser.add_argument("--collar-y", type=float, default=None, help="Collar line: 0-1 of image height, or pixel Y")
     args = parser.parse_args(argv)
 
     try:
@@ -165,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
                 nudge_x=args.nudge_x,
                 nudge_y=args.nudge_y,
                 nudge_scale=args.nudge_scale,
+                crop=args.crop,
+                collar_y=args.collar_y,
             )
             print(json.dumps({"ok": True, "written": written}))
             return 0
@@ -176,6 +277,8 @@ def main(argv: list[str] | None = None) -> int:
                 nudge_x=args.nudge_x,
                 nudge_y=args.nudge_y,
                 nudge_scale=args.nudge_scale,
+                crop=args.crop,
+                collar_y=args.collar_y,
             )
             print(json.dumps({"ok": True, "written": [result]}))
             return 0
