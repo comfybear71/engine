@@ -60,9 +60,11 @@ export default function AlignHeadModal({
   } | null>(null);
 
   const bodyRel = bgKind === "reference" ? character.referenceRel : character.bodyRel;
-  const bodySrc = assetUrl(project, bodyRel);
+  const bodySrc = assetUrl(project, bodyRel, {
+    v: bgKind === "reference" ? character.referenceMtime : character.mtime,
+  });
   const drawing = slot?.drawings.find((d) => d.name === drawingName) || slot?.drawings[0];
-  const headSrc = assetUrl(project, drawing?.rel);
+  const headSrc = assetUrl(project, drawing?.rel, { v: drawing?.mtime });
 
   useEffect(() => {
     const list = alignableSlots(character.slots);

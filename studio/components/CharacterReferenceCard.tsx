@@ -24,7 +24,7 @@ export default function CharacterReferenceCard({
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const src = assetUrl(project, character.referenceRel);
+  const src = assetUrl(project, character.referenceRel, { v: character.referenceMtime });
 
   async function onFile(file: File) {
     if (!file.type.startsWith("image/")) {

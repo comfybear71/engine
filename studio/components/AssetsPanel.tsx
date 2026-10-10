@@ -93,7 +93,7 @@ function SlotBlock({ slot, project }: { slot: CharacterSlot; project: string }) 
         {slot.drawings.map((drawing) => (
           <Thumb
             key={drawing.name}
-            src={assetUrl(project, drawing.rel)}
+            src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
             label={drawing.name}
             selected={drawing.name === slot.default_drawing}
             fit="contain"
@@ -269,7 +269,7 @@ export default function AssetsPanel({
             {characters.map((character) => (
               <Thumb
                 key={character.id}
-                src={assetUrl(project, character.thumbRel)}
+                src={assetUrl(project, character.thumbRel, { thumb: true, v: character.mtime })}
                 label={character.display_name}
                 badge={character.source === "project" ? "local" : undefined}
                 selected={character.id === selectedId}
@@ -286,7 +286,7 @@ export default function AssetsPanel({
         <Section title="Backgrounds" count={staging?.backgrounds.length ?? 0}>
           <div className={gridClass}>
             {(staging?.backgrounds || []).map((bg) => (
-              <Thumb key={bg.id} src={assetUrl(project, bg.thumbRel, { thumb: true })} label={bg.id} />
+              <Thumb key={bg.id} src={assetUrl(project, bg.thumbRel, { thumb: true, v: bg.mtime })} label={bg.id} />
             ))}
           </div>
         </Section>
@@ -301,7 +301,7 @@ export default function AssetsPanel({
               {(staging?.props || []).map((prop) => (
                 <Thumb
                   key={`${prop.location}:${prop.id}`}
-                  src={assetUrl(project, prop.thumbRel)}
+                  src={assetUrl(project, prop.thumbRel, { thumb: true, v: prop.mtime })}
                   label={`${prop.id} · ${prop.location}`}
                 />
               ))}
@@ -397,7 +397,11 @@ export default function AssetsPanel({
                   const added = libraryAdded.includes(character.id) || characters.some((c) => c.id === character.id);
                   return (
                     <div key={character.id} className="space-y-1.5">
-                      <Thumb src={assetUrl(project, character.thumbRel)} label={character.display_name} fit="contain" />
+                      <Thumb
+                        src={assetUrl(project, character.thumbRel, { thumb: true, v: character.mtime })}
+                        label={character.display_name}
+                        fit="contain"
+                      />
                       <button
                         type="button"
                         disabled={added || addingId === character.id}

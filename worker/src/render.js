@@ -10,6 +10,7 @@ const { spawn } = require("child_process");
 const path = require("path");
 
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
+const { previewViaSession } = require("./previewSession");
 
 const ESTIMATED_SILENT_RE = /(\d+) of (\d+) lines are estimated\/silent/;
 
@@ -105,9 +106,31 @@ function renderProject(projectDir, options = {}) {
  * @param {{pythonBin?: string}} [options]
  */
 async function previewFrame(projectDir, frame, outputPath, options = {}) {
+  const format = options.format === "jpeg" || options.format === "jpg" ? "jpeg" : "png";
+  const quality = options.quality || 85;
+  if (options.persistent !== false) {
+    try {
+      const msg = await previewViaSession(projectDir, frame, outputPath, {
+        ...options,
+        format,
+        quality,
+      });
+      return {
+        code: 0,
+        stdout: JSON.stringify(msg),
+        stderr: "",
+        estimatedSilent: null,
+        meta: msg,
+      };
+    } catch {
+      /* fall through to a one-shot spawn */
+    }
+  }
   const extra = [];
   if (options.timeline) extra.push("--timeline", path.resolve(options.timeline));
   extra.push("--preview-frame", String(frame), "--output", path.resolve(outputPath));
+  extra.push("--format", format);
+  if (format === "jpeg") extra.push("--jpeg-quality", String(quality));
   const result = await spawnCompositor(projectDir, extra, { ...options, echo: false });
   let meta = null;
   const trimmed = result.stdout.trim();

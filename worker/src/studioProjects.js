@@ -12,8 +12,8 @@ const path = require("path");
 const { tokenize } = require("./parser/tokenizer");
 const { parseCastList } = require("./parser/actionTag");
 const { slugify } = require("./parser/scriptParser");
-const { parseProject } = require("./parser");
 const { probeDurationSeconds } = require("./parser/ffprobeDuration");
+const { getCachedParse } = require("./parser/parseCache");
 const { readMp4DurationSeconds } = require("./parser/mp4Duration");
 const {
   loadCharacter,
@@ -218,20 +218,20 @@ function newestRenderPath(projectDir) {
 async function durationFromRender(projectDir) {
   const renderPath = newestRenderPath(projectDir);
   if (!renderPath) return null;
+  const header = readMp4DurationSeconds(renderPath);
+  if (Number.isFinite(header) && header > 0) return roundTenths(header);
   try {
     const probed = await probeDurationSeconds(renderPath);
     if (Number.isFinite(probed) && probed > 0) return roundTenths(probed);
   } catch {
-    /* fall through to the movie header */
+    /* no usable duration */
   }
-  const header = readMp4DurationSeconds(renderPath);
-  if (Number.isFinite(header) && header > 0) return roundTenths(header);
   return null;
 }
 
 async function durationFromParsedTimeline(projectDir, scriptName) {
   try {
-    const parsed = await parseProject(projectDir, { script: scriptName || DEFAULT_SCRIPT });
+    const parsed = await getCachedParse(projectDir, { script: scriptName || DEFAULT_SCRIPT });
     const fps = (parsed.timeline && parsed.timeline.fps) || 24;
     const frames = (parsed.sceneLengths || []).reduce((sum, scene) => sum + (scene.frames || 0), 0);
     if (frames > 0 && fps > 0) return roundTenths(frames / fps);
@@ -267,18 +267,87 @@ function newestRenderMtime(projectDir) {
   return newest > 0 ? new Date(newest).toISOString() : null;
 }
 
+function resolvedMtime(projectDir, globalAssetsDir, rel) {
+  if (!rel) return null;
+  const resolved = resolveAsset(projectDir, globalAssetsDir, rel);
+  if (!resolved) return null;
+  try {
+    return Math.round(fs.statSync(resolved.absPath).mtimeMs);
+  } catch {
+    return null;
+  }
+}
+
+function projectSummaryFingerprint(projectDir) {
+  const parts = [];
+  function add(abs) {
+    try {
+      const stat = fs.statSync(abs);
+      parts.push(`${abs}\t${stat.mtimeMs}\t${stat.size}`);
+    } catch {
+      parts.push(`${abs}\tmissing`);
+    }
+  }
+  add(projectDir);
+  for (const script of listScriptFiles(projectDir)) add(path.join(projectDir, script));
+  add(path.join(projectDir, LIBRARY_FILENAME));
+  const rendersDir = path.join(projectDir, "renders");
+  add(rendersDir);
+  if (fs.existsSync(rendersDir) && fs.statSync(rendersDir).isDirectory()) {
+    for (const entry of fs.readdirSync(rendersDir)) {
+      if (/\.(mp4|mov)$/i.test(entry)) add(path.join(rendersDir, entry));
+    }
+  }
+  const audioDir = path.join(projectDir, "audio");
+  if (fs.existsSync(audioDir)) {
+    const stack = [audioDir];
+    while (stack.length) {
+      const dir = stack.pop();
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        const child = path.join(dir, entry.name);
+        if (entry.isDirectory()) stack.push(child);
+        else if (entry.isFile() && /\.wav$/i.test(entry.name)) add(child);
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+const summaryCache = new Map();
+
 async function summarizeProject(projectDir, name, globalAssetsDir) {
   const used = collectUsedAssets(projectDir, globalAssetsDir);
   const scriptName = used.scripts[0] || DEFAULT_SCRIPT;
   const durationSeconds = await resolveProjectDuration(projectDir, scriptName);
+  const thumbRel = firstThumbRel(projectDir, globalAssetsDir, used.locationIds);
   return {
     name,
     scripts: used.scripts,
-    thumbRel: firstThumbRel(projectDir, globalAssetsDir, used.locationIds),
+    thumbRel,
+    thumbMtime: resolvedMtime(projectDir, globalAssetsDir, thumbRel),
     durationSeconds,
     sceneCount: countScriptScenes(projectDir, scriptName),
     lastRenderAt: newestRenderMtime(projectDir),
   };
+}
+
+async function summarizeProjectCached(projectDir, name, globalAssetsDir) {
+  const fp = projectSummaryFingerprint(projectDir);
+  const hit = summaryCache.get(name);
+  if (hit && hit.fp === fp) return hit.summary;
+  const summary = await summarizeProject(projectDir, name, globalAssetsDir);
+  summaryCache.set(name, { fp, summary });
+  return summary;
+}
+
+function resetSummaryCache() {
+  summaryCache.clear();
 }
 
 function isSafeFolderName(name) {
@@ -590,6 +659,8 @@ module.exports = {
   countScriptScenes,
   resolveProjectDuration,
   summarizeProject,
+  summarizeProjectCached,
+  resetSummaryCache,
   describeProjectContents,
   moveProjectToTrash,
   listTrash,

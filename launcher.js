@@ -9,7 +9,7 @@
  * `node launcher.js`.
  */
 
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -46,6 +46,121 @@ function resolveEnginePaths(rootDir) {
   const workerEntry = path.join(workerDir, "src", "server.js");
   const nextBin = path.join(studioDir, "node_modules", "next", "dist", "bin", "next");
   return { root, workerDir, studioDir, workerEntry, nextBin };
+}
+
+function isStudioDev(env = process.env) {
+  const value = env.STUDIO_DEV || env.ENGINE_STUDIO_DEV;
+  return value === "1" || /^true$/i.test(String(value || ""));
+}
+
+function studioLaunchArgs(nextBin, port, { dev } = {}) {
+  return dev ? [nextBin, "dev", "-p", String(port)] : [nextBin, "start", "-p", String(port)];
+}
+
+const STUDIO_SOURCE_ENTRIES = [
+  "app",
+  "components",
+  "lib",
+  "package.json",
+  "package-lock.json",
+  "next.config.ts",
+  "next.config.js",
+  "tailwind.config.ts",
+  "tsconfig.json",
+  "postcss.config.js",
+  "postcss.config.mjs",
+];
+
+function newestMtime(absPath, maxDepth = 6) {
+  if (!fs.existsSync(absPath)) return 0;
+  const stat = fs.statSync(absPath);
+  if (stat.isFile()) return stat.mtimeMs;
+  if (!stat.isDirectory() || maxDepth <= 0) return stat.mtimeMs;
+  let newest = stat.mtimeMs;
+  let entries;
+  try {
+    entries = fs.readdirSync(absPath, { withFileTypes: true });
+  } catch {
+    return newest;
+  }
+  for (const entry of entries) {
+    if (entry.name === "node_modules" || entry.name === ".next" || entry.name === ".git") continue;
+    const child = newestMtime(path.join(absPath, entry.name), maxDepth - 1);
+    if (child > newest) newest = child;
+  }
+  return newest;
+}
+
+function studioSourceMtime(studioDir) {
+  let newest = 0;
+  for (const entry of STUDIO_SOURCE_ENTRIES) {
+    const mtime = newestMtime(path.join(studioDir, entry));
+    if (mtime > newest) newest = mtime;
+  }
+  return newest;
+}
+
+function readGitHead(rootDir) {
+  const headPath = path.join(rootDir, ".git", "HEAD");
+  if (!fs.existsSync(headPath)) return null;
+  const raw = fs.readFileSync(headPath, "utf8").trim();
+  if (raw.startsWith("ref:")) {
+    const refPath = path.join(rootDir, ".git", raw.slice(4).trim());
+    if (fs.existsSync(refPath)) return fs.readFileSync(refPath, "utf8").trim();
+  }
+  return raw || null;
+}
+
+function buildStampPath(studioDir) {
+  return path.join(studioDir, ".next", "engine-build-stamp.json");
+}
+
+function readBuildStamp(studioDir) {
+  const file = buildStampPath(studioDir);
+  if (!fs.existsSync(file)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeBuildStamp(paths) {
+  const stamp = {
+    gitHead: readGitHead(paths.root),
+    builtAt: new Date().toISOString(),
+  };
+  fs.mkdirSync(path.join(paths.studioDir, ".next"), { recursive: true });
+  fs.writeFileSync(buildStampPath(paths.studioDir), JSON.stringify(stamp) + "\n");
+}
+
+function studioNeedsRebuild(paths) {
+  const buildId = path.join(paths.studioDir, ".next", "BUILD_ID");
+  if (!fs.existsSync(buildId)) return true;
+  const stamp = readBuildStamp(paths.studioDir);
+  const gitHead = readGitHead(paths.root);
+  if (gitHead && (!stamp || stamp.gitHead !== gitHead)) return true;
+  const buildMtime = fs.statSync(buildId).mtimeMs;
+  return studioSourceMtime(paths.studioDir) > buildMtime;
+}
+
+function ensureStudioBuild(paths, env) {
+  if (isStudioDev(env)) return { built: false, skipped: true };
+  if (!studioNeedsRebuild(paths)) return { built: false, skipped: true };
+  console.log("Building Studio…");
+  const result = spawnSync(process.execPath, [paths.nextBin, "build"], {
+    cwd: paths.studioDir,
+    env,
+    stdio: "inherit",
+    windowsHide: true,
+  });
+  if (result.status !== 0) {
+    const err = new Error("Studio build failed.");
+    err.code = "STUDIO_BUILD";
+    throw err;
+  }
+  writeBuildStamp(paths);
+  return { built: true };
 }
 
 function waitForHttp(url, timeoutMs) {
@@ -143,11 +258,26 @@ function createSupervisor(options) {
       console.error("Studio isn't installed on this computer yet. Ask whoever set this computer up to finish the Engine Studio install.");
       return;
     }
+    const studioEnv = { ...baseEnv, PORT: studioPort };
+    const dev = isStudioDev(studioEnv);
+    if (!dev) {
+      try {
+        ensureStudioBuild(paths, studioEnv);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : "Studio build failed.");
+        if (!fs.existsSync(path.join(paths.studioDir, ".next", "BUILD_ID"))) {
+          const wait = restartDelay("studio");
+          console.error(`Trying the Studio build again in ${Math.round(wait / 1000)}s…`);
+          setTimeout(startStudio, wait);
+          return;
+        }
+      }
+    }
     children.studio = spawnChild(
       "studio",
-      [paths.nextBin, "dev", "-p", studioPort],
+      studioLaunchArgs(paths.nextBin, studioPort, { dev }),
       paths.studioDir,
-      { ...baseEnv, PORT: studioPort },
+      studioEnv,
       () => {
         children.studio = null;
         if (stopping.value) return;
@@ -202,4 +332,9 @@ module.exports = {
   resolveEnginePaths,
   waitForHttp,
   createSupervisor,
+  isStudioDev,
+  studioLaunchArgs,
+  studioNeedsRebuild,
+  studioSourceMtime,
+  ensureStudioBuild,
 };

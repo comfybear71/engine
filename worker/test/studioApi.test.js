@@ -6,6 +6,10 @@ const fs = require("fs");
 const path = require("path");
 
 const { createApp, isSafeProjectName, resolveProjectDir, isSafeRelPath } = require("../src/server");
+const { closePreviewSession } = require("../src/previewSession");
+const { resetParseCache } = require("../src/parser/parseCache");
+const { resetDurationCache } = require("../src/parser/ffprobeDuration");
+const { resetSummaryCache } = require("../src/studioProjects");
 const { renderOutputName, resolveScriptName } = require("../src/studioProjects");
 const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
 const { writeSilentWav } = require("./helpers/wav");
@@ -84,6 +88,10 @@ describe("studio worker API", () => {
 
   after(async () => {
     if (ctx) await ctx.close();
+    closePreviewSession();
+    resetParseCache();
+    resetDurationCache();
+    resetSummaryCache();
     fixture.cleanup();
   });
 
@@ -158,6 +166,16 @@ describe("studio worker API", () => {
       `${ctx.url}/api/projects/project/asset?rel=${encodeURIComponent("../package.json")}`
     );
     assert.equal(bad.status, 400);
+
+    const mtime = Math.round(
+      fs.statSync(path.join(fixture.globalAssetsDir, "characters", "alice", "body.png")).mtimeMs
+    );
+    const versioned = await fetch(
+      `${ctx.url}/api/projects/project/asset?rel=${encodeURIComponent("characters/alice/body.png")}&v=${mtime}`
+    );
+    assert.equal(versioned.status, 200);
+    assert.match(String(versioned.headers.get("cache-control") || ""), /max-age=31536000/);
+    assert.match(String(versioned.headers.get("cache-control") || ""), /immutable/);
   });
 
   test("GET /stage and POST preview-frame do not overwrite timeline.json", async () => {
@@ -176,11 +194,15 @@ describe("studio worker API", () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
     assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
 
-    await fetch(`${ctx.url}/api/projects/project/preview-frame`, {
+    const preview = await fetch(`${ctx.url}/api/projects/project/preview-frame`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ frame: 0 }),
     });
+    if (preview.status === 200) {
+      assert.match(String(preview.headers.get("content-type") || ""), /image\/jpeg/);
+      assert.match(String(preview.headers.get("cache-control") || ""), /max-age=3600/);
+    }
     assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
     assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
   });

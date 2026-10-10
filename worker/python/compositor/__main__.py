@@ -43,6 +43,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--width", type=int, default=None, help="Optional output width (even, for proxy renders)")
     parser.add_argument("--height", type=int, default=None, help="Optional output height (even, for proxy renders)")
+    parser.add_argument(
+        "--format",
+        choices=("png", "jpeg"),
+        default="png",
+        help="Preview image format (default png; Studio scrubbing uses jpeg)",
+    )
+    parser.add_argument("--jpeg-quality", type=int, default=85, help="JPEG quality 1-100 when --format jpeg")
     args = parser.parse_args(argv)
 
     project_dir: Path = args.project_dir.resolve()
@@ -59,7 +66,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.preview_frame is not None:
-        return _write_preview(timeline, args.preview_frame, args.output, project_dir)
+        return _write_preview(
+            timeline,
+            args.preview_frame,
+            args.output,
+            project_dir,
+            fmt=args.format,
+            jpeg_quality=args.jpeg_quality,
+        )
 
     output_path = args.output
     if output_path is None:
@@ -76,7 +90,14 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _write_preview(timeline, frame_index: int, output_path: Path | None, project_dir: Path) -> int:
+def _write_preview(
+    timeline,
+    frame_index: int,
+    output_path: Path | None,
+    project_dir: Path,
+    fmt: str = "png",
+    jpeg_quality: int = 85,
+) -> int:
     if timeline.total_frames <= 0:
         print("error: timeline has no frames", file=sys.stderr)
         return 2
@@ -88,12 +109,17 @@ def _write_preview(timeline, frame_index: int, output_path: Path | None, project
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
+    ext = "jpg" if fmt == "jpeg" else "png"
     if output_path is None:
-        output_path = project_dir / "renders" / f"preview_{frame_index}.png"
+        output_path = project_dir / "renders" / f"preview_{frame_index}.{ext}"
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if not cv2.imwrite(str(output_path), canvas):
-        print(f"error: failed to write PNG: {output_path}", file=sys.stderr)
+    if fmt == "jpeg":
+        wrote = cv2.imwrite(str(output_path), canvas, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
+    else:
+        wrote = cv2.imwrite(str(output_path), canvas)
+    if not wrote:
+        print(f"error: failed to write {fmt.upper()}: {output_path}", file=sys.stderr)
         return 1
 
     print(f"Preview frame {frame_index}/{timeline.total_frames} -> {output_path}", file=sys.stderr)
