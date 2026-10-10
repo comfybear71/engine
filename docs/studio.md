@@ -133,13 +133,27 @@ clobber the project's `timeline.json`.
   below.
 - **Stage** — the main workspace. A large frame preview from
   `POST /api/projects/:name/preview-frame?script=`, a transport bar under
-  the viewer (rewind / play / stop; timecode on the left; `frame N · fps ·
-  script` on the right), and **read-only timeline lanes** at the bottom
-  (Action, Dialogue, Audio, SFX, Camera). Space toggles play. Play steps
-  preview frames, or plays the latest `renders/<script-stem>.mp4` when
-  that file exists. The orange playhead handle sits on the scrub bar;
-  one vertical line continues down through every lane. Click or drag the
-  bar to seek; click a block to seek and highlight that script line.
+  the viewer (centred rewind / larger play / stop; timecode on the left;
+  `frame N · fps · script` on the right), and **read-only timeline lanes**
+  at the bottom (Action, Dialogue, Audio, SFX, Camera). Space toggles
+  play. Stop returns to frame 0; rewind does the same. Play uses, in
+  order: (a) an up-to-date `renders/<script-stem>.mp4` or leftover
+  `output.mp4` (mtime ≥ the script) in the viewport with sound and a
+  synced playhead / lane highlight; (b) otherwise stepping
+  `preview-frame` with prefetch/cache plus the audio-lane WAVs through
+  Web Audio at their frame offsets, clamped to `total_frames`; (c) if
+  stepping cannot keep real time, a 960×540 proxy render to
+  `renders/<script-stem>_preview.mp4` with a **Rendering preview…**
+  state, then that video plays. The orange playhead handle sits on the
+  time ruler; one vertical line continues down through every lane.
+  Click or drag the ruler to seek; click a block to seek and highlight
+  that script line. The timeline zooms like Resolve: `+` / `−` and a
+  slider, Ctrl+wheel centred on the cursor, **Fit** for the whole shot,
+  horizontal scroll (wheel / drag / scrollbar) when zoomed in, a ruler
+  whose ticks step from frames to seconds to minutes, and the playhead
+  scrolls into view during playback. Lanes, blocks, and the playhead
+  share one pixel-per-frame scale. Zoom persists per project in
+  `localStorage` (`engine.studio.timelineZoom.v1`).
   **Assets / Media / Effects** are a left dock (library characters,
   backgrounds, props) that slides in over the stage — not a full-page
   switch. The right icon rail opens **Marks**, **Layers**, **Script**
@@ -196,12 +210,15 @@ project root). Those paths parse to **temp** files and never write
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |
 | `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. |
-| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`). Does **not** write `timeline.json`. |
+| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`). Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Does **not** write `timeline.json`. |
 | `GET` | `/api/projects/:name/stage?script=` | Parse the selected script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
+| `GET` | `/api/projects/:name/playback?script=` | Render/proxy freshness (`renders/<stem>.mp4` or `output.mp4`, plus `<stem>_preview.mp4`) vs the script mtime, and audio-lane clips with `exists`. Temp parse only. |
+| `GET` | `/api/projects/:name/media?rel=` | Stream a project-local line WAV (`audio/<scene>/<file>.wav` only). |
 | `POST` | `/api/projects/:name/preview-frame?script=` | Parse the selected script to a temp timeline, compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a PNG. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. |
 | `POST` | `/api/projects/:name/render?script=` | Parse the selected script to a temp timeline (never `timeline.json`), run the compositor with `--output renders/<script-stem>.mp4`. Same `--script` choice as the CLI. One render at a time. |
+| `POST` | `/api/projects/:name/preview-render?script=` | Same temp parse as Render, but writes a 960×540 H.264 proxy to `renders/<script-stem>_preview.mp4` for Stage playback. Shares the one-at-a-time render lock. |
 | `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?" }` or multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe`). Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Dry-run prints length + the STT credit note and writes nothing. No Studio UI for this yet. |
-| `GET` | `/api/projects/:name/renders/:file` | Stream a render (`script.mp4`, `script_mcd.mp4`, or a leftover `output.mp4`). |
+| `GET` | `/api/projects/:name/renders/:file` | Stream a render (`script.mp4`, `script_mcd.mp4`, `script_preview.mp4`, or a leftover `output.mp4`). |
 | `POST` | `/render` | Original CLI-oriented contract: `{ "projectDir": "..." }`. |
 
 `:name` is validated against path traversal. `_global_assets` and `_trash`

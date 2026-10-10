@@ -92,6 +92,8 @@ function renderProject(projectDir, options = {}) {
   if (options.timeline) extra.push("--timeline", path.resolve(options.timeline));
   if (options.codec) extra.push("--codec", options.codec);
   if (options.output) extra.push("--output", path.resolve(options.output));
+  if (options.width) extra.push("--width", String(options.width));
+  if (options.height) extra.push("--height", String(options.height));
   return spawnCompositor(projectDir, extra, options);
 }
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterator, NamedTuple
 
+import cv2
 import numpy as np
 
 from .asset_cache import AssetCache, anchor_after_rotation
@@ -278,10 +279,23 @@ def iter_frames(timeline: Timeline, cache: AssetCache | None = None) -> Iterator
         yield from iter_scene_frames(scene, canvas_w, canvas_h, timeline.fps, cache)
 
 
+def scale_frame(frame: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Resize a composed BGR frame for a low-res proxy without changing layout math."""
+    out_w = max(2, int(width) - int(width) % 2)
+    out_h = max(2, int(height) - int(height) % 2)
+    src_h, src_w = frame.shape[:2]
+    if src_w == out_w and src_h == out_h:
+        return frame
+    interp = cv2.INTER_AREA if out_w * out_h < src_w * src_h else cv2.INTER_LINEAR
+    return cv2.resize(frame, (out_w, out_h), interpolation=interp)
+
+
 def render(
     timeline: Timeline,
     output_path: Path,
     codec: str = "h264",
+    width: int | None = None,
+    height: int | None = None,
 ) -> Path:
     """Render a Timeline to ``output_path``, streaming frames into FFmpeg."""
 
@@ -289,13 +303,20 @@ def render(
     if total:
         print(f"{estimated} of {total} lines are estimated/silent")
 
+    out_w = int(width) if width else timeline.canvas.width
+    out_h = int(height) if height else timeline.canvas.height
+    out_w = max(2, out_w - out_w % 2)
+    out_h = max(2, out_h - out_h % 2)
+
     cache = AssetCache()
     frames = iter_frames(timeline, cache)
+    if out_w != timeline.canvas.width or out_h != timeline.canvas.height:
+        frames = (scale_frame(frame, out_w, out_h) for frame in frames)
     write_frames(
         frames,
         output_path=output_path,
-        width=timeline.canvas.width,
-        height=timeline.canvas.height,
+        width=out_w,
+        height=out_h,
         fps=timeline.fps,
         codec=codec,
         audio_clips=timeline.all_audio_clips(),

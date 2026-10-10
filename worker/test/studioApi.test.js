@@ -247,7 +247,7 @@ describe("studio worker API", () => {
     const byLane = (name) => laneBody.blocks.filter((b) => b.lane === name);
     assert.ok(byLane("camera").some((b) => b.scriptLine === 4 && /zoom/.test(b.label)));
     assert.ok(byLane("dialogue").some((b) => b.scriptLine === 6 && /Hello there friend/.test(b.label)));
-    assert.ok(byLane("audio").some((b) => b.scriptLine === 6 && /\.wav$/.test(b.label)));
+    assert.ok(byLane("audio").some((b) => b.scriptLine === 6 && /\.wav$/.test(b.label) && /audio\/.+\.wav$/.test(b.rel)));
     assert.ok(byLane("action").some((b) => b.scriptLine === 5 && /eyes=closed/.test(b.label)));
     assert.ok(byLane("action").some((b) => b.scriptLine === 7 && /right/.test(b.label)));
     for (const block of laneBody.blocks) {
@@ -582,6 +582,33 @@ describe("studio worker API", () => {
     assert.equal(mouth.offset.x, 12);
     assert.equal(mouth.scale, 1.25);
     assert.equal(mouth.rotation, 8);
+  });
+
+  test("GET /playback and /media report render freshness and serve wavs", async () => {
+    fixture.writeScript(
+      ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi there."].join("\n")
+    );
+    writeSilentWav(path.join(fixture.projectDir, "audio", "intro", "001_alice.wav"), 0.4);
+    const renders = path.join(fixture.projectDir, "renders");
+    fs.mkdirSync(renders, { recursive: true });
+    const renderPath = path.join(renders, "script.mp4");
+    fs.writeFileSync(renderPath, "not-mp4");
+    const scriptPath = path.join(fixture.projectDir, "script.txt");
+    fs.utimesSync(renderPath, new Date(), new Date(fs.statSync(scriptPath).mtimeMs + 5000));
+
+    const playback = await fetch(`${ctx.url}/api/projects/project/playback`);
+    const body = await playback.json();
+    assert.equal(playback.status, 200, JSON.stringify(body));
+    assert.equal(body.render.file, "script.mp4");
+    assert.equal(body.render.upToDate, true);
+    assert.ok(body.audio.some((clip) => clip.rel === "audio/intro/001_alice.wav" && clip.exists));
+
+    const wav = await fetch(`${ctx.url}/api/projects/project/media?rel=audio/intro/001_alice.wav`);
+    assert.equal(wav.status, 200);
+    assert.match(String(wav.headers.get("content-type") || ""), /audio\/(wav|x-wav|wave)/);
+
+    const bad = await fetch(`${ctx.url}/api/projects/project/media?rel=../script.txt`);
+    assert.equal(bad.status, 400);
   });
 
   test("POST /api/projects/:name/import-audio dry-run reports length and writes nothing", async () => {

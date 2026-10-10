@@ -8,6 +8,13 @@ import { LayersInspector, MarksInspector, ScriptInspector } from "@/components/S
 import { LeftIconRail, RightIconRail, type LeftPoolId, type RightDrawerId } from "@/components/StageRails";
 import TimelineLanes from "@/components/TimelineLanes";
 import TransportBar from "@/components/TransportBar";
+import {
+  chooseVideoFile,
+  createFrameCache,
+  frameFromElapsedMs,
+  shouldFallbackToProxy,
+  webAudioSchedule,
+} from "@/lib/playback";
 import { clampFrameIndex, scriptLineAtFrame } from "@/lib/playhead";
 import {
   DEFAULT_STAGE_LAYOUT,
@@ -19,12 +26,15 @@ import {
 import {
   fetchPreviewFrame,
   loadLanes,
+  loadPlayback,
   loadScript,
   loadStage,
-  renderExists,
+  mediaUrl,
   renderVideoUrl,
+  startPreviewRender,
   type LanesResponse,
   type Mark,
+  type PlaybackStatus,
   type StageInfo,
   type StageLayer,
 } from "@/lib/worker";
@@ -61,7 +71,8 @@ export default function StagePanel({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [hasRender, setHasRender] = useState(false);
+  const [playback, setPlayback] = useState<PlaybackStatus | null>(null);
+  const [previewStatus, setPreviewStatus] = useState<"idle" | "rendering">("idle");
   const [leftPool, setLeftPool] = useState<LeftPoolId | null>(null);
   const [rightDrawer, setRightDrawer] = useState<RightDrawerId | null>(null);
   const [layout, setLayout] = useState<StageLayout>(DEFAULT_STAGE_LAYOUT);
@@ -71,9 +82,17 @@ export default function StagePanel({
   const frameRef = useRef(0);
   const userSeekRef = useRef(false);
   const playableTotalRef = useRef<number | null>(null);
+  const frameCacheRef = useRef(createFrameCache());
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map());
+  const audioSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const proxyKickRef = useRef(false);
 
   playingRef.current = playing;
   frameRef.current = frame;
+
+  const videoChoice = chooseVideoFile(playback);
+  const videoSrc = project && videoChoice ? renderVideoUrl(project, renderNonce || undefined, script, videoChoice.file) : null;
 
   useEffect(() => {
     setLayout(loadStageLayout());
@@ -92,6 +111,10 @@ export default function StagePanel({
     setPlaying(false);
     setSelectedMark(null);
     playableTotalRef.current = null;
+    proxyKickRef.current = false;
+    frameCacheRef.current.clear();
+    audioBuffersRef.current.clear();
+    stopAudio();
     Promise.all([loadStage(project, script), loadLanes(project, script), loadScript(project, script)])
       .then(([info, nextLanes, text]) => {
         if (cancelled) return;
@@ -118,28 +141,43 @@ export default function StagePanel({
 
   useEffect(() => {
     if (!project || !workerUp) {
-      setHasRender(false);
+      setPlayback(null);
       return;
     }
     let cancelled = false;
-    renderExists(project, script).then((exists) => {
-      if (!cancelled) setHasRender(exists);
-    });
+    loadPlayback(project, script)
+      .then((status) => {
+        if (cancelled) return;
+        setPlayback(status);
+        if (proxyKickRef.current && chooseVideoFile(status)) {
+          proxyKickRef.current = false;
+          setPlaying(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPlayback(null);
+      });
     return () => {
       cancelled = true;
     };
-  }, [project, script, workerUp, renderNonce, scriptEpoch]);
+  }, [project, script, workerUp, renderNonce, scriptEpoch, previewStatus]);
 
   useEffect(() => {
     if (!project || !workerUp) return;
-    if (playing && hasRender) return;
+    if (playing && videoSrc) return;
+    const cached = frameCacheRef.current.get(frame);
+    if (cached) {
+      setPreviewUrl(cached);
+      return;
+    }
     const controller = new AbortController();
     const requestFrame = clampFrameIndex(frame, totalFrames);
     const timer = window.setTimeout(() => {
+      const started = performance.now();
       fetchPreviewFrame(project, requestFrame, controller.signal, script)
         .then(({ blob, meta }) => {
           const url = URL.createObjectURL(blob);
-          if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+          frameCacheRef.current.put(requestFrame, url);
           previewUrlRef.current = url;
           setPreviewUrl(url);
           const nextTotal = meta.totalFrames > 0 ? meta.totalFrames : totalFrames;
@@ -148,13 +186,16 @@ export default function StagePanel({
             setTotalFrames(nextTotal);
           }
           const served = clampFrameIndex(Number.isFinite(meta.frame) ? meta.frame : requestFrame, nextTotal);
-          if (served !== frame) setFrame(served);
+          if (!playingRef.current && served !== frame) setFrame(served);
           if (meta.fps) setFps(meta.fps);
           if (meta.canvasWidth && meta.canvasHeight) {
             setCanvas({ width: meta.canvasWidth, height: meta.canvasHeight });
           }
           if (meta.sceneId) setSceneId(meta.sceneId);
           setError(null);
+          if (playingRef.current && !videoSrc && shouldFallbackToProxy(performance.now() - started, meta.fps || fps)) {
+            void kickProxyRender();
+          }
         })
         .catch((err: Error) => {
           if (err.name === "AbortError") return;
@@ -165,12 +206,17 @@ export default function StagePanel({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [project, script, workerUp, frame, playing, hasRender, totalFrames]);
+    // kickProxyRender is stable enough via ref
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, script, workerUp, frame, playing, videoSrc, totalFrames, fps]);
 
   useEffect(() => {
     return () => {
-      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      frameCacheRef.current.clear();
+      stopAudio();
+      audioCtxRef.current?.close().catch(() => undefined);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const currentScene = useMemo(
@@ -213,16 +259,107 @@ export default function StagePanel({
       const line = scriptLine ?? scriptLineAtFrame(lanes?.blocks || [], clamped);
       onSelectLine(line);
       const video = videoRef.current;
-      if (video && hasRender) {
+      if (video && videoSrc) {
         video.currentTime = clamped / Math.max(fps, 1);
       }
     },
-    [fps, hasRender, lanes, totalFrames, onSelectLine]
+    [fps, videoSrc, lanes, totalFrames, onSelectLine]
   );
 
+  function stopAudio() {
+    for (const source of audioSourcesRef.current) {
+      try {
+        source.stop();
+      } catch {
+        /* already stopped */
+      }
+    }
+    audioSourcesRef.current = [];
+  }
+
+  async function ensureAudioContext(): Promise<AudioContext | null> {
+    const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) return null;
+    if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+      audioCtxRef.current = new Ctor();
+    }
+    if (audioCtxRef.current.state === "suspended") {
+      await audioCtxRef.current.resume();
+    }
+    return audioCtxRef.current;
+  }
+
+  async function loadAudioBuffers() {
+    if (!project || !playback) return;
+    const ctx = await ensureAudioContext();
+    if (!ctx) return;
+    await Promise.all(
+      playback.audio
+        .filter((clip) => clip.exists)
+        .map(async (clip) => {
+          if (audioBuffersRef.current.has(clip.rel)) return;
+          try {
+            const res = await fetch(mediaUrl(project, clip.rel));
+            if (!res.ok) return;
+            const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
+            audioBuffersRef.current.set(clip.rel, buffer);
+          } catch {
+            /* missing or undecodable line audio */
+          }
+        })
+    );
+  }
+
+  async function startLineAudio(fromFrame: number) {
+    stopAudio();
+    if (!playback) return;
+    const ctx = await ensureAudioContext();
+    if (!ctx) return;
+    await loadAudioBuffers();
+    for (const clip of playback.audio) {
+      if (!clip.exists) continue;
+      const buffer = audioBuffersRef.current.get(clip.rel);
+      if (!buffer) continue;
+      const schedule = webAudioSchedule(
+        { startFrame: clip.startFrame, endFrame: clip.endFrame, durationSec: buffer.duration },
+        fromFrame,
+        fps,
+        totalFrames
+      );
+      if (!schedule) continue;
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(ctx.currentTime + schedule.delaySec, schedule.offsetSec);
+      audioSourcesRef.current.push(source);
+    }
+  }
+
+  async function kickProxyRender() {
+    if (!project || proxyKickRef.current || previewStatus === "rendering") return;
+    if (playback?.proxy?.upToDate || playback?.render?.upToDate) return;
+    proxyKickRef.current = true;
+    setPlaying(false);
+    stopAudio();
+    setPreviewStatus("rendering");
+    try {
+      await startPreviewRender(project, script);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Preview render failed");
+      proxyKickRef.current = false;
+    } finally {
+      setPreviewStatus("idle");
+    }
+  }
+
   useEffect(() => {
-    if (!playing) return;
-    if (hasRender) {
+    if (!playing) {
+      stopAudio();
+      const video = videoRef.current;
+      if (video) video.pause();
+      return;
+    }
+    if (videoSrc) {
       const video = videoRef.current;
       if (!video) return;
       video.currentTime = frameRef.current / Math.max(fps, 1);
@@ -232,26 +369,51 @@ export default function StagePanel({
       };
     }
     let cancelled = false;
-    const step = async () => {
-      while (!cancelled && playingRef.current) {
-        const next = frameRef.current + 1;
-        if (next > maxFrame) {
-          setPlaying(false);
-          break;
-        }
+    const originMsRef = { current: performance.now() - (frameRef.current / Math.max(fps, 1)) * 1000 };
+    void startLineAudio(frameRef.current);
+    const prefetch = (from: number) => {
+      if (!project) return;
+      for (let i = 0; i < 8; i += 1) {
+        const next = from + i;
+        if (next > maxFrame) break;
+        void frameCacheRef.current.ensure(next, async () => {
+          const { blob } = await fetchPreviewFrame(project, next, undefined, script);
+          return URL.createObjectURL(blob);
+        });
+      }
+    };
+    prefetch(frameRef.current);
+    const tick = () => {
+      if (cancelled || !playingRef.current) return;
+      if (userSeekRef.current) {
+        userSeekRef.current = false;
+        originMsRef.current = performance.now() - (frameRef.current / Math.max(fps, 1)) * 1000;
+        void startLineAudio(frameRef.current);
+      }
+      const next = frameFromElapsedMs(performance.now() - originMsRef.current, 0, fps, totalFrames);
+      if (next !== frameRef.current) {
         setFrame(next);
         const line = scriptLineAtFrame(lanes?.blocks || [], next);
         if (line != null) onSelectLine(line);
-        await new Promise((resolve) => window.setTimeout(resolve, 1000 / Math.max(fps, 1)));
+        const url = frameCacheRef.current.get(next);
+        if (url) setPreviewUrl(url);
+        prefetch(next + 1);
       }
+      if (next >= maxFrame) {
+        setPlaying(false);
+        return;
+      }
+      window.requestAnimationFrame(tick);
     };
-    void step();
+    const raf = window.requestAnimationFrame(tick);
     return () => {
       cancelled = true;
+      window.cancelAnimationFrame(raf);
+      stopAudio();
     };
     // Start/stop only — frame is read from refs so scrubbing does not restart playback.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, hasRender, fps, maxFrame]);
+  }, [playing, videoSrc, fps, maxFrame, totalFrames]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -260,11 +422,12 @@ export default function StagePanel({
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
       event.preventDefault();
+      if (previewStatus === "rendering") return;
       setPlaying((value) => !value);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [previewStatus]);
 
   function onVideoTimeUpdate() {
     const video = videoRef.current;
@@ -280,14 +443,18 @@ export default function StagePanel({
 
   function onRewind() {
     setPlaying(false);
+    stopAudio();
     seekTo(0, scriptLineAtFrame(lanes?.blocks || [], 0));
   }
 
   function onStop() {
     setPlaying(false);
+    stopAudio();
+    seekTo(0, scriptLineAtFrame(lanes?.blocks || [], 0));
   }
 
   function onTogglePlay() {
+    if (previewStatus === "rendering") return;
     if (!playing && frame >= maxFrame) {
       seekTo(0, scriptLineAtFrame(lanes?.blocks || [], 0));
     }
@@ -298,8 +465,7 @@ export default function StagePanel({
     return <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">Pick a project to open the stage.</div>;
   }
 
-  const videoSrc = hasRender ? renderVideoUrl(project, renderNonce || undefined, script) : null;
-  const showVideo = Boolean(playing && hasRender && videoSrc);
+  const showVideo = Boolean(videoSrc);
 
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden" data-testid="stage-workspace">
@@ -350,7 +516,11 @@ export default function StagePanel({
                   />
                 ) : (
                   <div className="flex h-[280px] w-[500px] max-w-full items-center justify-center rounded-sm border border-studio-border bg-studio-raised text-sm text-studio-muted">
-                    {loading ? "Parsing script…" : "Waiting for preview…"}
+                    {previewStatus === "rendering"
+                      ? "Rendering preview…"
+                      : loading
+                        ? "Parsing script…"
+                        : "Waiting for preview…"}
                   </div>
                 )}
                 {videoSrc ? (
@@ -360,12 +530,25 @@ export default function StagePanel({
                     src={videoSrc}
                     playsInline
                     onTimeUpdate={onVideoTimeUpdate}
-                    onEnded={() => setPlaying(false)}
+                    onEnded={() => {
+                      setPlaying(false);
+                      seekTo(maxFrame, scriptLineAtFrame(lanes?.blocks || [], maxFrame));
+                    }}
                     onError={() => {
-                      setHasRender(false);
+                      setPlayback((current) =>
+                        current ? { ...current, render: null, proxy: current.proxy?.file === videoChoice?.file ? null : current.proxy } : current
+                      );
                       setPlaying(false);
                     }}
                   />
+                ) : null}
+                {previewStatus === "rendering" ? (
+                  <div
+                    className="absolute inset-0 flex items-center justify-center bg-black/55 text-sm font-medium text-white"
+                    data-testid="preview-render-overlay"
+                  >
+                    Rendering preview…
+                  </div>
                 ) : null}
                 {previewUrl && selectedMark && !showVideo ? (
                   <div
@@ -390,7 +573,8 @@ export default function StagePanel({
               fps={fps}
               script={script}
               playing={playing}
-              usingVideo={showVideo}
+              usingVideo={Boolean(showVideo && videoChoice?.kind === "render")}
+              previewStatus={previewStatus}
               onRewind={onRewind}
               onTogglePlay={onTogglePlay}
               onStop={onStop}
@@ -476,11 +660,13 @@ export default function StagePanel({
         />
         <div className="shrink-0 overflow-hidden" style={{ height: layout.timelineHeight }}>
           <TimelineLanes
+            project={project}
             lanes={lanes}
             frame={frame}
             selectedLine={selectedLine}
             onSeek={seekTo}
             totalFrames={totalFrames}
+            playing={playing}
           />
         </div>
       </div>

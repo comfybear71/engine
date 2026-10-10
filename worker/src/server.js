@@ -23,6 +23,7 @@ const { buildLaneBlocks, clampFrame } = require("./studioLanes");
 const {
   DEFAULT_SCRIPT,
   renderOutputName,
+  previewOutputName,
   resolveScriptName,
   listScriptFiles,
   collectUsedAssets,
@@ -42,6 +43,12 @@ const { cachedBackgroundThumb } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
 const { previewIngest, confirmIngest, cancelIngest } = require("./assetIngest");
 const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, SLOT_NAME } = require("./characterLocal");
+const {
+  PROXY_SIZE,
+  isSafeAudioRel,
+  resolveProjectAudio,
+  describePlayback,
+} = require("./studioPlayback");
 const { runImportAudio, readImportAudioRequest, VoicesFatalError } = require("./importAudio");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
@@ -710,6 +717,41 @@ function createApp(options = {}) {
     }
   });
 
+  app.get("/api/projects/:name/playback", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    let result;
+    try {
+      result = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
+    } catch (err) {
+      return res.status(400).json(parseErrorPayload(err));
+    }
+    try {
+      if (result.validation && result.validation.ok === false) {
+        return res.status(400).json({ error: result.validation.message || "timeline validation failed" });
+      }
+      res.json(describePlayback(projectDir, scriptName, buildLaneBlocks(result)));
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
+  app.get("/api/projects/:name/media", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const rel = typeof req.query.rel === "string" ? req.query.rel : "";
+    if (!isSafeAudioRel(rel)) {
+      return res.status(400).json({ error: "Invalid audio path" });
+    }
+    const abs = resolveProjectAudio(projectDir, rel);
+    if (!abs) {
+      return res.status(404).json({ error: `Audio not found: ${rel}` });
+    }
+    res.type("audio/wav").sendFile(abs);
+  });
+
   app.post("/api/projects/:name/import-audio", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
@@ -804,6 +846,54 @@ function createApp(options = {}) {
         script: scriptName,
         url: `/api/projects/${encodeURIComponent(req.params.name)}/renders/${encodeURIComponent(outputFile)}`,
         estimatedSilent,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    } finally {
+      cleanupTempParse(parsed);
+      renderInProgress = false;
+    }
+  });
+
+  app.post("/api/projects/:name/preview-render", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    if (renderInProgress) {
+      return res.status(409).json({ error: "A render is already in progress" });
+    }
+
+    renderInProgress = true;
+    const outputFile = previewOutputName(scriptName);
+    const outputPath = path.join(projectDir, "renders", outputFile);
+    let parsed;
+    try {
+      try {
+        parsed = await parseProjectToTemp(projectDir, parseOpts(skipValidate, scriptName));
+      } catch (err) {
+        return res.status(400).json(parseErrorPayload(err));
+      }
+      if (parsed.validation && parsed.validation.ok === false) {
+        return res.status(400).json({ error: parsed.validation.message || "timeline validation failed" });
+      }
+
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      const renderOpts = {
+        codec: "h264",
+        output: outputPath,
+        timeline: parsed.timelinePath,
+        width: PROXY_SIZE.width,
+        height: PROXY_SIZE.height,
+      };
+      if (options.pythonBin) renderOpts.pythonBin = options.pythonBin;
+      await renderProject(projectDir, renderOpts);
+      res.json({
+        ok: true,
+        outputPath,
+        script: scriptName,
+        proxy: true,
+        url: `/api/projects/${encodeURIComponent(req.params.name)}/renders/${encodeURIComponent(outputFile)}`,
       });
     } catch (err) {
       res.status(500).json({ error: err.message });

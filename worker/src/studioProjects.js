@@ -50,6 +50,10 @@ function renderOutputName(scriptName) {
   return `${scriptStem(scriptName)}.mp4`;
 }
 
+function previewOutputName(scriptName) {
+  return `${scriptStem(scriptName)}_preview.mp4`;
+}
+
 function resolveScriptName(value) {
   if (value == null || value === "") return DEFAULT_SCRIPT;
   const base = path.basename(String(value));
@@ -577,6 +581,7 @@ module.exports = {
   isSafeFolderName,
   scriptStem,
   renderOutputName,
+  previewOutputName,
   resolveScriptName,
   listScriptFiles,
   readLibrary,
