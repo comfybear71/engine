@@ -149,6 +149,7 @@ export default function TimelineLanes({
   loopSelection = false,
   onPatchCue,
   onClearLipSync,
+  onSplitLongAudio,
 }: {
   project: string | null;
   lanes: LanesResponse | null;
@@ -179,6 +180,7 @@ export default function TimelineLanes({
     pinned?: boolean;
   }) => void;
   onClearLipSync?: (opts: { scriptLine: number }) => void;
+  onSplitLongAudio?: (block: LaneBlock) => void;
 }) {
   const total = Math.max(totalFrames || lanes?.totalFrames || 1, 1);
   const fps = Math.max(lanes?.fps || 24, 1);
@@ -616,6 +618,14 @@ export default function TimelineLanes({
     if (next !== scriptText) onEditScript(next);
   }
 
+  function longSelectedAudio() {
+    return allBlocks.find((block) => {
+      if (!selectedIds.has(block.id) || block.lane !== "audio" || !block.rel) return false;
+      const frames = block.sourceDurationFrames || Math.max(1, block.endFrame - block.startFrame);
+      return frames / fps > 60.01;
+    }) || null;
+  }
+
   function applyContextAction(action: TimelineContextAction) {
     const lane = contextMenu?.lane ?? null;
     if (action === "copy") applyCopy();
@@ -631,6 +641,9 @@ export default function TimelineLanes({
         allBlocks.find((item) => seeds.has(item.id) && item.lane === "dialogue") ||
         allBlocks.find((item) => seeds.has(item.id) && item.scriptLine != null);
       if (block?.scriptLine != null) onSyncLines?.({ scriptLine: block.scriptLine, force: action === "redo-sync" });
+    } else if (action === "split-long-audio") {
+      const block = longSelectedAudio();
+      if (block) onSplitLongAudio?.(block);
     }
   }
 
@@ -1448,6 +1461,7 @@ export default function TimelineLanes({
           }
           hasSelection={selectedIds.size > 0}
           mouthOnly={selectionIsMouthOnly(allBlocks, selectedIds)}
+          showSplitLong={Boolean(onSplitLongAudio && longSelectedAudio())}
           showSync={allBlocks.some((block) => block.lane === "dialogue" && selectedIds.has(block.id))}
           syncLabel={
             allBlocks.find((block) => block.lane === "dialogue" && selectedIds.has(block.id))?.sync === "synced"

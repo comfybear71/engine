@@ -9,7 +9,8 @@ export type TimelineContextAction =
   | "ripple"
   | "sync"
   | "redo-sync"
-  | "clear-lipsync";
+  | "clear-lipsync"
+  | "split-long-audio";
 
 export default function TimelineContextMenu({
   x,
@@ -20,6 +21,7 @@ export default function TimelineContextMenu({
   showSync,
   syncLabel,
   mouthOnly = false,
+  showSplitLong = false,
   onAction,
   onClose,
 }: {
@@ -31,6 +33,7 @@ export default function TimelineContextMenu({
   showSync: boolean;
   syncLabel: string;
   mouthOnly?: boolean;
+  showSplitLong?: boolean;
   onAction: (action: TimelineContextAction) => void;
   onClose: () => void;
 }) {
@@ -70,6 +73,13 @@ export default function TimelineContextMenu({
               <div className="studio-ctx-sep" />
               <MenuItem label={syncLabel} disabled={!canEdit} onClick={() => run(syncLabel.startsWith("Redo") ? "redo-sync" : "sync")} />
             </>
+          ) : null}
+          {showSplitLong ? (
+            <MenuItem
+              label="Split long audio"
+              disabled={!canEdit}
+              onClick={() => run("split-long-audio")}
+            />
           ) : null}
         </>
       )}

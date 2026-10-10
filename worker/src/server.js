@@ -70,6 +70,7 @@ const {
 } = require("./studioPlayback");
 const { requestPreviewSegment, resolveSegmentFile, SEGMENT_SEC, SEGMENT_SIZE } = require("./previewSegments");
 const { runImportAudio, readImportAudioRequest, VoicesFatalError } = require("./importAudio");
+const { splitExistingAudio, formatChunkAtTime } = require("./splitLongAudio");
 const {
   collectDialogueTargets,
   syncDialogueLines,
@@ -1793,7 +1794,12 @@ function createApp(options = {}) {
         name: parsed.name,
         dryRun: parsed.dryRun,
         noTranscribe: parsed.noTranscribe,
+        splitLong: parsed.splitLong,
       });
+      const chunks = result.chunks || [];
+      const tags = chunks.length
+        ? chunks.map((chunk) => `[Audio: ${result.character} file=${chunk.label} at_time=${formatChunkAtTime(chunk.offsetSec)}]`)
+        : [`[Audio: ${result.character} file=${result.label}]`];
       res.json({
         ok: result.ok,
         dryRun: result.dryRun,
@@ -1806,7 +1812,13 @@ function createApp(options = {}) {
         cuesPath: result.cuesPath,
         wordsPath: result.wordsPath,
         transcribed: result.transcribed,
-        tag: `[Audio: ${result.character} file=${result.label}]`,
+        tag: tags[0],
+        tags,
+        split: Boolean(result.split),
+        willSplit: Boolean(result.willSplit),
+        estimatedChunks: result.estimatedChunks || null,
+        chunks,
+        splitMs: result.splitMs || null,
       });
     } catch (err) {
       const status =
@@ -1821,6 +1833,28 @@ function createApp(options = {}) {
       res.status(status).json({ error: err.message });
     } finally {
       if (parsed && parsed.cleanup) parsed.cleanup();
+    }
+  });
+
+  app.post("/api/projects/:name/split-audio", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const rel = typeof body.rel === "string" ? body.rel.trim() : "";
+    if (!rel) return res.status(400).json({ error: "rel is required (audio/<label>/<file>.wav)" });
+    try {
+      const result = await splitExistingAudio(projectDir, {
+        rel,
+        characterId: body.character || body.characterId,
+        label: body.label,
+      });
+      const tags = (result.chunks || []).map(
+        (chunk) => `[Audio: ${result.character} file=${chunk.label} at_time=${formatChunkAtTime(chunk.offsetSec)}]`
+      );
+      res.json({ ...result, tags });
+    } catch (err) {
+      const status = /not found|required|rel must/i.test(err.message) ? 400 : 500;
+      res.status(status).json({ error: err.message });
     }
   });
 

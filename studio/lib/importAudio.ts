@@ -21,6 +21,11 @@ export type ImportAudioResult = {
   wordsPath?: string;
   transcribed?: boolean;
   tag?: string;
+  tags?: string[];
+  split?: boolean;
+  willSplit?: boolean;
+  estimatedChunks?: number | null;
+  chunks?: { label: string; offsetSec: number; durationSec?: number }[];
   estimatedCost?: string | number | null;
   cost?: string | number | null;
   estimatedCredits?: string | number | null;
@@ -54,6 +59,73 @@ export function buildAudioTag(characterName: string, label: string): string {
   const name = String(characterName || "").trim() || "Name";
   const file = slugifyImportLabel(label) || "take";
   return `[Audio: ${name} file=${file}]`;
+}
+
+export const SPLIT_OVER_SEC = 60;
+
+export function shouldOfferSplit(durationSeconds: number): boolean {
+  return Number(durationSeconds) > SPLIT_OVER_SEC + 0.01;
+}
+
+export function formatAudioAtTime(seconds: number): string {
+  const s = Math.max(0, Number(seconds) || 0);
+  if (s < 0.005) return "0s";
+  const rounded = Math.round(s * 100) / 100;
+  return `${rounded}s`;
+}
+
+export function parseAtTimeToSeconds(raw: string, fps = 24): number {
+  const text = String(raw || "").trim();
+  if (!text) return 0;
+  if (/s$/i.test(text)) return Math.max(0, Number.parseFloat(text) || 0);
+  const n = Number.parseFloat(text);
+  if (!Number.isFinite(n)) return 0;
+  if (text.includes(".")) return Math.max(0, n);
+  return Math.max(0, n / Math.max(1, fps));
+}
+
+export type AudioChunkTag = { label: string; offsetSec: number };
+
+export function buildChunkAudioTags(
+  characterName: string,
+  chunks: AudioChunkTag[],
+  opts?: { view?: string | null; baseOffsetSec?: number }
+): string[] {
+  const name = String(characterName || "").trim() || "Name";
+  const view = opts?.view ? ` view=${opts.view}` : "";
+  const base = opts?.baseOffsetSec || 0;
+  return chunks.map(
+    (chunk) =>
+      `[Audio: ${name} file=${slugifyImportLabel(chunk.label) || "take"}${view} at_time=${formatAudioAtTime(base + chunk.offsetSec)}]`
+  );
+}
+
+export function replaceLineWithAudioChunks(
+  line: string,
+  chunks: AudioChunkTag[],
+  fps = 24
+): string[] | null {
+  if (!chunks.length) return null;
+  const audio = line.match(/^(\s*)\[Audio:\s*(\S+)(.*?)\]\s*$/i);
+  if (audio) {
+    const rest = audio[3] || "";
+    const view = (rest.match(/\bview=(\S+)/i) || [])[1] || null;
+    const at = rest.match(/\b(?:at_time|start)=(\S+)/i);
+    const base = at ? parseAtTimeToSeconds(at[1], fps) : 0;
+    return buildChunkAudioTags(audio[2], chunks, { view, baseOffsetSec: base }).map(
+      (tag) => `${audio[1]}${tag}`
+    );
+  }
+  const dialogue = line.match(/^(\s*)(.+?)(\s*:\s*)(.*)$/);
+  if (!dialogue) return null;
+  const head = dialogue[2];
+  const name = head.replace(/\s+\b(?:at_time|start|view|trim_in|trim_out)=\S+/gi, "").trim();
+  const view = (head.match(/\bview=(\S+)/i) || [])[1] || null;
+  const at = head.match(/\b(?:at_time|start)=(\S+)/i);
+  const base = at ? parseAtTimeToSeconds(at[1], fps) : 0;
+  return buildChunkAudioTags(name || "Name", chunks, { view, baseOffsetSec: base }).map(
+    (tag) => `${dialogue[1]}${tag}`
+  );
 }
 
 export function formatAudioLength(seconds: number): string {

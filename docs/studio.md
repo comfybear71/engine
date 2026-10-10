@@ -10,7 +10,12 @@ No Vercel Blob, no database, no auth. Voices TTS stays on the CLI
 (`node src/cli.js voices`). Pre-recorded mp3/wav lip-sync is **Import
 audio** in Studio (Script tab, or **Import audio** on the Stage transport
 bar / Script drawer) — that calls `POST /api/projects/:name/import-audio` (ElevenLabs
-Speech-to-Text + Rhubarb). You never need the command line for that.
+Speech-to-Text + Rhubarb). A take longer than 60 s is split into 30–60 s
+clips at silences (word timings / Rhubarb rest), each with its own
+`[Audio:]` line, `.rhubarb.json`, and `words.json`. Existing long Audio
+blocks have **Split long audio** on the context menu. Splitting never
+re-runs ElevenLabs — it reuses `words.json`. You never need the command
+line for that.
 
 The **script is the source of truth**. Stage lanes are a view of a temp
 parse. Timeline edits (select, move, trim, split, delete, ripple,
@@ -463,7 +468,8 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/preview-frame?script=` | Parse the selected script to a temp timeline (shared cache), compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a JPEG (quality 85) for scrubbing. `{ "format": "png" }` keeps exact pixels. Frames are cached on disk/memory by script fingerprint + asset mtimes + frame. `Cache-Control: private, max-age=3600`. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. A persistent Python compositor process stays warm so numpy/cv2 are not re-imported per frame. |
 | `POST` | `/api/projects/:name/render?script=` | Parse the selected script to a temp timeline (never `timeline.json`), run the compositor with `--output renders/<script-stem>.mp4`. Same `--script` choice as the CLI. One render at a time. |
 | `POST` | `/api/projects/:name/preview-render?script=` | Same temp parse as Render, but writes a 960×540 H.264 proxy to `renders/<script-stem>_preview.mp4` for Stage playback. Shares the one-at-a-time render lock. |
-| `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). Studio **Import audio** sends multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe`); JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?" }` still works. Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Dry-run returns length + the STT credit note and writes nothing. |
+| `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). Studio **Import audio** sends multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe` / `splitLong`); JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?", "splitLong?" }` still works. Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Takes longer than 60 s are split into 30–60 s clips at silences (default; `splitLong=false` keeps one file). Dry-run returns length + the STT credit note and writes nothing. |
+| `POST` | `/api/projects/:name/split-audio` | Split an existing `audio/<label>/<file>.wav` over 60 s into 30–60 s chunks at word/Rhubarb silences. Reuses `.words.json` / `.rhubarb.json` (no ElevenLabs). Returns `{ chunks, tags }`. Studio rewrites the script line(s). |
 | `GET` | `/api/projects/:name/renders/:file` | Stream a render (`script.mp4`, `script_mcd.mp4`, `script_preview.mp4`, or a leftover `output.mp4`). |
 | `POST` | `/render` | Original CLI-oriented contract: `{ "projectDir": "..." }`. |
 

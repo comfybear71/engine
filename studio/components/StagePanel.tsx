@@ -41,6 +41,7 @@ import {
   shiftPlaybackAudio,
   type ScriptEditMeta,
 } from "@/lib/timelineEdit";
+import { replaceLineWithAudioChunks } from "@/lib/importAudio";
 import {
   DEFAULT_STAGE_LAYOUT,
   clampStageLayout,
@@ -60,6 +61,7 @@ import {
   saveMouthCue,
   saveScript,
   saveStudioSettings,
+  splitProjectAudio,
   syncDialogue,
   mediaUrl,
   previewSegmentUrl,
@@ -71,6 +73,7 @@ import {
   type PlaybackStatus,
   type StageInfo,
   type StageLayer,
+  type LaneBlock,
 } from "@/lib/worker";
 
 export default function StagePanel({
@@ -874,8 +877,29 @@ export default function StagePanel({
     if (!project) return;
     const after = findInsertAfterLine(scriptText, playheadLine ?? selectedLine, sceneId);
     const next = insertLineAfter(scriptText, after, tag);
-    await saveScript(project, next, script);
-    onSaved();
+    onEditScript(next);
+  }
+
+  async function splitLongAudio(block: LaneBlock) {
+    if (!project || !block.rel || block.scriptLine == null) return;
+    try {
+      const result = await splitProjectAudio(project, { rel: block.rel });
+      if (!result.split || !result.chunks.length) {
+        setError(result.reason || "Audio is already short enough");
+        return;
+      }
+      const lines = scriptText.split("\n");
+      const index = block.scriptLine - 1;
+      const tags = replaceLineWithAudioChunks(lines[index] || "", result.chunks, fps);
+      if (!tags) {
+        setError("Could not rewrite the script line for the split");
+        return;
+      }
+      lines.splice(index, 1, ...tags);
+      onEditScript(lines.join("\n"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Split long audio failed");
+    }
   }
 
   if (!project) {
@@ -1157,6 +1181,7 @@ export default function StagePanel({
             loopSelection={loopSelection}
             onPatchCue={(patch) => void patchMouthCue(patch)}
             onClearLipSync={(opts) => void runLipSync({ ...opts, clear: true })}
+            onSplitLongAudio={(block) => void splitLongAudio(block)}
           />
         </div>
       </div>

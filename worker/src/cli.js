@@ -7,7 +7,7 @@
  *   node src/cli.js parse        <projectDir> [--script script.txt] [--out timeline.json]
  *   node src/cli.js lint         <projectDir> [--script script.txt]
  *   node src/cli.js voices       <projectDir> [--dry-run] [--force] [--script script.txt]
- *   node src/cli.js import-audio <projectDir> <file> --character <id> [--name <label>] [--dry-run] [--no-transcribe]
+ *   node src/cli.js import-audio <projectDir> <file> --character <id> [--name <label>] [--dry-run] [--no-transcribe] [--no-split]
  *   node src/cli.js render       <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
  *   node src/cli.js watch        <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
  *
@@ -56,7 +56,7 @@ function printUsageAndExit() {
       "  node src/cli.js parse        <projectDir> [--script script.txt] [--out timeline.json]",
       "  node src/cli.js lint         <projectDir> [--script script.txt]",
       "  node src/cli.js voices       <projectDir> [--dry-run] [--force] [--script script.txt]",
-      "  node src/cli.js import-audio <projectDir> <file> --character <id> [--name <label>] [--dry-run] [--no-transcribe]",
+      "  node src/cli.js import-audio <projectDir> <file> --character <id> [--name <label>] [--dry-run] [--no-transcribe] [--no-split]",
       "  node src/cli.js render       <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
       "  node src/cli.js watch        <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
     ].join("\n")
@@ -174,6 +174,7 @@ async function cmdImportAudio(flags) {
       name: flags.name,
       dryRun: !!flags["dry-run"],
       noTranscribe: !!flags["no-transcribe"],
+      splitLong: flags["no-split"] ? false : undefined,
     });
     if (!result.ok) process.exit(1);
   } catch (err) {

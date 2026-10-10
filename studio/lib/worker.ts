@@ -880,6 +880,12 @@ export type ImportAudioResponse = {
   wordsPath?: string;
   transcribed?: boolean;
   tag?: string;
+  tags?: string[];
+  split?: boolean;
+  willSplit?: boolean;
+  estimatedChunks?: number | null;
+  chunks?: AudioSplitChunk[];
+  splitMs?: number | null;
   estimatedCost?: string | number | null;
   cost?: string | number | null;
   estimatedCredits?: string | number | null;
@@ -971,10 +977,48 @@ export async function generateProjectImage(
   return payload;
 }
 
+export type AudioSplitChunk = {
+  label: string;
+  offsetSec: number;
+  durationSec: number;
+  wavPath?: string;
+  cuesPath?: string;
+  wordsPath?: string;
+};
+
+export type SplitAudioResponse = {
+  ok: boolean;
+  split: boolean;
+  durationSeconds: number;
+  originalRel?: string;
+  originalLabel?: string;
+  character?: string;
+  chunks: AudioSplitChunk[];
+  tags?: string[];
+  elapsedMs?: number;
+  reusedWords?: boolean;
+  reusedCues?: boolean;
+  reason?: string;
+};
+
+export async function splitProjectAudio(
+  name: string,
+  body: { rel: string; character?: string; label?: string }
+): Promise<SplitAudioResponse> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/split-audio`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json().catch(() => ({}))) as SplitAudioResponse & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Split failed (${res.status})`);
+  return payload;
+}
+
 export async function importProjectAudio(
   name: string,
   file: File,
-  options: { character: string; name?: string; dryRun?: boolean; noTranscribe?: boolean }
+  options: { character: string; name?: string; dryRun?: boolean; noTranscribe?: boolean; splitLong?: boolean }
 ): Promise<ImportAudioResponse> {
   const body = new FormData();
   body.append("file", file, file.name);
@@ -982,6 +1026,8 @@ export async function importProjectAudio(
   if (options.name) body.append("name", options.name);
   if (options.dryRun) body.append("dryRun", "true");
   if (options.noTranscribe) body.append("noTranscribe", "true");
+  if (options.splitLong === false) body.append("splitLong", "false");
+  if (options.splitLong === true) body.append("splitLong", "true");
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/import-audio`, {
     method: "POST",
     body,

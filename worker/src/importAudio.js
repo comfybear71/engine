@@ -21,6 +21,7 @@ const { resolveApiKey, VoicesFatalError } = require("./voices/elevenlabs");
 const { runRhubarbOnWav } = require("./voices/rhubarb");
 const { shouldAutoLipSync, stampCuesMeta } = require("./voices/lipSync");
 const { transcribeWav, mergeChunkWords, STT_MODEL_ID } = require("./voices/speechToText");
+const { shouldSplitLongAudio, writeAudioChunks, readCues, planSilenceCuts } = require("./splitLongAudio");
 
 function slugifyLabel(text) {
   return String(text || "")
@@ -330,6 +331,7 @@ async function runImportAudio(projectDir, sourceFile, options = {}) {
   const rel = importedRelPaths(label, character.characterId);
   const dryRun = !!options.dryRun;
   const noTranscribe = !!options.noTranscribe;
+  const splitLong = options.splitLong;
   const probe = options.probeDuration || probeDurationSeconds;
   const durationSeconds = await probe(sourceAbs);
   const note = creditNote(durationSeconds, { noTranscribe });
@@ -350,9 +352,22 @@ async function runImportAudio(projectDir, sourceFile, options = {}) {
     wordsPath: rel.words,
     words: null,
     transcribed: false,
+    split: false,
+    willSplit: false,
+    chunks: [],
   };
 
+  result.willSplit = shouldSplitLongAudio(durationSeconds, splitLong);
+  if (result.willSplit) {
+    result.estimatedChunks = planSilenceCuts(durationSeconds, [], []).length;
+  }
+
   if (dryRun) {
+    if (result.willSplit) {
+      io.log(
+        `This take is longer than 60s — import will split it into about ${result.estimatedChunks} clips (30–60s) at silences.`
+      );
+    }
     io.log("Dry run: no files written.");
     return result;
   }
@@ -424,8 +439,33 @@ async function runImportAudio(projectDir, sourceFile, options = {}) {
     io.log("Lip-sync is set to manual; skip Rhubarb on import.");
   }
 
-  io.log(`Imported ${rel.wav} for ${character.characterId} (${formatAudioLength(durationSeconds)}).`);
+    io.log(`Imported ${rel.wav} for ${character.characterId} (${formatAudioLength(durationSeconds)}).`);
   io.log(`Use in a script: [Audio: ${character.displayName} file=${label}]`);
+
+  const wantSplit = shouldSplitLongAudio(durationSeconds, splitLong);
+  if (wantSplit) {
+    const written = await writeAudioChunks({
+      projectDir: resolvedProjectDir,
+      sourceWavAbs: wavAbs,
+      characterId: character.characterId,
+      baseLabel: label,
+      durationSec: durationSeconds,
+      words: words || [],
+      cues: readCues(cuesAbs),
+      extractWavSlice: options.extractWavSlice,
+    });
+    result.split = written.chunks.length > 1;
+    result.chunks = written.chunks;
+    result.splitMs = written.elapsedMs;
+    if (result.split) {
+      io.log(
+        `Split into ${written.chunks.length} clips (${written.chunks
+          .map((c) => `${c.durationSec.toFixed(1)}s`)
+          .join(", ")}) without re-transcribing.`
+      );
+    }
+  }
+
   return result;
 }
 
@@ -531,6 +571,10 @@ async function readImportAudioRequest(req) {
       name: (fields.name || "").trim() || undefined,
       dryRun: parseBooleanFlag(fields.dryRun || fields["dry-run"]),
       noTranscribe: parseBooleanFlag(fields.noTranscribe || fields["no-transcribe"]),
+      splitLong:
+        fields.splitLong == null && fields.split == null
+          ? undefined
+          : parseBooleanFlag(fields.splitLong != null ? fields.splitLong : fields.split),
       cleanup,
     };
   }
@@ -542,6 +586,7 @@ async function readImportAudioRequest(req) {
     name: body.name ? String(body.name).trim() : undefined,
     dryRun: parseBooleanFlag(body.dryRun || body["dry-run"]),
     noTranscribe: parseBooleanFlag(body.noTranscribe || body["no-transcribe"] || (body.transcribe === false ? true : false)),
+    splitLong: body.splitLong == null && body.split == null ? undefined : parseBooleanFlag(body.splitLong != null ? body.splitLong : body.split),
     cleanup: null,
   };
 }
