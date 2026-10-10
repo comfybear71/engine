@@ -45,6 +45,12 @@ export type ClipboardBlock = {
   movable?: boolean;
 };
 
+export function selectionIsMouthOnly(blocks: ClipboardBlock[], seedIds: Iterable<string>): boolean {
+  const seeds = new Set(seedIds);
+  const selected = blocks.filter((block) => seeds.has(block.id));
+  return selected.length > 0 && selected.every((block) => isMouthBlock(block));
+}
+
 export function relatedEditIds(blocks: ClipboardBlock[], seedIds: Iterable<string>): Set<string> {
   const seeds = new Set(seedIds);
   const ids = idsForMarriedGroup(blocks, seeds);
@@ -83,7 +89,7 @@ export function classifyClipboardLine(
 }
 
 const LANE_FIT: Record<string, readonly string[]> = {
-  speech: ["dialogue", "audio", "face"],
+  speech: ["dialogue", "audio", "face", "mouth"],
   face: ["face"],
   body: ["body"],
   prop: ["props"],

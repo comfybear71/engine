@@ -25,9 +25,10 @@ nothing here is derived from it.
 ```
 
 - **Studio** (`studio/`): a Next.js app (App Router). Home (`/`) lists
-  project cards; `/p/<name>` is Assets, Stage (preview + read-only
-  timeline lanes), Script editor, and Render for that project. It
-  reads and writes files **only** through the local worker -- see
+  Shows and an Experiments bucket of flat projects; `/s/<show>` is
+  episodes, shared assets, and Final cut; `/s/<show>/e/<episode>` and
+  `/p/<name>` are Assets, Stage, Script, and Render. It reads and writes
+  files **only** through the local worker -- see
   [docs/studio.md](docs/studio.md). The script is the source of truth;
   Save/Lint/preview/Render never write `timeline.json`.
 - **Script parser** (`worker/src/parser/`): turns a plain-text

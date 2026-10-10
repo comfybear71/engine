@@ -8,8 +8,11 @@ import {
   lintScript,
   loadCharacters,
   loadScript,
+  loadScriptHistory,
+  restoreScriptHistory,
   saveScript,
   type LintIssue,
+  type ScriptHistorySnapshot,
 } from "@/lib/worker";
 
 function flattenLint(result: { lint: { errors: LintIssue[]; warnings: LintIssue[] } }): LintIssue[] {
@@ -42,6 +45,9 @@ export default function ScriptPanel({
   const [castNames, setCastNames] = useState<string[]>([]);
   const [castName, setCastName] = useState("Name");
   const [importOpen, setImportOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<ScriptHistorySnapshot[]>([]);
+  const [historyStatus, setHistoryStatus] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const gutterRef = useRef<HTMLDivElement | null>(null);
 
@@ -81,6 +87,47 @@ export default function ScriptPanel({
     const el = gutterRef.current?.querySelector(`[data-line="${selectedLine}"]`);
     el?.scrollIntoView({ block: "center" });
   }, [selectedLine, lines.length]);
+
+  const refreshHistory = useCallback(async () => {
+    if (!project || !workerUp) return;
+    try {
+      const next = await loadScriptHistory(project, script);
+      setHistory(next.snapshots);
+    } catch {
+      setHistory([]);
+    }
+  }, [project, script, workerUp]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    void refreshHistory();
+  }, [historyOpen, refreshHistory, scriptEpoch]);
+
+  const onRestoreSnapshot = useCallback(
+    async (id: string) => {
+      if (!project || saving) return;
+      setSaving(true);
+      setHistoryStatus("Restoring…");
+      try {
+        const result = await restoreScriptHistory(project, id, script);
+        if (result.text != null) {
+          setText(result.text);
+          setDirty(false);
+        }
+        setIssues(flattenLint(result));
+        setStatus(result.ok ? "Restored." : "Restored, with lint issues.");
+        setHistoryOpen(false);
+        setHistoryStatus(null);
+        onSaved();
+        void refreshHistory();
+      } catch (err) {
+        setHistoryStatus(err instanceof Error ? err.message : "Restore failed");
+      } finally {
+        setSaving(false);
+      }
+    },
+    [project, script, saving, onSaved, refreshHistory]
+  );
 
   const onSave = useCallback(async () => {
     if (!project || saving) return;
@@ -176,7 +223,51 @@ export default function ScriptPanel({
             {script} {dirty ? "· unsaved" : ""}
             {status ? <span className="ml-2 text-neutral-400">{status}</span> : null}
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                type="button"
+                data-testid="script-history-toggle"
+                onClick={() => setHistoryOpen((open) => !open)}
+                disabled={!workerUp}
+                className="rounded-md border border-studio-border px-3 py-1 text-xs text-neutral-200 hover:text-white disabled:opacity-40"
+              >
+                History
+              </button>
+              {historyOpen ? (
+                <div
+                  className="absolute right-0 z-20 mt-1 w-72 rounded-md border border-studio-border bg-studio-panel p-2 shadow-lg"
+                  data-testid="script-history"
+                >
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-studio-muted">Snapshots</div>
+                  {historyStatus ? <p className="mb-1 text-[11px] text-amber-300">{historyStatus}</p> : null}
+                  {history.length === 0 ? (
+                    <p className="text-[11px] text-studio-muted">No snapshots yet. Saves and timeline edits keep the last 200 / 14 days.</p>
+                  ) : (
+                    <ul className="max-h-56 space-y-1 overflow-auto">
+                      {history.map((item) => (
+                        <li key={item.id} className="flex items-center gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-mono text-[11px] text-neutral-200">{item.createdAt.replace("T", " ").replace("Z", " UTC")}</div>
+                            <div className="truncate text-[10px] text-studio-muted">{item.preview || "empty"}</div>
+                          </div>
+                          <button
+                            type="button"
+                            data-testid="script-history-restore"
+                            data-id={item.id}
+                            onClick={() => void onRestoreSnapshot(item.id)}
+                            disabled={saving}
+                            className="shrink-0 rounded border border-studio-border px-2 py-0.5 text-[10px] text-neutral-200 hover:text-white disabled:opacity-40"
+                          >
+                            Restore
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : null}
+            </div>
             <button
               type="button"
               onClick={() => void onLint()}

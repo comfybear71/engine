@@ -11,10 +11,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { parseProject, resolveGlobalAssetsDir } = require("./index");
+const { parseProject, resolveGlobalAssetsDir, resolveShowAssetsDir } = require("./index");
 
 const PARSE_INPUT = /\.(json|wav)$/i;
-const SKIP_DIR_NAMES = new Set(["node_modules", "venv", ".venv", ".git", "__pycache__", "renders"]);
+const SKIP_DIR_NAMES = new Set(["node_modules", "venv", ".venv", ".git", "__pycache__", "renders", ".history"]);
 
 const cache = new Map();
 const inflight = new Map();
@@ -59,7 +59,7 @@ function collectParseInputFiles(projectDir, scriptName) {
   const libraryPath = path.join(projectDir, "library.json");
   if (fs.existsSync(libraryPath)) files.push(libraryPath);
 
-  const roots = [projectDir, resolveGlobalAssetsDir(projectDir)];
+  const roots = [projectDir, resolveShowAssetsDir(projectDir), resolveGlobalAssetsDir(projectDir)].filter(Boolean);
   for (const root of roots) {
     walkFingerprintFiles(path.join(root, "characters"), files, (p) => PARSE_INPUT.test(p));
     walkFingerprintFiles(path.join(root, "backgrounds"), files, (p) => PARSE_INPUT.test(p));
@@ -87,7 +87,7 @@ function fingerprintParseInputs(projectDir, scriptName) {
 
 function fingerprintAssets(projectDir) {
   const files = [];
-  const roots = [projectDir, resolveGlobalAssetsDir(projectDir)];
+  const roots = [projectDir, resolveShowAssetsDir(projectDir), resolveGlobalAssetsDir(projectDir)].filter(Boolean);
   const pred = (p) => /\.(png|jpe?g|webp)$/i.test(p);
   for (const root of roots) {
     walkFingerprintFiles(path.join(root, "characters"), files, pred);

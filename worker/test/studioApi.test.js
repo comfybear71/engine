@@ -301,7 +301,7 @@ describe("studio worker API", () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
     assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
     assert.ok(laneBody.totalFrames > 0);
-    assert.deepEqual(laneBody.lanes, ["body", "face", "props", "dialogue", "audio", "sfx", "camera"]);
+    assert.deepEqual(laneBody.lanes, ["body", "face", "props", "dialogue", "mouth", "audio", "sfx", "camera"]);
     const byLane = (name) => laneBody.blocks.filter((b) => b.lane === name);
     assert.ok(byLane("camera").some((b) => b.scriptLine === 4 && /zoom/.test(b.label)));
     assert.ok(byLane("dialogue").some((b) => b.scriptLine === 6 && /Hello there friend/.test(b.label)));
@@ -313,6 +313,22 @@ describe("studio worker API", () => {
       assert.equal(typeof block.endFrame, "number");
       assert.ok(block.endFrame >= block.startFrame);
     }
+
+    const history = await fetch(`${ctx.url}/api/projects/project/script-history`);
+    assert.equal(history.status, 200);
+    const historyBody = await history.json();
+    assert.ok(Array.isArray(historyBody.snapshots));
+    assert.ok(historyBody.snapshots.length >= 1);
+    const restore = await fetch(`${ctx.url}/api/projects/project/script-history/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: historyBody.snapshots[0].id }),
+    });
+    assert.equal(restore.status, 200);
+    const restoreBody = await restore.json();
+    assert.equal(restoreBody.saved, true);
+    assert.equal(restoreBody.restored, true);
+    assert.equal(typeof restoreBody.text, "string");
   });
 
   test("Assets filter to script cast plus local, Library records a reference without copying art", async () => {

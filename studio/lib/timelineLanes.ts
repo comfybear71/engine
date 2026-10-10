@@ -17,6 +17,7 @@ export const TIMELINE_LANE_IDS = [
   "face",
   "props",
   "dialogue",
+  "mouth",
   "audio",
   "sfx",
   "camera",

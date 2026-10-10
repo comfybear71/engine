@@ -125,7 +125,7 @@ describe("studio action lane assignment", () => {
         },
       ],
     });
-    assert.deepEqual(built.lanes, ["body", "face", "props", "dialogue", "audio", "sfx", "camera"]);
+    assert.deepEqual(built.lanes, ["body", "face", "props", "dialogue", "mouth", "audio", "sfx", "camera"]);
     const byLane = (id) => built.blocks.filter((b) => b.lane === id);
     assert.ok(byLane("body").some((b) => b.scriptLine === 3));
     assert.ok(byLane("body").some((b) => b.scriptLine === 4));
@@ -189,7 +189,7 @@ describe("studio action lane assignment", () => {
     assert.equal(Math.max(move.row, swing.row), 1);
   });
 
-  test("synced dialogue emits a married Face mouth block; not-synced does not", () => {
+  test("synced dialogue emits one Mouth-lane block; not-synced does not", () => {
     const built = buildLaneBlocks({
       timeline: { fps: 24 },
       sceneLengths: [{ id: "intro", frames: 48 }],
@@ -235,16 +235,108 @@ describe("studio action lane assignment", () => {
       ],
     });
     const face = built.blocks.filter((b) => b.lane === "face");
-    const mouth = face.find((b) => b.role === "mouth");
+    const mouths = built.blocks.filter((b) => b.lane === "mouth");
+    const mouth = mouths[0];
     const pin = face.find((b) => b.scriptLine === 3);
+    assert.equal(mouths.length, 1);
     assert.ok(mouth);
+    assert.equal(mouth.role, "mouth");
     assert.equal(mouth.startFrame, 0);
     assert.equal(mouth.endFrame, 24);
     assert.equal(mouth.marriedId, "line:intro:4");
     assert.equal(mouth.movable, false);
-    assert.equal(face.some((b) => b.role === "mouth" && b.scriptLine === 5), false);
+    assert.equal(mouth.row, 0);
+    assert.equal(face.some((b) => b.role === "mouth"), false);
     assert.ok(pin);
-    assert.equal(pin.role, null);
+    assert.equal(pin.role, "pin");
+    assert.equal(pin.faceOverridesMouth, true);
     assert.notEqual(pin.marriedId, mouth.marriedId);
+  });
+
+  test("imported-audio sentence mouths stay one-per-dialogue and never stack", () => {
+    const sentences = [];
+    for (let i = 0; i < 8; i++) {
+      sentences.push({
+        lane: "dialogue",
+        tag: "audio",
+        sceneId: "intro",
+        startFrame: i * 12,
+        endFrame: i * 12 + 12,
+        label: `Rodney: sentence ${i}`,
+        scriptLine: 6,
+        subject: "rodney",
+        marriedId: "line:intro:6",
+        sync: "synced",
+        cues: [{ shape: "B", start: 0, end: 0.2 }],
+        timing: { kind: "dialogue", attr: "at_time", movable: true },
+      });
+    }
+    sentences.push({
+      lane: "dialogue",
+      tag: "audio",
+      sceneId: "intro",
+      startFrame: 0,
+      endFrame: 12,
+      label: "Rodney: sentence 0",
+      scriptLine: 6,
+      subject: "rodney",
+      marriedId: "line:intro:6",
+      sync: "synced",
+      cues: [{ shape: "B", start: 0, end: 0.2 }],
+      timing: { kind: "dialogue", attr: "at_time", movable: true },
+    });
+    const built = buildLaneBlocks({
+      timeline: { fps: 24 },
+      sceneLengths: [{ id: "intro", frames: 240 }],
+      laneEvents: sentences,
+    });
+    const mouths = built.blocks.filter((b) => b.lane === "mouth").sort((a, b) => a.startFrame - b.startFrame);
+    assert.equal(mouths.length, 8);
+    assert.equal(new Set(mouths.map((b) => b.id)).size, 8);
+    assert.ok(mouths.every((b) => b.row === 0));
+    for (let i = 1; i < mouths.length; i++) {
+      assert.ok(mouths[i].startFrame >= mouths[i - 1].endFrame);
+    }
+  });
+
+  test("face pin without hold caps at 2s and warns when face=yap", () => {
+    const built = buildLaneBlocks({
+      timeline: { fps: 24 },
+      sceneLengths: [{ id: "intro", frames: 240 }],
+      laneEvents: [
+        {
+          lane: "action",
+          tag: "action",
+          keys: ["face"],
+          sceneId: "intro",
+          startFrame: 0,
+          endFrame: 0,
+          label: "Rodney face=yap",
+          scriptLine: 3,
+          subject: "rodney",
+          timing: { kind: "pin", attr: null, movable: true },
+        },
+        {
+          lane: "dialogue",
+          tag: "dialogue",
+          sceneId: "intro",
+          startFrame: 72,
+          endFrame: 96,
+          label: "Rodney: Hi",
+          scriptLine: 4,
+          subject: "rodney",
+          marriedId: "line:intro:4",
+          sync: "not_synced",
+          cues: [],
+        },
+      ],
+    });
+    const pin = built.blocks.find((b) => b.lane === "face");
+    assert.ok(pin);
+    assert.equal(pin.startFrame, 0);
+    assert.equal(pin.endFrame, 48);
+    assert.equal(pin.implicitHold, true);
+    assert.equal(pin.faceOverridesMouth, true);
+    assert.equal(pin.role, "pin");
   });
 });

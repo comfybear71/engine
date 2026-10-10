@@ -11,7 +11,9 @@ import StudioSettings from "@/components/StudioSettings";
 import {
   checkWorker,
   loadScripts,
+  loadShow,
   renderVideoUrl,
+  setActiveShowId,
   startRender,
   type RenderResponse,
 } from "@/lib/worker";
@@ -26,8 +28,15 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-export default function StudioApp({ projectName }: { projectName: string }) {
+export default function StudioApp({
+  projectName,
+  showId,
+}: {
+  projectName: string;
+  showId?: string;
+}) {
   const project = projectName;
+  const [showName, setShowName] = useState<string | null>(showId || null);
   const [tab, setTab] = useState<TabId>("stage");
   const [scripts, setScripts] = useState<string[]>([]);
   const [script, setScript] = useState<string>("script.txt");
@@ -44,6 +53,18 @@ export default function StudioApp({ projectName }: { projectName: string }) {
   const [assetCharacterId, setAssetCharacterId] = useState<string | null>(null);
   const [assetEpoch, setAssetEpoch] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    setActiveShowId(showId || null);
+    return () => setActiveShowId(null);
+  }, [showId]);
+
+  useEffect(() => {
+    if (!showId) return;
+    void loadShow(showId)
+      .then((body) => setShowName(body.show.name))
+      .catch(() => setShowName(showId));
+  }, [showId]);
 
   const refresh = useCallback(async () => {
     const up = await checkWorker();
@@ -95,15 +116,29 @@ export default function StudioApp({ projectName }: { projectName: string }) {
     <div className="flex h-screen flex-col bg-studio-bg">
       <header className="grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-studio-border bg-studio-panel px-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-xs text-studio-muted hover:text-white" data-testid="back-home">
-            ← Projects
+          <Link
+            href={showId ? `/s/${encodeURIComponent(showId)}` : "/"}
+            className="text-xs text-studio-muted hover:text-white"
+            data-testid="back-home"
+          >
+            {showId ? "← Show" : "← Home"}
           </Link>
           <div className="flex items-center gap-2">
             <span className="flex h-6 w-6 items-center justify-center rounded bg-studio-accent text-xs font-bold text-black">▶</span>
             <span className="text-sm font-semibold tracking-wide text-white">Engine Studio</span>
           </div>
           <span className="truncate text-sm text-neutral-200" data-testid="project-name">
-            {project}
+            {showId ? (
+              <>
+                <Link href={`/s/${encodeURIComponent(showId)}`} className="hover:text-studio-accent">
+                  {showName || showId}
+                </Link>
+                <span className="px-1 text-studio-muted">›</span>
+                {project}
+              </>
+            ) : (
+              project
+            )}
           </span>
           <label className="flex items-center gap-2 text-xs text-studio-muted">
             Script

@@ -7,13 +7,7 @@ const path = require("path");
 const { parseScript } = require("./scriptParser");
 const { validateTimelineFile } = require("./validateTimelineFile");
 const { ScriptError } = require("./errors");
-
-const DEFAULT_GLOBAL_ASSETS_DIR_NAME = "_global_assets";
-
-function resolveGlobalAssetsDir(projectDir) {
-  // projects/<name>/ -> projects/_global_assets/
-  return path.join(path.dirname(projectDir), DEFAULT_GLOBAL_ASSETS_DIR_NAME);
-}
+const { resolveShowAssetsDir, resolveGlobalAssetsDir } = require("./assetLibrary");
 
 /**
  * Parses `<projectDir>/<scriptFilename>` into a timeline.json object + a
@@ -101,4 +95,11 @@ async function parseProjectToTemp(projectDir, options = {}) {
   };
 }
 
-module.exports = { parseProject, parseProjectToFiles, parseProjectToTemp, resolveGlobalAssetsDir, ScriptError };
+module.exports = {
+  parseProject,
+  parseProjectToFiles,
+  parseProjectToTemp,
+  resolveGlobalAssetsDir,
+  resolveShowAssetsDir,
+  ScriptError,
+};

@@ -28,7 +28,7 @@ export type Character = {
   id: string;
   display_name: string;
   aliases: string[];
-  source: "global" | "project";
+  source: "global" | "show" | "project";
   z: number;
   style: string;
   asset: string | null;
@@ -42,7 +42,7 @@ export type Character = {
 };
 export type Background = {
   id: string;
-  source: "global" | "project";
+  source: "global" | "show" | "project";
   thumbRel: string | null;
   mtime?: number | null;
 };
@@ -99,7 +99,7 @@ export type RenderResponse = {
 };
 export type LintIssue = { level: "error" | "warning"; line: number | null; message: string };
 export type LintResult = { ok: boolean; lint: { errors: LintIssue[]; warnings: LintIssue[] }; saved?: boolean };
-export type LaneId = "body" | "face" | "props" | "dialogue" | "audio" | "sfx" | "camera";
+export type LaneId = "body" | "face" | "props" | "dialogue" | "mouth" | "audio" | "sfx" | "camera";
 export type LaneTimingKind = "over" | "for" | "pin" | "audio" | "dialogue";
 export type LaneTimingAttr = "over" | "for" | "hold" | "at_time" | "start" | null;
 export type LaneTiming = {
@@ -126,6 +126,8 @@ export type LaneBlock = {
   view?: string | null;
   marriedId?: string | null;
   role?: "mouth" | "pin" | null;
+  implicitHold?: boolean;
+  faceOverridesMouth?: boolean;
   trim?: { inFrames: number; outFrames: number };
   sourceDurationFrames?: number;
   words?: { word: string; start: number; end: number }[];
@@ -143,6 +145,7 @@ export type LanesResponse = {
 };
 export type ProjectSummary = {
   name: string;
+  showId?: string | null;
   scripts: string[];
   thumbRel: string | null;
   thumbMtime?: number | null;
@@ -165,11 +168,30 @@ export type TrashItem = {
   originalName: string;
   deletedAt: string;
   bytes: number;
+  kind?: "project" | "episode" | "show";
+  showId?: string | null;
 };
 export type LibraryResponse = {
   characters: Character[];
   added: string[];
 };
+
+let activeShowId: string | null = null;
+
+export function setActiveShowId(showId: string | null | undefined) {
+  activeShowId = showId && showId.trim() ? showId.trim() : null;
+}
+
+export function getActiveShowId(): string | null {
+  return activeShowId;
+}
+
+function withShow(path: string): string {
+  if (!activeShowId) return path;
+  if (/[?&]show=/.test(path)) return path;
+  const join = path.includes("?") ? "&" : "?";
+  return `${path}${join}show=${encodeURIComponent(activeShowId)}`;
+}
 
 function withScript(path: string, script?: string | null): string {
   if (!script) return path;
@@ -178,8 +200,9 @@ function withScript(path: string, script?: string | null): string {
 }
 
 async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
+  const next = path.startsWith("/api/projects/") ? withShow(path) : path;
   try {
-    return await fetch(`${WORKER_URL}${path}`, init);
+    return await fetch(`${WORKER_URL}${next}`, init);
   } catch (err) {
     if (init?.signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
       if (err instanceof Error && err.name === "AbortError") throw err;
@@ -420,18 +443,22 @@ export function assetUrl(
   const params = new URLSearchParams({ rel });
   if (opts?.thumb) params.set("thumb", "1");
   if (opts?.v != null && opts.v !== "") params.set("v", String(opts.v));
-  return `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/asset?${params.toString()}`;
+  return `${WORKER_URL}${withShow(`/api/projects/${encodeURIComponent(project)}/asset?${params.toString()}`)}`;
 }
 
-export async function loadProjectContents(name: string): Promise<ProjectContents> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/contents`);
+function showQuery(showId?: string | null): string {
+  return showId ? `?show=${encodeURIComponent(showId)}` : "";
+}
+
+export async function loadProjectContents(name: string, showId?: string | null): Promise<ProjectContents> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/contents${showQuery(showId)}`);
   if (!res.ok) throw new Error(await readError(res));
   const body = (await res.json()) as { contents: ProjectContents };
   return body.contents;
 }
 
-export async function trashProject(name: string, confirmName: string): Promise<void> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/trash`, {
+export async function trashProject(name: string, confirmName: string, showId?: string | null): Promise<void> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/trash${showQuery(showId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirmName }),
@@ -439,8 +466,8 @@ export async function trashProject(name: string, confirmName: string): Promise<v
   if (!res.ok) throw new Error(await readError(res));
 }
 
-export async function renameProject(name: string, newName: string): Promise<ProjectSummary> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/rename`, {
+export async function renameProject(name: string, newName: string, showId?: string | null): Promise<ProjectSummary> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/rename${showQuery(showId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: newName }),
@@ -451,8 +478,8 @@ export async function renameProject(name: string, newName: string): Promise<Proj
   return body.project;
 }
 
-export async function duplicateProject(name: string): Promise<ProjectSummary> {
-  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/duplicate`, {
+export async function duplicateProject(name: string, showId?: string | null): Promise<ProjectSummary> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/duplicate${showQuery(showId)}`, {
     method: "POST",
   });
   const body = (await res.json().catch(() => ({}))) as { project?: ProjectSummary; error?: string };
@@ -461,8 +488,10 @@ export async function duplicateProject(name: string): Promise<ProjectSummary> {
   return body.project;
 }
 
-export function downloadProjectUrl(name: string): string {
-  return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/download`;
+export function downloadProjectUrl(name: string, showId?: string | null): string {
+  const show = showId || activeShowId;
+  const path = `/api/projects/${encodeURIComponent(name)}/download`;
+  return `${WORKER_URL}${show ? `${path}?show=${encodeURIComponent(show)}` : path}`;
 }
 
 export async function listTrash(): Promise<TrashItem[]> {
@@ -472,12 +501,16 @@ export async function listTrash(): Promise<TrashItem[]> {
   return body.trash;
 }
 
-export async function restoreTrash(id: string): Promise<ProjectSummary> {
+export async function restoreTrash(id: string): Promise<{ project?: ProjectSummary; show?: ShowSummary }> {
   const res = await workerFetch(`/api/trash/${encodeURIComponent(id)}/restore`, { method: "POST" });
-  const body = (await res.json().catch(() => ({}))) as { project?: ProjectSummary; error?: string };
+  const body = (await res.json().catch(() => ({}))) as {
+    project?: ProjectSummary;
+    show?: ShowSummary;
+    error?: string;
+  };
   if (!res.ok) throw new Error(body.error || `Restore failed (${res.status})`);
-  if (!body.project) throw new Error("Restore failed");
-  return body.project;
+  if (!body.project && !body.show) throw new Error("Restore failed");
+  return body;
 }
 
 export async function emptyTrash(): Promise<void> {
@@ -518,6 +551,42 @@ export async function loadScript(name: string, script?: string | null): Promise<
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, script));
   if (!res.ok) throw new Error(await readError(res));
   return res.text();
+}
+
+export type ScriptHistorySnapshot = {
+  id: string;
+  createdAt: string;
+  bytes: number;
+  preview: string;
+};
+
+export async function loadScriptHistory(
+  name: string,
+  script?: string | null
+): Promise<{ script: string; snapshots: ScriptHistorySnapshot[] }> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script-history`, script));
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ script: string; snapshots: ScriptHistorySnapshot[] }>;
+}
+
+export async function restoreScriptHistory(
+  name: string,
+  id: string,
+  script?: string | null
+): Promise<LintResult & { text?: string; restored?: boolean; id?: string }> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script-history/restore`, script), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  const body = (await res.json().catch(() => ({}))) as LintResult & {
+    error?: string;
+    text?: string;
+    restored?: boolean;
+    id?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `Restore failed (${res.status})`);
+  return body;
 }
 
 export async function saveScript(name: string, text: string, script?: string | null): Promise<LintResult> {
@@ -577,7 +646,7 @@ export async function saveStudioSettings(name: string, patch: Partial<StudioSett
 
 export async function syncDialogue(
   name: string,
-  body: { all?: boolean; scriptLine?: number; scriptLines?: number[]; force?: boolean },
+  body: { all?: boolean; scriptLine?: number; scriptLines?: number[]; force?: boolean; clear?: boolean },
   script?: string | null
 ): Promise<{ ok: boolean; lipSync: "auto" | "manual"; results: LipSyncResult[] }> {
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lipsync`, script), {
@@ -646,11 +715,11 @@ export function renderVideoUrl(
 ): string {
   const output = file || renderOutputFile(script);
   const qs = bust ? `?t=${bust}` : "";
-  return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/renders/${encodeURIComponent(output)}${qs}`;
+  return `${WORKER_URL}${withShow(`/api/projects/${encodeURIComponent(name)}/renders/${encodeURIComponent(output)}${qs}`)}`;
 }
 
 export function mediaUrl(name: string, rel: string): string {
-  return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/media?rel=${encodeURIComponent(rel)}`;
+  return `${WORKER_URL}${withShow(`/api/projects/${encodeURIComponent(name)}/media?rel=${encodeURIComponent(rel)}`)}`;
 }
 
 export type PlaybackVideoInfo = { file: string; upToDate: boolean };
@@ -796,7 +865,7 @@ export async function generateProjectImage(
   const res = await workerFetch("/api/generate-image", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, showId: activeShowId || undefined }),
   });
   const payload = (await res.json().catch(() => ({}))) as GenerateImageResponse & { error?: string };
   if (!res.ok) throw new Error(payload.error || `Generate failed (${res.status})`);
@@ -821,4 +890,274 @@ export async function importProjectAudio(
   const payload = (await res.json().catch(() => ({}))) as ImportAudioResponse & { error?: string };
   if (!res.ok) throw new Error(payload.error || `Import failed (${res.status})`);
   return payload;
+}
+
+export type ShowSummary = {
+  id: string;
+  name: string;
+  description: string;
+  thumbnail: string | null;
+  thumbRel: string | null;
+  thumbMtime?: number | null;
+  episodeCount: number;
+  durationSeconds: number | null;
+  lastRenderAt: string | null;
+  episodes?: ProjectSummary[];
+};
+
+export type FinalCutItem = {
+  id: string;
+  kind: "episode" | "scene";
+  episodeId: string;
+  script?: string;
+  sceneId?: string | null;
+  trimIn?: number | null;
+  trimOut?: number | null;
+};
+
+export type FinalCut = {
+  name: string;
+  gapSeconds: number;
+  fadeSeconds: number;
+  items: FinalCutItem[];
+};
+
+export type FinalCutPlanItem = {
+  id: string;
+  kind: string;
+  episodeId: string;
+  script: string;
+  sceneId?: string | null;
+  label: string;
+  stale: boolean;
+  missing: boolean;
+  willRender: boolean;
+  durationSeconds: number | null;
+  trimInSec: number;
+  trimOutSec: number | null;
+};
+
+export type FinalCutPlan = {
+  cut: FinalCut;
+  items: FinalCutPlanItem[];
+  staleCount: number;
+  missingCount: number;
+  estimatedSeconds: number;
+  note: string;
+};
+
+export type ShowAssets = {
+  characters: Character[];
+  backgrounds: Background[];
+  props: PropAsset[];
+};
+
+export function showAssetUrl(
+  showId: string,
+  rel: string | null | undefined,
+  opts?: { thumb?: boolean; v?: number | string | null }
+): string | null {
+  if (!rel) return null;
+  const params = new URLSearchParams({ rel });
+  if (opts?.thumb) params.set("thumb", "1");
+  if (opts?.v != null && opts.v !== "") params.set("v", String(opts.v));
+  return `${WORKER_URL}/api/shows/${encodeURIComponent(showId)}/asset?${params.toString()}`;
+}
+
+export function downloadShowUrl(showId: string): string {
+  return `${WORKER_URL}/api/shows/${encodeURIComponent(showId)}/download`;
+}
+
+export function finalCutVideoUrl(showId: string, file: string, bust?: number): string {
+  const qs = bust ? `?t=${bust}` : "";
+  return `${WORKER_URL}/api/shows/${encodeURIComponent(showId)}/final/${encodeURIComponent(file)}${qs}`;
+}
+
+export async function listShows(): Promise<ShowSummary[]> {
+  const res = await workerFetch("/api/shows");
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { shows: ShowSummary[] };
+  return body.shows;
+}
+
+export async function createShow(name: string, description = ""): Promise<ShowSummary> {
+  const res = await workerFetch("/api/shows", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, description }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { show?: ShowSummary; error?: string };
+  if (!res.ok) throw new Error(body.error || `Create show failed (${res.status})`);
+  if (!body.show) throw new Error("Create show failed");
+  return body.show;
+}
+
+export async function loadShow(showId: string): Promise<{
+  show: ShowSummary;
+  assets: ShowAssets;
+  finalCut: FinalCut;
+  library: { added: string[] };
+}> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}`);
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{
+    show: ShowSummary;
+    assets: ShowAssets;
+    finalCut: FinalCut;
+    library: { added: string[] };
+  }>;
+}
+
+export async function loadShowContents(showId: string): Promise<ProjectContents> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/contents`);
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { contents: ProjectContents };
+  return body.contents;
+}
+
+export async function trashShow(showId: string, confirmName: string): Promise<void> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/trash`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmName }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+}
+
+export async function renameShow(
+  showId: string,
+  next: { id?: string; displayName?: string; name?: string }
+): Promise<ShowSummary> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(next),
+  });
+  const body = (await res.json().catch(() => ({}))) as { show?: ShowSummary; error?: string };
+  if (!res.ok) throw new Error(body.error || `Rename failed (${res.status})`);
+  if (!body.show) throw new Error("Rename failed");
+  return body.show;
+}
+
+export async function duplicateShow(showId: string): Promise<ShowSummary> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/duplicate`, { method: "POST" });
+  const body = (await res.json().catch(() => ({}))) as { show?: ShowSummary; error?: string };
+  if (!res.ok) throw new Error(body.error || `Duplicate failed (${res.status})`);
+  if (!body.show) throw new Error("Duplicate failed");
+  return body.show;
+}
+
+export async function createEpisode(
+  showId: string,
+  name: string,
+  duplicateFrom?: string
+): Promise<ProjectSummary> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/episodes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(duplicateFrom ? { name, duplicateFrom } : { name }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { episode?: ProjectSummary; error?: string };
+  if (!res.ok) throw new Error(body.error || `Create episode failed (${res.status})`);
+  if (!body.episode) throw new Error("Create episode failed");
+  return body.episode;
+}
+
+export async function moveProjectToShow(
+  projectName: string,
+  showId: string,
+  options?: { create?: boolean; displayName?: string }
+): Promise<{ show: ShowSummary; episode: ProjectSummary }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(projectName)}/move-to-show`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ showId, create: options?.create, displayName: options?.displayName }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    show?: ShowSummary;
+    episode?: ProjectSummary;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `Move failed (${res.status})`);
+  if (!body.show || !body.episode) throw new Error("Move failed");
+  return { show: body.show, episode: body.episode };
+}
+
+export async function moveEpisodeToExperiments(showId: string, episodeId: string): Promise<ProjectSummary> {
+  const res = await workerFetch(
+    `/api/shows/${encodeURIComponent(showId)}/episodes/${encodeURIComponent(episodeId)}/move-to-experiments`,
+    { method: "POST" }
+  );
+  const body = (await res.json().catch(() => ({}))) as { project?: ProjectSummary; error?: string };
+  if (!res.ok) throw new Error(body.error || `Move failed (${res.status})`);
+  if (!body.project) throw new Error("Move failed");
+  return body.project;
+}
+
+export async function loadShowLibrary(showId: string): Promise<LibraryResponse> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/library`);
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<LibraryResponse>;
+}
+
+export async function addShowLibraryCharacter(showId: string, characterId: string): Promise<void> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/library`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ characterId }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+}
+
+export async function saveFinalCut(showId: string, cut: FinalCut): Promise<FinalCut> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/final-cut`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cut }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { cut?: FinalCut; error?: string };
+  if (!res.ok) throw new Error(body.error || `Save failed (${res.status})`);
+  if (!body.cut) throw new Error("Save failed");
+  return body.cut;
+}
+
+export async function planFinalCut(showId: string): Promise<FinalCutPlan> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/final-cut/plan`);
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<FinalCutPlan>;
+}
+
+export async function renderFinalCut(
+  showId: string,
+  name?: string
+): Promise<{ ok: boolean; file: string; url: string; note?: string; plan?: FinalCutPlan }> {
+  const res = await workerFetch(`/api/shows/${encodeURIComponent(showId)}/final-cut/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(name ? { name } : {}),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    file?: string;
+    url?: string;
+    note?: string;
+    plan?: FinalCutPlan;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `Final render failed (${res.status})`);
+  return {
+    ok: body.ok !== false,
+    file: body.file || "final.mp4",
+    url: body.url || "",
+    note: body.note,
+    plan: body.plan,
+  };
+}
+
+export async function loadEpisodeStage(showId: string, episodeId: string, script?: string | null): Promise<StageInfo> {
+  const res = await workerFetch(
+    withScript(`/api/projects/${encodeURIComponent(episodeId)}/stage?show=${encodeURIComponent(showId)}`, script)
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<StageInfo>;
 }
