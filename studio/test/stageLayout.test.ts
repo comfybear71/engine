@@ -10,11 +10,19 @@ import {
 } from "../lib/stageLayout.ts";
 import { clampFrameIndex, formatTimecode, frameFromTrackX, scriptLineAtFrame } from "../lib/playhead.ts";
 import {
+  DEFAULT_LANE_SCALE,
   LANE_EMPTY_PX,
   LANE_ROW_PX,
+  MAX_LANE_SCALE,
+  MIN_LANE_SCALE,
+  clampLaneScale,
   defaultTimelinePanelHeight,
   laneHeightPx,
   laneRowCount,
+  laneScaleToSlider,
+  occupiedLaneRowPx,
+  parseStoredLaneScale,
+  sliderToLaneScale,
 } from "../lib/timelineLanes.ts";
 
 describe("stage layout", () => {
@@ -70,6 +78,26 @@ describe("timeline lane heights", () => {
     assert.equal(laneRowCount([{ row: 0 }, { row: 2 }]), 3);
     assert.equal(laneHeightPx([{ row: 0 }]), LANE_ROW_PX);
     assert.equal(laneHeightPx([{ row: 0 }, { row: 2 }]), 3 * LANE_ROW_PX);
+  });
+
+  test("lane scale clamps and grows occupied rows", () => {
+    assert.equal(clampLaneScale(0), MIN_LANE_SCALE);
+    assert.equal(clampLaneScale(9), MAX_LANE_SCALE);
+    assert.equal(clampLaneScale(DEFAULT_LANE_SCALE), DEFAULT_LANE_SCALE);
+    assert.equal(occupiedLaneRowPx(1), LANE_ROW_PX);
+    assert.ok(occupiedLaneRowPx(MIN_LANE_SCALE) < LANE_ROW_PX);
+    assert.ok(occupiedLaneRowPx(MAX_LANE_SCALE) > LANE_ROW_PX);
+    assert.equal(laneHeightPx([{ row: 0 }], 1.7), occupiedLaneRowPx(1.7));
+    assert.ok(laneHeightPx([], MIN_LANE_SCALE) >= 16);
+    const mid = sliderToLaneScale(0.5);
+    assert.ok(Math.abs(laneScaleToSlider(mid) - 0.5) < 0.02);
+  });
+
+  test("parseStoredLaneScale ignores junk and reads { scale }", () => {
+    assert.equal(parseStoredLaneScale(null), DEFAULT_LANE_SCALE);
+    assert.equal(parseStoredLaneScale("nope"), DEFAULT_LANE_SCALE);
+    assert.equal(parseStoredLaneScale(JSON.stringify({ scale: 1.4 })), 1.4);
+    assert.equal(parseStoredLaneScale("1.2"), 1.2);
   });
 });
 

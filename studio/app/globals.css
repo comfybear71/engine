@@ -126,3 +126,9 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   border: 2px solid #fff;
   cursor: pointer;
 }
+
+.studio-timeline-hscroll {
+  height: 14px;
+  overflow-x: scroll;
+  overflow-y: hidden;
+}
