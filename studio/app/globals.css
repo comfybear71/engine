@@ -75,6 +75,10 @@ input[type="range"].studio-scrubber::-moz-range-thumb {
   transform: translateX(-50%);
 }
 
+.studio-playhead-line--lanes {
+  top: 0;
+}
+
 .studio-field {
   width: 100%;
   border-radius: 0.375rem;

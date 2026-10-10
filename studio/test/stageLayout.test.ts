@@ -3,11 +3,19 @@ import { describe, test } from "node:test";
 import {
   DEFAULT_IMAGINE_HEIGHT,
   DEFAULT_STAGE_LAYOUT,
+  STAGE_LAYOUT_LIMITS,
   clampImagineHeight,
   clampStageLayout,
   parseStoredLayout,
 } from "../lib/stageLayout.ts";
 import { clampFrameIndex, formatTimecode, frameFromTrackX, scriptLineAtFrame } from "../lib/playhead.ts";
+import {
+  LANE_EMPTY_PX,
+  LANE_ROW_PX,
+  defaultTimelinePanelHeight,
+  laneHeightPx,
+  laneRowCount,
+} from "../lib/timelineLanes.ts";
 
 describe("stage layout", () => {
   test("clamps sizes and fills defaults", () => {
@@ -31,6 +39,37 @@ describe("stage layout", () => {
     assert.equal(clampImagineHeight(80), 160);
     assert.equal(clampImagineHeight(900), 560);
     assert.equal(clampImagineHeight(DEFAULT_IMAGINE_HEIGHT), DEFAULT_IMAGINE_HEIGHT);
+  });
+
+  test("default timeline height fits seven single-row lanes", () => {
+    assert.equal(DEFAULT_STAGE_LAYOUT.timelineHeight, defaultTimelinePanelHeight());
+    assert.ok(DEFAULT_STAGE_LAYOUT.timelineHeight >= 7 * LANE_ROW_PX + 60);
+    assert.equal(STAGE_LAYOUT_LIMITS.timelineHeight.min, 180);
+    assert.equal(STAGE_LAYOUT_LIMITS.timelineHeight.max, 560);
+  });
+
+  test("legacy short timeline heights migrate to the new default", () => {
+    const fromOldDefault = parseStoredLayout(JSON.stringify({ leftWidth: 300, timelineHeight: 220 }));
+    assert.equal(fromOldDefault.leftWidth, 300);
+    assert.equal(fromOldDefault.timelineHeight, DEFAULT_STAGE_LAYOUT.timelineHeight);
+    assert.equal(
+      parseStoredLayout(JSON.stringify({ timelineHeight: 176 })).timelineHeight,
+      DEFAULT_STAGE_LAYOUT.timelineHeight
+    );
+    const kept = parseStoredLayout(JSON.stringify({ timelineHeight: 360 }));
+    assert.equal(kept.timelineHeight, 360);
+  });
+});
+
+describe("timeline lane heights", () => {
+  test("empty lanes stay thin; stacked rows grow by 30px", () => {
+    assert.equal(laneRowCount([]), 0);
+    assert.equal(laneHeightPx([]), LANE_EMPTY_PX);
+    assert.ok(LANE_EMPTY_PX >= 20);
+    assert.ok(LANE_EMPTY_PX < LANE_ROW_PX);
+    assert.equal(laneRowCount([{ row: 0 }, { row: 2 }]), 3);
+    assert.equal(laneHeightPx([{ row: 0 }]), LANE_ROW_PX);
+    assert.equal(laneHeightPx([{ row: 0 }, { row: 2 }]), 3 * LANE_ROW_PX);
   });
 });
 

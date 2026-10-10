@@ -2,6 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  LANE_CHIP_PX,
+  LANE_ROW_PX,
+  LANE_SCROLL_GUTTER_PX,
+  LABEL_WIDTH,
+  RULER_PX,
+  laneHeightPx,
+  laneRowCount,
+} from "@/lib/timelineLanes";
+import {
   MAX_ZOOM,
   MIN_ZOOM,
   ZOOM_STEP,
@@ -27,16 +36,6 @@ const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
   { id: "camera", label: "Camera", bar: "bg-violet-500/80", text: "text-violet-50" },
 ];
 
-const LABEL_WIDTH = 80;
-const LANE_ROW_PX = 28;
-const LANE_EMPTY_PX = 12;
-
-function laneHeight(blocks: LaneBlock[]): number {
-  if (blocks.length === 0) return LANE_EMPTY_PX;
-  const rows = Math.max(1, ...blocks.map((block) => (block.row ?? 0) + 1));
-  return rows * LANE_ROW_PX;
-}
-
 export default function TimelineLanes({
   project,
   lanes,
@@ -61,10 +60,19 @@ export default function TimelineLanes({
   const [viewWidth, setViewWidth] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const labelScrollRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<HTMLDivElement | null>(null);
   const zoomRef = useRef(zoom);
   const followLockRef = useRef(false);
   zoomRef.current = zoom;
+
+  const laneBlocks = useMemo(() => {
+    const blocks = lanes?.blocks || [];
+    return LANE_META.map((lane) => {
+      const list = blocks.filter((b) => b.lane === lane.id);
+      return { ...lane, blocks: list, height: laneHeightPx(list), rows: laneRowCount(list) };
+    });
+  }, [lanes]);
 
   useEffect(() => {
     if (!project) {
@@ -103,6 +111,11 @@ export default function TimelineLanes({
       }),
     [total, fps, ppf, scrollLeft, viewWidth, trackW]
   );
+
+  const syncLabelScroll = useCallback((top: number) => {
+    const labels = labelScrollRef.current;
+    if (labels && labels.scrollTop !== top) labels.scrollTop = top;
+  }, []);
 
   const applyScroll = useCallback((next: number) => {
     const el = scrollRef.current;
@@ -213,9 +226,14 @@ export default function TimelineLanes({
     requestAnimationFrame(() => applyScroll(0));
   }
 
+  function onLaneScroll(event: React.UIEvent<HTMLDivElement>) {
+    setScrollLeft(event.currentTarget.scrollLeft);
+    syncLabelScroll(event.currentTarget.scrollTop);
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-studio-panel" data-testid="timeline-lanes">
-      <div className="flex shrink-0 items-center gap-2 px-3 py-1 text-[11px] text-studio-muted">
+      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-[11px] text-studio-muted">
         <span className="uppercase tracking-[0.14em]">Timeline</span>
         <div className="flex items-center gap-1" data-testid="timeline-zoom-controls">
           <button
@@ -272,31 +290,35 @@ export default function TimelineLanes({
         </div>
         <span className="ml-auto hidden uppercase tracking-[0.14em] sm:inline">Read-only · script is the source of truth</span>
       </div>
-      <div className="flex min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <div className="shrink-0" style={{ width: LABEL_WIDTH }}>
-          <div className="h-5" />
-          {LANE_META.map((lane) => {
-            const blocks = (lanes?.blocks || []).filter((b) => b.lane === lane.id);
-            const height = laneHeight(blocks);
-            return (
+      <div className="flex min-h-0 flex-1">
+        <div className="flex shrink-0 flex-col" style={{ width: LABEL_WIDTH }} data-testid="timeline-label-column">
+          <div className="shrink-0" style={{ height: RULER_PX }} />
+          <div
+            ref={labelScrollRef}
+            className="min-h-0 flex-1 overflow-hidden"
+            data-testid="timeline-labels"
+          >
+            {laneBlocks.map((lane) => (
               <div
                 key={lane.id}
-                className="truncate pt-0.5 text-[11px] font-medium uppercase tracking-wide text-studio-muted"
-                style={{ height }}
+                className="flex items-center overflow-hidden whitespace-nowrap px-1.5 text-[10px] font-medium uppercase leading-none tracking-wide text-studio-muted"
+                style={{ height: lane.height }}
                 data-testid={`timeline-label-${lane.id}`}
-                data-empty={blocks.length === 0 ? "true" : "false"}
+                data-empty={lane.blocks.length === 0 ? "true" : "false"}
+                title={lane.label}
               >
                 {lane.label}
               </div>
-            );
-          })}
+            ))}
+            <div aria-hidden="true" style={{ height: LANE_SCROLL_GUTTER_PX }} />
+          </div>
         </div>
-        <div className="relative min-w-0 flex-1" ref={viewRef}>
+        <div className="relative min-h-0 min-w-0 flex-1" ref={viewRef}>
           <div
             ref={scrollRef}
             data-testid="timeline-scroll"
-            className="overflow-x-auto"
-            onScroll={(event) => setScrollLeft(event.currentTarget.scrollLeft)}
+            className="h-full overflow-auto"
+            onScroll={onLaneScroll}
           >
             <div
               className="relative"
@@ -309,7 +331,8 @@ export default function TimelineLanes({
             >
               <div
                 data-testid="timeline-ruler"
-                className="relative h-5 cursor-ew-resize border-b border-neutral-800"
+                className="sticky top-0 z-20 cursor-ew-resize border-b border-neutral-800 bg-studio-panel"
+                style={{ height: RULER_PX }}
                 onPointerDown={onRulerPointerDown}
                 onPointerMove={onRulerPointerMove}
                 onPointerUp={onRulerPointerUp}
@@ -329,42 +352,44 @@ export default function TimelineLanes({
                     ) : null}
                   </div>
                 ))}
+                <div
+                  className="pointer-events-none absolute top-0 z-10"
+                  style={{ left: playheadX }}
+                >
+                  <div className="studio-playhead-handle pointer-events-none" />
+                </div>
               </div>
               <div data-testid="timeline-scrubber" className="relative">
-                {LANE_META.map((lane) => {
-                  const blocks = (lanes?.blocks || []).filter((b) => b.lane === lane.id);
-                  const height = laneHeight(blocks);
-                  return (
-                    <div
-                      key={lane.id}
-                      className="relative"
-                      style={{ height }}
-                      data-testid={`timeline-lane-${lane.id}`}
-                      data-rows={blocks.length === 0 ? 0 : Math.max(1, ...blocks.map((b) => (b.row ?? 0) + 1))}
-                    >
-                      <div className="absolute inset-x-0 inset-y-0.5 rounded-sm bg-black/40" />
-                      {blocks.map((block) => (
-                        <LaneChip
-                          key={block.id}
-                          block={block}
-                          ppf={ppf}
-                          selected={selectedLine != null && block.scriptLine === selectedLine}
-                          bar={lane.bar}
-                          text={lane.text}
-                          onSeek={onSeek}
-                        />
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
-              <div
-                className="pointer-events-none absolute bottom-0 top-0 z-10"
-                style={{ left: playheadX }}
-                data-testid="timeline-playhead"
-              >
-                <div className="studio-playhead-handle pointer-events-none" />
-                <div className="studio-playhead-line" />
+                {laneBlocks.map((lane) => (
+                  <div
+                    key={lane.id}
+                    className="relative"
+                    style={{ height: lane.height }}
+                    data-testid={`timeline-lane-${lane.id}`}
+                    data-rows={lane.rows}
+                  >
+                    <div className="absolute inset-x-0 inset-y-0.5 rounded-sm bg-black/40" />
+                    {lane.blocks.map((block) => (
+                      <LaneChip
+                        key={block.id}
+                        block={block}
+                        ppf={ppf}
+                        selected={selectedLine != null && block.scriptLine === selectedLine}
+                        bar={lane.bar}
+                        text={lane.text}
+                        onSeek={onSeek}
+                      />
+                    ))}
+                  </div>
+                ))}
+                <div
+                  className="pointer-events-none absolute bottom-0 top-0 z-10"
+                  style={{ left: playheadX }}
+                  data-testid="timeline-playhead"
+                >
+                  <div className="studio-playhead-line studio-playhead-line--lanes" />
+                </div>
+                <div aria-hidden="true" style={{ height: LANE_SCROLL_GUTTER_PX }} />
               </div>
             </div>
           </div>
@@ -390,7 +415,7 @@ function LaneChip({
   onSeek: (frame: number, scriptLine: number | null) => void;
 }) {
   const left = block.startFrame * ppf;
-  const width = Math.max((Math.max(block.endFrame - block.startFrame, 1)) * ppf, 2);
+  const width = Math.max(Math.max(block.endFrame - block.startFrame, 1) * ppf, 2);
   const top = (block.row ?? 0) * LANE_ROW_PX + 2;
   return (
     <button
@@ -399,10 +424,10 @@ function LaneChip({
         block.scriptLine ? ` · line ${block.scriptLine}` : ""
       }`}
       onClick={() => onSeek(block.startFrame, block.scriptLine)}
-      className={`absolute z-[1] h-6 overflow-hidden rounded-sm px-1.5 text-left text-[10px] leading-6 ${bar} ${text} ${
+      className={`absolute z-[1] overflow-hidden rounded-sm px-1.5 text-left text-[10px] leading-[26px] ${bar} ${text} ${
         selected ? "ring-2 ring-white" : ""
       }`}
-      style={{ left, width, top }}
+      style={{ left, width, top, height: LANE_CHIP_PX }}
       data-row={block.row ?? 0}
     >
       <span className="block truncate">{block.label}</span>

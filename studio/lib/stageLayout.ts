@@ -1,3 +1,5 @@
+import { LEGACY_TIMELINE_HEIGHTS, defaultTimelinePanelHeight } from "./timelineLanes";
+
 export const STAGE_LAYOUT_KEY = "engine.studio.stageLayout.v1";
 
 export type StageLayout = {
@@ -9,13 +11,13 @@ export type StageLayout = {
 export const DEFAULT_STAGE_LAYOUT: StageLayout = {
   leftWidth: 280,
   rightWidth: 320,
-  timelineHeight: 220,
+  timelineHeight: defaultTimelinePanelHeight(),
 };
 
 export const STAGE_LAYOUT_LIMITS = {
   leftWidth: { min: 200, max: 520 },
   rightWidth: { min: 240, max: 480 },
-  timelineHeight: { min: 140, max: 480 },
+  timelineHeight: { min: 180, max: 560 },
 } as const;
 
 function clamp(value: number, min: number, max: number): number {
@@ -47,7 +49,14 @@ export function clampStageLayout(partial: Partial<StageLayout> | null | undefine
 export function parseStoredLayout(raw: string | null | undefined): StageLayout {
   if (!raw) return { ...DEFAULT_STAGE_LAYOUT };
   try {
-    return clampStageLayout(JSON.parse(raw) as Partial<StageLayout>);
+    const parsed = JSON.parse(raw) as Partial<StageLayout>;
+    if (
+      typeof parsed.timelineHeight === "number" &&
+      (LEGACY_TIMELINE_HEIGHTS as readonly number[]).includes(parsed.timelineHeight)
+    ) {
+      parsed.timelineHeight = DEFAULT_STAGE_LAYOUT.timelineHeight;
+    }
+    return clampStageLayout(parsed);
   } catch {
     return { ...DEFAULT_STAGE_LAYOUT };
   }
