@@ -2,12 +2,12 @@
 
 /**
  * Resolves assets against the shared library (`projects/_global_assets/`)
- * with per-file, per-project overrides, per the brief: "Episode projects
- * can override any global asset with the same relative path in their own
- * folder." Every lookup here (character.json, body.png, a single drawing
- * inside a slot folder, a location's bg.png/staging.json, ...) is resolved
- * independently, so a project can override just one file (e.g. a single
- * reaction drawing) without forking the whole character or location.
+ * with optional show-level files and per-file, per-project/episode overrides.
+ * Lookup order is episode (project folder) -> show -> global. Every lookup
+ * (character.json, body.png, a single drawing inside a slot folder, a
+ * location's bg.png/staging.json, ...) is resolved independently, so a
+ * project or show can override just one file without forking the whole
+ * character or location.
  *
  * `relPath` is always relative to the *library root* convention, e.g.
  * "characters/hicks/body.png" or "backgrounds/corridor/staging.json" --
@@ -20,26 +20,68 @@ const path = require("path");
 const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"];
 
 /**
+ * An episode lives at `shows/<show-id>/episodes/<episode-id>` and has a
+ * sibling `show.json` on the show folder. Flat projects under `projects/`
+ * have no show layer.
+ */
+const DEFAULT_GLOBAL_ASSETS_DIR_NAME = "_global_assets";
+
+/**
+ * Flat project: sibling `_global_assets`. Episode under `shows/<id>/episodes/`
+ * walks up to `projects/_global_assets` (or a fixture-root `_global_assets`).
+ */
+function resolveGlobalAssetsDir(projectDir) {
+  const sibling = path.join(path.dirname(projectDir), DEFAULT_GLOBAL_ASSETS_DIR_NAME);
+  if (fs.existsSync(sibling)) return sibling;
+
+  let dir = path.resolve(projectDir);
+  for (let i = 0; i < 8; i++) {
+    const parent = path.dirname(dir);
+    const nextToParent = path.join(parent, DEFAULT_GLOBAL_ASSETS_DIR_NAME);
+    if (fs.existsSync(nextToParent)) return nextToParent;
+    const underProjects = path.join(parent, "projects", DEFAULT_GLOBAL_ASSETS_DIR_NAME);
+    if (fs.existsSync(underProjects)) return underProjects;
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return sibling;
+}
+
+function resolveShowAssetsDir(projectDir) {
+  if (!projectDir) return null;
+  const episodesDir = path.dirname(path.resolve(projectDir));
+  const showDir = path.dirname(episodesDir);
+  if (path.basename(episodesDir) !== "episodes") return null;
+  if (!fs.existsSync(path.join(showDir, "show.json"))) return null;
+  return showDir;
+}
+
+function assetSearchRoots(projectDir, globalAssetsDir) {
+  const roots = [];
+  if (projectDir) roots.push({ dir: path.resolve(projectDir), source: "project" });
+  const showDir = resolveShowAssetsDir(projectDir);
+  if (showDir) roots.push({ dir: showDir, source: "show" });
+  if (globalAssetsDir) roots.push({ dir: path.resolve(globalAssetsDir), source: "global" });
+  return roots;
+}
+
+/**
  * @param {string} projectDir Absolute path to the project folder (contains script.txt / timeline.json).
  * @param {string} globalAssetsDir Absolute path to projects/_global_assets.
  * @param {string} relPath e.g. "characters/hicks/body.png"
- * @returns {{ absPath: string, timelinePath: string, source: "project"|"global" } | null}
+ * @returns {{ absPath: string, timelinePath: string, source: "project"|"show"|"global" } | null}
  *   `timelinePath` is relative to `projectDir`, suitable for embedding
- *   directly in timeline.json (using ".." to reach a global asset). Returns
- *   null if the file exists in neither location.
+ *   directly in timeline.json (using ".." to reach a show or global asset).
  */
 function resolveAsset(projectDir, globalAssetsDir, relPath) {
-  const projectCandidate = path.join(projectDir, relPath);
-  if (fs.existsSync(projectCandidate)) {
-    return { absPath: projectCandidate, timelinePath: toPosix(relPath), source: "project" };
+  if (!relPath) return null;
+  for (const root of assetSearchRoots(projectDir, globalAssetsDir)) {
+    const candidate = path.join(root.dir, relPath);
+    if (!fs.existsSync(candidate)) continue;
+    const timelinePath =
+      root.source === "project" ? toPosix(relPath) : toPosix(path.relative(projectDir, candidate));
+    return { absPath: candidate, timelinePath, source: root.source };
   }
-
-  const globalCandidate = path.join(globalAssetsDir, relPath);
-  if (fs.existsSync(globalCandidate)) {
-    const timelinePath = toPosix(path.relative(projectDir, globalCandidate));
-    return { absPath: globalCandidate, timelinePath, source: "global" };
-  }
-
   return null;
 }
 
@@ -57,9 +99,8 @@ function readJsonAsset(projectDir, globalAssetsDir, relPath) {
 /**
  * Lists the drawings available in a slot folder (e.g. "characters/hicks/mouth"):
  * every image file's name (without extension) is a valid drawing name. If
- * the folder exists in both the project and the global library, entries are
- * merged with the project's own files taking precedence per-filename (the
- * same per-file override principle, applied within a directory).
+ * the folder exists in the project, the show, and the global library, entries
+ * are merged with later layers winning per-filename (episode > show > global).
  *
  * @returns {Map<string, {absPath: string, timelinePath: string}>} drawing name -> resolved file
  */
@@ -67,13 +108,13 @@ function scanDrawingsDir(projectDir, globalAssetsDir, relDirPath) {
   const drawings = new Map();
 
   const addFrom = (baseDir, isProject) => {
+    if (!baseDir) return;
     const absDir = path.join(baseDir, relDirPath);
     if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) return;
     for (const entry of fs.readdirSync(absDir)) {
       const ext = path.extname(entry).toLowerCase();
       if (!IMAGE_EXTENSIONS.includes(ext)) continue;
       const name = path.basename(entry, ext);
-      if (drawings.has(name) && isProject === false) continue; // project already provided this one
       const absPath = path.join(absDir, entry);
       const timelinePath = isProject
         ? toPosix(path.join(relDirPath, entry))
@@ -82,38 +123,42 @@ function scanDrawingsDir(projectDir, globalAssetsDir, relDirPath) {
     }
   };
 
-  // Global first, then project overrides same-named drawings.
+  // Global first, then show, then episode/project — later entries win.
   addFrom(globalAssetsDir, false);
+  addFrom(resolveShowAssetsDir(projectDir), false);
   addFrom(projectDir, true);
 
   return drawings;
 }
 
-/** Loads characters/<id>/character.json, or null if the character doesn't exist in either location. */
+/** Loads characters/<id>/character.json, or null if the character doesn't exist in any location. */
 function loadCharacter(projectDir, globalAssetsDir, characterId) {
   return readJsonAsset(projectDir, globalAssetsDir, `characters/${characterId}/character.json`);
 }
 
+function listIdsInFolder(baseDir, folder) {
+  const ids = [];
+  if (!baseDir) return ids;
+  const dir = path.join(baseDir, folder);
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return ids;
+  for (const entry of fs.readdirSync(dir)) {
+    if (fs.statSync(path.join(dir, entry)).isDirectory()) ids.push(entry);
+  }
+  return ids;
+}
+
 function listKnownCharacterIds(projectDir, globalAssetsDir) {
   const ids = new Set();
-  for (const base of [globalAssetsDir, projectDir]) {
-    const dir = path.join(base, "characters");
-    if (!fs.existsSync(dir)) continue;
-    for (const entry of fs.readdirSync(dir)) {
-      if (fs.statSync(path.join(dir, entry)).isDirectory()) ids.add(entry);
-    }
+  for (const root of assetSearchRoots(projectDir, globalAssetsDir).reverse()) {
+    for (const id of listIdsInFolder(root.dir, "characters")) ids.add(id);
   }
   return [...ids].sort();
 }
 
 function listKnownLocations(projectDir, globalAssetsDir) {
   const ids = new Set();
-  for (const base of [globalAssetsDir, projectDir]) {
-    const dir = path.join(base, "backgrounds");
-    if (!fs.existsSync(dir)) continue;
-    for (const entry of fs.readdirSync(dir)) {
-      if (fs.statSync(path.join(dir, entry)).isDirectory()) ids.add(entry);
-    }
+  for (const root of assetSearchRoots(projectDir, globalAssetsDir).reverse()) {
+    for (const id of listIdsInFolder(root.dir, "backgrounds")) ids.add(id);
   }
   return [...ids].sort();
 }
@@ -165,6 +210,9 @@ module.exports = {
   loadStaging,
   listKnownCharacterIds,
   listKnownLocations,
+  resolveShowAssetsDir,
+  resolveGlobalAssetsDir,
+  assetSearchRoots,
   normalizeAnchor,
   ANCHOR_NAMES,
   DEFAULT_AUTO_ORDER,

@@ -41,6 +41,7 @@ const {
   duplicateProject,
   createEmptyProject,
   addLibraryCharacter,
+  readLibrary,
   isSafeFolderName,
 } = require("./studioProjects");
 const { cachedBackgroundThumb } = require("./studioThumbs");
@@ -64,8 +65,31 @@ const {
 const { describeEngineSettings, saveXaiApiKey } = require("./engineSettings");
 const { generateProjectImage, GenerateImageError } = require("./generateImage");
 const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
+const {
+  isSafeShowId,
+  resolveEpisodeDir,
+  assertShow,
+  listShows,
+  summarizeShow,
+  createShow,
+  duplicateShow,
+  renameShow,
+  createEpisode,
+  duplicateEpisode,
+  renameEpisode,
+  moveProjectIntoShow,
+  moveEpisodeToExperiments,
+  describeShowAssets,
+  describeShowContents,
+  readFinalCut,
+  writeFinalCut,
+  planFinalCut,
+  renderFinalCut,
+  readShowJson,
+} = require("./studioShows");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
+const DEFAULT_SHOWS_DIR = path.resolve(__dirname, "..", "..", "shows");
 const DEFAULT_STUDIO_ORIGINS = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -239,6 +263,7 @@ function setAssetCacheControl(req, res, absPath) {
 
 function createApp(options = {}) {
   const projectsDir = path.resolve(options.projectsDir || process.env.ENGINE_PROJECTS_DIR || DEFAULT_PROJECTS_DIR);
+  const showsDir = path.resolve(options.showsDir || process.env.ENGINE_SHOWS_DIR || DEFAULT_SHOWS_DIR);
   const skipValidate = options.skipValidate === true;
   const envPath = options.envPath;
   const fetchFn = options.fetchFn;
@@ -254,7 +279,31 @@ function createApp(options = {}) {
   app.use(express.json({ limit: "20mb" }));
   app.use(express.text({ type: "text/plain", limit: "2mb" }));
 
+  function queryShowId(req, res) {
+    const raw = req.query && (Array.isArray(req.query.show) ? req.query.show[0] : req.query.show);
+    if (raw == null || raw === "") return null;
+    if (!isSafeShowId(raw)) {
+      res.status(400).json({ error: "Invalid show name" });
+      return false;
+    }
+    return raw;
+  }
+
   function projectFromRequest(req, res) {
+    const showId = queryShowId(req, res);
+    if (showId === false) return null;
+    if (showId) {
+      const projectDir = resolveEpisodeDir(showsDir, showId, req.params.name);
+      if (!projectDir) {
+        res.status(400).json({ error: "Invalid project name" });
+        return null;
+      }
+      if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
+        res.status(404).json({ error: `Episode not found: ${req.params.name}` });
+        return null;
+      }
+      return projectDir;
+    }
     const projectDir = resolveProjectDir(projectsDir, req.params.name);
     if (!projectDir) {
       res.status(400).json({ error: "Invalid project name" });
@@ -265,6 +314,24 @@ function createApp(options = {}) {
       return null;
     }
     return projectDir;
+  }
+
+  function showFromRequest(req, res) {
+    const showId = req.params.showId;
+    if (!isSafeShowId(showId)) {
+      res.status(400).json({ error: "Invalid show name" });
+      return null;
+    }
+    try {
+      return { showId, showDir: assertShow(showsDir, showId) };
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        res.status(404).json({ error: err.message });
+        return null;
+      }
+      res.status(400).json({ error: err.message });
+      return null;
+    }
   }
 
   app.get("/health", (_req, res) => {
@@ -320,7 +387,14 @@ function createApp(options = {}) {
     req.setTimeout(5 * 60 * 1000);
     res.setTimeout(5 * 60 * 1000);
     const projectName = req.body && req.body.project;
-    const projectDir = resolveProjectDir(projectsDir, projectName);
+    const showId = req.body && req.body.showId;
+    let projectDir = null;
+    if (showId) {
+      if (!isSafeShowId(showId)) return res.status(400).json({ error: "Invalid show name" });
+      projectDir = resolveEpisodeDir(showsDir, showId, projectName);
+    } else {
+      projectDir = resolveProjectDir(projectsDir, projectName);
+    }
     if (!projectDir) {
       return res.status(400).json({ error: "Invalid project name" });
     }
@@ -401,8 +475,16 @@ function createApp(options = {}) {
   app.post("/api/trash/:id/restore", async (req, res) => {
     const id = req.params.id;
     try {
-      const restored = restoreFromTrash(projectsDir, id);
-      res.json({ ok: true, project: await summarized(restored.projectDir, restored.name) });
+      const restored = restoreFromTrash(projectsDir, id, { showsDir });
+      if (restored.kind === "show") {
+        res.json({ ok: true, show: await summarizeShow(showsDir, restored.name) });
+        return;
+      }
+      res.json({
+        ok: true,
+        project: await summarized(restored.projectDir, restored.name),
+        showId: restored.showId || null,
+      });
     } catch (err) {
       sendLifecycleError(res, err);
     }
@@ -424,6 +506,22 @@ function createApp(options = {}) {
       return res.status(400).json({ error: "Type the project name to confirm" });
     }
     try {
+      const showId = queryShowId(req, res);
+      if (showId === false) return;
+      if (showId) {
+        const episodeDir = resolveEpisodeDir(showsDir, showId, name);
+        if (!episodeDir || !fs.existsSync(episodeDir)) {
+          return res.status(404).json({ error: `Episode not found: ${name}` });
+        }
+        res.json({
+          ok: true,
+          trash: moveProjectToTrash(projectsDir, name, {
+            parentDir: path.join(showsDir, showId, "episodes"),
+            meta: { kind: "episode", showId, originalName: name },
+          }),
+        });
+        return;
+      }
       res.json({ ok: true, trash: moveProjectToTrash(projectsDir, name) });
     } catch (err) {
       sendLifecycleError(res, err);
@@ -440,8 +538,11 @@ function createApp(options = {}) {
       return res.status(400).json({ error: "Invalid project name" });
     }
     try {
-      const renamed = renameProject(projectsDir, name, newName);
-      res.json({ ok: true, project: await summarized(renamed.projectDir, renamed.name) });
+      const showId = queryShowId(req, res);
+      if (showId === false) return;
+      const parent = showId ? path.join(showsDir, showId, "episodes") : projectsDir;
+      const renamed = showId ? renameEpisode(showsDir, showId, name, newName) : renameProject(parent, name, newName);
+      res.json({ ok: true, project: await summarized(renamed.projectDir, renamed.name || renamed.id) });
     } catch (err) {
       sendLifecycleError(res, err);
     }
@@ -453,11 +554,338 @@ function createApp(options = {}) {
       return res.status(400).json({ error: "Invalid project name" });
     }
     try {
-      const copied = duplicateProject(projectsDir, name);
-      res.status(201).json({ ok: true, project: await summarized(copied.projectDir, copied.name) });
+      const showId = queryShowId(req, res);
+      if (showId === false) return;
+      const copied = showId
+        ? duplicateEpisode(showsDir, showId, name)
+        : duplicateProject(projectsDir, name);
+      res.status(201).json({ ok: true, project: await summarized(copied.projectDir, copied.name || copied.id) });
     } catch (err) {
       sendLifecycleError(res, err);
     }
+  });
+
+  app.post("/api/projects/:name/move-to-show", async (req, res) => {
+    const name = req.params.name;
+    if (!isSafeProjectName(name)) {
+      return res.status(400).json({ error: "Invalid project name" });
+    }
+    const showId = req.body && (req.body.showId || req.body.id);
+    const displayName = req.body && req.body.displayName;
+    const create = !!(req.body && req.body.create);
+    if (!showId || !isSafeShowId(showId)) {
+      return res.status(400).json({ error: "Invalid show name" });
+    }
+    try {
+      const moved = moveProjectIntoShow(projectsDir, showsDir, name, showId, { create, displayName });
+      const show = await summarizeShow(showsDir, moved.showId);
+      const episode = await summarized(moved.projectDir, moved.episodeId);
+      res.json({ ok: true, show, episode });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.get("/api/shows", async (_req, res) => {
+    try {
+      res.json({ shows: await listShows(showsDir) });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/shows", async (req, res) => {
+    const rawName = req.body && (req.body.name || req.body.id);
+    if (!rawName) return res.status(400).json({ error: "Show name is required" });
+    try {
+      const created = createShow(showsDir, rawName, {
+        displayName: req.body.displayName || req.body.name,
+        description: req.body.description || "",
+        id: req.body.id,
+      });
+      res.status(201).json({ ok: true, show: await summarizeShow(showsDir, created.id) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.get("/api/shows/:showId", async (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    try {
+      const show = await summarizeShow(showsDir, found.showId);
+      res.json({
+        show,
+        assets: describeShowAssets(found.showDir),
+        finalCut: readFinalCut(found.showDir),
+        library: {
+          added: readLibrary(found.showDir).characters,
+        },
+      });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.get("/api/shows/:showId/contents", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    res.json({ name: found.showId, contents: describeShowContents(found.showDir) });
+  });
+
+  app.post("/api/shows/:showId/trash", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    const confirmName = req.body && req.body.confirmName;
+    if (confirmName !== found.showId && confirmName !== (readShowJson(found.showDir) || {}).name) {
+      return res.status(400).json({ error: "Type the show name to confirm" });
+    }
+    try {
+      const { moveFolderToTrash } = require("./studioProjects");
+      res.json({
+        ok: true,
+        trash: moveFolderToTrash(projectsDir, found.showDir, found.showId, {
+          kind: "show",
+          originalName: found.showId,
+        }),
+      });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.post("/api/shows/:showId/rename", async (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    const newId = req.body && req.body.id;
+    const displayName = req.body && (req.body.displayName || req.body.name);
+    if (newId && !isSafeShowId(newId)) {
+      return res.status(400).json({ error: "Invalid show name" });
+    }
+    try {
+      const renamed = renameShow(showsDir, found.showId, newId || found.showId, { displayName });
+      res.json({ ok: true, show: await summarizeShow(showsDir, renamed.id) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.post("/api/shows/:showId/duplicate", async (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    try {
+      const copied = duplicateShow(showsDir, found.showId);
+      res.status(201).json({ ok: true, show: await summarizeShow(showsDir, copied.id) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.get("/api/shows/:showId/download", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    streamProjectZip(found.showDir, found.showId, res);
+  });
+
+  app.get("/api/shows/:showId/assets", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    res.json(describeShowAssets(found.showDir));
+  });
+
+  app.get("/api/shows/:showId/library", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(found.showDir);
+    res.json({
+      characters: listGlobalCharacters(found.showDir, globalAssetsDir),
+      added: readLibrary(found.showDir).characters,
+    });
+  });
+
+  app.post("/api/shows/:showId/library", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    const characterId = req.body && req.body.characterId;
+    try {
+      const globalAssetsDir = resolveGlobalAssetsDir(found.showDir);
+      const library = addLibraryCharacter(found.showDir, globalAssetsDir, characterId);
+      res.json({ ok: true, library });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.get("/api/shows/:showId/asset", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    const rel = typeof req.query.rel === "string" ? req.query.rel : "";
+    if (!isSafeRelPath(rel)) {
+      return res.status(400).json({ error: "Invalid asset path" });
+    }
+    const globalAssetsDir = resolveGlobalAssetsDir(found.showDir);
+    const resolved = resolveAsset(found.showDir, globalAssetsDir, rel);
+    if (!resolved) {
+      return res.status(404).json({ error: `Asset not found: ${rel}` });
+    }
+    const ext = path.extname(resolved.absPath).toLowerCase();
+    const type = IMAGE_TYPES[ext];
+    if (!type) {
+      return res.status(400).json({ error: "Unsupported asset type" });
+    }
+    const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
+    if (wantThumb) {
+      cachedBackgroundThumb(resolved.absPath)
+        .then((thumbPath) => {
+          const file = thumbPath || resolved.absPath;
+          const sendType = thumbPath ? "image/jpeg" : type;
+          setAssetCacheControl(req, res, resolved.absPath);
+          res.type(sendType).sendFile(file);
+        })
+        .catch((err) => {
+          if (!res.headersSent) res.status(500).json({ error: err.message });
+        });
+      return;
+    }
+    setAssetCacheControl(req, res, resolved.absPath);
+    res.type(type).sendFile(resolved.absPath);
+  });
+
+  app.post("/api/shows/:showId/episodes", async (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    const episodeId = req.body && req.body.name;
+    const duplicateFrom = req.body && req.body.duplicateFrom;
+    if (!isSafeProjectName(episodeId)) {
+      return res.status(400).json({ error: "Invalid episode name" });
+    }
+    try {
+      const created = duplicateFrom
+        ? duplicateEpisode(showsDir, found.showId, duplicateFrom)
+        : createEpisode(showsDir, found.showId, episodeId);
+      const id = created.id || created.name || episodeId;
+      // Duplicate uses source name-copy; if they asked for a specific name, rename.
+      if (duplicateFrom && episodeId && id !== episodeId) {
+        const renamed = renameEpisode(showsDir, found.showId, id, episodeId);
+        res.status(201).json({ ok: true, episode: await summarized(renamed.projectDir, renamed.id) });
+        return;
+      }
+      res.status(201).json({ ok: true, episode: await summarized(created.projectDir, id) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.post("/api/shows/:showId/episodes/:episodeId/move-to-experiments", async (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    const episodeId = req.params.episodeId;
+    if (!isSafeProjectName(episodeId)) {
+      return res.status(400).json({ error: "Invalid episode name" });
+    }
+    try {
+      const moved = moveEpisodeToExperiments(projectsDir, showsDir, found.showId, episodeId);
+      res.json({ ok: true, project: await summarized(moved.projectDir, moved.name) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.get("/api/shows/:showId/final-cut", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    res.json({ cut: readFinalCut(found.showDir) });
+  });
+
+  app.put("/api/shows/:showId/final-cut", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    const body = req.body || {};
+    try {
+      res.json({ ok: true, cut: writeFinalCut(found.showDir, body.cut || body) });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.get("/api/shows/:showId/final-cut/plan", async (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    try {
+      res.json(await planFinalCut(showsDir, found.showId));
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
+  });
+
+  app.post("/api/shows/:showId/final-cut/render", async (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    if (renderInProgress) {
+      return res.status(409).json({ error: "A render is already in progress" });
+    }
+    renderInProgress = true;
+    try {
+      let plan = await planFinalCut(showsDir, found.showId);
+      if (plan.items.length === 0) {
+        return res.status(400).json({ error: "Final cut is empty. Add episodes first." });
+      }
+      if (plan.missingCount > 0) {
+        return res.status(400).json({ error: "Final cut points at a missing episode." });
+      }
+      for (const item of plan.items) {
+        if (!item.willRender) continue;
+        const projectDir = resolveEpisodeDir(showsDir, found.showId, item.episodeId);
+        const parsed = await parseForWrite(projectDir, parseOpts(skipValidate, item.script));
+        if (parsed.validation && parsed.validation.ok === false) {
+          cleanupTempParse(parsed);
+          return res.status(400).json({ error: parsed.validation.message || `Render failed for ${item.episodeId}` });
+        }
+        const outputFile = renderOutputName(item.script);
+        const outputPath = path.join(projectDir, "renders", outputFile);
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        try {
+          await renderProject(projectDir, {
+            codec: "h264",
+            output: outputPath,
+            timeline: parsed.timelinePath,
+            ...(options.pythonBin ? { pythonBin: options.pythonBin } : {}),
+          });
+        } finally {
+          cleanupTempParse(parsed);
+        }
+      }
+      const result = await renderFinalCut(showsDir, found.showId, {
+        name: req.body && req.body.name,
+        allowStale: true,
+      });
+      res.json({
+        ok: true,
+        outputPath: result.outputPath,
+        file: result.file,
+        url: `/api/shows/${encodeURIComponent(found.showId)}/final/${encodeURIComponent(result.file)}`,
+        plan: result.plan,
+        note: plan.note,
+      });
+    } catch (err) {
+      sendLifecycleError(res, err);
+    } finally {
+      renderInProgress = false;
+    }
+  });
+
+  app.get("/api/shows/:showId/final/:file", (req, res) => {
+    const found = showFromRequest(req, res);
+    if (!found) return;
+    const file = path.basename(String(req.params.file || ""));
+    if (!SAFE_RENDER_FILE.test(file)) {
+      return res.status(400).json({ error: "Invalid final-cut filename" });
+    }
+    const outputPath = path.join(found.showDir, "final", file);
+    if (!fs.existsSync(outputPath)) {
+      return res.status(404).json({ error: "No final cut yet. Use Render final first." });
+    }
+    res.sendFile(outputPath, { headers: { "Content-Type": "video/mp4" } });
   });
 
   app.get("/api/projects/:name/download", (req, res) => {

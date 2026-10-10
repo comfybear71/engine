@@ -79,33 +79,49 @@ override the worker URL.
 
 ## What it does
 
-The default route `/` is a **home screen**: a grid of project cards
-(thumbnail = first-frame preview if the worker can compose it, otherwise
-a cached ~480px JPEG of the first used background; name; length; last
-render time) plus a **New project** card. Card length is the latest
+The default route `/` is a **home screen**: slim **Show** cards, an
+**Experiments** bucket of ungrouped flat projects, **+ New show**, and
+**+ New project**. Show cards list episode count and a cached thumbnail.
+Experiment cards are the same as before (first-frame preview if the worker
+can compose it, otherwise a cached ~480px JPEG of the first used
+background; name; length; last render time). Card length is the latest
 render's real duration (MP4 `mvhd` header, then cached `ffprobe`). If there
 is no render yet, it uses parsed timeline frames/fps — not a dialogue-text
 guess. New project creates an empty folder under `projects/` from a small
-text template (`script.txt` + `library.json`) — no art is copied. Click a
-card to open `/p/<name>`. The home list is fetched on load, when the
-window is focused, and after create/rename/duplicate/delete/restore. While
-the page stays open it only polls `GET /health` so a down engine can come
-back; it does not re-walk every project every few seconds.
+text template (`script.txt` + `library.json`) — no art is copied. New show
+creates `shows/<id>/show.json` plus empty `characters/`, `backgrounds/`,
+`props/`, `episodes/`, and `final/`. Click a show to open `/s/<id>`; click
+an experiment to open `/p/<name>`. The home list is fetched on load, when
+the window is focused, and after create/rename/duplicate/delete/restore.
+While the page stays open it only polls `GET /health` so a down engine can
+come back; it does not re-walk every project every few seconds.
+
+Existing flat folders under `projects/` stay valid experiments. **Move
+into a show** renames the folder to `shows/<id>/episodes/<name>` (no copy,
+no delete). **Move to Experiments** on an episode reverses that. Shared
+art in `projects/_global_assets` is never touched.
 
 Each card has an actions menu: **Duplicate** (copy the folder to
 `<name>-copy`, then `<name>-copy-2`, …), **Rename** (folder rename, same
-name rules as create), **Download** (zip of the project folder), and
-**Delete**. Delete asks you to type the project name after listing what
-will go (script files, audio, renders, local assets, sizes). It **moves**
-the folder to `projects/_trash/<name>-<timestamp>` — never a hard delete,
-and it never touches `projects/_global_assets`. A **Trash** section on the
+name rules as create), **Download** (zip of the project or show folder),
+and **Delete**. Delete asks you to type the name after listing what will
+go (script files, audio, renders, local assets, sizes). It **moves** the
+folder to `projects/_trash/<name>-<timestamp>` — never a hard delete, and
+it never touches `projects/_global_assets`. A **Trash** section on the
 home screen can **Restore** an item or **Empty trash** (that step is
 permanent and has its own confirm).
 
-Inside a project the default tab is **Stage** (Resolve-style workspace).
-Top tabs stay **Assets**, **Stage**, **Script**, **Edit**, **Deliver** for
-the full pages, with a back-to-home link, the project name, and a
-**script picker**. A project may hold several `script*.txt` files
+Open a show for **Episodes** (cards with the same cached thumbs and real
+durations), shared **Assets**, and **Final cut**. **+ New episode** is a
+blank project folder or a duplicate of an existing episode. Episode
+Studio is `/s/<show>/e/<episode>`: the same **Assets / Stage / Script /
+Edit / Deliver** tabs, with a **Show › Episode** breadcrumb back to the
+show.
+
+Inside an episode (or a flat experiment) the default tab is **Stage**
+(Resolve-style workspace). Top tabs stay **Assets**, **Stage**,
+**Script**, **Edit**, **Deliver** for the full pages, with a back link,
+the project name, and a **script picker**. A project may hold several `script*.txt` files
 (`script.txt`, `script_mcd.txt`, …). Stage, lanes, the Script page,
 preview, and Render all use the selected file. The orange **Render**
 button parses that script (temp files only) and writes
@@ -320,8 +336,17 @@ other media durations are cached by path + mtime + size.
 | Method | Path | What |
 |---|---|---|
 | `GET` | `/health` | Liveness. |
-| `GET` | `/api/projects` | Folders under `projects/`, excluding `_global_assets` and `_trash`. Each item has `name`, `scripts`, `thumbRel`, `thumbMtime`, `durationSeconds`, `sceneCount`, `lastRenderAt`. Summaries are cached per project by a shallow directory fingerprint and built in parallel. `durationSeconds` is the latest render length, else parsed timeline frames/fps. |
-| `POST` | `/api/projects` | Create an empty project from the template. JSON `{ "name": "episode_01" }`. |
+| `GET` | `/api/projects` | Folders under `projects/`, excluding `_global_assets` and `_trash` (the Experiments bucket). Each item has `name`, `scripts`, `thumbRel`, `thumbMtime`, `durationSeconds`, `sceneCount`, `lastRenderAt`. Summaries are cached per project by a shallow directory fingerprint and built in parallel. `durationSeconds` is the latest render length, else parsed timeline frames/fps. |
+| `POST` | `/api/projects` | Create an empty experiment from the template. JSON `{ "name": "episode_01" }`. |
+| `POST` | `/api/projects/:name/move-to-show` | Rename `projects/<name>` to `shows/<showId>/episodes/<name>`. JSON `{ "showId", "create?", "displayName?" }`. Reversible. |
+| `GET` | `/api/shows` | Shows under `shows/` that have `show.json`. |
+| `POST` | `/api/shows` | Create `shows/<id>/` from `{ "name": "Sunny Banks" }` (id is slugified). |
+| `GET` | `/api/shows/:showId` | Show summary, episodes, shared assets, final-cut JSON. |
+| `POST` | `/api/shows/:showId/episodes` | Blank episode or `{ "name", "duplicateFrom" }`. |
+| `POST` | `/api/shows/:showId/episodes/:episodeId/move-to-experiments` | Rename the episode folder back to `projects/<episodeId>`. |
+| `GET`/`PUT` | `/api/shows/:showId/final-cut` | Ordered items (`episode` or `scene`) with `trimIn` / `trimOut`, plus `gapSeconds` / `fadeSeconds`. |
+| `GET` | `/api/shows/:showId/final-cut/plan` | What will re-render, missing sources, duration, time/cost note (no ElevenLabs). |
+| `POST` | `/api/shows/:showId/final-cut/render` | Re-render stale episode mp4s, then ffmpeg-concat to `shows/<id>/final/<name>.mp4`. |
 | `GET` | `/api/projects/:name/contents` | What Delete will list: script files, audio/renders/local-asset file counts and bytes. |
 | `POST` | `/api/projects/:name/trash` | Move the folder to `projects/_trash/<name>-<timestamp>`. JSON `{ "confirmName": "<name>" }` must match. Never deletes `_global_assets` or `_trash`. |
 | `POST` | `/api/projects/:name/rename` | Rename the folder. JSON `{ "name": "new_name" }`. |
@@ -367,7 +392,9 @@ other media durations are cached by path + mtime + size.
 
 `:name` is validated against path traversal. `_global_assets` and `_trash`
 are reserved and cannot be created, renamed to, duplicated as, or deleted.
-`rel` cannot contain `..`. `?script=` cannot contain `/` or `..`.
+`rel` cannot contain `..`. `?script=` cannot contain `/` or `..`. Episode
+routes reuse `/api/projects/:name/…` with `?show=<showId>` so Stage /
+Assets / Script / Render stay the same inside an episode.
 
 Lane `lane` values are `body` (`[Move:]`, `[Swing:]`, `[Pose:]`,
 `body=` cycles, character `at=` / `flip` / layer-z), `face` (`face=` /

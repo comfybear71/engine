@@ -271,7 +271,7 @@ export default function AssetsPanel({
                 key={character.id}
                 src={assetUrl(project, character.thumbRel, { thumb: true, v: character.mtime })}
                 label={character.display_name}
-                badge={character.source === "project" ? "local" : undefined}
+                badge={character.source === "project" ? "local" : character.source === "show" ? "show" : undefined}
                 selected={character.id === selectedId}
                 fit="contain"
                 onClick={() => setSelectedId(character.id)}

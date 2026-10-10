@@ -18,6 +18,7 @@ worker/python/**/*.pyc
 # Rendered output (per-project renders/ folders, e.g. projects/sample/renders/)
 renders/
 **/renders/
+shows/**/final/*.mp4
 
 # Studio trash (soft-deleted project folders)
 projects/_trash/
