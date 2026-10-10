@@ -12,6 +12,7 @@ import {
   frameInSegment,
   isLiveAudioStart,
   isRenderUpToDate,
+  mergePlaybackAudioFromLanes,
   playSegmentDurationSec,
   segmentWindow,
   shouldFallbackToProxy,
@@ -133,5 +134,54 @@ describe("stage playback helpers", () => {
       200
     );
     assert.deepEqual(trimmed, { offsetSec: 1, delaySec: 0, playSec: 1 });
+    const lastPiece = webAudioSchedule(
+      { startFrame: 192, endFrame: 216, durationSec: 9, trimInSec: 8, trimOutSec: null },
+      208,
+      24,
+      216
+    );
+    assert.deepEqual(lastPiece, { offsetSec: 8 + 16 / 24, delaySec: 0, playSec: 8 / 24 });
+  });
+
+  test("split last-piece lanes become two playable clips of the same file", () => {
+    const current = [
+      {
+        rel: "audio/monologue/001_alice.wav",
+        startFrame: 192,
+        endFrame: 216,
+        exists: true,
+        durationSeconds: 9,
+        trimInSec: 8,
+        trimOutSec: null,
+      },
+    ];
+    const next = mergePlaybackAudioFromLanes(
+      current,
+      [
+        {
+          lane: "audio",
+          rel: "audio/monologue/001_alice.wav",
+          startFrame: 192,
+          endFrame: 208,
+          trim: { inFrames: 192, outFrames: 208 },
+        },
+        {
+          lane: "audio",
+          rel: "audio/monologue/001_alice.wav",
+          startFrame: 208,
+          endFrame: 216,
+          trim: { inFrames: 208, outFrames: 216 },
+        },
+      ],
+      216,
+      24
+    );
+    assert.equal(next.length, 2);
+    assert.equal(next[0].rel, next[1].rel);
+    assert.equal(next[0].durationSeconds, 9);
+    assert.equal(next[1].durationSeconds, 9);
+    assert.equal(next[1].startFrame, 208);
+    assert.equal(next[1].trimInSec, 208 / 24);
+    assert.ok(next[1].trimOutSec != null && next[1].trimOutSec > next[1].trimInSec);
   });
 });

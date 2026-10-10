@@ -918,6 +918,30 @@ describe("[Audio: Name file=<label>]", () => {
     fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
   });
 
+  test("last untrimmed [Audio:] piece split stays two playable same-file lanes", async () => {
+    const audioDir = path.join(fixture.projectDir, "audio", "monologue");
+    wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 9.0);
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Audio: Alice file=monologue at_time=8s trim_in=8s trim_out=8.67s]",
+      "[Audio: Alice file=monologue at_time=8.67s trim_in=8.67s]",
+    ].join("\n");
+    const { laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const audio = laneEvents.filter((e) => e.lane === "audio");
+    assert.equal(audio.length, 2);
+    assert.equal(audio[0].startFrame, 192);
+    assert.equal(audio[0].endFrame, 208);
+    assert.deepEqual(audio[0].trim, { inFrames: 192, outFrames: 208 });
+    assert.equal(audio[1].startFrame, 208);
+    assert.equal(audio[1].endFrame, 216);
+    assert.equal(audio[1].trim.inFrames, 208);
+    assert.ok(audio[1].trim.outFrames > 208);
+    assert.equal(audio[1].rel, audio[0].rel);
+    fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
+  });
+
   test("view= on [Audio:] does not drop existing mouth cues", async () => {
     const audioDir = path.join(fixture.projectDir, "audio", "monologue");
     wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 3.0);

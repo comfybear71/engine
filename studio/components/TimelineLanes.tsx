@@ -543,7 +543,7 @@ export default function TimelineLanes({
     const next = splitBlocksInScript(scriptText, writes);
     if (next === scriptText) return;
     const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const optimistic = lanes ? shiftLanesForSplit(lanes, writes, frame) : undefined;
+    const optimistic = lanes ? shiftLanesForSplit(lanes, writes, frame, fps) : undefined;
     const ms = (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0;
     if (typeof console !== "undefined") console.debug(`[timeline] split apply ${Math.round(ms)}ms`);
     onEditScript(next, { lanes: optimistic, ids: [...seeds] });

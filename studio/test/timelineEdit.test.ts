@@ -390,6 +390,66 @@ describe("timeline script rewrite", () => {
     assert.ok((audio[1].trim?.outFrames || 0) > (audio[1].trim?.inFrames || 0));
   });
 
+  test("split on the last untrimmed Audio piece keeps both halves of the same file", () => {
+    const script = ["[Scene: Intro]", "[Audio: Alice file=monologue at_time=8s trim_in=8s]"].join("\n");
+    const lastPiece = {
+      id: "a",
+      scriptLine: 2,
+      sceneId: "intro",
+      startFrame: 192,
+      endFrame: 216,
+      lane: "audio" as const,
+      timing: { kind: "audio" as const },
+      rel: "audio/monologue/001_alice.wav",
+      sourceStartFrame: 192,
+      movable: true,
+    };
+    const scenes = [{ id: "intro", startFrame: 0 }];
+    for (const extra of [
+      { trim: { inFrames: 192, outFrames: 216 }, sourceDurationFrames: 216 },
+      { trim: { inFrames: 192, outFrames: 0 }, sourceDurationFrames: 0 },
+      {},
+    ]) {
+      const blocks = [{ ...lastPiece, ...extra }];
+      const write = planSplit({
+        blocks,
+        ids: ["a"],
+        playhead: 208,
+        scenes,
+        fps: 24,
+        script,
+      });
+      assert.ok(write, `planSplit failed for ${JSON.stringify(extra)}`);
+      const next = applySplitWrite(script, write);
+      const lines = next.split("\n");
+      assert.equal(lines[1], "[Audio: Alice file=monologue at_time=8s trim_in=8s trim_out=8.67s]");
+      assert.equal(lines[2], "[Audio: Alice file=monologue at_time=8.67s trim_in=8.67s]");
+      const optimistic = shiftLanesForSplit(
+        {
+          fps: 24,
+          totalFrames: 216,
+          lanes: ["audio"],
+          scenes: [{ id: "intro", startFrame: 0, endFrame: 216, frames: 216 }],
+          blocks,
+        },
+        [write],
+        208,
+        24
+      );
+      const audio = optimistic.blocks.filter((block) => block.lane === "audio");
+      assert.equal(audio.length, 2);
+      assert.equal(audio[0].startFrame, 192);
+      assert.equal(audio[0].endFrame, 208);
+      assert.equal(audio[1].startFrame, 208);
+      assert.equal(audio[1].endFrame, 216);
+      assert.equal(audio[0].trim?.inFrames, 192);
+      assert.equal(audio[0].trim?.outFrames, 208);
+      assert.equal(audio[1].trim?.inFrames, 208);
+      assert.ok((audio[1].trim?.outFrames || 0) > 208);
+      assert.equal(audio[1].movable, true);
+    }
+  });
+
   test("changing view does not drop mouth cues on other chips", () => {
     const lanes = {
       fps: 24,

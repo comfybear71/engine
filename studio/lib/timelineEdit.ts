@@ -83,6 +83,35 @@ export function formatAtTime(sceneLocalFrames: number, fps: number): string {
   return String(frames);
 }
 
+/** `2s` / `0.5s` / `48` (frames) → frame count. Null if the token is missing or junk. */
+export function parseTimeTokenToFrames(raw: string | null | undefined, fps: number): number | null {
+  if (raw == null) return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+  const safeFps = Math.max(1, Math.round(fps) || 24);
+  const seconds = text.match(/^(\d+(?:\.\d+)?)s$/i);
+  if (seconds) {
+    const sec = Number(seconds[1]);
+    if (!Number.isFinite(sec) || sec < 0) return null;
+    return Math.round(sec * safeFps);
+  }
+  const frames = text.match(/^(\d+)$/);
+  if (!frames) return null;
+  return parseInt(frames[1], 10);
+}
+
+export function lineTrimFrames(
+  line: string,
+  fps: number
+): { inFrames: number | null; outFrames: number | null } {
+  const inMatch = line.match(/\btrim_in=([^\s\]]+)/i);
+  const outMatch = line.match(/\btrim_out=([^\s\]]+)/i);
+  return {
+    inFrames: parseTimeTokenToFrames(inMatch?.[1], fps),
+    outFrames: parseTimeTokenToFrames(outMatch?.[1], fps),
+  };
+}
+
 export function shiftLanesForView<T extends MovableLanes>(
   lanes: T,
   scriptLine: number,
@@ -460,7 +489,8 @@ function assignOptimisticRows<T extends { lane?: string; startFrame: number; end
 export function shiftLanesForSplit<T extends MovableLanes>(
   lanes: T,
   writes: LineSplitWrite[],
-  playhead: number
+  playhead: number,
+  fps?: number
 ): T {
   if (!writes.length) return lanes;
   const ordered = [...writes].sort((a, b) => b.scriptLine - a.scriptLine);
@@ -471,7 +501,20 @@ export function shiftLanesForSplit<T extends MovableLanes>(
     if (!members.length) continue;
     const take = takeWindowForIds(blocks, members.map((block) => block.id));
     if (!take || playhead <= take.start || playhead >= take.end) continue;
-    const splitSource = take.trimIn + (playhead - take.start);
+    const fromWrite =
+      fps != null
+        ? parseTimeTokenToFrames(write.right.trimIn, fps) ?? parseTimeTokenToFrames(write.left.trimOut, fps)
+        : null;
+    const splitSource = fromWrite != null ? fromWrite : take.trimIn + (playhead - take.start);
+    const leftInFrames =
+      fromWrite != null ? Math.max(0, splitSource - (playhead - take.start)) : take.trimIn;
+    const rightOutFramesFor = (block: (typeof blocks)[number]) => {
+      const fromBlock = block.trim?.outFrames || 0;
+      if (fromBlock > splitSource) return fromBlock;
+      if (take.trimOut > splitSource) return take.trimOut;
+      const remain = Math.max(1, (block.endFrame > playhead ? block.endFrame : take.end) - playhead);
+      return splitSource + remain;
+    };
     blocks = blocks.map((block) =>
       block.scriptLine != null && block.scriptLine > line
         ? { ...block, scriptLine: block.scriptLine + 1 }
@@ -484,10 +527,12 @@ export function shiftLanesForSplit<T extends MovableLanes>(
         continue;
       }
       const marriedRight = block.marriedId ? `${block.marriedId}:r` : null;
+      const leftIn = (block.trim?.inFrames || 0) > 0 ? block.trim!.inFrames : leftInFrames;
+      const rightOut = rightOutFramesFor(block);
       if (block.endFrame <= playhead) {
         next.push({
           ...block,
-          trim: { inFrames: block.trim?.inFrames ?? take.trimIn, outFrames: splitSource },
+          trim: { inFrames: leftIn, outFrames: splitSource },
         });
       } else if (block.startFrame >= playhead) {
         next.push({
@@ -496,13 +541,13 @@ export function shiftLanesForSplit<T extends MovableLanes>(
           scriptLine: line + 1,
           marriedId: marriedRight,
           sourceStartFrame: playhead,
-          trim: { inFrames: splitSource, outFrames: block.trim?.outFrames ?? take.trimOut },
+          trim: { inFrames: splitSource, outFrames: rightOut },
         });
       } else {
         next.push({
           ...block,
           endFrame: playhead,
-          trim: { inFrames: block.trim?.inFrames ?? take.trimIn, outFrames: splitSource },
+          trim: { inFrames: leftIn, outFrames: splitSource },
         });
         next.push({
           ...block,
@@ -511,7 +556,7 @@ export function shiftLanesForSplit<T extends MovableLanes>(
           startFrame: playhead,
           sourceStartFrame: playhead,
           marriedId: marriedRight,
-          trim: { inFrames: splitSource, outFrames: block.trim?.outFrames ?? take.trimOut },
+          trim: { inFrames: splitSource, outFrames: rightOut },
         });
       }
     }
@@ -730,9 +775,12 @@ export function takeWindowForIds(
   if (!kind) return null;
   const start = Math.min(...members.map((block) => block.startFrame));
   const end = Math.max(...members.map((block) => block.endFrame));
-  const trimIn = primary.trim?.inFrames ?? 0;
-  const source = primary.sourceDurationFrames ?? null;
-  let trimOut = primary.trim?.outFrames ?? 0;
+  const trimIn = primary.trim?.inFrames && primary.trim.inFrames > 0 ? primary.trim.inFrames : 0;
+  const source =
+    primary.sourceDurationFrames != null && primary.sourceDurationFrames > 0
+      ? primary.sourceDurationFrames
+      : null;
+  let trimOut = primary.trim?.outFrames && primary.trim.outFrames > 0 ? primary.trim.outFrames : 0;
   if (!(trimOut > trimIn)) trimOut = source != null && source > trimIn ? source : trimIn + Math.max(1, end - start);
   return {
     scriptLine: primary.scriptLine,
@@ -863,21 +911,26 @@ export function planSplit(opts: {
   const rightAt = formatAtTime(Math.max(0, opts.playhead - sceneStart), opts.fps);
   const line = opts.script.split("\n")[take.scriptLine - 1] || "";
   if (take.kind === "media") {
-    const rawSplit = take.trimIn + (opts.playhead - take.start);
-    const sourceCap =
-      take.sourceDuration != null && take.sourceDuration > take.trimIn + 1
-        ? take.sourceDuration
-        : take.trimOut > take.trimIn
+    const lineTrim = lineTrimFrames(line, opts.fps);
+    const trimIn = lineTrim.inFrames != null && lineTrim.inFrames >= 0 ? lineTrim.inFrames : take.trimIn;
+    const rawSplit = trimIn + (opts.playhead - take.start);
+    const knownSource =
+      take.sourceDuration != null && take.sourceDuration > trimIn + 1 ? take.sourceDuration : null;
+    const trimOutHint =
+      lineTrim.outFrames != null && lineTrim.outFrames > trimIn
+        ? lineTrim.outFrames
+        : take.trimOut > trimIn
           ? take.trimOut
           : rawSplit + Math.max(1, take.end - opts.playhead);
-    const splitFrames = Math.min(rawSplit, Math.max(take.trimIn + 1, sourceCap - 1));
+    const sourceCap = knownSource ?? trimOutHint;
+    const splitFrames = Math.min(rawSplit, Math.max(trimIn + 1, sourceCap - 1));
     const splitSec = splitFrames / Math.max(1, opts.fps);
-    const leftIn = take.trimIn > 0 ? formatAtTime(take.trimIn, opts.fps) : null;
+    const leftIn = trimIn > 0 ? formatAtTime(trimIn, opts.fps) : null;
     const rightOut =
-      take.sourceDuration != null && take.trimOut >= take.sourceDuration
-        ? null
-        : take.trimOut > splitFrames
-          ? formatAtTime(take.trimOut, opts.fps)
+      lineTrim.outFrames != null && lineTrim.outFrames > splitFrames
+        ? formatAtTime(lineTrim.outFrames, opts.fps)
+        : knownSource != null && trimOutHint < knownSource && trimOutHint > splitFrames
+          ? formatAtTime(trimOutHint, opts.fps)
           : null;
     const texts = splitDialogueText(
       "",

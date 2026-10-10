@@ -136,6 +136,33 @@ export function audioClipsFromBlocks(
     .filter((clip) => clip.endFrame > clip.startFrame);
 }
 
+/** Rebuild playback clips from optimistic lane blocks, keeping file duration by rel. */
+export function mergePlaybackAudioFromLanes<T extends PlaybackAudioClip>(
+  current: T[],
+  blocks: {
+    lane?: string;
+    rel?: string | null;
+    startFrame: number;
+    endFrame: number;
+    trim?: { inFrames: number; outFrames: number } | null;
+  }[],
+  totalFrames: number,
+  fps = 24
+): PlaybackAudioClip[] {
+  const prior = new Map<string, T>();
+  for (const clip of current) {
+    if (clip.rel && !prior.has(clip.rel)) prior.set(clip.rel, clip);
+  }
+  return audioClipsFromBlocks(blocks, totalFrames, fps).map((clip) => {
+    const prev = prior.get(clip.rel);
+    return {
+      ...clip,
+      exists: prev?.exists ?? true,
+      durationSeconds: prev?.durationSeconds ?? null,
+    };
+  });
+}
+
 /** Where to start a clip in Web Audio relative to the current playhead. */
 export function webAudioSchedule(
   clip: { startFrame: number; endFrame: number; durationSec: number; trimInSec?: number; trimOutSec?: number | null },
@@ -148,7 +175,9 @@ export function webAudioSchedule(
   if (clipEnd <= playheadFrame) return null;
   if (clip.startFrame >= totalFrames) return null;
   const trimIn = Math.max(0, clip.trimInSec || 0);
-  const trimOut = clip.trimOutSec != null && clip.trimOutSec > trimIn ? clip.trimOutSec : trimIn + clip.durationSec;
+  const spanSec = Math.max(0, (clip.endFrame - clip.startFrame) / safeFps);
+  const fallbackOut = clip.durationSec > trimIn ? clip.durationSec : trimIn + spanSec;
+  const trimOut = clip.trimOutSec != null && clip.trimOutSec > trimIn ? clip.trimOutSec : fallbackOut;
   const intoClip = Math.max(0, playheadFrame - clip.startFrame) / safeFps;
   const offsetSec = trimIn + intoClip;
   if (offsetSec >= trimOut - 1e-6) return null;

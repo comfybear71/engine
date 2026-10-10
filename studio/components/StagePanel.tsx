@@ -24,6 +24,7 @@ import {
   createFrameCache,
   frameInSegment,
   isLiveAudioStart,
+  mergePlaybackAudioFromLanes,
   playSegmentDurationSec,
   segmentWindow,
   shouldHoldLineAudio,
@@ -462,6 +463,28 @@ export default function StagePanel({
           );
           setPlayback((current) =>
             current ? { ...current, audio: shiftPlaybackAudio(current.audio, meta.delta || 0, starts) } : current
+          );
+        } else {
+          for (const handle of audioElsRef.current) {
+            try {
+              handle.el.pause();
+            } catch {
+              /* ignore */
+            }
+          }
+          audioElsRef.current = [];
+          setPlayback((current) =>
+            current
+              ? {
+                  ...current,
+                  audio: mergePlaybackAudioFromLanes(
+                    current.audio,
+                    meta.lanes.blocks,
+                    meta.lanes.totalFrames,
+                    meta.lanes.fps
+                  ),
+                }
+              : current
           );
         }
       }
