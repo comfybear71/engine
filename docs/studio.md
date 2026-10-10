@@ -10,7 +10,12 @@ No Vercel Blob, no database, no auth. Voices TTS stays on the CLI
 (`node src/cli.js voices`). Pre-recorded mp3/wav lip-sync is **Import
 audio** in Studio (Script tab, or **Import audio** on the Stage transport
 bar / Script drawer) — that calls `POST /api/projects/:name/import-audio` (ElevenLabs
-Speech-to-Text + Rhubarb). You never need the command line for that.
+Speech-to-Text + Rhubarb). A take longer than 60 s is split into 30–60 s
+clips at silences (word timings / Rhubarb rest), each with its own
+`[Audio:]` line, `.rhubarb.json`, and `words.json`. Existing long Audio
+blocks have **Split long audio** on the context menu. Splitting never
+re-runs ElevenLabs — it reuses `words.json`. You never need the command
+line for that.
 
 The **script is the source of truth**. Stage lanes are a view of a temp
 parse. Timeline edits (select, move, trim, split, delete, ripple,
@@ -159,8 +164,14 @@ clobber the project's `timeline.json`.
   keys step through that slot. Zoom/pan the preview. Mouth grids label
   each Rhubarb shape (X, A–H) with the plain-English sound, flag
   byte-identical duplicates, list missing shapes, and show view-set
-  folders (`mouth_left_side/`, …) plus loud variants when those files
-  exist. **Play sample** animates the head through a chosen sample
+  folders (`mouth_front/`, `mouth_left_side/`, …) plus loud variants when those files
+  exist. With no `view=` the compositor and Assets grid resolve
+  `mouth_front/` first when it exists, then `mouth/`. Generate/ingest of
+  a front head sheet writes `mouth_front/` and points the slot at it.
+  **Use this set as default** promotes the open view (old files stay in
+  `_replaced/`). **Re-align to default** matches hat-top / chin / neck
+  to the previous default canvas, with a before/after overlay and x/y/scale
+  nudge in the drawing viewer. **Play sample** animates the head through a chosen sample
   sentence (or a project take that already has Rhubarb cues). Drop or
   paste an image onto a drawing/cell to replace it through the green-screen
   cut-out + trim pipeline (before/after, Accept/Cancel); the old file is
@@ -207,30 +218,35 @@ clobber the project's `timeline.json`.
   Timed `wait=false` actions
   use their real `over=` / `for=` start and end, not just script order.
   Dialogue and audio lanes are unchanged. Space toggles
-  play. Stop returns to frame 0; rewind does the same. Play uses, in
+  play. Stop returns to frame 0; rewind does the same.   Play uses, in
   order: (a) an up-to-date `renders/<script-stem>.mp4` or leftover
   `output.mp4` (mtime ≥ the script) in the viewport with sound and a
-  synced playhead / lane highlight — Web Audio is stopped so the
-  video's own soundtrack is the only sound; (b) otherwise stepping
-  `preview-frame` with prefetch/cache plus the audio-lane WAVs through
-  Web Audio at their frame offsets, clamped to `total_frames`. Line
-  WAVs are fetched and decoded when the clips load, not on first Play;
-  Stage shows **Loading audio…** until that finishes. Pause, stop,
-  rewind, and effect cleanup cancel any pending start so only one WAV
-  copy can play. A seek before Play does not restart audio on the first
-  tick. (c) if the shot is two minutes or shorter and stepping cannot
-  keep real time, a 960×540 proxy render to
-  `renders/<script-stem>_preview.mp4` with a **Rendering preview…**
-  state, then that video plays. Shots longer than two minutes stay on
-  stepped preview with line audio; they do not auto-kick a proxy from
-  the first slow frame. The orange playhead handle sits on the
+  synced playhead / lane highlight — line audio is stopped so the
+  video's own soundtrack is the only sound; (b) otherwise the next ~25 s
+  as a 960×540 proxy *segment* from the persistent compositor (in-process
+  frame loop, cached by script/asset fingerprint). Stage shows
+  **Buffering preview…** with a progress hint. The first window is ~6 s
+  so the mouth can start without a 30 s wait; later windows are ~25 s
+  and render ahead. Line audio is held until that picture is actually
+  playing and is paused again if Stage has to buffer — it does not run
+  ahead of the mouth. There is no 120 s cap — a 9-minute shot plays
+  from any start the same way. Line audio is streamed with
+  `HTMLAudioElement` (range requests from `/media`) so a long WAV never
+  decodes on the main thread; timeline edits never wait on audio.
+  Pause, stop, rewind, and effect cleanup cancel any pending start so
+  only one WAV copy can play. A seek before Play does not restart
+  audio on the first tick. The audio clock follows the proxy video
+  (reseek if it drifts). Scrub still uses `preview-frame`
+  (preview resolution, persisted asset cache). The orange playhead handle sits on the
   time ruler; one vertical line continues down through every lane.
   Click or drag the empty ruler area to seek. Pointer-down on a block
   selects it and starts a drag; Shift/Ctrl-click adds to the selection;
   drag a rubber-band on empty lane area selects several; Esc clears.
   Drag a selected block (or several) left/right to change its start:
-  Studio writes `at_time=` on the matching script line(s), saves
-  (debounced), and re-parses so the script stays human-readable and the
+  Studio writes `at_time=` on every moved line in one pass, updates the
+  lane chips immediately, and saves the script without waiting for a
+  re-parse (`/lanes` on a 146-block shot can take ~10 s). One
+  background parse follows. The script stays human-readable and the
   single source of truth. Instant tags with no time concept show a
   not-allowed cursor. Snap to the playhead, other block edges, whole
   seconds, and frame boundaries (hold Alt to disable); a vertical guide
@@ -411,7 +427,9 @@ other media durations are cached by path + mtime + size.
 | `PUT` | `/api/projects/:name/characters/:id` | JSON `{ "style": "painted semi-real" }`. Writes a project-local `character.json` (copied from global if needed) with that free-text style field. Does not touch `_global_assets`. |
 | `POST` | `/api/projects/:name/characters/:id/reference` | JSON `{ "imageBase64", "filename?" }`. Stores the original image under `characters/<id>/_reference/full.<ext>` (no cut-out) and sets `reference` on a project-local `character.json`. |
 | `PUT` | `/api/projects/:name/characters/:id/slots/:slot` | JSON `{ "offset"?: {x,y}, "scale"?: number, "rotation"?: number }`. Copy-on-write into project-local `character.json`. Used by **Align head**. |
-| `GET` | `/api/projects/:name/characters/:id/slots/:slot` | Slot editor payload: drawings (size, hash, source), view folders (`?view=`), offset/scale, cycles, mouth-shape labels, duplicates, missing Rhubarb shapes. Resolves `characters/<id>/` episode → show → global (`?show=` for episodes). |
+| `GET` | `/api/projects/:name/characters/:id/slots/:slot` | Slot editor payload: drawings (size, hash, source), view folders (`?view=`), offset/scale, cycles, mouth-shape labels, duplicates, missing Rhubarb shapes. No `view=` resolves `mouth_front/` first when it exists. Resolves `characters/<id>/` episode → show → global (`?show=` for episodes). |
+| `POST` | `/api/projects/:name/characters/:id/slots/:slot/promote-view` | JSON `{ "view" }`. Point the slot `drawings_dir` at that set; copy the previous default files to `_replaced/<timestamp>/`. |
+| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"? }`. Align the view (or one drawing) to the previous default canvas (hat / chin / neck). |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing` | Drawing viewer payload plus script/cycle usages and prev/next names in that view. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/lipsync-preview` | Builtin sample cue tracks plus project audio that already has `.rhubarb.json`. Mouth slots only. |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing/replace` | JSON `{ "imageBase64", "filename?", "view?" }`. Green-screen cut-out + trim preview (before/after). |
@@ -443,12 +461,15 @@ other media durations are cached by path + mtime + size.
 | `PUT` | `/api/projects/:name/settings` | JSON `{ "lipSync"?, "lipsync"? }`. Writes `studio.json`. `lipsync.smoothing` is `off`/`light`/`medium`; `head_bob` is `off`/`subtle`/`strong`; `blinks` is a boolean; `loud_threshold` is a 0–1 percentile. |
 | `POST` | `/api/projects/:name/lipsync?script=` | Run Rhubarb for Dialogue lines. JSON `{ "scriptLine": N }`, `{ "scriptLines": [N] }`, or `{ "all": true }`. `{ "force": true }` redoes a synced line. `{ "clear": true }` deletes that line's `<wav>.rhubarb.json` so sync returns to `not_synced` (Dialogue and Audio stay). Writes `<wav>.rhubarb.json` plus an `engine` text fingerprint when syncing. Returns `{ ok, results }`. |
 | `GET` | `/api/projects/:name/stage?script=` | Parse the selected script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
-| `GET` | `/api/projects/:name/playback?script=` | Render/proxy freshness (`renders/<stem>.mp4` or `output.mp4`, plus `<stem>_preview.mp4`) vs the script mtime, and audio-lane clips with `exists`. Temp parse only. |
-| `GET` | `/api/projects/:name/media?rel=` | Stream a project-local line WAV (`audio/<scene>/<file>.wav` only). |
+| `GET` | `/api/projects/:name/playback?script=` | Render/proxy freshness (`renders/<stem>.mp4` or `output.mp4`, plus `<stem>_preview.mp4`) vs the script mtime, and audio-lane clips with `exists` and RIFF `durationSeconds`. Temp parse only. |
+| `GET` | `/api/projects/:name/media?rel=` | Stream a project-local line WAV (`audio/<scene>/<file>.wav` only). Supports HTTP range requests. |
+| `POST`/`GET` | `/api/projects/:name/preview-segment?script=` | Render or poll a ~25 s 960×540 H.264 play window from `{ startFrame, durationSec?, frames? }`. Cached by script/asset fingerprint. Does not block the UI or write `timeline.json`. |
+| `GET` | `/api/projects/:name/preview-segments/:file` | Stream a cached preview segment (`<sha1>.mp4`). |
 | `POST` | `/api/projects/:name/preview-frame?script=` | Parse the selected script to a temp timeline (shared cache), compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a JPEG (quality 85) for scrubbing. `{ "format": "png" }` keeps exact pixels. Frames are cached on disk/memory by script fingerprint + asset mtimes + frame. `Cache-Control: private, max-age=3600`. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. A persistent Python compositor process stays warm so numpy/cv2 are not re-imported per frame. |
 | `POST` | `/api/projects/:name/render?script=` | Parse the selected script to a temp timeline (never `timeline.json`), run the compositor with `--output renders/<script-stem>.mp4`. Same `--script` choice as the CLI. One render at a time. |
 | `POST` | `/api/projects/:name/preview-render?script=` | Same temp parse as Render, but writes a 960×540 H.264 proxy to `renders/<script-stem>_preview.mp4` for Stage playback. Shares the one-at-a-time render lock. |
-| `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). Studio **Import audio** sends multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe`); JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?" }` still works. Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Dry-run returns length + the STT credit note and writes nothing. |
+| `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). Studio **Import audio** sends multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe` / `splitLong`); JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?", "splitLong?" }` still works. Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Takes longer than 60 s are split into 30–60 s clips at silences (default; `splitLong=false` keeps one file). Dry-run returns length + the STT credit note and writes nothing. |
+| `POST` | `/api/projects/:name/split-audio` | Split an existing `audio/<label>/<file>.wav` over 60 s into 30–60 s chunks at word/Rhubarb silences. Reuses `.words.json` / `.rhubarb.json` (no ElevenLabs). Returns `{ chunks, tags }`. Studio rewrites the script line(s). |
 | `GET` | `/api/projects/:name/renders/:file` | Stream a render (`script.mp4`, `script_mcd.mp4`, `script_preview.mp4`, or a leftover `output.mp4`). |
 | `POST` | `/render` | Original CLI-oriented contract: `{ "projectDir": "..." }`. |
 

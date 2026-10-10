@@ -67,14 +67,22 @@ class Slot:
 
     def resolve_image(self, drawing: str | None, view: str | None = None) -> Path | None:
         pools: list[dict[str, Path]] = []
-        if view:
-            named = self.images_by_view.get(view)
+        # No view= (and empty view) means the default head: mouth_front/
+        # when that set exists, then mouth/. Named views still fall back
+        # to front, then to ``images``.
+        wanted = (view or "").strip() or None
+        if wanted:
+            named = self.images_by_view.get(wanted)
             if named:
                 pools.append(named)
-            if view != "front":
+            if wanted != "front":
                 front = self.images_by_view.get("front")
                 if front:
                     pools.append(front)
+        else:
+            front = self.images_by_view.get("front")
+            if front:
+                pools.append(front)
         pools.append(self.images)
         names: list[str] = []
         if drawing:

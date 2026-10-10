@@ -914,6 +914,20 @@ describe("at_time= / start= explicit start", () => {
     assert.equal(dlg[0].sync, "not_synced");
   });
 
+  test("mouth_front/ is the default image set when view is omitted", async () => {
+    const aliceDir = path.join(fixture.projectDir, "characters", "alice");
+    const globalMouth = path.join(fixture.globalAssetsDir, "characters", "alice", "mouth");
+    fs.mkdirSync(path.join(aliceDir, "mouth_front"), { recursive: true });
+    fs.copyFileSync(path.join(globalMouth, "X.png"), path.join(aliceDir, "mouth_front", "X.png"));
+    fs.copyFileSync(path.join(globalMouth, "A.png"), path.join(aliceDir, "mouth_front", "A.png"));
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hello."].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const mouth = timeline.scenes[0].layers[0].slots.mouth;
+    const x = String(mouth.images.X || "");
+    assert.match(x, /mouth_front/);
+    assert.match(String(mouth.images_by_view.front.X || ""), /mouth_front/);
+  });
+
   test("trim_in=/trim_out= shorten dialogue and over= holds a face pin", async () => {
     const script = [
       "[Scene: Intro]",

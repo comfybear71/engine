@@ -60,6 +60,9 @@ export type SlotEditor = {
   scale: number;
   rotation: number;
   defaultDrawing: string | null;
+  defaultDrawingsDir?: string;
+  isDefaultView?: boolean;
+  canRealign?: boolean;
   cycles: Record<string, { drawings: string[]; fps: number }>;
   mouth: boolean;
   shapes: { shape: string; sound: string; present: boolean; loud: boolean }[];
@@ -274,6 +277,40 @@ export async function deleteEditorDrawing(
   if (res.status === 409 && json.used) return json;
   if (!res.ok) throw new Error(json.error || `Delete failed (${res.status})`);
   return { ok: true };
+}
+
+export async function promoteSlotView(
+  project: string,
+  characterId: string,
+  slot: string,
+  view?: string
+): Promise<{ ok: boolean; drawingsDir: string; alreadyDefault?: boolean }> {
+  const res = await workerFetch(slotPath(project, characterId, slot, "/promote-view"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ view }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ ok: boolean; drawingsDir: string; alreadyDefault?: boolean }>;
+}
+
+export async function realignSlotView(
+  project: string,
+  characterId: string,
+  slot: string,
+  body: { view?: string; drawing?: string; nudge?: { x: number; y: number; scale: number } }
+): Promise<{ ok: boolean; written: { name: string; rel: string }[]; overlay?: { afterRel: string; beforeRel: string } | null }> {
+  const res = await workerFetch(slotPath(project, characterId, slot, "/realign"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{
+    ok: boolean;
+    written: { name: string; rel: string }[];
+    overlay?: { afterRel: string; beforeRel: string } | null;
+  }>;
 }
 
 export async function loadLipsyncPreview(

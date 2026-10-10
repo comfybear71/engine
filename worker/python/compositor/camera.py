@@ -12,7 +12,7 @@ see docs/timeline-schema.md).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -93,6 +93,25 @@ def _shake_offset(shake: Shake | None, frame: int, fps: int) -> tuple[float, flo
     dx = shake.amplitude_px * math.sin(angle)
     dy = shake.amplitude_px * math.cos(angle * 1.3)
     return dx, dy
+
+
+def scale_camera(camera: Camera | None, scale: float) -> Camera | None:
+    """Scale pan/shake coordinates when composing onto a smaller preview canvas."""
+
+    if camera is None or abs(float(scale) - 1.0) < 1e-9:
+        return camera
+    keyframes = [
+        replace(
+            kf,
+            x=None if kf.x is None else kf.x * scale,
+            y=None if kf.y is None else kf.y * scale,
+        )
+        for kf in camera.keyframes
+    ]
+    shake = camera.shake
+    if shake is not None:
+        shake = replace(shake, amplitude_px=shake.amplitude_px * scale)
+    return replace(camera, keyframes=keyframes, shake=shake)
 
 
 def apply_camera(

@@ -30,6 +30,8 @@ import {
   isMouthBlock,
   lineHasPinHold,
   moveBlocksInScript,
+  shiftLanesForMove,
+  type ScriptEditMeta,
   planSplit,
   planTrim,
   setViewOnLine,
@@ -147,6 +149,7 @@ export default function TimelineLanes({
   loopSelection = false,
   onPatchCue,
   onClearLipSync,
+  onSplitLongAudio,
 }: {
   project: string | null;
   lanes: LanesResponse | null;
@@ -156,7 +159,7 @@ export default function TimelineLanes({
   totalFrames?: number;
   playing?: boolean;
   scriptText?: string;
-  onEditScript?: (next: string) => void;
+  onEditScript?: (next: string, meta?: ScriptEditMeta) => void;
   canUndo?: boolean;
   canRedo?: boolean;
   onUndo?: () => void;
@@ -177,6 +180,7 @@ export default function TimelineLanes({
     pinned?: boolean;
   }) => void;
   onClearLipSync?: (opts: { scriptLine: number }) => void;
+  onSplitLongAudio?: (block: LaneBlock) => void;
 }) {
   const total = Math.max(totalFrames || lanes?.totalFrames || 1, 1);
   const fps = Math.max(lanes?.fps || 24, 1);
@@ -421,13 +425,14 @@ export default function TimelineLanes({
     if (!onEditScript || !scriptText || delta === 0) return;
     const moves = [];
     const seen = new Set<number>();
+    const lines = scriptText.split("\n");
     for (const block of allBlocks) {
       if (!ids.has(block.id) || !blockIsMovable(block) || block.scriptLine == null) continue;
       if (seen.has(block.scriptLine)) continue;
       seen.add(block.scriptLine);
       const scene = scenes.find((item) => item.id === block.sceneId);
       const source = block.sourceStartFrame ?? block.startFrame;
-      const line = scriptText.split("\n")[block.scriptLine - 1] || "";
+      const line = lines[block.scriptLine - 1] || "";
       const hold =
         trimKindForBlock(block) === "pin" && !lineHasPinHold(line)
           ? formatAtTime(Math.max(1, block.endFrame - block.startFrame), fps)
@@ -440,7 +445,9 @@ export default function TimelineLanes({
       });
     }
     const next = moveBlocksInScript(scriptText, moves, fps);
-    if (next !== scriptText) onEditScript(next);
+    if (next === scriptText) return;
+    const optimistic = lanes ? shiftLanesForMove(lanes, ids, delta) : undefined;
+    onEditScript(next, { lanes: optimistic, delta, ids: [...ids] });
   }
 
   function applyView(view: string) {
@@ -611,6 +618,14 @@ export default function TimelineLanes({
     if (next !== scriptText) onEditScript(next);
   }
 
+  function longSelectedAudio() {
+    return allBlocks.find((block) => {
+      if (!selectedIds.has(block.id) || block.lane !== "audio" || !block.rel) return false;
+      const frames = block.sourceDurationFrames || Math.max(1, block.endFrame - block.startFrame);
+      return frames / fps > 60.01;
+    }) || null;
+  }
+
   function applyContextAction(action: TimelineContextAction) {
     const lane = contextMenu?.lane ?? null;
     if (action === "copy") applyCopy();
@@ -626,6 +641,9 @@ export default function TimelineLanes({
         allBlocks.find((item) => seeds.has(item.id) && item.lane === "dialogue") ||
         allBlocks.find((item) => seeds.has(item.id) && item.scriptLine != null);
       if (block?.scriptLine != null) onSyncLines?.({ scriptLine: block.scriptLine, force: action === "redo-sync" });
+    } else if (action === "split-long-audio") {
+      const block = longSelectedAudio();
+      if (block) onSplitLongAudio?.(block);
     }
   }
 
@@ -811,13 +829,14 @@ export default function TimelineLanes({
       window.removeEventListener("pointercancel", onUp);
       if (dragRef.current?.pointerId === drag.pointerId) dragRef.current = null;
       followLockRef.current = false;
-      setDraftDelta(0);
       setSnapGuide(null);
       setTooltip(null);
       if (drag.moved) {
         applyMove(drag.delta, drag.ids);
+        setDraftDelta(0);
         return;
       }
+      setDraftDelta(0);
       selectFromClick(block, ev.shiftKey || ev.ctrlKey || ev.metaKey);
       onSeek(block.startFrame, block.scriptLine);
     };
@@ -1442,6 +1461,7 @@ export default function TimelineLanes({
           }
           hasSelection={selectedIds.size > 0}
           mouthOnly={selectionIsMouthOnly(allBlocks, selectedIds)}
+          showSplitLong={Boolean(onSplitLongAudio && longSelectedAudio())}
           showSync={allBlocks.some((block) => block.lane === "dialogue" && selectedIds.has(block.id))}
           syncLabel={
             allBlocks.find((block) => block.lane === "dialogue" && selectedIds.has(block.id))?.sync === "synced"

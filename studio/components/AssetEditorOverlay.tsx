@@ -18,6 +18,8 @@ import {
   neighborDrawing,
   previewAddDrawing,
   previewReplaceDrawing,
+  promoteSlotView,
+  realignSlotView,
   renameEditorDrawing,
   type AssetFocus,
   type DrawingEditor,
@@ -27,6 +29,7 @@ import {
   type LipsyncPreview,
   type SlotEditor,
 } from "@/lib/assetEditor";
+import { clampHeadNudge, defaultHeadNudge } from "@/lib/headAlign";
 import { packForCharacter } from "@/lib/promptPacks";
 import { assetUrl, loadCharacters, type Character } from "@/lib/worker";
 
@@ -81,6 +84,8 @@ export default function AssetEditorOverlay({
   const [lipsync, setLipsync] = useState<LipsyncPreview | null>(null);
   const [sampleId, setSampleId] = useState<string>("builtin:hello");
   const [playShape, setPlayShape] = useState<string | null>(null);
+  const [nudge, setNudge] = useState(defaultHeadNudge());
+  const [overlayDefault, setOverlayDefault] = useState(true);
   const playRef = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const addFileRef = useRef<HTMLInputElement | null>(null);
@@ -302,6 +307,38 @@ export default function AssetEditorOverlay({
     }
   }
 
+  async function onPromoteView() {
+    setBusy("Setting default…");
+    setError(null);
+    try {
+      await promoteSlotView(project, focus.characterId, focus.slot, view);
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not promote set");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onRealign(drawing?: string) {
+    setBusy("Re-aligning…");
+    setError(null);
+    try {
+      await realignSlotView(project, focus.characterId, focus.slot, {
+        view,
+        drawing,
+        nudge: clampHeadNudge(nudge),
+      });
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not re-align");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function playSample() {
     const sample = lipsync?.samples.find((item) => item.id === sampleId);
     if (!sample) return;
@@ -433,6 +470,18 @@ export default function AssetEditorOverlay({
           onReplace={() => fileRef.current?.click()}
           onRename={() => setRenameTo(current.name)}
           onDelete={() => setDeleteState({ force: false, usages: detail?.usages || [] })}
+          project={project}
+          canRealign={Boolean(slot?.canRealign)}
+          overlayDefault={overlayDefault}
+          onOverlayDefault={setOverlayDefault}
+          nudge={nudge}
+          onNudge={(next) => setNudge(clampHeadNudge(next))}
+          onRealign={() => void onRealign(current.name)}
+          defaultRel={
+            slot?.canRealign && slot.defaultDrawingsDir
+              ? `characters/${focus.characterId}/${slot.defaultDrawingsDir}/${current.name}.png`
+              : null
+          }
         />
       ) : slot ? (
         <SlotGrid
@@ -460,6 +509,8 @@ export default function AssetEditorOverlay({
             void ingestFile(file, "replace");
           }}
           onOpenImagine={openImagine}
+          onPromote={() => void onPromoteView()}
+          onRealign={() => void onRealign()}
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-[11px] text-studio-muted">Loading…</div>
@@ -542,6 +593,14 @@ function DrawingView({
   onReplace,
   onRename,
   onDelete,
+  project,
+  canRealign,
+  overlayDefault,
+  onOverlayDefault,
+  nudge,
+  onNudge,
+  onRealign,
+  defaultRel,
 }: {
   slot: SlotEditor | null;
   detail: DrawingEditor | null;
@@ -554,10 +613,30 @@ function DrawingView({
   onReplace: () => void;
   onRename: () => void;
   onDelete: () => void;
+  project: string;
+  canRealign: boolean;
+  overlayDefault: boolean;
+  onOverlayDefault: (value: boolean) => void;
+  nudge: { x: number; y: number; scale: number };
+  onNudge: (nudge: { x: number; y: number; scale: number }) => void;
+  onRealign: () => void;
+  defaultRel: string | null;
 }) {
+  const defaultSrc = defaultRel ? assetUrl(project, defaultRel) : null;
   return (
     <div className="flex min-h-0 flex-1">
-      <ZoomPane src={src} label={current.name} bg={bg} playShape={playShape} />
+      <div className="relative min-h-0 min-w-0 flex-1">
+        <ZoomPane src={src} label={current.name} bg={bg} playShape={playShape} />
+        {canRealign && overlayDefault && defaultSrc ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={defaultSrc}
+            alt=""
+            className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-40 mix-blend-screen"
+            data-testid="asset-align-overlay"
+          />
+        ) : null}
+      </div>
       <aside className="studio-asset-editor-meta">
         <MetaRow label="Name" value={current.name} />
         <MetaRow
@@ -604,6 +683,54 @@ function DrawingView({
             </button>
           ))}
         </div>
+        {canRealign ? (
+          <div className="space-y-1 border-t border-studio-border pt-2" data-testid="asset-nudge">
+            <label className="flex items-center gap-1 text-[10px] text-neutral-400">
+              <input
+                type="checkbox"
+                checked={overlayDefault}
+                onChange={(event) => onOverlayDefault(event.target.checked)}
+              />
+              Overlay default
+            </label>
+            <label className="block text-[10px] text-neutral-500">
+              Nudge X
+              <input
+                type="range"
+                min={-80}
+                max={80}
+                value={nudge.x}
+                className="w-full"
+                onChange={(event) => onNudge({ ...nudge, x: Number(event.target.value) })}
+              />
+            </label>
+            <label className="block text-[10px] text-neutral-500">
+              Nudge Y
+              <input
+                type="range"
+                min={-80}
+                max={80}
+                value={nudge.y}
+                className="w-full"
+                onChange={(event) => onNudge({ ...nudge, y: Number(event.target.value) })}
+              />
+            </label>
+            <label className="block text-[10px] text-neutral-500">
+              Scale
+              <input
+                type="range"
+                min={50}
+                max={150}
+                value={Math.round(nudge.scale * 100)}
+                className="w-full"
+                onChange={(event) => onNudge({ ...nudge, scale: Number(event.target.value) / 100 })}
+              />
+            </label>
+            <button type="button" className="studio-header-textbtn" data-testid="asset-realign-one" onClick={onRealign}>
+              Re-align this drawing
+            </button>
+          </div>
+        ) : null}
         <div className="flex flex-wrap gap-1">
           <button type="button" className="studio-header-textbtn" onClick={onReplace} data-testid="asset-replace">
             Replace
@@ -697,6 +824,8 @@ function SlotGrid({
   onDropAdd,
   onDropReplace,
   onOpenImagine,
+  onPromote,
+  onRealign,
 }: {
   project: string;
   slot: SlotEditor;
@@ -711,6 +840,8 @@ function SlotGrid({
   onDropAdd: (file: File) => void;
   onDropReplace: (drawing: string, file: File) => void;
   onOpenImagine: () => void;
+  onPromote: () => void;
+  onRealign: () => void;
 }) {
   const cells = slot.mouth
     ? slot.shapes.map((shape) => {
@@ -763,6 +894,16 @@ function SlotGrid({
               Play sample
             </button>
           </>
+        ) : null}
+        {slot.mouth && !slot.isDefaultView ? (
+          <button type="button" className="studio-header-textbtn" data-testid="asset-promote-view" onClick={onPromote}>
+            Use this set as default
+          </button>
+        ) : null}
+        {slot.canRealign ? (
+          <button type="button" className="studio-header-textbtn" data-testid="asset-realign" onClick={onRealign}>
+            Re-align to default
+          </button>
         ) : null}
         <button type="button" className="studio-header-textbtn" data-testid="asset-imagine" onClick={onOpenImagine}>
           Open Grok Imagine for this slot

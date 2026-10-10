@@ -68,3 +68,11 @@ def test_clamp_preview_frame_stays_on_last_valid_index(tmp_path):
     assert local == 4
     canvas = compose_frame(timeline, clamped)
     assert canvas.shape == (20, 20, 3)
+
+
+def test_compose_frame_can_preview_at_reduced_resolution(tmp_path):
+    timeline = _two_scene_timeline(tmp_path)
+    small = compose_frame(timeline, 0, width=10, height=10)
+    assert small.shape[0] == 10
+    assert small.shape[1] == 10
+    assert tuple(int(v) for v in small[0, 0]) == (0, 0, 255)

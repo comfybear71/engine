@@ -7,6 +7,7 @@ const path = require("path");
 
 const { createApp, isSafeProjectName, resolveProjectDir, isSafeRelPath } = require("../src/server");
 const { closePreviewSession } = require("../src/previewSession");
+const { resetPreviewSegments } = require("../src/previewSegments");
 const { resetParseCache } = require("../src/parser/parseCache");
 const { resetDurationCache } = require("../src/parser/ffprobeDuration");
 const { resetSummaryCache } = require("../src/studioProjects");
@@ -89,6 +90,7 @@ describe("studio worker API", () => {
   after(async () => {
     if (ctx) await ctx.close();
     closePreviewSession();
+    resetPreviewSegments();
     resetParseCache();
     resetDurationCache();
     resetSummaryCache();
@@ -283,6 +285,21 @@ describe("studio worker API", () => {
     assert.equal(goodBody.saved, true);
     assert.equal(goodBody.ok, true);
     assert.equal(fs.readFileSync(path.join(fixture.projectDir, "script.txt"), "utf8"), script);
+
+    const moved = script.replace("Alice: Hello there friend.", "Alice at_time=2s: Hello there friend.");
+    const t0 = Date.now();
+    const fast = await fetch(`${ctx.url}/api/projects/project/script?parse=0`, {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain" },
+      body: moved,
+    });
+    const fastMs = Date.now() - t0;
+    const fastBody = await fast.json();
+    assert.equal(fast.status, 200, JSON.stringify(fastBody));
+    assert.equal(fastBody.saved, true);
+    assert.equal(fastBody.parsed, false);
+    assert.equal(fs.readFileSync(path.join(fixture.projectDir, "script.txt"), "utf8"), moved);
+    assert.ok(fastMs < 200, `parse=0 save ${fastMs}ms`);
     assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
 
     const lint = await fetch(`${ctx.url}/api/projects/project/lint`, {
@@ -680,9 +697,36 @@ describe("studio worker API", () => {
     const wav = await fetch(`${ctx.url}/api/projects/project/media?rel=audio/intro/001_alice.wav`);
     assert.equal(wav.status, 200);
     assert.match(String(wav.headers.get("content-type") || ""), /audio\/(wav|x-wav|wave)/);
+    const ranged = await fetch(`${ctx.url}/api/projects/project/media?rel=audio/intro/001_alice.wav`, {
+      headers: { Range: "bytes=0-15" },
+    });
+    assert.equal(ranged.status, 206);
+    assert.equal(ranged.headers.get("accept-ranges"), "bytes");
+    const clip = body.audio.find((item) => item.rel === "audio/intro/001_alice.wav");
+    assert.ok(clip.durationSeconds > 0);
 
     const bad = await fetch(`${ctx.url}/api/projects/project/media?rel=../script.txt`);
     assert.equal(bad.status, 400);
+  });
+
+  test("POST /preview-segment starts a windowed proxy and never writes timeline.json", async () => {
+    fixture.writeScript(
+      ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi there."].join("\n")
+    );
+    const timelinePath = path.join(fixture.projectDir, "timeline.json");
+    const sentinel = { sentinel: true };
+    fs.writeFileSync(timelinePath, JSON.stringify(sentinel));
+    const res = await fetch(`${ctx.url}/api/projects/project/preview-segment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startFrame: 0, frames: 2, width: 64, height: 36 }),
+    });
+    const body = await res.json();
+    assert.ok(res.status === 200 || res.status === 202, JSON.stringify(body));
+    assert.equal(body.startFrame, 0);
+    assert.equal(body.frames, 2);
+    assert.ok(body.file || body.progress >= 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinel);
   });
 
   test("POST /api/projects/:name/import-audio dry-run reports length and writes nothing", async () => {

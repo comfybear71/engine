@@ -589,8 +589,15 @@ export async function restoreScriptHistory(
   return body;
 }
 
-export async function saveScript(name: string, text: string, script?: string | null): Promise<LintResult> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, script), {
+export async function saveScript(
+  name: string,
+  text: string,
+  script?: string | null,
+  opts?: { parse?: boolean }
+): Promise<LintResult> {
+  const path = withScript(`/api/projects/${encodeURIComponent(name)}/script`, script);
+  const url = opts?.parse === false ? `${path}${path.includes("?") ? "&" : "?"}parse=0` : path;
+  const res = await workerFetch(url, {
     method: "PUT",
     headers: { "Content-Type": "text/plain" },
     body: text,
@@ -745,8 +752,25 @@ export type PlaybackAudioInfo = {
   startFrame: number;
   endFrame: number;
   exists: boolean;
+  durationSeconds?: number | null;
   trimInSec?: number;
   trimOutSec?: number | null;
+};
+
+export type PreviewSegmentStatus = {
+  ok: boolean;
+  ready: boolean;
+  progress: number;
+  framesDone: number;
+  framesTotal: number;
+  startFrame: number;
+  frames: number;
+  fps: number;
+  width: number;
+  height: number;
+  file: string | null;
+  url: string | null;
+  error?: string;
 };
 export type PlaybackStatus = {
   fps: number;
@@ -760,6 +784,64 @@ export async function loadPlayback(name: string, script?: string | null): Promis
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/playback`, script));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<PlaybackStatus>;
+}
+
+export function previewSegmentUrl(name: string, file: string): string {
+  return `${WORKER_URL}${withShow(`/api/projects/${encodeURIComponent(name)}/preview-segments/${encodeURIComponent(file)}`)}`;
+}
+
+export async function requestPreviewSegment(
+  name: string,
+  body: { startFrame: number; durationSec?: number; frames?: number; width?: number; height?: number },
+  script?: string | null
+): Promise<PreviewSegmentStatus> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/preview-segment`, script), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => ({}))) as PreviewSegmentStatus & { error?: string };
+  if (!res.ok && res.status !== 202) {
+    throw new Error(json.error || `Preview segment failed (${res.status})`);
+  }
+  return json;
+}
+
+export async function waitForPreviewSegment(
+  name: string,
+  body: { startFrame: number; durationSec?: number; frames?: number },
+  script?: string | null,
+  onProgress?: (status: PreviewSegmentStatus) => void
+): Promise<PreviewSegmentStatus> {
+  let status = await requestPreviewSegment(name, body, script);
+  onProgress?.(status);
+  const started = Date.now();
+  while (!status.ready) {
+    if (status.error) throw new Error(status.error);
+    if (Date.now() - started > 10 * 60 * 1000) throw new Error("Preview segment timed out");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    status = await loadPreviewSegment(name, { startFrame: body.startFrame, durationSec: body.durationSec, frames: body.frames }, script);
+    onProgress?.(status);
+  }
+  return status;
+}
+
+export async function loadPreviewSegment(
+  name: string,
+  query: { startFrame: number; durationSec?: number; frames?: number },
+  script?: string | null
+): Promise<PreviewSegmentStatus> {
+  const params = new URLSearchParams({ startFrame: String(query.startFrame) });
+  if (query.durationSec) params.set("durationSec", String(query.durationSec));
+  if (query.frames) params.set("frames", String(query.frames));
+  const res = await workerFetch(
+    withScript(`/api/projects/${encodeURIComponent(name)}/preview-segment?${params.toString()}`, script)
+  );
+  const json = (await res.json().catch(() => ({}))) as PreviewSegmentStatus & { error?: string };
+  if (!res.ok && res.status !== 202) {
+    throw new Error(json.error || `Preview segment failed (${res.status})`);
+  }
+  return json;
 }
 
 export async function startPreviewRender(name: string, script?: string | null): Promise<RenderResponse> {
@@ -798,6 +880,12 @@ export type ImportAudioResponse = {
   wordsPath?: string;
   transcribed?: boolean;
   tag?: string;
+  tags?: string[];
+  split?: boolean;
+  willSplit?: boolean;
+  estimatedChunks?: number | null;
+  chunks?: AudioSplitChunk[];
+  splitMs?: number | null;
   estimatedCost?: string | number | null;
   cost?: string | number | null;
   estimatedCredits?: string | number | null;
@@ -889,10 +977,48 @@ export async function generateProjectImage(
   return payload;
 }
 
+export type AudioSplitChunk = {
+  label: string;
+  offsetSec: number;
+  durationSec: number;
+  wavPath?: string;
+  cuesPath?: string;
+  wordsPath?: string;
+};
+
+export type SplitAudioResponse = {
+  ok: boolean;
+  split: boolean;
+  durationSeconds: number;
+  originalRel?: string;
+  originalLabel?: string;
+  character?: string;
+  chunks: AudioSplitChunk[];
+  tags?: string[];
+  elapsedMs?: number;
+  reusedWords?: boolean;
+  reusedCues?: boolean;
+  reason?: string;
+};
+
+export async function splitProjectAudio(
+  name: string,
+  body: { rel: string; character?: string; label?: string }
+): Promise<SplitAudioResponse> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/split-audio`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json().catch(() => ({}))) as SplitAudioResponse & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Split failed (${res.status})`);
+  return payload;
+}
+
 export async function importProjectAudio(
   name: string,
   file: File,
-  options: { character: string; name?: string; dryRun?: boolean; noTranscribe?: boolean }
+  options: { character: string; name?: string; dryRun?: boolean; noTranscribe?: boolean; splitLong?: boolean }
 ): Promise<ImportAudioResponse> {
   const body = new FormData();
   body.append("file", file, file.name);
@@ -900,6 +1026,8 @@ export async function importProjectAudio(
   if (options.name) body.append("name", options.name);
   if (options.dryRun) body.append("dryRun", "true");
   if (options.noTranscribe) body.append("noTranscribe", "true");
+  if (options.splitLong === false) body.append("splitLong", "false");
+  if (options.splitLong === true) body.append("splitLong", "true");
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/import-audio`, {
     method: "POST",
     body,

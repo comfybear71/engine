@@ -318,8 +318,11 @@ class TestMouthSlotDrivenByDialogue:
         )
         assert slot.resolve_image("B", view="left_side") == side_b
         assert slot.resolve_image("B", view="up") == front_b
+        assert slot.resolve_image("B", view=None) == front_b
+        assert slot.resolve_image("B", view="") == front_b
         empty = Slot(images={"B": default_b})
         assert empty.resolve_image("B", view="left_side") == default_b
+        assert empty.resolve_image("B", view=None) == default_b
 
     def test_requires_non_empty_dialogue(self, tmp_path):
         _base_project(tmp_path)
