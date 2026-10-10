@@ -22,12 +22,13 @@ describe("tokenizer", () => {
         "[Camera: zoom=1.3 over=2s]",
         "[Pause: 12]",
         "[Audio: Alice file=monologue]",
+        "[View: Alice view=left_side]",
         "Alice: Hello there.",
       ].join("\n")
     );
     assert.deepEqual(
       tokens.map((t) => t.kind),
-      ["scene", "location", "cast", "action", "prop", "layer", "move", "pose", "swing", "camera", "pause", "audio", "dialogue"]
+      ["scene", "location", "cast", "action", "prop", "layer", "move", "pose", "swing", "camera", "pause", "audio", "view", "dialogue"]
     );
   });
 
@@ -60,6 +61,15 @@ describe("tokenizer", () => {
     assert.equal(token.kind, "dialogue");
     assert.equal(token.character, "Hicks");
     assert.equal(token.text, "Where's the rent money, Dana?");
+  });
+
+  test("dialogue speaker accepts at_time= and view=", () => {
+    const [token] = tokenize("Alice at_time=2s view=left_side: Hello.");
+    assert.equal(token.kind, "dialogue");
+    assert.equal(token.character, "Alice");
+    assert.equal(token.text, "Hello.");
+    assert.equal(token.kv.at_time, "2s");
+    assert.equal(token.kv.view, "left_side");
   });
 
   test("unknown bracket tag throws a line-numbered ScriptError", () => {

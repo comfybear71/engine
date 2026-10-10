@@ -79,6 +79,143 @@ input[type="range"].studio-scrubber::-moz-range-thumb {
   top: 0;
 }
 
+.studio-snap-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #fde68a;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 20;
+}
+
+.studio-mouth-cues {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  left: 1px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.studio-sync-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: #737373;
+}
+
+.studio-sync-dot[data-sync="synced"] {
+  background: #4ade80;
+}
+
+.studio-sync-dot[data-sync="stale"] {
+  background: #fbbf24;
+}
+
+.studio-chip-sync {
+  display: none;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.85;
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+.studio-chip-sync:hover,
+.studio-chip-sync:focus-visible {
+  opacity: 1;
+}
+
+[data-lane-chip]:hover .studio-chip-sync,
+[data-lane-chip][data-selected="true"] .studio-chip-sync {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.studio-header-textbtn {
+  height: 18px;
+  padding: 0 5px;
+  border: 0;
+  background: transparent;
+  color: #a3a3a3;
+  font-size: 10px;
+  line-height: 18px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.studio-header-textbtn:hover:not(:disabled),
+.studio-header-textbtn[data-active="true"] {
+  color: #fff;
+}
+
+.studio-header-textbtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.studio-header-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #a3a3a3;
+  cursor: pointer;
+}
+
+.studio-header-iconbtn:hover:not(:disabled),
+.studio-header-iconbtn[data-active="true"] {
+  color: #fff;
+}
+
+.studio-header-iconbtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.studio-view-select {
+  height: 16px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: #e5e5e5;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.studio-mouth-cue {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.studio-rubber-band {
+  position: absolute;
+  border: 1px solid rgba(253, 230, 138, 0.9);
+  background: rgba(253, 230, 138, 0.12);
+  pointer-events: none;
+  z-index: 25;
+}
+
 .studio-field {
   width: 100%;
   border-radius: 0.375rem;

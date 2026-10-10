@@ -662,6 +662,35 @@ describe("studio worker API", () => {
     assert.match(body.error, /character/i);
   });
 
+  test("settings and lipsync endpoints accept studio.json and require a line", async () => {
+    const getSettings = await fetch(`${ctx.url}/api/projects/project/settings`);
+    assert.equal(getSettings.status, 200);
+    const before = await getSettings.json();
+    assert.equal(before.lipSync, "auto");
+
+    const put = await fetch(`${ctx.url}/api/projects/project/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lipSync: "manual" }),
+    });
+    assert.equal(put.status, 200);
+    assert.equal((await put.json()).lipSync, "manual");
+    await fetch(`${ctx.url}/api/projects/project/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lipSync: "auto" }),
+    });
+
+    const missing = await fetch(`${ctx.url}/api/projects/project/lipsync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missing.status, 400);
+    const missingBody = await missing.json();
+    assert.match(missingBody.error, /scriptLine|all/i);
+  });
+
   test("POST ingest without an image is 400", async () => {
     const res = await fetch(`${ctx.url}/api/projects/project/characters/alice/ingest`, {
       method: "POST",

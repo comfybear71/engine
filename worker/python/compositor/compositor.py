@@ -31,7 +31,7 @@ from .background import fit_to_canvas
 from .blend import draw_image
 from .camera import apply_camera
 from .ffmpeg_writer import write_frames
-from .slots import Slot, active_drawing, slot_is_visible
+from .slots import Slot, _find_active_clip, active_drawing, slot_is_visible
 from .timeline_loader import Child, Layer, Scene, Timeline, child_rotation_at, transform_at
 from .transform import rotate_offset_clockwise
 
@@ -154,7 +154,11 @@ def _draw_slot(
     if not slot_is_visible(slot, drawings):
         return
     drawing = active_drawing(slot, owner_local_frame_idx, fps)
-    image_path = slot.resolve_image(drawing)
+    view = None
+    if slot.dialogue is not None:
+        clip = _find_active_clip(slot.dialogue, owner_local_frame_idx)
+        view = getattr(clip, "view", None) if clip is not None else None
+    image_path = slot.resolve_image(drawing, view=view)
     if image_path is None:
         return
 

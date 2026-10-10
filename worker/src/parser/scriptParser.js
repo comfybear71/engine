@@ -20,6 +20,12 @@
  * cues + optional words.json) as that character's dialogue at the cursor
  * and advances by the real file duration.
  *
+ * Optional at_time= / start= (seconds like "2s" or a frame count like "48")
+ * pins that one event to an explicit scene-local start. The shared cursor
+ * still advances from its current value (wait=true / dialogue / audio), so
+ * moving one block does not ripple-shift later lines. Omit the attribute
+ * and timing is unchanged (script order + wait=).
+ *
  * A character gets exactly one Layer per *cut* they hold in a scene:
  * an [Action: ... at=/flip=/scale=/z=] that actually changes their resolved
  * transform closes the current layer "segment" and opens a new one with the
@@ -43,7 +49,10 @@ const {
   noteHasKeyValue,
   parseCastList,
   parsePauseValue,
+  parseAtTimeSpec,
+  parseViewValue,
   parseSecondsSpec,
+  HEAD_VIEWS,
   parseEaseValue,
   parseWaitValue,
   parseNumberValue,
@@ -55,6 +64,7 @@ const assetLibrary = require("./assetLibrary");
 const { probeDurationSeconds } = require("./ffprobeDuration");
 const { findOverlapWarnings, findMouthSheetErrors, findMissingPropAssets } = require("./lint");
 const { resolveImportedTrack, wordsToSentences, transcriptFromWords } = require("../importAudio");
+const { computeSyncState } = require("../voices/lipSync");
 
 const WORDS_PER_SECOND = 2.5;
 const ESTIMATE_PAD_SECONDS = 0.3;
@@ -62,7 +72,8 @@ const DEFAULT_SCENE_PADDING_FRAMES = 12;
 const DEFAULT_CANVAS_WIDTH = 1920;
 const DEFAULT_CANVAS_HEIGHT = 1080;
 const RESERVED_SLOT_NAMES = new Set(["mouth"]); // dialogue-driven only, never settable via [Action: ...]
-const CAMERA_KEYS = new Set(["zoom", "pan", "tilt", "to", "over", "ease", "wait", "reset"]);
+const CAMERA_KEYS = new Set(["zoom", "pan", "tilt", "to", "over", "ease", "wait", "reset", "at_time", "start"]);
+const TIMING_KEYS = new Set(["at_time", "start"]);
 
 function slugify(text) {
   return (
@@ -188,6 +199,7 @@ class CharacterSceneState {
     // Last Action-set drawing/cycle per slot, so a forked layer can continue
     // it instead of snapping back to default_drawing.
     this.activeSlots = new Map(); // slotStateKey -> { ownerType, childId?, slotName, drawing?, cycle?, fps?, startedAtSceneFrame? }
+    this.currentView = "front"; // head/mouth set for subsequent dialogue until [View:] or view=
   }
 }
 
@@ -247,10 +259,82 @@ class ScriptParser {
     this.sceneLengths = []; // { id, frames } in parse order, for global offsets
   }
 
-  _emitLane({ lane, token, startFrame, endFrame, label, subject, rel, keys, subjectKind }) {
+  _laneTiming(token, kv) {
+    const kind =
+      token.kind === "dialogue"
+        ? "dialogue"
+        : token.kind === "audio"
+          ? "audio"
+          : token.kind === "swing"
+            ? "for"
+            : token.kind === "move" || token.kind === "pose" || token.kind === "camera"
+              ? "over"
+              : "pin";
+    const explicit = kv && kv.at_time !== undefined ? "at_time" : kv && kv.start !== undefined ? "start" : null;
+    const durationAttr = kind === "over" ? "over" : kind === "for" ? "for" : null;
+    return {
+      kind,
+      tag: token.kind,
+      attr: explicit || durationAttr,
+      movable: true,
+    };
+  }
+
+  /** Scene-local start: at_time= / start= if present, else the shared cursor. */
+  _eventStartFrame(kv, scene, lineNumber) {
+    const hasAt = kv && kv.at_time !== undefined;
+    const hasStart = kv && kv.start !== undefined;
+    if (!hasAt && !hasStart) return scene.cursorFrames;
+    const label = hasAt ? "at_time" : "start";
+    const spec = parseAtTimeSpec(hasAt ? kv.at_time : kv.start, lineNumber, label);
+    if (spec.frames !== undefined) return spec.frames;
+    return Math.max(0, Math.round(spec.seconds * this.fps));
+  }
+
+  /** Run `fn` with the scene cursor temporarily at `startFrame`, then restore. */
+  _runAtEventTime(scene, startFrame, fn) {
+    const saved = scene.cursorFrames;
+    scene.cursorFrames = startFrame;
+    try {
+      return fn(saved);
+    } finally {
+      scene.cursorFrames = saved;
+    }
+  }
+
+  _emitLane({
+    lane,
+    token,
+    startFrame,
+    endFrame,
+    label,
+    subject,
+    rel,
+    keys,
+    subjectKind,
+    kv,
+    sourceStartFrame,
+    cues,
+    view,
+    marriedId,
+    audioRel,
+    cuesRel,
+    syncText,
+  }) {
     if (!this.scene) return;
     const start = Math.max(0, startFrame);
     const end = Math.max(start, endFrame == null ? start : endFrame);
+    const sourceStart = sourceStartFrame == null ? start : Math.max(0, sourceStartFrame);
+    const spokenText = syncText == null ? "" : String(syncText);
+    const sync =
+      lane === "dialogue" && cuesRel
+        ? computeSyncState({
+            projectDir: this.projectDir,
+            cuesRel,
+            wavRel: audioRel,
+            text: spokenText,
+          })
+        : null;
     this.laneEvents.push({
       lane,
       tag: token.kind,
@@ -260,10 +344,60 @@ class ScriptParser {
       scriptLine: token.lineNumber,
       startFrame: start,
       endFrame: end,
+      sourceStartFrame: sourceStart,
       label,
       subject: subject || null,
       rel: rel || null,
+      timing: this._laneTiming(token, kv || {}),
+      cues: Array.isArray(cues) ? cues : [],
+      view: view || null,
+      marriedId: marriedId || null,
+      trim: { inFrames: 0, outFrames: 0 },
+      audioRel: audioRel || null,
+      cuesRel: cuesRel || null,
+      syncText: spokenText || null,
+      sync,
     });
+  }
+
+  _marriedId(token) {
+    if (!this.scene) return null;
+    return `line:${this.scene.sceneId}:${token.lineNumber}`;
+  }
+
+  _readMouthCues(relPath) {
+    if (!relPath) return [];
+    const abs = path.isAbsolute(relPath) ? relPath : path.join(this.projectDir, relPath);
+    try {
+      if (!fs.existsSync(abs)) return [];
+      const data = JSON.parse(fs.readFileSync(abs, "utf8"));
+      const raw = Array.isArray(data.mouthCues) ? data.mouthCues : [];
+      return raw
+        .map((cue) => ({
+          shape: String(cue.value || cue.shape || "X"),
+          start: Number(cue.start) || 0,
+          end: Number(cue.end) || 0,
+        }))
+        .filter((cue) => cue.end > cue.start);
+    } catch {
+      return [];
+    }
+  }
+
+  _sliceMouthCues(cues, fromSec, toSec) {
+    return (cues || [])
+      .filter((cue) => cue.end > fromSec && cue.start < toSec)
+      .map((cue) => ({
+        shape: cue.shape,
+        start: Math.max(0, cue.start - fromSec),
+        end: Math.max(0, Math.min(toSec, cue.end) - fromSec),
+      }))
+      .filter((cue) => cue.end > cue.start);
+  }
+
+  _resolveLineView(kv, state, lineNumber) {
+    if (kv && kv.view !== undefined) return parseViewValue(kv.view, lineNumber);
+    return state && state.currentView && state.currentView !== "front" ? state.currentView : null;
   }
 
   // ---- top-level driver -------------------------------------------------
@@ -332,6 +466,9 @@ class ScriptParser {
         return;
       case "audio":
         await this._handleImportedAudio(token);
+        return;
+      case "view":
+        this._handleView(token);
         return;
       case "dialogue":
         await this._handleDialogue(token);
@@ -716,26 +853,45 @@ class ScriptParser {
     const wantHide = kv.hide === "true" || kv.hide === "1";
     const wantShow = kv.show === "true" || kv.show === "1";
     const hasPoseChange = kv.at !== undefined || kv.scale !== undefined || kv.z !== undefined;
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
 
-    if (wantHide) {
-      this._closeCurrentSegment(state, scene.cursorFrames);
-      this._emitLane({
-        lane: "action",
-        token,
-        startFrame: scene.cursorFrames,
-        endFrame: scene.cursorFrames,
-        label: `${scriptName} hide`,
-        subject: state.propId,
-        subjectKind: "prop",
-        keys: Object.keys(kv),
-      });
-      return;
-    }
+    this._runAtEventTime(scene, eventStart, () => {
+      if (wantHide) {
+        this._closeCurrentSegment(state, scene.cursorFrames);
+        this._emitLane({
+          lane: "action",
+          token,
+          startFrame: scene.cursorFrames,
+          endFrame: scene.cursorFrames,
+          label: `${scriptName} hide`,
+          subject: state.propId,
+          subjectKind: "prop",
+          keys: Object.keys(kv),
+          kv,
+        });
+        return;
+      }
 
-    const pose = this._resolvePropPose(scene, state, kv, token.lineNumber);
-    const verb = wantShow ? "show" : hasPoseChange ? "move" : "prop";
-    if (!state.current) {
-      this._openPropSegment(scene, state, pose, token.lineNumber);
+      const pose = this._resolvePropPose(scene, state, kv, token.lineNumber);
+      const verb = wantShow ? "show" : hasPoseChange ? "move" : "prop";
+      if (!state.current) {
+        this._openPropSegment(scene, state, pose, token.lineNumber);
+        this._emitLane({
+          lane: "action",
+          token,
+          startFrame: scene.cursorFrames,
+          endFrame: scene.cursorFrames,
+          label: `${scriptName} ${verb}`,
+          subject: state.propId,
+          subjectKind: "prop",
+          keys: Object.keys(kv),
+          kv,
+        });
+        return;
+      }
+      if (hasPoseChange || wantShow) {
+        this._applyPropPose(scene, state, pose, token.lineNumber);
+      }
       this._emitLane({
         lane: "action",
         token,
@@ -745,21 +901,8 @@ class ScriptParser {
         subject: state.propId,
         subjectKind: "prop",
         keys: Object.keys(kv),
+        kv,
       });
-      return;
-    }
-    if (hasPoseChange || wantShow) {
-      this._applyPropPose(scene, state, pose, token.lineNumber);
-    }
-    this._emitLane({
-      lane: "action",
-      token,
-      startFrame: scene.cursorFrames,
-      endFrame: scene.cursorFrames,
-      label: `${scriptName} ${verb}`,
-      subject: state.propId,
-      subjectKind: "prop",
-      keys: Object.keys(kv),
     });
   }
 
@@ -771,11 +914,11 @@ class ScriptParser {
     if (kv.z === undefined) {
       throw new ScriptError(token.lineNumber, `[Layer: ...] needs z=<integer>.`);
     }
-    const extraKeys = Object.keys(kv).filter((key) => key !== "z");
+    const extraKeys = Object.keys(kv).filter((key) => key !== "z" && !TIMING_KEYS.has(key));
     if (extraKeys.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[Layer: ...] only accepts z=; use [Action: ...] or [Prop: ...] to move. Unexpected: ${extraKeys.join(", ")}`
+        `[Layer: ...] only accepts z= and optional at_time=/start=; use [Action: ...] or [Prop: ...] to move. Unexpected: ${extraKeys.join(", ")}`
       );
     }
     const newZ = parseInt(kv.z, 10);
@@ -783,22 +926,26 @@ class ScriptParser {
       throw new ScriptError(token.lineNumber, `Invalid z "${kv.z}" -- expected an integer.`);
     }
 
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
     const characterId = this.characterLibrary.resolveIdByScriptName(scriptName);
     if (characterId) {
       if (!scene.castOrder.includes(characterId)) {
         scene.castOrder.push(characterId);
       }
       const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
-      this._applyCharacterZ(scene, state, newZ, token.lineNumber);
-      this._emitLane({
-        lane: "action",
-        token,
-        startFrame: scene.cursorFrames,
-        endFrame: scene.cursorFrames,
-        label: `${scriptName} z=${newZ}`,
-        subject: characterId,
-        subjectKind: "character",
-        keys: ["z"],
+      this._runAtEventTime(scene, eventStart, () => {
+        this._applyCharacterZ(scene, state, newZ, token.lineNumber);
+        this._emitLane({
+          lane: "action",
+          token,
+          startFrame: scene.cursorFrames,
+          endFrame: scene.cursorFrames,
+          label: `${scriptName} z=${newZ}`,
+          subject: characterId,
+          subjectKind: "character",
+          keys: ["z"],
+          kv,
+        });
       });
       return;
     }
@@ -815,22 +962,25 @@ class ScriptParser {
         `"${scriptName}" is hidden -- show it with [Prop: ${scriptName} show] before changing its layer.`
       );
     }
-    this._applyPropPose(scene, propState, this._resolvePropPose(scene, propState, { z: String(newZ) }, token.lineNumber), token.lineNumber);
-    this._emitLane({
-      lane: "action",
-      token,
-      startFrame: scene.cursorFrames,
-      endFrame: scene.cursorFrames,
-      label: `${scriptName} z=${newZ}`,
-      subject: propState.propId,
-      subjectKind: "prop",
-      keys: ["z"],
+    this._runAtEventTime(scene, eventStart, () => {
+      this._applyPropPose(scene, propState, this._resolvePropPose(scene, propState, { z: String(newZ) }, token.lineNumber), token.lineNumber);
+      this._emitLane({
+        lane: "action",
+        token,
+        startFrame: scene.cursorFrames,
+        endFrame: scene.cursorFrames,
+        label: `${scriptName} z=${newZ}`,
+        subject: propState.propId,
+        subjectKind: "prop",
+        keys: ["z"],
+        kv,
+      });
     });
   }
 
   _handleActionOnProp(scene, state, kv, note, lineNumber) {
     this._warnNoteLooksLikeAssignments(lineNumber, "Action", note);
-    const allowed = new Set(["at", "scale", "z"]);
+    const allowed = new Set(["at", "scale", "z", "at_time", "start"]);
     const extra = Object.keys(kv).filter((key) => !allowed.has(key));
     if (extra.length > 0) {
       throw new ScriptError(
@@ -871,19 +1021,23 @@ class ScriptParser {
     const scene = this._requireScene(token.lineNumber, "Action");
     const { character: scriptName, kv, note } = parseActionTag(token.body);
     if (!scriptName) throw new ScriptError(token.lineNumber, "[Action: ...] needs a character name.");
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
     if (!this.characterLibrary.resolveIdByScriptName(scriptName)) {
       const propState = this._findPropState(scene, scriptName);
       if (propState) {
-        this._handleActionOnProp(scene, propState, kv, note, token.lineNumber);
-        this._emitLane({
-          lane: "action",
-          token,
-          startFrame: scene.cursorFrames,
-          endFrame: scene.cursorFrames,
-          label: `${scriptName} ${note || Object.keys(kv).join(" ") || "action"}`.trim(),
-          subject: propState.propId,
-          subjectKind: "prop",
-          keys: Object.keys(kv),
+        this._runAtEventTime(scene, eventStart, () => {
+          this._handleActionOnProp(scene, propState, kv, note, token.lineNumber);
+          this._emitLane({
+            lane: "action",
+            token,
+            startFrame: scene.cursorFrames,
+            endFrame: scene.cursorFrames,
+            label: `${scriptName} ${note || Object.keys(kv).join(" ") || "action"}`.trim(),
+            subject: propState.propId,
+            subjectKind: "prop",
+            keys: Object.keys(kv),
+            kv,
+          });
         });
         return;
       }
@@ -899,6 +1053,7 @@ class ScriptParser {
     const positionKeys = ["at", "scale", "flip", "z"];
     const hasPositionChange = positionKeys.some((k) => kv[k] !== undefined);
 
+    this._runAtEventTime(scene, eventStart, () => {
     if (hasPositionChange) {
       const current = state.current;
       let newTransform;
@@ -979,7 +1134,7 @@ class ScriptParser {
     }
 
     for (const [key, value] of Object.entries(kv)) {
-      if (positionKeys.includes(key)) continue;
+      if (positionKeys.includes(key) || TIMING_KEYS.has(key)) continue;
       this._applySlotKeyframe(scene, state, characterId, key, value, token.lineNumber);
     }
 
@@ -989,7 +1144,7 @@ class ScriptParser {
     if (kv.scale) bits.push(`scale=${kv.scale}`);
     if (kv.flip) bits.push("flip");
     for (const [key, value] of Object.entries(kv)) {
-      if (positionKeys.includes(key)) continue;
+      if (positionKeys.includes(key) || TIMING_KEYS.has(key)) continue;
       bits.push(`${key}=${value}`);
     }
     if (note) bits.push(note);
@@ -1002,6 +1157,8 @@ class ScriptParser {
       subject: characterId,
       subjectKind: "character",
       keys: Object.keys(kv),
+      kv,
+    });
     });
   }
 
@@ -1275,42 +1432,47 @@ class ScriptParser {
       markName = kv.to;
     }
 
-    const startRel = scene.cursorFrames - segment.startFrame;
-    const endRel = startRel + durationFrames;
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
+    this._runAtEventTime(scene, eventStart, () => {
+      const startRel = Math.max(0, scene.cursorFrames - segment.startFrame);
+      const endRel = startRel + durationFrames;
 
-    this._addTransformKeyframe(segment, {
-      frame: startRel,
-      x: from.x,
-      y: from.y,
-      scale: from.scale,
-      ease,
-    });
-    this._addTransformKeyframe(segment, {
-      frame: endRel,
-      x: toX,
-      y: toY,
-      scale: toScale,
-    });
+      this._addTransformKeyframe(segment, {
+        frame: startRel,
+        x: from.x,
+        y: from.y,
+        scale: from.scale,
+        ease,
+      });
+      this._addTransformKeyframe(segment, {
+        frame: endRel,
+        x: toX,
+        y: toY,
+        scale: toScale,
+      });
 
-    segment.transform = { ...from, x: toX, y: toY, scale: toScale };
-    segment.markName = markName;
-    const startFrame = scene.cursorFrames;
-    this._applyWait(scene, durationFrames, wait);
-    this._emitLane({
-      lane: "action",
-      token,
-      startFrame,
-      endFrame: startFrame + durationFrames,
-      label: `${state.characterId} → ${kv.to}`,
-      subject: state.characterId,
+      segment.transform = { ...from, x: toX, y: toY, scale: toScale };
+      segment.markName = markName;
+      this._emitLane({
+        lane: "action",
+        token,
+        startFrame: eventStart,
+        endFrame: eventStart + durationFrames,
+        label: `${state.characterId} → ${kv.to}`,
+        subject: state.characterId,
+        kv,
+        keys: Object.keys(kv),
+      });
     });
+    this._noteHorizon(scene, eventStart + durationFrames);
+    if (wait) scene.cursorFrames += durationFrames;
   }
 
   // ---- [Pose: ...] -------------------------------------------------------
 
   _handlePose(token) {
     const { scene, state, kv } = this._requireCharacterForMotion(token, "Pose");
-    const reserved = new Set(["over", "ease", "wait"]);
+    const reserved = new Set(["over", "ease", "wait", "at_time", "start"]);
     const parts = this._collectPartAngles(kv, reserved, state, token.lineNumber, "Pose");
     const overSeconds = parseSecondsSpec(kv.over, token.lineNumber, "over");
     const ease = parseEaseValue(kv.ease, token.lineNumber);
@@ -1320,34 +1482,39 @@ class ScriptParser {
       throw new ScriptError(token.lineNumber, `Invalid over "${kv.over}" -- duration rounds to 0 frames at ${this.fps} fps.`);
     }
 
-    const segment = state.current;
-    const startRel = scene.cursorFrames - segment.startFrame;
-    const endRel = startRel + durationFrames;
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
+    this._runAtEventTime(scene, eventStart, () => {
+      const segment = state.current;
+      const startRel = Math.max(0, scene.cursorFrames - segment.startFrame);
+      const endRel = startRel + durationFrames;
 
-    for (const part of parts) {
-      const from = this._getChildRotation(state, part.childId);
-      this._addRotationKeyframe(segment, part.childId, { frame: startRel, rotation: from, ease });
-      this._addRotationKeyframe(segment, part.childId, { frame: endRel, rotation: part.degrees });
-      state.childRotations.set(part.childId, part.degrees);
-    }
+      for (const part of parts) {
+        const from = this._getChildRotation(state, part.childId);
+        this._addRotationKeyframe(segment, part.childId, { frame: startRel, rotation: from, ease });
+        this._addRotationKeyframe(segment, part.childId, { frame: endRel, rotation: part.degrees });
+        state.childRotations.set(part.childId, part.degrees);
+      }
 
-    const startFrame = scene.cursorFrames;
-    this._applyWait(scene, durationFrames, wait);
-    this._emitLane({
-      lane: "action",
-      token,
-      startFrame,
-      endFrame: startFrame + durationFrames,
-      label: `${state.characterId} pose ${parts.map((p) => p.childId).join(" ")}`.trim(),
-      subject: state.characterId,
+      this._emitLane({
+        lane: "action",
+        token,
+        startFrame: eventStart,
+        endFrame: eventStart + durationFrames,
+        label: `${state.characterId} pose ${parts.map((p) => p.childId).join(" ")}`.trim(),
+        subject: state.characterId,
+        kv,
+        keys: Object.keys(kv),
+      });
     });
+    this._noteHorizon(scene, eventStart + durationFrames);
+    if (wait) scene.cursorFrames += durationFrames;
   }
 
   // ---- [Swing: ...] ------------------------------------------------------
 
   _handleSwing(token) {
     const { scene, state, kv } = this._requireCharacterForMotion(token, "Swing");
-    const reserved = new Set(["period", "for", "wait", "ease"]);
+    const reserved = new Set(["period", "for", "wait", "ease", "at_time", "start"]);
     const parts = this._collectPartAngles(kv, reserved, state, token.lineNumber, "Swing");
     const periodSeconds = parseSecondsSpec(kv.period, token.lineNumber, "period");
     const forSeconds = parseSecondsSpec(kv.for, token.lineNumber, "for");
@@ -1363,26 +1530,31 @@ class ScriptParser {
       throw new ScriptError(token.lineNumber, `Invalid for "${kv.for}" -- duration rounds to 0 frames at ${this.fps} fps.`);
     }
 
-    const segment = state.current;
-    const startRel = scene.cursorFrames - segment.startFrame;
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
+    this._runAtEventTime(scene, eventStart, () => {
+      const segment = state.current;
+      const startRel = Math.max(0, scene.cursorFrames - segment.startFrame);
 
-    for (const part of parts) {
-      const current = this._getChildRotation(state, part.childId);
-      const keys = swingRotationKeyframes(current, part.degrees, periodFrames, durationFrames, startRel);
-      for (const key of keys) this._addRotationKeyframe(segment, part.childId, key);
-      state.childRotations.set(part.childId, current); // ends back at the start angle
-    }
+      for (const part of parts) {
+        const current = this._getChildRotation(state, part.childId);
+        const keys = swingRotationKeyframes(current, part.degrees, periodFrames, durationFrames, startRel);
+        for (const key of keys) this._addRotationKeyframe(segment, part.childId, key);
+        state.childRotations.set(part.childId, current); // ends back at the start angle
+      }
 
-    const startFrame = scene.cursorFrames;
-    this._applyWait(scene, durationFrames, wait);
-    this._emitLane({
-      lane: "action",
-      token,
-      startFrame,
-      endFrame: startFrame + durationFrames,
-      label: `${state.characterId} swing`,
-      subject: state.characterId,
+      this._emitLane({
+        lane: "action",
+        token,
+        startFrame: eventStart,
+        endFrame: eventStart + durationFrames,
+        label: `${state.characterId} swing`,
+        subject: state.characterId,
+        kv,
+        keys: Object.keys(kv),
+      });
     });
+    this._noteHorizon(scene, eventStart + durationFrames);
+    if (wait) scene.cursorFrames += durationFrames;
   }
 
   // ---- [Camera: ...] -----------------------------------------------------
@@ -1396,7 +1568,7 @@ class ScriptParser {
       if (!CAMERA_KEYS.has(key)) {
         throw new ScriptError(
           token.lineNumber,
-          `Unknown [Camera: ...] argument "${key}". Allowed: zoom, pan, tilt, to, over, ease, wait, reset.`
+          `Unknown [Camera: ...] argument "${key}". Allowed: zoom, pan, tilt, to, over, ease, wait, reset, at_time, start.`
         );
       }
     }
@@ -1480,15 +1652,16 @@ class ScriptParser {
       }
     }
 
-    const startFrame = scene.cursorFrames;
-    const endFrame = startFrame + durationFrames;
-    const startKey = { frame: startFrame, x: from.x, y: from.y, zoom: from.zoom };
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
+    const endFrame = eventStart + durationFrames;
+    const startKey = { frame: eventStart, x: from.x, y: from.y, zoom: from.zoom };
     if (ease !== "linear") startKey.ease = ease;
     this._addCameraKeyframe(scene, startKey);
     this._addCameraKeyframe(scene, { frame: endFrame, x: toX, y: toY, zoom: toZoom });
 
     scene.camera = { x: toX, y: toY, zoom: toZoom };
-    this._applyWait(scene, durationFrames, wait);
+    this._noteHorizon(scene, endFrame);
+    if (wait) scene.cursorFrames += durationFrames;
     const cameraBits = [];
     if (isReset) cameraBits.push("reset");
     if (hasZoom) cameraBits.push(`zoom=${kv.zoom}`);
@@ -1498,9 +1671,11 @@ class ScriptParser {
     this._emitLane({
       lane: "camera",
       token,
-      startFrame,
+      startFrame: eventStart,
       endFrame,
       label: cameraBits.join(" ") || "camera",
+      kv,
+      keys: Object.keys(kv),
     });
   }
 
@@ -1511,6 +1686,35 @@ class ScriptParser {
     const { frames, seconds } = parsePauseValue(token.body, token.lineNumber);
     const advance = frames !== undefined ? frames : framesFromSeconds(seconds, this.fps);
     scene.cursorFrames += advance;
+  }
+
+  // ---- [View: Name view=<head view>] ------------------------------------
+
+  _handleView(token) {
+    const scene = this._requireScene(token.lineNumber, "View");
+    const { character: scriptName, kv, note } = parseActionTag(token.body);
+    if (!scriptName) throw new ScriptError(token.lineNumber, "[View: ...] needs a character name.");
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "View", note);
+    if (kv.view === undefined) {
+      throw new ScriptError(token.lineNumber, `[View: ...] needs view=<${HEAD_VIEWS.join("|")}>.`);
+    }
+    const extra = Object.keys(kv).filter((key) => key !== "view" && !TIMING_KEYS.has(key));
+    if (extra.length > 0) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[View: ...] only accepts view= and optional at_time=/start=. Unexpected: ${extra.join(", ")}`
+      );
+    }
+    const view = parseViewValue(kv.view, token.lineNumber);
+    const characterId = this._resolveCharacterIdOrThrow(scriptName, token.lineNumber);
+    if (!scene.castOrder.includes(characterId)) {
+      scene.castOrder.push(characterId);
+    }
+    const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
+    this._runAtEventTime(scene, eventStart, () => {
+      state.currentView = view || "front";
+    });
   }
 
   // ---- [Audio: Name file=<label>] ---------------------------------------
@@ -1529,11 +1733,13 @@ class ScriptParser {
         `[Audio: ...] needs file=<label> (the --name from import-audio).`
       );
     }
-    const extra = Object.keys(kv).filter((key) => key !== "file" && key !== "lines");
+    const extra = Object.keys(kv).filter(
+      (key) => key !== "file" && key !== "lines" && key !== "view" && !TIMING_KEYS.has(key)
+    );
     if (extra.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[Audio: ...] unknown key "${extra[0]}". Expected file=<label> and optional lines=true|false.`
+        `[Audio: ...] unknown key "${extra[0]}". Expected file=<label>, optional lines=true|false, view=, and at_time=/start=.`
       );
     }
     let emitSentenceLines = true;
@@ -1566,11 +1772,12 @@ class ScriptParser {
     const absAudioPath = path.join(this.projectDir, imported.wav);
     const durationSeconds = await probeDurationSeconds(absAudioPath);
     const durationFrames = framesFromSeconds(durationSeconds, this.fps);
-    const startFrame = scene.cursorFrames;
+    const startFrame = this._eventStartFrame(kv, scene, token.lineNumber);
     const words = imported.words;
     const text = transcriptFromWords(words) || `[Audio: ${label}]`;
 
     scene.lineCounter += 1;
+    const lineView = this._resolveLineView(kv, state, token.lineNumber);
     const clip = {
       audio: imported.wav,
       start_frame: startFrame - state.current.startFrame,
@@ -1582,8 +1789,11 @@ class ScriptParser {
     if (words && words.length > 0) {
       clip.words = words;
     }
+    if (lineView) clip.view = lineView;
     state.current.dialogue.push(clip);
 
+    const mouthCues = this._readMouthCues(imported.cues);
+    const marriedId = this._marriedId(token);
     const sentences =
       emitSentenceLines && words && words.length > 0 ? wordsToSentences(words) : [];
     if (sentences.length > 0) {
@@ -1597,6 +1807,14 @@ class ScriptParser {
           endFrame: Math.max(lineEnd, lineStart + 1),
           label: `${scriptName}: ${sentence.text}`,
           subject: characterId,
+          kv,
+          sourceStartFrame: startFrame,
+          cues: this._sliceMouthCues(mouthCues, sentence.start, sentence.end),
+          view: lineView,
+          marriedId,
+          audioRel: imported.wav,
+          cuesRel: imported.cues,
+          syncText: text,
         });
       }
     } else {
@@ -1607,6 +1825,14 @@ class ScriptParser {
         endFrame: startFrame + durationFrames,
         label: `${scriptName}: ${text}`,
         subject: characterId,
+        kv,
+        sourceStartFrame: startFrame,
+        cues: mouthCues,
+        view: lineView,
+        marriedId,
+        audioRel: imported.wav,
+        cuesRel: imported.cues,
+        syncText: text,
       });
     }
     this._emitLane({
@@ -1617,6 +1843,13 @@ class ScriptParser {
       label: path.basename(imported.wav),
       subject: characterId,
       rel: imported.wav,
+      kv,
+      sourceStartFrame: startFrame,
+      view: lineView,
+      marriedId,
+      audioRel: imported.wav,
+      cuesRel: imported.cues,
+      syncText: text,
     });
 
     this.lines.push({
@@ -1632,6 +1865,7 @@ class ScriptParser {
       source: "import",
     });
 
+    this._noteHorizon(scene, startFrame + durationFrames);
     scene.cursorFrames += durationFrames;
   }
 
@@ -1670,8 +1904,10 @@ class ScriptParser {
       status = "missing";
     }
     const durationFrames = framesFromSeconds(durationSeconds, this.fps);
-    const startFrame = scene.cursorFrames;
+    const kv = token.kv || {};
+    const startFrame = this._eventStartFrame(kv, scene, token.lineNumber);
 
+    const lineView = this._resolveLineView(kv, state, token.lineNumber);
     const clip = {
       audio: audioRelPath,
       start_frame: startFrame - state.current.startFrame,
@@ -1683,8 +1919,11 @@ class ScriptParser {
       clip.estimated = true;
       clip.estimated_duration_seconds = Math.round(durationSeconds * 100) / 100;
     }
+    if (lineView) clip.view = lineView;
     state.current.dialogue.push(clip);
 
+    const mouthCues = this._readMouthCues(`${audioRelPath}.rhubarb.json`);
+    const marriedId = this._marriedId(token);
     const spoken = `${token.character}: ${token.text}`;
     this._emitLane({
       lane: "dialogue",
@@ -1693,6 +1932,14 @@ class ScriptParser {
       endFrame: startFrame + durationFrames,
       label: spoken,
       subject: characterId,
+      kv,
+      sourceStartFrame: startFrame,
+      cues: mouthCues,
+      view: lineView,
+      marriedId,
+      audioRel: audioRelPath,
+      cuesRel: `${audioRelPath}.rhubarb.json`,
+      syncText: token.text,
     });
     this._emitLane({
       lane: "audio",
@@ -1702,6 +1949,13 @@ class ScriptParser {
       label: path.basename(audioRelPath),
       subject: characterId,
       rel: audioRelPath,
+      kv,
+      sourceStartFrame: startFrame,
+      view: lineView,
+      marriedId,
+      audioRel: audioRelPath,
+      cuesRel: `${audioRelPath}.rhubarb.json`,
+      syncText: token.text,
     });
 
     this.lines.push({
@@ -1716,6 +1970,7 @@ class ScriptParser {
       ...(status === "missing" ? { estimated_duration_seconds: Math.round(durationSeconds * 100) / 100 } : {}),
     });
 
+    this._noteHorizon(scene, startFrame + durationFrames);
     scene.cursorFrames += durationFrames;
   }
 
@@ -1885,10 +2140,24 @@ class ScriptParser {
     return slot;
   }
 
+  _scanMouthViewImages(characterId, slotConfig) {
+    const baseDir = (slotConfig && slotConfig.drawings_dir) || "mouth";
+    const images = this._scanSlotImages(characterId, { drawings_dir: baseDir });
+    const byView = {};
+    const frontAlt = this._scanSlotImages(characterId, { drawings_dir: "mouth_front" });
+    byView.front = Object.keys(frontAlt).length > 0 ? frontAlt : images;
+    for (const view of HEAD_VIEWS) {
+      if (view === "front") continue;
+      const scanned = this._scanSlotImages(characterId, { drawings_dir: `mouth_${view}` });
+      if (Object.keys(scanned).length > 0) byView[view] = scanned;
+    }
+    return { images: byView.front && Object.keys(byView.front).length > 0 ? byView.front : images, images_by_view: byView };
+  }
+
   _buildSlotJson(characterId, slotName, slotConfig, keyframes) {
     if (slotName === "mouth") {
-      const images = this._scanSlotImages(characterId, slotConfig);
-      const mouth = { offset: slotConfig.offset || { x: 0, y: 0 }, images, lipsync: { source: "dialogue" } };
+      const { images, images_by_view } = this._scanMouthViewImages(characterId, slotConfig);
+      const mouth = { offset: slotConfig.offset || { x: 0, y: 0 }, images, images_by_view, lipsync: { source: "dialogue" } };
       if (slotConfig.visible_when) mouth.visible_when = slotConfig.visible_when;
       return this._applySlotTransform(mouth, slotConfig);
     }

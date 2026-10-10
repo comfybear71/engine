@@ -297,9 +297,16 @@ Single speaker only. Studio **Import audio** (Script tab, or Stage
 transport / Script drawer) calls the same work via
 `POST /api/projects/:name/import-audio` -- see [docs/studio.md](studio.md).
 
+### `[View: Name view=<head view>]`
+
+Sets the default head/mouth view for following spoken lines and `[Audio:]`
+takes by that character. See [Head view](#head-view-view--view).
+
 ### `Character: dialogue text`
 
 A spoken line. `Character` is matched the same way as in `[Cast: ...]`.
+Optional `at_time=` / `start=` and `view=` may sit on the name:
+`Hicks at_time=2s view=left_side: text`.
 Lines run **strictly in sequence against one shared per-scene cursor** --
 there's no overlapping dialogue -- so each line's `start_frame` is wherever
 the cursor currently is, and the cursor then advances by that line's
@@ -325,6 +332,75 @@ this classification happens.
 See [docs/assets.md#mark-field-resolution-order](assets.md#mark-field-resolution-order)
 for the full per-field walkthrough (script tag > mark's own value >
 character default > canvas/library default).
+
+## Explicit start (`at_time=` / `start=`)
+
+Every timed or placed event starts at the shared scene cursor unless you
+set an optional **explicit start**. Studio timeline moves write this
+attribute; you can also type it by hand.
+
+| Form | Meaning |
+|---|---|
+| `at_time=2s` | Start 2 seconds into the **scene** (preferred name). |
+| `at_time=0.5s` | Fractional seconds, converted at the document fps. |
+| `at_time=48` | Start at scene-local frame 48. |
+| `start=2s` or `start=48` | Same meaning; an alias. If both are present, `at_time=` wins. |
+
+Accepted on `[Action:]`, `[Prop:]`, `[Layer:]`, `[Move:]`, `[Pose:]`,
+`[Swing:]`, `[Camera:]`, `[Audio:]`, and on dialogue as
+`Name at_time=2s: spoken text`. Zero is allowed (`at_time=0s`).
+
+**The cursor does not move to `at_time=`.** A `wait=true` move, a
+dialogue line, or `[Audio:]` still advances the shared clock from
+wherever the cursor already was, by that event's duration. Later
+sequential lines therefore keep the placement they would have had
+without the attribute. That is how dragging one block later can leave a
+gap (or overlap) without ripple-shifting the rest of the shot.
+
+Omit `at_time=` / `start=` and timing is unchanged: script order, `wait=`,
+`over=` / `for=` durations, and pin-until-next-hold.
+
+Studio always writes the canonical `at_time=` name (seconds when that is
+exact, otherwise a frame count). Several lane blocks that share one
+script line (an `[Audio:]` take plus its sentence chips) share one
+`at_time=` — moving any of them moves the tag.
+
+```text
+[Move: Hicks to=right over=2s at_time=1.5s]
+[Action: Hicks eyes=furious at_time=3s]
+[Camera: zoom=1.3 over=2s at_time=48]
+[Audio: Hicks file=monologue at_time=2s]
+Hicks at_time=4s: Where's the rent money, Dana?
+```
+
+## Head view (`view=` / `[View:]`)
+
+Each spoken line (and `[Audio:]` take) can pick which mouth/head drawing
+set lip-sync uses:
+
+| Form | Meaning |
+|---|---|
+| `Name view=left_side: text` | This line uses `mouth_left_side/` (falls back to `mouth_front/` / `mouth/`). |
+| `[View: Name view=left_side]` | Sets the default for following lines until another `[View:]` or a per-line `view=`. |
+| `[Audio: Name file=monologue view=right_34]` | Same for an imported take. |
+
+Allowed views: `front`, `left_34`, `left_side`, `right_34`, `right_side`,
+`up`, `down`. `front` is the default and may be omitted. Studio writes
+`view=` from the selected Dialogue block's dropdown. The compositor
+resolves `images_by_view[view]` → `front` → `images` → shape `X`.
+
+## Lip-sync (on demand)
+
+Dialogue exists first. Rhubarb cues are generated per line:
+
+- **Auto** (default): `voices` and Import audio still run Rhubarb when
+  they create a WAV.
+- **Manual**: `studio.json` `{ "lipSync": "manual" }` skips that; use
+  Studio **Sync this line** / **Sync all**.
+
+A line is **not synced** until `<wav>.rhubarb.json` has mouth cues,
+**synced** when those cues match the current WAV + spoken text, and
+**stale** when the WAV or text changed after the last sync.
 
 ## Timing and layers
 

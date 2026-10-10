@@ -857,7 +857,64 @@ describe("[Audio: Name file=<label>]", () => {
 
     fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
   });
+});
 
+describe("at_time= / start= explicit start", () => {
+  test("pins a move, pin, and dialogue without shifting the next sequential line", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Move: Alice to=right over=1s wait=false at_time=1s]",
+      "[Action: Alice eyes=closed start=24]",
+      "Alice at_time=2s: Hello.",
+      "Alice: Next.",
+    ].join("\n");
+    const { timeline, laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, {
+      fps: 24,
+    });
+    const move = laneEvents.find((e) => e.tag === "move");
+    const pin = laneEvents.find((e) => e.tag === "action");
+    const spoken = laneEvents.filter((e) => e.lane === "dialogue");
+    assert.equal(move.startFrame, 24);
+    assert.equal(move.endFrame, 48);
+    assert.equal(move.timing.attr, "at_time");
+    assert.equal(move.timing.kind, "over");
+    assert.equal(pin.startFrame, 24);
+    assert.equal(pin.timing.kind, "pin");
+    assert.equal(spoken[0].startFrame, 48);
+    const helloDuration = spoken[0].endFrame - spoken[0].startFrame;
+    assert.equal(spoken[1].startFrame, helloDuration);
+    assert.equal(timeline.scenes[0].layers[0].dialogue[0].start_frame, 48);
+    assert.equal(timeline.scenes[0].layers[0].dialogue[1].start_frame, helloDuration);
+  });
+
+  test("view= on a line is stored on the clip and married dialogue/audio share an id", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[View: Alice view=left_side]",
+      "Alice: Hello.",
+      "Alice view=right_side: Next.",
+    ].join("\n");
+    const { timeline, laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const clips = timeline.scenes[0].layers[0].dialogue;
+    assert.equal(clips[0].view, "left_side");
+    assert.equal(clips[1].view, "right_side");
+    const mouth = timeline.scenes[0].layers[0].slots.mouth;
+    assert.ok(mouth.images_by_view);
+    assert.ok(mouth.images_by_view.front);
+    const dlg = laneEvents.filter((e) => e.lane === "dialogue");
+    const audio = laneEvents.filter((e) => e.lane === "audio");
+    assert.equal(dlg[0].marriedId, audio[0].marriedId);
+    assert.ok(dlg[0].marriedId);
+    assert.deepEqual(dlg[0].trim, { inFrames: 0, outFrames: 0 });
+    assert.equal(dlg[0].sync, "not_synced");
+  });
+});
+
+describe("imported audio errors", () => {
   test("missing imported WAV is a line-numbered error (no estimate)", async () => {
     const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Audio: Alice file=missing]"].join("\n");
     await assert.rejects(

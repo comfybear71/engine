@@ -22,6 +22,14 @@ import {
 } from "@/lib/playback";
 import { clampFrameIndex, scriptLineAtFrame } from "@/lib/playhead";
 import {
+  emptyScriptHistory,
+  historyCanRedo,
+  historyCanUndo,
+  historyPush,
+  historyRedo,
+  historyUndo,
+} from "@/lib/timelineEdit";
+import {
   DEFAULT_STAGE_LAYOUT,
   clampStageLayout,
   loadStageLayout,
@@ -34,7 +42,10 @@ import {
   loadPlayback,
   loadScript,
   loadStage,
+  loadStudioSettings,
   saveScript,
+  saveStudioSettings,
+  syncDialogue,
   mediaUrl,
   renderVideoUrl,
   startPreviewRender,
@@ -84,6 +95,19 @@ export default function StagePanel({
   const [importOpen, setImportOpen] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
   const [layout, setLayout] = useState<StageLayout>(DEFAULT_STAGE_LAYOUT);
+  const [lanesEpoch, setLanesEpoch] = useState(0);
+  const [historyTick, setHistoryTick] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [lipSyncMode, setLipSyncMode] = useState<"auto" | "manual">("auto");
+  const [loopSelection, setLoopSelection] = useState(false);
+  const [selectionRange, setSelectionRange] = useState<{
+    start: number;
+    end: number;
+    scriptLine: number | null;
+  } | null>(null);
+  const historyRef = useRef(emptyScriptHistory());
+  const saveTimerRef = useRef<number | null>(null);
+  const pendingScriptRef = useRef<string | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playingRef = useRef(false);
@@ -98,6 +122,7 @@ export default function StagePanel({
   const audioGenRef = useRef(0);
   const projectRef = useRef(project);
   const proxyKickRef = useRef(false);
+  const playRangeRef = useRef<{ start: number; end: number; loop: boolean } | null>(null);
 
   playingRef.current = playing;
   frameRef.current = frame;
@@ -122,17 +147,28 @@ export default function StagePanel({
     setFrame(0);
     setPlaying(false);
     setSelectedMark(null);
+    setLoopSelection(false);
+    setSelectionRange(null);
+    playRangeRef.current = null;
     playableTotalRef.current = null;
     proxyKickRef.current = false;
     frameCacheRef.current.clear();
     audioBuffersRef.current.clear();
     stopAudio();
-    Promise.all([loadStage(project, script), loadLanes(project, script), loadScript(project, script)])
-      .then(([info, nextLanes, text]) => {
+    Promise.all([
+      loadStage(project, script),
+      loadLanes(project, script),
+      loadScript(project, script),
+      loadStudioSettings(project).catch(() => ({ lipSync: "auto" as const })),
+    ])
+      .then(([info, nextLanes, text, settings]) => {
         if (cancelled) return;
         setStage(info);
         setLanes(nextLanes);
         setScriptText(text);
+        setLipSyncMode(settings.lipSync === "manual" ? "manual" : "auto");
+        historyRef.current = emptyScriptHistory();
+        setHistoryTick((n) => n + 1);
         setFps(info.fps);
         setCanvas(info.canvas);
         setSceneId(info.scenes[0]?.id ?? null);
@@ -246,7 +282,7 @@ export default function StagePanel({
     };
     // kickProxyRender is stable enough via ref
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, script, workerUp, frame, playing, videoSrc, totalFrames, fps]);
+  }, [project, script, workerUp, frame, playing, videoSrc, totalFrames, fps, lanesEpoch]);
 
   useEffect(() => {
     return () => {
@@ -303,6 +339,92 @@ export default function StagePanel({
     },
     [fps, videoSrc, lanes, totalFrames, onSelectLine]
   );
+
+  const canUndo = historyTick >= 0 && historyCanUndo(historyRef.current);
+  const canRedo = historyTick >= 0 && historyCanRedo(historyRef.current);
+
+  const flushTimelineSave = useCallback(async () => {
+    if (!project) return;
+    const text = pendingScriptRef.current;
+    if (text == null) return;
+    pendingScriptRef.current = null;
+    if (saveTimerRef.current != null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    try {
+      await saveScript(project, text, script);
+      const [nextLanes, nextStage, nextPlayback] = await Promise.all([
+        loadLanes(project, script),
+        loadStage(project, script),
+        loadPlayback(project, script),
+      ]);
+      setLanes(nextLanes);
+      setStage(nextStage);
+      setPlayback(nextPlayback);
+      if (nextLanes.totalFrames > 0) setTotalFrames(nextLanes.totalFrames);
+      frameCacheRef.current.clear();
+      setLanesEpoch((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Timeline save failed");
+    }
+  }, [project, script]);
+
+  const scheduleTimelineSave = useCallback(
+    (text: string) => {
+      pendingScriptRef.current = text;
+      if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = window.setTimeout(() => {
+        void flushTimelineSave();
+      }, 280);
+    },
+    [flushTimelineSave]
+  );
+
+  const onEditScript = useCallback(
+    (next: string) => {
+      setScriptText((current) => {
+        if (next === current) return current;
+        historyRef.current = historyPush(historyRef.current, current);
+        setHistoryTick((n) => n + 1);
+        scheduleTimelineSave(next);
+        return next;
+      });
+    },
+    [scheduleTimelineSave]
+  );
+
+  const undoTimeline = useCallback(() => {
+    setScriptText((current) => {
+      const result = historyUndo(historyRef.current, current);
+      if (!result) return current;
+      historyRef.current = result.history;
+      setHistoryTick((n) => n + 1);
+      scheduleTimelineSave(result.text);
+      return result.text;
+    });
+  }, [scheduleTimelineSave]);
+
+  const redoTimeline = useCallback(() => {
+    setScriptText((current) => {
+      const result = historyRedo(historyRef.current, current);
+      if (!result) return current;
+      historyRef.current = result.history;
+      setHistoryTick((n) => n + 1);
+      scheduleTimelineSave(result.text);
+      return result.text;
+    });
+  }, [scheduleTimelineSave]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+      const text = pendingScriptRef.current;
+      if (text && projectRef.current) {
+        void saveScript(projectRef.current, text, script);
+      }
+    };
+  }, [script]);
 
   function stopAudio() {
     audioGenRef.current = bumpAudioGeneration(audioGenRef.current);
@@ -391,6 +513,17 @@ export default function StagePanel({
       source.buffer = buffer;
       source.connect(ctx.destination);
       source.start(ctx.currentTime + schedule.delaySec, schedule.offsetSec);
+      const range = playRangeRef.current;
+      if (range) {
+        const remain = (range.end - fromFrame) / Math.max(fps, 1);
+        if (remain > 0) {
+          try {
+            source.stop(ctx.currentTime + schedule.delaySec + remain);
+          } catch {
+            /* stop time may be in the past on a late start */
+          }
+        }
+      }
       audioSourcesRef.current.push(source);
     }
   }
@@ -464,6 +597,20 @@ export default function StagePanel({
         if (url) setPreviewUrl(url);
         prefetch(next + 1);
       }
+      const range = playRangeRef.current;
+      if (range && next >= range.end) {
+        if (range.loop) {
+          setFrame(range.start);
+          originMsRef.current = performance.now();
+          void startLineAudio(range.start);
+          prefetch(range.start);
+          window.requestAnimationFrame(tick);
+          return;
+        }
+        setFrame(range.end);
+        setPlaying(false);
+        return;
+      }
       if (next >= maxFrame) {
         setPlaying(false);
         return;
@@ -488,6 +635,7 @@ export default function StagePanel({
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
       event.preventDefault();
       if (previewStatus === "rendering") return;
+      if (!playingRef.current) playRangeRef.current = null;
       setPlaying((value) => !value);
     }
     window.addEventListener("keydown", onKey);
@@ -501,18 +649,34 @@ export default function StagePanel({
       userSeekRef.current = false;
     }
     const next = Math.max(0, Math.min(maxFrame, Math.round(video.currentTime * fps)));
+    const range = playRangeRef.current;
+    if (range && next >= range.end) {
+      if (range.loop) {
+        video.currentTime = range.start / Math.max(fps, 1);
+        setFrame(range.start);
+        return;
+      }
+      video.pause();
+      setFrame(range.end);
+      setPlaying(false);
+      return;
+    }
     setFrame(next);
     const line = scriptLineAtFrame(lanes?.blocks || [], next);
     if (line != null) onSelectLine(line);
   }
 
   function onRewind() {
+    playRangeRef.current = null;
+    setLoopSelection(false);
     setPlaying(false);
     stopAudio();
     seekTo(0, scriptLineAtFrame(lanes?.blocks || [], 0));
   }
 
   function onStop() {
+    playRangeRef.current = null;
+    setLoopSelection(false);
     setPlaying(false);
     stopAudio();
     seekTo(0, scriptLineAtFrame(lanes?.blocks || [], 0));
@@ -520,10 +684,57 @@ export default function StagePanel({
 
   function onTogglePlay() {
     if (previewStatus === "rendering") return;
+    if (!playing) playRangeRef.current = null;
     if (!playing && frame >= maxFrame) {
       seekTo(0, scriptLineAtFrame(lanes?.blocks || [], 0));
     }
     setPlaying((value) => !value);
+  }
+
+  function playSelection(loop: boolean) {
+    if (!selectionRange || previewStatus === "rendering") return;
+    playRangeRef.current = { start: selectionRange.start, end: selectionRange.end, loop };
+    setLoopSelection(loop);
+    seekTo(selectionRange.start, selectionRange.scriptLine);
+    setPlaying(true);
+  }
+
+  function toggleLoopSelection() {
+    if (!selectionRange) return;
+    const next = !loopSelection;
+    playSelection(next);
+  }
+
+  async function runLipSync(opts: { all?: boolean; scriptLine?: number; force?: boolean }) {
+    if (!project) return;
+    await flushTimelineSave();
+    setSyncing(true);
+    setError(null);
+    try {
+      const result = await syncDialogue(project, opts, script);
+      const failed = result.results.find((item) => !item.ok);
+      if (failed) setError(failed.message || "Lip-sync failed");
+      const nextLanes = await loadLanes(project, script);
+      setLanes(nextLanes);
+      if (nextLanes.totalFrames > 0) setTotalFrames(nextLanes.totalFrames);
+      frameCacheRef.current.clear();
+      setLanesEpoch((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Lip-sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function toggleLipSyncMode() {
+    if (!project) return;
+    const next = lipSyncMode === "manual" ? "auto" : "manual";
+    try {
+      const settings = await saveStudioSettings(project, { lipSync: next });
+      setLipSyncMode(settings.lipSync);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save settings");
+    }
   }
 
   async function insertImportedAudio(tag: string) {
@@ -750,6 +961,20 @@ export default function StagePanel({
             onSeek={seekTo}
             totalFrames={totalFrames}
             playing={playing}
+            scriptText={scriptText}
+            onEditScript={onEditScript}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={undoTimeline}
+            onRedo={redoTimeline}
+            onSyncLines={(opts) => void runLipSync(opts)}
+            onPlaySelection={() => playSelection(false)}
+            onToggleLoopSelection={toggleLoopSelection}
+            onSelectionRange={setSelectionRange}
+            syncing={syncing}
+            lipSyncMode={lipSyncMode}
+            onToggleLipSyncMode={() => void toggleLipSyncMode()}
+            loopSelection={loopSelection}
           />
         </div>
       </div>

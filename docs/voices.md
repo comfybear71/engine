@@ -60,7 +60,9 @@ stop the run immediately with a clear message (the key is still never printed).
 
 After each **new** WAV, Rhubarb is run (`rhubarb` on `PATH`, or
 `RHUBARB_PATH`) with JSON export (`-f json`) and the line text as a dialog
-file (`-d`). Cues are written where the parser and compositor already look:
+file (`-d`) **unless** the project `studio.json` sets `"lipSync": "manual"`
+(Studio can still Sync that line later). Cues are written where the parser
+and compositor already look:
 
 `audio/<scene_id>/<nnn>_<character>.wav.rhubarb.json`
 

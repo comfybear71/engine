@@ -196,6 +196,7 @@ function buildLaneBlocks(parsed) {
     const base = offsets.get(event.sceneId) || 0;
     const startFrame = base + event.startFrame;
     const endFrame = base + event.endFrame;
+    const sourceLocal = event.sourceStartFrame != null ? event.sourceStartFrame : event.startFrame;
     return {
       id: `${event.lane}-${event.sceneId}-${event.scriptLine}-${index}`,
       lane: event.lane,
@@ -206,6 +207,17 @@ function buildLaneBlocks(parsed) {
       sceneId: event.sceneId,
       rel: event.rel || null,
       row: 0,
+      tag: event.tag || null,
+      sourceStartFrame: base + sourceLocal,
+      timing: event.timing || null,
+      movable: event.scriptLine != null && event.scriptLine > 0 && (!event.timing || event.timing.movable !== false),
+      cues: Array.isArray(event.cues) ? event.cues : [],
+      view: event.view || null,
+      marriedId: event.marriedId || null,
+      trim: event.trim || { inFrames: 0, outFrames: 0 },
+      audioRel: event.audioRel || null,
+      cuesRel: event.cuesRel || null,
+      sync: event.sync || null,
     };
   });
   assignOverlapRows(blocks);

@@ -19,6 +19,7 @@ const { pcmToWav } = require("./wavHeader");
 const { sidecarPathForWav, writeSidecar, shouldSkipLine } = require("./creditGuard");
 const { synthesizePcm, resolveModelId, resolveApiKey, resolveOutputFormat, VoicesFatalError } = require("./elevenlabs");
 const { runRhubarbOnWav } = require("./rhubarb");
+const { shouldAutoLipSync, stampCuesMeta } = require("./lipSync");
 
 function padLineNumber(n) {
   return String(n).padStart(3, "0");
@@ -127,21 +128,25 @@ async function recordOneLine(line, ctx) {
     modelId,
   });
 
-  const rhubarb = (options.runRhubarb || runRhubarbOnWav)({
-    wavPath: wavAbs,
-    cuesPath: cuesAbs,
-    text: line.text,
-    rhubarbBin: options.rhubarbBin,
-  });
-  if (!rhubarb.ok) {
-    if (rhubarb.reason === "missing") {
-      io.warn(
-        `warning: Rhubarb not found on PATH (or RHUBARB_PATH). Skipping cues for ${lineLabel(line)}; renderer will fall back.`
-      );
+  if (shouldAutoLipSync(projectDir)) {
+    const rhubarb = (options.runRhubarb || runRhubarbOnWav)({
+      wavPath: wavAbs,
+      cuesPath: cuesAbs,
+      text: line.text,
+      rhubarbBin: options.rhubarbBin,
+    });
+    if (!rhubarb.ok) {
+      if (rhubarb.reason === "missing") {
+        io.warn(
+          `warning: Rhubarb not found on PATH (or RHUBARB_PATH). Skipping cues for ${lineLabel(line)}; renderer will fall back.`
+        );
+      } else {
+        io.warn(
+          `warning: Rhubarb failed for ${lineLabel(line)} (${rhubarb.message || "unknown error"}). No cues written; renderer will fall back.`
+        );
+      }
     } else {
-      io.warn(
-        `warning: Rhubarb failed for ${lineLabel(line)} (${rhubarb.message || "unknown error"}). No cues written; renderer will fall back.`
-      );
+      stampCuesMeta(cuesAbs, { text: line.text, wavPath: wavAbs });
     }
   }
 }

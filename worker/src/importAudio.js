@@ -18,6 +18,7 @@ const assetLibrary = require("./parser/assetLibrary");
 const { probeDurationSeconds } = require("./parser/ffprobeDuration");
 const { resolveApiKey, VoicesFatalError } = require("./voices/elevenlabs");
 const { runRhubarbOnWav } = require("./voices/rhubarb");
+const { shouldAutoLipSync, stampCuesMeta } = require("./voices/lipSync");
 const { transcribeWav, mergeChunkWords, STT_MODEL_ID } = require("./voices/speechToText");
 
 function resolveGlobalAssetsDir(projectDir) {
@@ -401,24 +402,29 @@ async function runImportAudio(projectDir, sourceFile, options = {}) {
 
   const cuesAbs = path.join(resolvedProjectDir, rel.cues);
   const dialogText = transcriptFromWords(words);
-  const rhubarb = (options.runRhubarb || runRhubarbOnWav)({
-    wavPath: wavAbs,
-    cuesPath: cuesAbs,
-    text: dialogText,
-    rhubarbBin: options.rhubarbBin,
-  });
-  if (!rhubarb.ok) {
-    if (rhubarb.reason === "missing") {
-      io.warn(
-        `warning: Rhubarb not found on PATH (or RHUBARB_PATH). Skipping cues for ${rel.wav}; renderer will fall back.`
-      );
+  if (shouldAutoLipSync(resolvedProjectDir)) {
+    const rhubarb = (options.runRhubarb || runRhubarbOnWav)({
+      wavPath: wavAbs,
+      cuesPath: cuesAbs,
+      text: dialogText,
+      rhubarbBin: options.rhubarbBin,
+    });
+    if (!rhubarb.ok) {
+      if (rhubarb.reason === "missing") {
+        io.warn(
+          `warning: Rhubarb not found on PATH (or RHUBARB_PATH). Skipping cues for ${rel.wav}; renderer will fall back.`
+        );
+      } else {
+        io.warn(
+          `warning: Rhubarb failed for ${rel.wav} (${rhubarb.message || "unknown error"}). No cues written; renderer will fall back.`
+        );
+      }
     } else {
-      io.warn(
-        `warning: Rhubarb failed for ${rel.wav} (${rhubarb.message || "unknown error"}). No cues written; renderer will fall back.`
-      );
+      stampCuesMeta(cuesAbs, { text: dialogText, wavPath: wavAbs });
+      io.log(`Wrote ${rel.cues}`);
     }
   } else {
-    io.log(`Wrote ${rel.cues}`);
+    io.log("Lip-sync is set to manual; skip Rhubarb on import.");
   }
 
   io.log(`Imported ${rel.wav} for ${character.characterId} (${formatAudioLength(durationSeconds)}).`);

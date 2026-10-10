@@ -57,12 +57,27 @@ class Slot:
     dialogue: Sequence[object] | None = None
     # Slot only draws when each named slot's active drawing is in the list.
     visible_when: dict[str, list[str]] = field(default_factory=dict)
+    # Optional per-head-view mouth sheets (mouth_left_side/, …). Missing
+    # views fall back to "front", then to ``images``.
+    images_by_view: dict[str, dict[str, Path]] = field(default_factory=dict)
 
-    def resolve_image(self, drawing: str | None) -> Path | None:
-        if drawing is not None and drawing in self.images:
-            return self.images[drawing]
-        if FALLBACK_SHAPE in self.images:
-            return self.images[FALLBACK_SHAPE]
+    def resolve_image(self, drawing: str | None, view: str | None = None) -> Path | None:
+        pools: list[dict[str, Path]] = []
+        if view:
+            named = self.images_by_view.get(view)
+            if named:
+                pools.append(named)
+            if view != "front":
+                front = self.images_by_view.get("front")
+                if front:
+                    pools.append(front)
+        pools.append(self.images)
+        for pool in pools:
+            if drawing is not None and drawing in pool:
+                return pool[drawing]
+        for pool in pools:
+            if FALLBACK_SHAPE in pool:
+                return pool[FALLBACK_SHAPE]
         if self.images:
             return next(iter(self.images.values()))
         return None
