@@ -9,6 +9,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { renderOutputName, previewOutputName } = require("./studioProjects");
+const { readWavDurationSeconds } = require("./parser/wavDuration");
 
 const PROXY_SIZE = { width: 960, height: 540 };
 
@@ -64,11 +65,13 @@ function audioClipsFromLanes(projectDir, lanes) {
     if (block.lane !== "audio" || !block.rel) continue;
     if (!isSafeAudioRel(block.rel)) continue;
     const fps = Math.max(Number(lanes.fps) || 24, 1);
+    const abs = resolveProjectAudio(projectDir, block.rel);
     clips.push({
       rel: block.rel,
       startFrame: block.startFrame,
       endFrame: block.endFrame,
-      exists: Boolean(resolveProjectAudio(projectDir, block.rel)),
+      exists: Boolean(abs),
+      durationSeconds: abs ? readWavDurationSeconds(abs) : null,
       trimInSec: ((block.trim && block.trim.inFrames) || 0) / fps,
       trimOutSec: block.trim && block.trim.outFrames ? block.trim.outFrames / fps : null,
     });

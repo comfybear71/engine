@@ -11,6 +11,7 @@ const {
   describeSlot,
   describeDrawing,
   findDrawingUsages,
+  promoteSlotView,
   confirmReplace,
   confirmAdd,
   renameDrawing,
@@ -87,6 +88,29 @@ describe("asset editor", { concurrency: 1 }, () => {
       side.drawings.map((d) => d.name),
       ["X"]
     );
+  });
+
+  test("default mouth view is mouth_front when that folder exists, and promote points the slot at it", () => {
+    writePng(path.join(deeDir, "mouth_front", "X.png"));
+    writePng(path.join(deeDir, "mouth_front", "A.png"));
+    const slot = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth");
+    assert.equal(slot.view, "front");
+    assert.equal(slot.drawingsDir, "mouth_front");
+    assert.equal(slot.isDefaultView, false);
+    assert.equal(slot.defaultDrawingsDir, "mouth");
+    assert.equal(slot.canRealign, true);
+
+    const promoted = promoteSlotView(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", { view: "front" });
+    assert.equal(promoted.drawingsDir, "mouth_front");
+    assert.equal(promoted.alreadyDefault, false);
+    const after = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth");
+    assert.equal(after.drawingsDir, "mouth_front");
+    assert.equal(after.isDefaultView, true);
+    assert.equal(after.defaultDrawingsDir, "mouth_front");
+    const character = JSON.parse(fs.readFileSync(path.join(deeDir, "character.json"), "utf8"));
+    character.slots.mouth.drawings_dir = "mouth";
+    fs.writeFileSync(path.join(deeDir, "character.json"), JSON.stringify(character, null, 2) + "\n");
+    fs.rmSync(path.join(deeDir, "mouth_front"), { recursive: true, force: true });
   });
 
   test("describeDrawing includes script and cycle usage", () => {

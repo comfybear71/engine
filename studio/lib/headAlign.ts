@@ -38,6 +38,20 @@ export function offsetFromCenter(bodyW: number, bodyH: number, center: Point): P
   return { x: center.x - anchor.x, y: center.y - anchor.y };
 }
 
+export type HeadNudge = { x: number; y: number; scale: number };
+
+export function defaultHeadNudge(): HeadNudge {
+  return { x: 0, y: 0, scale: 1 };
+}
+
+export function clampHeadNudge(nudge: HeadNudge): HeadNudge {
+  return {
+    x: Math.max(-400, Math.min(400, Number(nudge.x) || 0)),
+    y: Math.max(-400, Math.min(400, Number(nudge.y) || 0)),
+    scale: Math.max(0.2, Math.min(3, Number(nudge.scale) || 1)),
+  };
+}
+
 export function alignableSlots<T extends { name: string; drawings: unknown[] }>(slots: T[]): T[] {
   const preferred = ["mouth", "head"];
   const named = preferred

@@ -40,4 +40,18 @@ describe("asset ingest helpers", () => {
     assert.ok(character.slots.mouth, "existing mouth slot stays");
     assert.equal(character.slots.body.drawings_dir, "body");
   });
+
+  test("front head ingest writes mouth_front and points the existing mouth slot at it", () => {
+    const need = getNeed("mouth_13_front");
+    assert.ok(need);
+    const expanded = expandNeed(need);
+    assert.equal(destRelForCell("rodney", expanded.cells[0].dest, "X"), "characters/rodney/mouth_front/X.png");
+    const character = {
+      id: "rodney",
+      slots: { mouth: { drawings_dir: "mouth" } },
+      children: [],
+    };
+    ensureSlot(character, expanded.cells[0].dest);
+    assert.equal(character.slots.mouth.drawings_dir, "mouth_front");
+  });
 });

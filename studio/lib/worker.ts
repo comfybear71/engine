@@ -745,8 +745,25 @@ export type PlaybackAudioInfo = {
   startFrame: number;
   endFrame: number;
   exists: boolean;
+  durationSeconds?: number | null;
   trimInSec?: number;
   trimOutSec?: number | null;
+};
+
+export type PreviewSegmentStatus = {
+  ok: boolean;
+  ready: boolean;
+  progress: number;
+  framesDone: number;
+  framesTotal: number;
+  startFrame: number;
+  frames: number;
+  fps: number;
+  width: number;
+  height: number;
+  file: string | null;
+  url: string | null;
+  error?: string;
 };
 export type PlaybackStatus = {
   fps: number;
@@ -760,6 +777,64 @@ export async function loadPlayback(name: string, script?: string | null): Promis
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/playback`, script));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<PlaybackStatus>;
+}
+
+export function previewSegmentUrl(name: string, file: string): string {
+  return `${WORKER_URL}${withShow(`/api/projects/${encodeURIComponent(name)}/preview-segments/${encodeURIComponent(file)}`)}`;
+}
+
+export async function requestPreviewSegment(
+  name: string,
+  body: { startFrame: number; durationSec?: number; frames?: number; width?: number; height?: number },
+  script?: string | null
+): Promise<PreviewSegmentStatus> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/preview-segment`, script), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => ({}))) as PreviewSegmentStatus & { error?: string };
+  if (!res.ok && res.status !== 202) {
+    throw new Error(json.error || `Preview segment failed (${res.status})`);
+  }
+  return json;
+}
+
+export async function waitForPreviewSegment(
+  name: string,
+  body: { startFrame: number; durationSec?: number; frames?: number },
+  script?: string | null,
+  onProgress?: (status: PreviewSegmentStatus) => void
+): Promise<PreviewSegmentStatus> {
+  let status = await requestPreviewSegment(name, body, script);
+  onProgress?.(status);
+  const started = Date.now();
+  while (!status.ready) {
+    if (status.error) throw new Error(status.error);
+    if (Date.now() - started > 10 * 60 * 1000) throw new Error("Preview segment timed out");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    status = await loadPreviewSegment(name, { startFrame: body.startFrame, durationSec: body.durationSec, frames: body.frames }, script);
+    onProgress?.(status);
+  }
+  return status;
+}
+
+export async function loadPreviewSegment(
+  name: string,
+  query: { startFrame: number; durationSec?: number; frames?: number },
+  script?: string | null
+): Promise<PreviewSegmentStatus> {
+  const params = new URLSearchParams({ startFrame: String(query.startFrame) });
+  if (query.durationSec) params.set("durationSec", String(query.durationSec));
+  if (query.frames) params.set("frames", String(query.frames));
+  const res = await workerFetch(
+    withScript(`/api/projects/${encodeURIComponent(name)}/preview-segment?${params.toString()}`, script)
+  );
+  const json = (await res.json().catch(() => ({}))) as PreviewSegmentStatus & { error?: string };
+  if (!res.ok && res.status !== 202) {
+    throw new Error(json.error || `Preview segment failed (${res.status})`);
+  }
+  return json;
 }
 
 export async function startPreviewRender(name: string, script?: string | null): Promise<RenderResponse> {

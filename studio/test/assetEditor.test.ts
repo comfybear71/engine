@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { clampHeadNudge, defaultHeadNudge } from "../lib/headAlign.ts";
 import {
   cueAtTime,
   formatUsage,
@@ -58,5 +59,13 @@ describe("asset editor helpers", () => {
     assert.equal(cueAtTime(cues, 0.2), "A");
     assert.equal(cueAtTime(cues, 0.7), "D");
     assert.match(formatUsage({ kind: "dialogue", script: "script.txt", line: 4, text: "Dee: Hi." }), /script.txt:4/);
+  });
+
+  test("head nudge clamps to a small usable range", () => {
+    assert.deepEqual(defaultHeadNudge(), { x: 0, y: 0, scale: 1 });
+    const clamped = clampHeadNudge({ x: 999, y: -999, scale: 8 });
+    assert.equal(clamped.x, 400);
+    assert.equal(clamped.y, -400);
+    assert.equal(clamped.scale, 3);
   });
 });

@@ -13,7 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 
-const { loadCharacter } = require("./parser/assetLibrary");
+const { loadCharacter, resolveAsset } = require("./parser/assetLibrary");
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 const { isSafeFolderName } = require("./studioProjects");
 const { getNeed, expandNeed } = require("./assetNeeds");
@@ -73,6 +73,8 @@ function ensureSlot(character, dest) {
   const existing = findSlotSpec(character, dest.slot);
   if (existing) {
     if (!existing.drawings_dir && dest.drawings_dir) existing.drawings_dir = dest.drawings_dir;
+    // Front head sheets must become the default the compositor reads.
+    if (dest.drawings_dir === "mouth_front") existing.drawings_dir = "mouth_front";
     return existing;
   }
   const spec = {
@@ -102,6 +104,85 @@ function mergeCycles(slotSpec, cycles) {
       fps: cycle.fps,
     };
   }
+}
+
+function runAlign(args, options = {}) {
+  const pythonBin = options.pythonBin || resolvePythonBin();
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonBin, ["-m", "compositor.align", ...args], {
+      cwd: PYTHON_DIR,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => {
+      stdout += d;
+    });
+    child.stderr.on("data", (d) => {
+      stderr += d;
+    });
+    child.on("error", (err) => {
+      reject(new Error(`Failed to spawn align pipeline (${pythonBin}): ${err.message}`));
+    });
+    child.on("close", (code) => {
+      const trimmed = stdout.trim();
+      let parsed = null;
+      if (trimmed) {
+        try {
+          parsed = JSON.parse(trimmed.split("\n").pop());
+        } catch {
+          parsed = null;
+        }
+      }
+      if (code !== 0 || !parsed || parsed.ok === false) {
+        const detail =
+          (parsed && parsed.error) || (stderr || stdout).trim().split("\n").pop() || `exited with code ${code}`;
+        reject(new Error(`Align pipeline failed: ${detail}`));
+        return;
+      }
+      resolve(parsed);
+    });
+  });
+}
+
+function isHeadLikeDest(dest) {
+  if (!dest || dest.kind !== "slot") return false;
+  const slot = String(dest.slot || "").toLowerCase();
+  const dir = String(dest.drawings_dir || "").toLowerCase();
+  return slot === "mouth" || slot === "head" || slot === "face" || dir.startsWith("mouth") || dir === "head" || dir === "face";
+}
+
+function findAlignReferenceAbs(projectDir, globalAssetsDir, characterId, dest, drawingName) {
+  if (!dest || dest.kind !== "slot") return null;
+  const dirs = [];
+  const destDir = dest.drawings_dir || dest.slot;
+  if (destDir && destDir !== "mouth_front") dirs.push(destDir);
+  dirs.push("mouth");
+  if (destDir === "mouth_front") dirs.unshift("mouth");
+  const seen = new Set();
+  for (const dir of dirs) {
+    if (!dir || seen.has(dir)) continue;
+    seen.add(dir);
+    const rel = posixJoin("characters", characterId, dir, `${drawingName}.png`);
+    const resolved = resolveAsset(projectDir, globalAssetsDir, rel);
+    if (resolved && resolved.absPath && fs.existsSync(resolved.absPath)) return resolved.absPath;
+  }
+  return null;
+}
+
+async function alignCellToReference(projectDir, globalAssetsDir, characterId, cell, options = {}) {
+  if (!cell || cell.empty || !cell.path || !isHeadLikeDest(cell.dest)) return cell;
+  const name = cell.suggestedName || cell.name;
+  const refAbs = findAlignReferenceAbs(projectDir, globalAssetsDir, characterId, cell.dest, name);
+  if (!refAbs) return cell;
+  const outPath = `${cell.path}.aligned.png`;
+  await runAlign(["--src", cell.path, "--ref", refAbs, "--out", outPath], options);
+  if (fs.existsSync(outPath)) {
+    fs.copyFileSync(cell.path, `${cell.path}.raw.png`);
+    fs.copyFileSync(outPath, cell.path);
+  }
+  return cell;
 }
 
 function runCutout(args, options = {}) {
@@ -236,22 +317,28 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
   if (!expanded.key) args.push("--no-key");
 
   const result = await runCutout(args, options);
-  const cells = result.cells.map((cell) => {
-    const template = expanded.cells[cell.index] || {};
-    const suggestedName = template.name || `cell_${String(cell.index).padStart(2, "0")}`;
-    return {
-      index: cell.index,
+  const cells = [];
+  for (const raw of result.cells) {
+    const template = expanded.cells[raw.index] || {};
+    const suggestedName = template.name || `cell_${String(raw.index).padStart(2, "0")}`;
+    const cell = {
+      index: raw.index,
       suggestedName,
       name: suggestedName,
       dest: template.dest || null,
       cycle: template.cycle || null,
-      empty: Boolean(cell.empty),
-      width: cell.width,
-      height: cell.height,
-      path: cell.path,
-      pngBase64: pngDataUrl(cell.path),
+      empty: Boolean(raw.empty),
+      width: raw.width,
+      height: raw.height,
+      path: raw.path,
     };
-  });
+    await alignCellToReference(projectDir, globalAssetsDir, characterId, cell, options);
+    cells.push(cell);
+  }
+  const cellsWithPng = cells.map((cell) => ({
+    ...cell,
+    pngBase64: cell.empty || !cell.path || !fs.existsSync(cell.path) ? null : pngDataUrl(cell.path),
+  }));
 
   const manifest = {
     sessionId: sid,
@@ -262,7 +349,7 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
     grid: expanded.grid,
     key: expanded.key,
     cycles: expanded.cycles,
-    cells: cells.map(({ pngBase64, ...rest }) => rest),
+    cells: cellsWithPng.map(({ pngBase64, ...rest }) => rest),
   };
   const manifestPath = path.join(previewDir(projectDir, characterId, sid), "manifest.json");
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
@@ -273,7 +360,7 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
     libraryRel: originalRel,
     needId: need.id,
     grid: expanded.grid,
-    cells: cells.map((cell) => ({
+    cells: cellsWithPng.map((cell) => ({
       index: cell.index,
       suggestedName: cell.suggestedName,
       empty: cell.empty,
@@ -354,6 +441,16 @@ function confirmIngest(projectDir, globalAssetsDir, characterId, body) {
     }
   }
 
+  for (const item of written) {
+    if (item.dest && item.dest.kind === "slot" && item.dest.drawings_dir === "mouth_front") {
+      const spec = findSlotSpec(character, item.dest.slot);
+      if (spec && spec.drawings_dir !== "mouth_front") {
+        spec.drawings_dir = "mouth_front";
+        jsonDirty = true;
+      }
+    }
+  }
+
   if (jsonDirty) {
     writeCharacterJson(projectDir, characterId, character, backupRoot);
   }
@@ -382,6 +479,9 @@ module.exports = {
   ensureSlot,
   readWritableCharacter,
   destRelForCell,
+  runAlign,
+  isHeadLikeDest,
+  findAlignReferenceAbs,
   DRAWING_NAME,
   SAFE_SESSION,
   runCutout,

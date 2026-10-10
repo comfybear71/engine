@@ -114,6 +114,8 @@ async function previewFrame(projectDir, frame, outputPath, options = {}) {
         ...options,
         format,
         quality,
+        width: options.width,
+        height: options.height,
       });
       return {
         code: 0,

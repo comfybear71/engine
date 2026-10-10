@@ -59,6 +59,8 @@ const {
   renameDrawing,
   deleteDrawing,
   listLipsyncPreview,
+  promoteSlotView,
+  realignSlotView,
 } = require("./assetEditor");
 const {
   PROXY_SIZE,
@@ -66,6 +68,7 @@ const {
   resolveProjectAudio,
   describePlayback,
 } = require("./studioPlayback");
+const { requestPreviewSegment, resolveSegmentFile, SEGMENT_SEC, SEGMENT_SIZE } = require("./previewSegments");
 const { runImportAudio, readImportAudioRequest, VoicesFatalError } = require("./importAudio");
 const {
   collectDialogueTargets,
@@ -1026,6 +1029,36 @@ function createApp(options = {}) {
     }
   });
 
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/promote-view", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(promoteSlotView(projectDir, globalAssetsDir, characterId, slotName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/realign", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(await realignSlotView(projectDir, globalAssetsDir, characterId, slotName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
   app.get("/api/projects/:name/characters/:characterId/slots/:slotName/lipsync-preview", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
@@ -1541,6 +1574,8 @@ function createApp(options = {}) {
     frame = clampFrame(frame, playableFrames);
     const format = body.format === "png" ? "png" : "jpeg";
     const quality = 85;
+    const width = body.width != null ? Number(body.width) : format === "jpeg" ? 960 : null;
+    const height = body.height != null ? Number(body.height) : format === "jpeg" ? 540 : null;
 
     function sendPreview(type, buffer, meta) {
       const totalFrames =
@@ -1556,7 +1591,7 @@ function createApp(options = {}) {
       res.type(type).send(buffer);
     }
 
-    const cached = getCachedPreview(projectDir, scriptName, frame, format, quality);
+    const cached = getCachedPreview(projectDir, scriptName, frame, format, quality, width, height);
     if (!cached.miss) {
       sendPreview(cached.type, cached.buffer, cached.meta || {});
       cleanupTempParse(result);
@@ -1573,6 +1608,8 @@ function createApp(options = {}) {
       previewOpts.timeline = result.timelinePath;
       previewOpts.format = format;
       previewOpts.quality = quality;
+      if (width) previewOpts.width = width;
+      if (height) previewOpts.height = height;
       const preview = await previewFrame(projectDir, frame, tmp, previewOpts);
       const meta = preview.meta || {};
       const buffer = fs.readFileSync(tmp);
@@ -1617,7 +1654,110 @@ function createApp(options = {}) {
     if (!abs) {
       return res.status(404).json({ error: `Audio not found: ${rel}` });
     }
-    res.type("audio/wav").sendFile(abs);
+    res.sendFile(abs, {
+      acceptRanges: true,
+      headers: {
+        "Content-Type": "audio/wav",
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, max-age=3600",
+      },
+    });
+  });
+
+  function segmentPayload(req, projectDir, scriptName, status) {
+    return {
+      ok: !status.error,
+      ready: Boolean(status.ready),
+      progress: status.progress || 0,
+      framesDone: status.framesDone || 0,
+      framesTotal: status.framesTotal || status.frames || 0,
+      startFrame: status.startFrame,
+      frames: status.frames,
+      fps: status.fps,
+      width: status.width,
+      height: status.height,
+      file: status.file,
+      error: status.error || undefined,
+      url: status.file
+        ? `/api/projects/${encodeURIComponent(req.params.name)}/preview-segments/${encodeURIComponent(status.file)}`
+        : null,
+    };
+  }
+
+  app.post("/api/projects/:name/preview-segment", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    let result;
+    try {
+      result = await parseForRead(projectDir, scriptName);
+    } catch (err) {
+      return res.status(400).json(parseErrorPayload(err));
+    }
+    try {
+      const body = req.body || {};
+      const lanes = buildLaneBlocks(result);
+      const status = requestPreviewSegment(projectDir, scriptName, {
+        timeline: result.timelinePath,
+        startFrame: body.startFrame,
+        durationSec: body.durationSec || SEGMENT_SEC,
+        frames: body.frames,
+        width: body.width || SEGMENT_SIZE.width,
+        height: body.height || SEGMENT_SIZE.height,
+        fps: lanes.fps,
+        pythonBin: options.pythonBin,
+      });
+      res.status(status.ready ? 200 : 202).json(segmentPayload(req, projectDir, scriptName, status));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
+  app.get("/api/projects/:name/preview-segment", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    let result;
+    try {
+      result = await parseForRead(projectDir, scriptName);
+    } catch (err) {
+      return res.status(400).json(parseErrorPayload(err));
+    }
+    try {
+      const lanes = buildLaneBlocks(result);
+      const status = requestPreviewSegment(projectDir, scriptName, {
+        timeline: result.timelinePath,
+        startFrame: req.query.startFrame,
+        durationSec: req.query.durationSec || SEGMENT_SEC,
+        frames: req.query.frames,
+        width: req.query.width || SEGMENT_SIZE.width,
+        height: req.query.height || SEGMENT_SIZE.height,
+        fps: lanes.fps,
+        pythonBin: options.pythonBin,
+      });
+      res.status(status.ready ? 200 : 202).json(segmentPayload(req, projectDir, scriptName, status));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
+  app.get("/api/projects/:name/preview-segments/:file", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const abs = resolveSegmentFile(req.params.file);
+    if (!abs) {
+      return res.status(404).json({ error: "Preview segment not found" });
+    }
+    res.sendFile(abs, {
+      acceptRanges: true,
+      headers: { "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
+    });
   });
 
   app.post("/api/projects/:name/import-audio", async (req, res) => {
