@@ -99,7 +99,7 @@ export type LintIssue = { level: "error" | "warning"; line: number | null; messa
 export type LintResult = { ok: boolean; lint: { errors: LintIssue[]; warnings: LintIssue[] }; saved?: boolean };
 export type LaneId = "body" | "face" | "props" | "dialogue" | "audio" | "sfx" | "camera";
 export type LaneTimingKind = "over" | "for" | "pin" | "audio" | "dialogue";
-export type LaneTimingAttr = "over" | "for" | "at_time" | "start" | null;
+export type LaneTimingAttr = "over" | "for" | "hold" | "at_time" | "start" | null;
 export type LaneTiming = {
   kind: LaneTimingKind;
   tag: string;
@@ -120,9 +120,10 @@ export type LaneBlock = {
   sourceStartFrame?: number;
   timing?: LaneTiming | null;
   movable?: boolean;
-  cues?: { shape: string; start: number; end: number }[];
+  cues?: { shape: string; start: number; end: number; pinned?: boolean }[];
   view?: string | null;
   marriedId?: string | null;
+  role?: "mouth" | "pin" | null;
   trim?: { inFrames: number; outFrames: number };
   sourceDurationFrames?: number;
   words?: { word: string; start: number; end: number }[];
@@ -576,6 +577,29 @@ export async function syncDialogue(
     lipSync: payload.lipSync === "manual" ? "manual" : "auto",
     results: payload.results || [],
   };
+}
+
+export type MouthCuePatch = {
+  rel: string;
+  start: number;
+  end: number;
+  value?: string;
+  pinned?: boolean;
+};
+
+export async function saveMouthCue(name: string, patch: MouthCuePatch): Promise<{ ok: boolean; cue: { start: number; end: number; value: string; pinned: boolean } }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/cues`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const payload = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    cue?: { start: number; end: number; value: string; pinned: boolean };
+    error?: string;
+  };
+  if (!res.ok || !payload.cue) throw new Error(payload.error || `Cue save failed (${res.status})`);
+  return { ok: payload.ok !== false, cue: payload.cue };
 }
 
 export async function startRender(name: string, script?: string | null): Promise<RenderResponse> {

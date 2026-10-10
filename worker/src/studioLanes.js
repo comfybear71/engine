@@ -156,6 +156,37 @@ function assignOverlapRows(blocks) {
   return blocks;
 }
 
+function mouthLabel(label) {
+  const text = String(label || "");
+  const cut = text.indexOf(":");
+  const name = (cut >= 0 ? text.slice(0, cut) : text).trim();
+  return name ? `${name} mouth` : "mouth";
+}
+
+function addMouthBlocks(blocks) {
+  const extra = [];
+  for (const block of blocks) {
+    if (block.lane !== "dialogue") continue;
+    if (block.sync !== "synced" && block.sync !== "stale") continue;
+    if (!Array.isArray(block.cues) || block.cues.length === 0) continue;
+    extra.push({
+      ...block,
+      id: `face-mouth-${block.sceneId}-${block.scriptLine}`,
+      lane: "face",
+      role: "mouth",
+      label: mouthLabel(block.label),
+      movable: false,
+      timing: {
+        kind: "dialogue",
+        tag: "mouth",
+        attr: (block.timing && block.timing.attr) || null,
+        movable: false,
+      },
+    });
+  }
+  return blocks.concat(extra);
+}
+
 function clampFrame(frame, totalFrames) {
   const total = Math.max(Number(totalFrames) || 1, 1);
   const max = total - 1;
@@ -220,11 +251,13 @@ function buildLaneBlocks(parsed) {
       audioRel: event.audioRel || null,
       cuesRel: event.cuesRel || null,
       sync: event.sync || null,
+      role: event.role || null,
     };
   });
-  assignOverlapRows(blocks);
+  const withMouth = addMouthBlocks(blocks);
+  assignOverlapRows(withMouth);
 
-  return { fps, totalFrames, lanes: LANES, scenes, blocks };
+  return { fps, totalFrames, lanes: LANES, scenes, blocks: withMouth };
 }
 
 module.exports = {
@@ -232,6 +265,7 @@ module.exports = {
   FACE_KEYS,
   assignActionLane,
   assignOverlapRows,
+  addMouthBlocks,
   buildLaneBlocks,
   clampFrame,
 };

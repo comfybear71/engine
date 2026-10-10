@@ -188,4 +188,63 @@ describe("studio action lane assignment", () => {
     assert.equal(later.row, 0);
     assert.equal(Math.max(move.row, swing.row), 1);
   });
+
+  test("synced dialogue emits a married Face mouth block; not-synced does not", () => {
+    const built = buildLaneBlocks({
+      timeline: { fps: 24 },
+      sceneLengths: [{ id: "intro", frames: 48 }],
+      laneEvents: [
+        {
+          lane: "dialogue",
+          tag: "dialogue",
+          sceneId: "intro",
+          startFrame: 0,
+          endFrame: 24,
+          label: "Alice: Hello",
+          scriptLine: 4,
+          marriedId: "line:intro:4",
+          sync: "synced",
+          cues: [{ shape: "B", start: 0, end: 0.4 }],
+          timing: { kind: "dialogue", attr: "at_time", movable: true },
+        },
+        {
+          lane: "dialogue",
+          tag: "dialogue",
+          sceneId: "intro",
+          startFrame: 24,
+          endFrame: 48,
+          label: "Alice: Later",
+          scriptLine: 5,
+          marriedId: "line:intro:5",
+          sync: "not_synced",
+          cues: [],
+          timing: { kind: "dialogue", attr: null, movable: true },
+        },
+        {
+          lane: "action",
+          tag: "action",
+          keys: ["face"],
+          sceneId: "intro",
+          startFrame: 0,
+          endFrame: 12,
+          label: "Alice face=yap",
+          scriptLine: 3,
+          subject: "alice",
+          timing: { kind: "pin", attr: "hold", movable: true },
+        },
+      ],
+    });
+    const face = built.blocks.filter((b) => b.lane === "face");
+    const mouth = face.find((b) => b.role === "mouth");
+    const pin = face.find((b) => b.scriptLine === 3);
+    assert.ok(mouth);
+    assert.equal(mouth.startFrame, 0);
+    assert.equal(mouth.endFrame, 24);
+    assert.equal(mouth.marriedId, "line:intro:4");
+    assert.equal(mouth.movable, false);
+    assert.equal(face.some((b) => b.role === "mouth" && b.scriptLine === 5), false);
+    assert.ok(pin);
+    assert.equal(pin.role, null);
+    assert.notEqual(pin.marriedId, mouth.marriedId);
+  });
 });

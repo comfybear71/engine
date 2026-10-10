@@ -106,7 +106,8 @@ in the scene's timeline onward (held until the next change):
 | `scale=<number>` | Overrides the resolved scale for this character from here on. |
 | `flip` (bare) or `flip=true`/`flip=false` | Overrides `flip_x` from here on. |
 | `z=<integer>` | Overrides this character's draw order from here on. |
-| `over=<secs>s` | Optional hold length for this pin (Studio trim). When set, the lane block lasts that long instead of stretching to the next pin. Does not advance the scene clock. |
+| `hold=<secs>s` | Optional hold length for this pin (Studio move / trim). When set, the lane block lasts that long instead of stretching to the next pin. Does not advance the scene clock. Studio writes `hold=` when you drag a pin so the block never silently lengthens. |
+| `over=<secs>s` | Same as `hold=` on a pin (older alias). On `[Move:]` / `[Pose:]` / `[Camera:]`, `over=` is the timed duration and may advance the clock. |
 | *(anything else)* | Treated as a **slot name** on that character (e.g. `eyes=furious`, `right_hand=point`, `body=walk_side`): the value is either a **named cycle** declared on that slot in `character.json` (emits a `{ frame, cycle, fps }` keyframe) or a drawing that must exist in that slot's folder (see [docs/assets.md](assets.md)). A drawing becomes a held-until-changed keyframe at the current frame. The reserved `mouth` slot can't be set this way -- it's always driven by dialogue. |
 
 Any `at=`/`scale=`/`flip`/`z` change **that actually differs** from the
@@ -374,8 +375,10 @@ Studio edge-trims rewrite the script, then re-parse.
 **Timed tags** (`[Move:]`, `[Pose:]`, `[Camera:]`, `[Swing:]`) change
 `over=` or `for=`. Dragging the start edge also writes `at_time=` so the
 end stays put. Instant pins (`[Action:]` / `[Prop:]` / `[Layer:]`) accept
-optional `over=` to hold a fixed length instead of stretching to the next
-pin.
+optional `hold=` (or `over=`) to lock a fixed length instead of stretching
+to the next pin. Dragging a pin writes `at_time=` and, if it had no
+explicit length, `hold=` equal to its current visual span (until the next
+pin). That move never silently lengthens the block.
 
 **Dialogue and `[Audio:]`** set in/out points in the **source file**:
 

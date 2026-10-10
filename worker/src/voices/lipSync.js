@@ -188,6 +188,55 @@ async function syncDialogueLines({ projectDir, targets, force = false, runRhubar
   };
 }
 
+const CUES_REL_RE = /^audio\/[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*\.wav\.rhubarb\.json$/i;
+
+function isSafeCuesRel(rel) {
+  if (typeof rel !== "string" || !rel) return false;
+  const posix = rel.replace(/\\/g, "/");
+  if (posix.includes("..") || posix.startsWith("/") || posix.includes("//")) return false;
+  return CUES_REL_RE.test(posix);
+}
+
+function resolveProjectCues(projectDir, rel) {
+  if (!isSafeCuesRel(rel)) return null;
+  const root = path.resolve(projectDir);
+  const resolved = path.resolve(root, rel);
+  const inside = path.relative(root, resolved);
+  if (inside.startsWith("..") || path.isAbsolute(inside)) return null;
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return null;
+  return resolved;
+}
+
+function patchMouthCue(projectDir, { rel, start, end, value, shape, pinned } = {}) {
+  const abs = resolveProjectCues(projectDir, rel);
+  if (!abs) return { ok: false, error: "Cues file not found" };
+  const data = readCuesFile(abs);
+  if (!data || !Array.isArray(data.mouthCues)) return { ok: false, error: "Invalid cues file" };
+  const from = Number(start);
+  const to = Number(end);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+    return { ok: false, error: "Cue start/end must be increasing numbers." };
+  }
+  const idx = data.mouthCues.findIndex(
+    (cue) => Math.abs(Number(cue.start) - from) < 1e-3 && Math.abs(Number(cue.end) - to) < 1e-3
+  );
+  if (idx < 0) return { ok: false, error: "No mouth cue at that time" };
+  const cue = { ...data.mouthCues[idx] };
+  if (value != null || shape != null) {
+    const next = String(value || shape).trim();
+    if (!/^[A-Za-z0-9_-]{1,24}$/.test(next)) return { ok: false, error: "Invalid mouth shape" };
+    cue.value = next;
+  }
+  if (pinned === true) cue.pinned = true;
+  if (pinned === false) delete cue.pinned;
+  data.mouthCues[idx] = cue;
+  fs.writeFileSync(abs, `${JSON.stringify(data, null, 2)}\n`);
+  return {
+    ok: true,
+    cue: { start: Number(cue.start) || 0, end: Number(cue.end) || 0, value: String(cue.value || "X"), pinned: Boolean(cue.pinned) },
+  };
+}
+
 module.exports = {
   STUDIO_SETTINGS_FILE,
   SYNC_STATES,
@@ -197,5 +246,8 @@ module.exports = {
   syncDialogueLines,
   readStudioSettings,
   writeStudioSettings,
+  isSafeCuesRel,
+  resolveProjectCues,
+  patchMouthCue,
   shouldAutoLipSync,
 };

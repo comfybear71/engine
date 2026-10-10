@@ -936,6 +936,20 @@ describe("at_time= / start= explicit start", () => {
     assert.equal(clip.trim_out, 1);
     assert.equal(clip.estimated_duration_seconds, 0.5);
   });
+
+  test("hold= locks a face pin the same way over= does", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Action: Alice eyes=closed hold=0.5s]",
+      "Alice: Hello.",
+    ].join("\n");
+    const { laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const pin = laneEvents.find((e) => e.tag === "action");
+    assert.equal(pin.endFrame - pin.startFrame, 12);
+    assert.equal(pin.timing.attr, "hold");
+  });
 });
 
 describe("imported audio errors", () => {

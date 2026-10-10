@@ -43,6 +43,7 @@ import {
   loadScript,
   loadStage,
   loadStudioSettings,
+  saveMouthCue,
   saveScript,
   saveStudioSettings,
   syncDialogue,
@@ -732,6 +733,27 @@ export default function StagePanel({
     }
   }
 
+  async function patchMouthCue(patch: {
+    rel: string;
+    start: number;
+    end: number;
+    value?: string;
+    pinned?: boolean;
+  }) {
+    if (!project) return;
+    setError(null);
+    try {
+      await saveMouthCue(project, patch);
+      const nextLanes = await loadLanes(project, script);
+      setLanes(nextLanes);
+      if (nextLanes.totalFrames > 0) setTotalFrames(nextLanes.totalFrames);
+      frameCacheRef.current.clear();
+      setLanesEpoch((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save mouth cue");
+    }
+  }
+
   async function toggleLipSyncMode() {
     if (!project) return;
     const next = lipSyncMode === "manual" ? "auto" : "manual";
@@ -981,6 +1003,7 @@ export default function StagePanel({
             lipSyncMode={lipSyncMode}
             onToggleLipSyncMode={() => void toggleLipSyncMode()}
             loopSelection={loopSelection}
+            onPatchCue={(patch) => void patchMouthCue(patch)}
           />
         </div>
       </div>

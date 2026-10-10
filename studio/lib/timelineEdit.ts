@@ -10,6 +10,7 @@ const DIALOGUE_RE = /^(\s*)(.+?)(\s*:\s*)(.*)$/;
 const EXISTING_START_RE = /\s*\b(?:at_time|start)=\S+/gi;
 const EXISTING_VIEW_RE = /\s*\bview=\S+/gi;
 const EXISTING_OVER_RE = /\s*\bover=\S+/gi;
+const EXISTING_HOLD_RE = /\s*\bhold=\S+/gi;
 const EXISTING_FOR_RE = /\s*\bfor=\S+/gi;
 const EXISTING_TRIM_IN_RE = /\s*\btrim_in=\S+/gi;
 const EXISTING_TRIM_OUT_RE = /\s*\btrim_out=\S+/gi;
@@ -23,6 +24,8 @@ export type BlockMove = {
   startFrame: number;
   /** Global start frame of the scene this line belongs to. */
   sceneStartFrame: number;
+  /** Pin hold length to write (hold= / over=) so a move never stretches the block. */
+  hold?: string | null;
 };
 
 export type ScriptHistory = {
@@ -114,8 +117,18 @@ export function setAtTimeOnLine(line: string, atTime: string): string {
   return replaceKeyedAttr(line, EXISTING_START_RE, `at_time=${atTime}`);
 }
 
-export function setDurationOnLine(line: string, attr: "over" | "for", value: string): string {
-  return replaceKeyedAttr(line, attr === "for" ? EXISTING_FOR_RE : EXISTING_OVER_RE, `${attr}=${value}`);
+export function setDurationOnLine(line: string, attr: "over" | "for" | "hold", value: string): string {
+  const remove = attr === "for" ? EXISTING_FOR_RE : attr === "hold" ? EXISTING_HOLD_RE : EXISTING_OVER_RE;
+  return replaceKeyedAttr(line, remove, `${attr}=${value}`);
+}
+
+export function pinDurationWriteAttr(line: string): "hold" | "over" {
+  if (/\bover=\S+/i.test(line) && !/\bhold=\S+/i.test(line)) return "over";
+  return "hold";
+}
+
+export function lineHasPinHold(line: string): boolean {
+  return /\b(?:hold|over)=\S+/i.test(line);
 }
 
 export function setTrimOnLine(
@@ -139,7 +152,7 @@ export function setDialogueTextOnLine(line: string, text: string): string {
   return `${dialogue[1]}${dialogue[2]}${dialogue[3]}${text}`;
 }
 
-export function lineHasAttr(line: string, key: "over" | "for" | "at_time" | "trim_in" | "trim_out"): boolean {
+export function lineHasAttr(line: string, key: "over" | "for" | "hold" | "at_time" | "trim_in" | "trim_out"): boolean {
   return new RegExp(String.raw`\b${key}=\S+`, "i").test(line);
 }
 
@@ -161,6 +174,10 @@ export function moveBlocksInScript(script: string, moves: BlockMove[], fps: numb
     if (index < 0 || index >= lines.length) continue;
     const local = Math.max(0, Math.round(move.startFrame - (move.sceneStartFrame || 0)));
     lines[index] = setAtTimeOnLine(lines[index], formatAtTime(local, fps));
+    if (move.hold) {
+      const attr = pinDurationWriteAttr(lines[index]);
+      lines[index] = setDurationOnLine(lines[index], attr, move.hold);
+    }
   }
   return lines.join("\n");
 }
@@ -259,6 +276,7 @@ export type EditableBlock = {
   words?: { word: string; start: number; end: number }[] | null;
   marriedId?: string | null;
   movable?: boolean;
+  role?: string | null;
 };
 
 export function trimKindForBlock(block: {
@@ -274,20 +292,26 @@ export function trimKindForBlock(block: {
   return null;
 }
 
-export function durationAttrForBlock(block: { timing?: { kind?: string } | null; tag?: string | null }): "over" | "for" {
+export function durationAttrForBlock(block: { timing?: { kind?: string } | null; tag?: string | null }): "over" | "for" | "hold" {
   if (block.timing?.kind === "for" || String(block.tag || "").toLowerCase() === "swing") return "for";
+  if (block.timing?.kind === "pin") return "hold";
   return "over";
 }
 
+export function isMouthBlock(block: { role?: string | null; tag?: string | null }): boolean {
+  return block.role === "mouth" || String(block.tag || "").toLowerCase() === "mouth";
+}
+
 export function blockIsTrimmable(block: EditableBlock): boolean {
-  if (!blockIsMovable(block)) return false;
+  if (block.scriptLine == null || block.scriptLine < 1) return false;
+  if (!blockIsMovable(block) && !isMouthBlock(block)) return false;
   return trimKindForBlock(block) != null && block.endFrame > block.startFrame;
 }
 
 export type LineTrimWrite = {
   scriptLine: number;
   atTime?: string | null;
-  durationAttr?: "over" | "for";
+  durationAttr?: "over" | "for" | "hold";
   duration?: string | null;
   trimIn?: string | null;
   trimOut?: string | null;
@@ -307,7 +331,7 @@ export type TakeWindow = {
   start: number;
   end: number;
   kind: TrimKind;
-  durationAttr: "over" | "for";
+  durationAttr: "over" | "for" | "hold";
   trimIn: number;
   trimOut: number;
   sourceDuration: number | null;
@@ -415,10 +439,11 @@ export function planTrim(opts: {
   const newEnd = opts.edge === "out" ? clamped.frame : take.end;
   const durationFrames = Math.max(1, newEnd - newStart);
   const line = opts.script ? opts.script.split("\n")[take.scriptLine - 1] || "" : "";
-  const hadDuration = take.kind === "duration" || lineHasAttr(line, take.durationAttr);
+  const durationAttr = take.kind === "pin" ? pinDurationWriteAttr(line) : take.durationAttr;
+  const hadDuration = take.kind === "duration" || lineHasPinHold(line) || lineHasAttr(line, take.durationAttr);
   if (opts.edge === "in") write.atTime = formatAtTime(Math.max(0, newStart - sceneStart), opts.fps);
-  if (take.kind === "duration" || hadDuration || opts.edge === "out") {
-    write.durationAttr = take.durationAttr;
+  if (take.kind === "duration" || hadDuration || take.kind === "pin" || opts.edge === "out") {
+    write.durationAttr = durationAttr;
     write.duration = formatAtTime(durationFrames, opts.fps);
   }
   return write;
@@ -494,7 +519,8 @@ export function planSplit(opts: {
   }
   const leftDur = formatAtTime(opts.playhead - take.start, opts.fps);
   const rightDur = formatAtTime(take.end - opts.playhead, opts.fps);
-  const hadDuration = take.kind === "duration" || lineHasAttr(line, take.durationAttr);
+  const durationAttr = take.kind === "pin" ? pinDurationWriteAttr(line) : take.durationAttr;
+  const hadDuration = take.kind === "duration" || lineHasPinHold(line) || lineHasAttr(line, take.durationAttr);
   const leftAt = lineHasAttr(line, "at_time")
     ? formatAtTime(Math.max(0, take.start - sceneStart), opts.fps)
     : undefined;
@@ -503,14 +529,14 @@ export function planSplit(opts: {
     left: {
       scriptLine: take.scriptLine,
       atTime: leftAt,
-      durationAttr: take.durationAttr,
+      durationAttr,
       duration: take.kind === "duration" || hadDuration || take.kind === "pin" ? leftDur : null,
     },
     right: {
       scriptLine: take.scriptLine,
       atTime: rightAt,
-      durationAttr: take.durationAttr,
-      duration: take.kind === "duration" || hadDuration ? rightDur : null,
+      durationAttr,
+      duration: take.kind === "duration" || hadDuration || take.kind === "pin" ? rightDur : null,
     },
   };
 }

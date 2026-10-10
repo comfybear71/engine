@@ -195,7 +195,8 @@ clobber the project's `timeline.json`.
   right edge for a thin resize handle (no bulky icons). Dragging the edge
   trims the clip: timed tags rewrite `over=` / `for=` (start-edge trim
   also writes `at_time=` so the end stays put); held face/body pins write
-  `over=` for a fixed hold length; dialogue and `[Audio:]` write
+  `hold=` (or keep an existing `over=`) for a fixed hold length so a drag
+  never silently stretches them to the next pin; dialogue and `[Audio:]` write
   `trim_in=` / `trim_out=` in the source file (the married mouth track
   and Audio lane follow). Snap applies to the dragged trim edge (Alt
   disables). A tooltip shows the new in / out / duration timecodes.
@@ -209,9 +210,15 @@ clobber the project's `timeline.json`.
   has the same buttons. Ripple delete, copy/paste, and lane moves are
   later stages.
   Dialogue owns its lip-sync: dragging a Dialogue block moves its audio,
-  Rhubarb mouth cues, and mouth track together. Face pins (`face=` /
-  wink) stay independent. A thin mouth-cue strip appears under a Dialogue
-  block only after that line is synced. Each Dialogue chip shows a small
+  Rhubarb mouth cues, and the red Face **mouth** block together. Synced
+  (or stale) lines get exactly one Face mouth block with the same
+  start/end as the blue Dialogue chip; not-synced lines have no red mouth
+  block. The mouth block is not independently draggable — click the slim
+  chevron to expand and pin/swap individual mouth-shape cues (the
+  tongue-out gag). Face expression pins (`face=` / wink / `eyes=`) stay
+  independent on the same lane (stacked if they overlap). Cue strips are
+  painted on a canvas so a 9-minute take stays one block. Chips off-screen
+  are not mounted. Each Dialogue chip shows a small
   status dot (grey = not synced, green = synced, amber = stale) and a
   14px sync icon on hover or when selected — Sync this line, or Redo
   sync when it is already green. The thin header has **Sync all**, play
@@ -308,7 +315,8 @@ other media durations are cached by path + mtime + size.
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |
 | `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. |
-| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`, `row`, `tag`, `sourceStartFrame`, `timing`, `movable`, `cues`, `view`, `marriedId`, `trim`, `sourceDurationFrames`, `words`, `sync`, `audioRel`, `cuesRel`). `timing` says which attribute holds the event (`over=`, `for=`, `at_time=` / `start=`, or a pin / `[Audio:]` / dialogue placement). `sync` on Dialogue is `not_synced` / `synced` / `stale`. `trim` is `{ inFrames, outFrames }` in the source file (0 / source length when untrimmed). Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Overlapping blocks in one lane get distinct `row` indexes. Does **not** write `timeline.json`. |
+| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`, `row`, `tag`, `sourceStartFrame`, `timing`, `movable`, `cues`, `view`, `marriedId`, `trim`, `sourceDurationFrames`, `words`, `sync`, `audioRel`, `cuesRel`, `role`). `timing` says which attribute holds the event (`over=`, `for=`, `hold=`, `at_time=` / `start=`, or a pin / `[Audio:]` / dialogue placement). `sync` on Dialogue is `not_synced` / `synced` / `stale`. Synced Dialogue also emits a Face `role=mouth` block of the same start/end. `trim` is `{ inFrames, outFrames }` in the source file (0 / source length when untrimmed). Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Overlapping blocks in one lane get distinct `row` indexes. Does **not** write `timeline.json`. |
+| `PUT` | `/api/projects/:name/cues` | Patch one mouth cue in an existing `audio/<scene>/<file>.wav.rhubarb.json`. JSON `{ "rel", "start", "end", "value"?, "pinned"? }`. `start`/`end` are seconds in the source file. |
 | `GET` | `/api/projects/:name/settings` | Project `studio.json`. `{ "lipSync": "auto" \| "manual" }` (default auto). |
 | `PUT` | `/api/projects/:name/settings` | JSON `{ "lipSync": "auto" \| "manual" }`. Writes `studio.json`. |
 | `POST` | `/api/projects/:name/lipsync?script=` | Run Rhubarb for Dialogue lines. JSON `{ "scriptLine": N }`, `{ "scriptLines": [N] }`, or `{ "all": true }`. `{ "force": true }` redoes a synced line. Writes `<wav>.rhubarb.json` plus an `engine` text fingerprint. Returns `{ ok, results }`. |
@@ -332,7 +340,8 @@ Lane `lane` values are `body` (`[Move:]`, `[Swing:]`, `[Pose:]`,
 (spoken lines with text), `audio` (the recorded line wavs), `sfx` (only
 if the parsed scene has bed audio), and `camera` (from `[Camera:]`
 keyframes). Instant pins hold until the next instant pin in the same
-lane and subject (or the scene end); duration-bearing `wait=false`
+lane and subject (or the scene end), unless `hold=` / `over=` locks a
+fixed length; duration-bearing `wait=false`
 moves keep their `over=` / `for=` end frame so they can overlap a walk
 cycle or a face change. Frames are global (concatenated scenes),
 matching the Stage scrubber. Each block also carries `scriptLine`,
@@ -341,8 +350,10 @@ blocks this is the file start, not the sentence start), and `timing`
 (`kind` is `over` / `for` / `pin` / `audio` / `dialogue`; `attr` is
 `over`, `for`, `at_time`, `start`, or null). Studio move-in-time always
 writes `at_time=` on that line. Dialogue and its married audio share
-`marriedId` (`line:<scene>:<scriptLine>`); Face blocks never join that
-group. `sync` is only set on Dialogue. `trim` is
+`marriedId` (`line:<scene>:<scriptLine>`); the Face **mouth** block for a
+synced line joins that group, but Face expression pins never do. `sync`
+is set on Dialogue and copied onto its mouth block. `role` is `mouth`
+on that Face mouth block. `trim` is
 `{ inFrames, outFrames }` in the source file; untrimmed clips use
 `0` / `sourceDurationFrames`. Playback clips also carry `trimInSec` /
 `trimOutSec` so Stage Web Audio starts inside the file.

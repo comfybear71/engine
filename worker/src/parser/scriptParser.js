@@ -28,8 +28,8 @@
  *
  * Dialogue and [Audio:] accept trim_in= / trim_out= (seconds or frames into
  * the source file). Playback, Rhubarb cues, words, and the cursor advance
- * use the trimmed window. Instant pins accept optional over= to hold a
- * fixed length instead of stretching to the next pin.
+ * use the trimmed window. Instant pins accept optional hold= (or over=) to
+ * lock a fixed length instead of stretching to the next pin.
  *
  * A character gets exactly one Layer per *cut* they hold in a scene:
  * an [Action: ... at=/flip=/scale=/z=] that actually changes their resolved
@@ -79,7 +79,7 @@ const DEFAULT_CANVAS_HEIGHT = 1080;
 const RESERVED_SLOT_NAMES = new Set(["mouth"]); // dialogue-driven only, never settable via [Action: ...]
 const CAMERA_KEYS = new Set(["zoom", "pan", "tilt", "to", "over", "ease", "wait", "reset", "at_time", "start"]);
 const TIMING_KEYS = new Set(["at_time", "start"]);
-const HOLD_KEYS = new Set(["over"]);
+const HOLD_KEYS = new Set(["over", "hold"]);
 const TRIM_KEYS = new Set(["trim_in", "trim_out"]);
 const AUDIO_KEYS = new Set(["file", "lines", "view", "at_time", "start", "trim_in", "trim_out"]);
 
@@ -280,7 +280,15 @@ class ScriptParser {
               : "pin";
     const explicit = kv && kv.at_time !== undefined ? "at_time" : kv && kv.start !== undefined ? "start" : null;
     const durationAttr =
-      kind === "over" ? "over" : kind === "for" ? "for" : kind === "pin" && kv && kv.over !== undefined ? "over" : null;
+      kind === "over"
+        ? "over"
+        : kind === "for"
+          ? "for"
+          : kind === "pin" && kv && kv.hold !== undefined
+            ? "hold"
+            : kind === "pin" && kv && kv.over !== undefined
+              ? "over"
+              : null;
     return {
       kind,
       tag: token.kind,
@@ -417,10 +425,13 @@ class ScriptParser {
     if (!this.scene) return;
     const start = Math.max(0, startFrame);
     let end = Math.max(start, endFrame == null ? start : endFrame);
-    if (end <= start && kv && kv.over !== undefined) {
-      const overSeconds = parseSecondsSpec(kv.over, token.lineNumber, "over");
-      const hold = framesFromSeconds(overSeconds, this.fps);
-      if (hold >= 1) end = start + hold;
+    if (end <= start && kv) {
+      const spec = kv.hold !== undefined ? kv.hold : kv.over;
+      const key = kv.hold !== undefined ? "hold" : "over";
+      if (spec !== undefined) {
+        const hold = framesFromSeconds(parseSecondsSpec(spec, token.lineNumber, key), this.fps);
+        if (hold >= 1) end = start + hold;
+      }
     }
     const sourceStart = sourceStartFrame == null ? start : Math.max(0, sourceStartFrame);
     const spokenText = syncText == null ? "" : String(syncText);
@@ -477,6 +488,7 @@ class ScriptParser {
           shape: String(cue.value || cue.shape || "X"),
           start: Number(cue.start) || 0,
           end: Number(cue.end) || 0,
+          pinned: Boolean(cue.pinned),
         }))
         .filter((cue) => cue.end > cue.start);
     } catch {
@@ -491,6 +503,7 @@ class ScriptParser {
         shape: cue.shape,
         start: Math.max(0, cue.start - fromSec),
         end: Math.max(0, Math.min(toSec, cue.end) - fromSec),
+        pinned: Boolean(cue.pinned),
       }))
       .filter((cue) => cue.end > cue.start);
   }
@@ -1018,7 +1031,7 @@ class ScriptParser {
     if (extraKeys.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[Layer: ...] only accepts z= and optional at_time=/start=/over=; use [Action: ...] or [Prop: ...] to move. Unexpected: ${extraKeys.join(", ")}`
+        `[Layer: ...] only accepts z= and optional at_time=/start=/hold=/over=; use [Action: ...] or [Prop: ...] to move. Unexpected: ${extraKeys.join(", ")}`
       );
     }
     const newZ = parseInt(kv.z, 10);
@@ -1247,7 +1260,8 @@ class ScriptParser {
       if (positionKeys.includes(key) || TIMING_KEYS.has(key) || HOLD_KEYS.has(key) || TRIM_KEYS.has(key)) continue;
       bits.push(`${key}=${value}`);
     }
-    if (kv.over) bits.push(`over=${kv.over}`);
+    if (kv.hold) bits.push(`hold=${kv.hold}`);
+    else if (kv.over) bits.push(`over=${kv.over}`);
     if (note) bits.push(note);
     this._emitLane({
       lane: "action",

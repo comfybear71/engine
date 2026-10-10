@@ -9,7 +9,9 @@ import {
   historyRedo,
   historyUndo,
   idsForMarriedGroup,
+  isMouthBlock,
   moveBlocksInScript,
+  pinDurationWriteAttr,
   planSplit,
   planTrim,
   setAtTimeOnLine,
@@ -160,5 +162,19 @@ describe("timeline script rewrite", () => {
     const next = applySplitWrite(script, split);
     assert.equal(next.split("\n")[1], "Alice trim_out=1s: Hello there");
     assert.equal(next.split("\n")[2], "Alice at_time=1s trim_in=1s trim_out=2s: friend");
+  });
+
+  test("moving a face pin writes at_time= and locks hold= so it does not stretch", () => {
+    const script = ["[Scene: Intro]", "[Action: Rodney face=yap]", "[Action: Rodney face=rest]"].join("\n");
+    const moved = moveBlocksInScript(
+      script,
+      [{ scriptLine: 2, startFrame: 12, sceneStartFrame: 0, hold: "0.5s" }],
+      24
+    );
+    assert.equal(moved.split("\n")[1], "[Action: Rodney face=yap at_time=0.5s hold=0.5s]");
+    assert.equal(pinDurationWriteAttr("[Action: Rodney face=yap over=1s]"), "over");
+    assert.equal(pinDurationWriteAttr("[Action: Rodney face=yap]"), "hold");
+    assert.equal(isMouthBlock({ role: "mouth" }), true);
+    assert.equal(isMouthBlock({ tag: "action" }), false);
   });
 });
