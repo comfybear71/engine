@@ -38,15 +38,19 @@ export default function AssetImaginePanel({
   character,
   onChanged,
   embedded = false,
+  initialNeedId = null,
+  onNeedId,
 }: {
   project: string;
   character: Character;
   onChanged: () => void;
   embedded?: boolean;
+  initialNeedId?: string | null;
+  onNeedId?: (id: string | null) => void;
 }) {
   const pack = useMemo(() => packForCharacter(character), [character]);
   const setOptions = pack ? pack.sets : ASSET_NEEDS;
-  const [needId, setNeedId] = useState<string>(setOptions[0]?.id || "mouth_sheet");
+  const [needId, setNeedId] = useState<string>(initialNeedId || setOptions[0]?.id || "mouth_sheet");
   const packSet = useMemo(() => pack?.sets.find((set) => set.id === needId) || pack?.sets[0] || null, [pack, needId]);
   const ingestId = packSet ? ingestNeedId(packSet) : needId;
   const need = useMemo(() => {
@@ -91,8 +95,11 @@ export default function AssetImaginePanel({
     setPicked(null);
     const nextPack = packForCharacter(character);
     const first = nextPack?.sets[0]?.id || ASSET_NEEDS[0]?.id || "mouth_sheet";
-    setNeedId(first);
-  }, [character.id, character.style]);
+    const match = initialNeedId
+      ? (nextPack?.sets || ASSET_NEEDS).find((set) => set.id === initialNeedId || ("needId" in set && set.needId === initialNeedId))
+      : null;
+    setNeedId(match?.id || first);
+  }, [character.id, character.style, initialNeedId]);
 
   useEffect(() => {
     if (need?.frameParam) setFrames(need.frameParam.default);
@@ -350,6 +357,7 @@ export default function AssetImaginePanel({
             value={needId}
             onChange={(event) => {
               setNeedId(event.target.value);
+              onNeedId?.(event.target.value);
               setResults([]);
               setPicked(null);
             }}

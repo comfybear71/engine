@@ -16,6 +16,7 @@ const {
   listKnownCharacterIds,
   listKnownLocations,
 } = require("./parser/assetLibrary");
+const { discoverSlotViews } = require("./assetEditor");
 
 function toPosix(p) {
   return String(p).split(path.sep).join("/");
@@ -55,11 +56,26 @@ function collectSlots(character, projectDir, globalAssetsDir, characterId) {
       }
       drawings.sort((a, b) => a.name.localeCompare(b.name));
       const offset = spec.offset || {};
+      const views = discoverSlotViews(projectDir, globalAssetsDir, characterId, name, spec).map((view) => {
+        const viewDrawings = [];
+        for (const [drawingName, file] of scanDrawingsDir(projectDir, globalAssetsDir, view.relDir)) {
+          const rel = `${view.relDir}/${path.basename(file.absPath)}`;
+          viewDrawings.push({
+            name: drawingName,
+            rel,
+            mtime: resolvedMtime(projectDir, globalAssetsDir, rel),
+            view: view.id,
+          });
+        }
+        viewDrawings.sort((a, b) => a.name.localeCompare(b.name));
+        return { id: view.id, drawingsDir: view.drawingsDir, drawings: viewDrawings };
+      });
       slots.push({
         name,
         owner,
         default_drawing: spec.default_drawing || null,
         drawings,
+        views,
         cycles: spec.cycles || {},
         offset: {
           x: offset.x == null ? 0 : offset.x,

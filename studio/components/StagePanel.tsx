@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import CameraDrawer from "@/components/CameraDrawer";
 import StageAssetsPanel from "@/components/StageAssetsPanel";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
@@ -9,6 +10,7 @@ import { LayersInspector, MarksInspector, ScriptInspector } from "@/components/S
 import { LeftIconRail, RightIconRail, type LeftPoolId, type RightDrawerId } from "@/components/StageRails";
 import TimelineLanes from "@/components/TimelineLanes";
 import TransportBar from "@/components/TransportBar";
+import type { AssetFocus } from "@/lib/assetEditor";
 import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import { ASSET_DRAG_MIME, applyStagePlacement, parseAssetDrag } from "@/lib/stageAssets";
 import {
@@ -69,6 +71,7 @@ export default function StagePanel({
   onSelectLine,
   onSaved,
   renderNonce,
+  onOpenImagine,
 }: {
   project: string | null;
   script?: string;
@@ -78,6 +81,7 @@ export default function StagePanel({
   onSelectLine: (line: number | null) => void;
   onSaved: () => void;
   renderNonce: number | null;
+  onOpenImagine?: (opts: { characterId: string; needId: string }) => void;
 }) {
   const [stage, setStage] = useState<StageInfo | null>(null);
   const [lanes, setLanes] = useState<LanesResponse | null>(null);
@@ -105,6 +109,8 @@ export default function StagePanel({
   const [syncing, setSyncing] = useState(false);
   const [lipSyncMode, setLipSyncMode] = useState<"auto" | "manual">("auto");
   const [loopSelection, setLoopSelection] = useState(false);
+  const [assetFocus, setAssetFocus] = useState<AssetFocus | null>(null);
+  const [assetEpoch, setAssetEpoch] = useState(0);
   const [selectionRange, setSelectionRange] = useState<{
     start: number;
     end: number;
@@ -838,6 +844,9 @@ export default function StagePanel({
                   project={project}
                   workerUp={workerUp}
                   poolSection={leftPool}
+                  refreshToken={assetEpoch}
+                  assetFocus={assetFocus}
+                  onOpenAsset={setAssetFocus}
                 />
               </div>
               <PanelSplitter
@@ -855,7 +864,17 @@ export default function StagePanel({
           ) : null}
 
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-black/40">
-            <div className="flex min-h-0 flex-1 items-center justify-center p-3">
+            <div className="relative flex min-h-0 flex-1 items-center justify-center p-3">
+            {assetFocus && project ? (
+              <AssetEditorOverlay
+                project={project}
+                focus={assetFocus}
+                onFocus={setAssetFocus}
+                onClose={() => setAssetFocus(null)}
+                onChanged={() => setAssetEpoch((n) => n + 1)}
+                onOpenImagine={onOpenImagine}
+              />
+            ) : null}
               <div
                 ref={previewBoxRef}
                 className="relative inline-block max-h-full max-w-full"

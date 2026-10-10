@@ -46,8 +46,20 @@ const {
 } = require("./studioProjects");
 const { cachedBackgroundThumb } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
-const { previewIngest, confirmIngest, cancelIngest } = require("./assetIngest");
+const { previewIngest, confirmIngest, cancelIngest, DRAWING_NAME } = require("./assetIngest");
 const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, SLOT_NAME } = require("./characterLocal");
+const {
+  describeSlot,
+  describeDrawing,
+  previewReplace,
+  confirmReplace,
+  previewAdd,
+  confirmAdd,
+  cancelEdit,
+  renameDrawing,
+  deleteDrawing,
+  listLipsyncPreview,
+} = require("./assetEditor");
 const {
   PROXY_SIZE,
   isSafeAudioRel,
@@ -924,6 +936,9 @@ function createApp(options = {}) {
   function sendIngestError(res, err) {
     if (err.code === "EINVAL") return res.status(400).json({ error: err.message });
     if (err.code === "ENOENT" || err.code === "ENOTFOUND") return res.status(404).json({ error: err.message });
+    if (err.code === "EUSED") {
+      return res.status(409).json({ error: err.message, used: true, usages: err.usages || [] });
+    }
     return res.status(500).json({ error: err.message });
   }
 
@@ -963,18 +978,202 @@ function createApp(options = {}) {
     }
   });
 
+  function slotNameFromRequest(req, res) {
+    const slotName = req.params.slotName;
+    if (!SLOT_NAME.test(String(slotName || ""))) {
+      res.status(400).json({ error: "Invalid slot name" });
+      return null;
+    }
+    return slotName;
+  }
+
+  function drawingNameFromRequest(req, res) {
+    const drawingName = req.params.drawingName;
+    if (!DRAWING_NAME.test(String(drawingName || ""))) {
+      res.status(400).json({ error: "Invalid drawing name" });
+      return null;
+    }
+    return drawingName;
+  }
+
   app.put("/api/projects/:name/characters/:characterId/slots/:slotName", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
     const characterId = characterIdFromRequest(req, res);
     if (!characterId) return;
-    const slotName = req.params.slotName;
-    if (!SLOT_NAME.test(String(slotName || ""))) {
-      return res.status(400).json({ error: "Invalid slot name" });
-    }
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
       res.json(saveSlotAlignment(projectDir, globalAssetsDir, characterId, slotName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/slots/:slotName", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(describeSlot(projectDir, globalAssetsDir, characterId, slotName, req.query.view));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/slots/:slotName/lipsync-preview", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(listLipsyncPreview(projectDir, globalAssetsDir, characterId, slotName, req.query.view));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const drawingName = drawingNameFromRequest(req, res);
+    if (!drawingName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(describeDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.query.view));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const ingestOpts = options.pythonBin ? { pythonBin: options.pythonBin } : {};
+      res.json(await previewAdd(projectDir, globalAssetsDir, characterId, slotName, req.body || {}, ingestOpts));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/confirm", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(confirmAdd(projectDir, globalAssetsDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/cancel", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    try {
+      res.json(cancelEdit(projectDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/replace", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const drawingName = drawingNameFromRequest(req, res);
+    if (!drawingName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const ingestOpts = options.pythonBin ? { pythonBin: options.pythonBin } : {};
+      res.json(
+        await previewReplace(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.body || {}, ingestOpts)
+      );
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/replace/confirm", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    try {
+      res.json(confirmReplace(projectDir, resolveGlobalAssetsDir(projectDir), characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/replace/cancel", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    try {
+      res.json(cancelEdit(projectDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/rename", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const drawingName = drawingNameFromRequest(req, res);
+    if (!drawingName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(renameDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/delete", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const drawingName = drawingNameFromRequest(req, res);
+    if (!drawingName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(deleteDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.body || {}));
     } catch (err) {
       sendIngestError(res, err);
     }
