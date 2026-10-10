@@ -12,6 +12,9 @@ const {
   isStudioDev,
   studioLaunchArgs,
   studioNeedsRebuild,
+  ensureStudioBuild,
+  launcherErrLogPath,
+  sourceUnchangedSinceBuildFailure,
 } = require("../../launcher.js");
 
 describe("launcher", () => {
@@ -41,6 +44,32 @@ describe("launcher", () => {
     const paths = { root: tmp, studioDir: path.join(tmp, "studio") };
     fs.mkdirSync(paths.studioDir, { recursive: true });
     assert.equal(studioNeedsRebuild(paths), true);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("failed production build writes launcher.err.log and falls back until source changes", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "engine-studio-build-"));
+    const studioDir = path.join(tmp, "studio");
+    fs.mkdirSync(path.join(studioDir, "app"), { recursive: true });
+    fs.writeFileSync(path.join(studioDir, "app", "page.tsx"), "export default function Page() { return null; }\n");
+    const failBin = path.join(tmp, "next-fail.js");
+    fs.writeFileSync(failBin, "process.stderr.write('next build exploded\\n'); process.exit(1);\n");
+    const paths = { root: tmp, studioDir, nextBin: failBin };
+
+    assert.throws(() => ensureStudioBuild(paths, {}), (err) => err && err.code === "STUDIO_BUILD");
+    const log = fs.readFileSync(launcherErrLogPath(tmp), "utf8");
+    assert.match(log, /Studio production build failed/);
+    assert.match(log, /next build exploded/);
+    assert.equal(sourceUnchangedSinceBuildFailure(paths), true);
+
+    const skipped = ensureStudioBuild(paths, {});
+    assert.deepEqual(skipped, { built: false, skipped: true, useDev: true });
+
+    const later = Date.now() + 5_000;
+    fs.utimesSync(path.join(studioDir, "app", "page.tsx"), later / 1000, later / 1000);
+    assert.equal(sourceUnchangedSinceBuildFailure(paths), false);
+    assert.throws(() => ensureStudioBuild(paths, {}), (err) => err && err.code === "STUDIO_BUILD");
+
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
