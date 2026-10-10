@@ -131,4 +131,20 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   height: 14px;
   overflow-x: scroll;
   overflow-y: hidden;
+  background: #121212;
+  scrollbar-width: thin;
+  scrollbar-color: #5a5a5a #2a2a2a;
+}
+
+.studio-timeline-hscroll::-webkit-scrollbar {
+  height: 14px;
+}
+
+.studio-timeline-hscroll::-webkit-scrollbar-track {
+  background: #2a2a2a;
+}
+
+.studio-timeline-hscroll::-webkit-scrollbar-thumb {
+  background: #5a5a5a;
+  border-radius: 7px;
 }
