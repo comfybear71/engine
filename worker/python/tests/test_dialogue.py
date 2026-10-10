@@ -216,6 +216,58 @@ class TestDialogueClipsList:
         assert timeline.scenes[0].total_frames == 71
 
 
+    def test_trim_in_out_shortens_mix_cues_and_scene(self, tmp_path):
+        _base_project(tmp_path)
+        write_wav(tmp_path / "line.wav", 2.0)
+        _write_cues(
+            tmp_path / "line.wav.rhubarb.json",
+            [
+                {"start": 0.0, "end": 0.5, "value": "A"},
+                {"start": 0.5, "end": 1.5, "value": "B"},
+                {"start": 1.5, "end": 2.0, "value": "C"},
+            ],
+        )
+        scene = {
+            "id": "s1",
+            "duration": {"from_dialogue": True, "padding_frames": 0},
+            "background": {"asset": "bg.png"},
+            "layers": [
+                {
+                    "id": "hicks",
+                    "asset": "body.png",
+                    "z": 1,
+                    "transform": {"x": 0, "y": 0, "anchor": "top-left"},
+                    "dialogue": [
+                        {
+                            "audio": "line.wav",
+                            "start_frame": 0,
+                            "trim_in": 0.5,
+                            "trim_out": 1.5,
+                        }
+                    ],
+                    "slots": {
+                        "mouth": {
+                            "images": _mouth_images(tmp_path),
+                            "lipsync": {"source": "dialogue"},
+                        }
+                    },
+                }
+            ],
+        }
+        timeline = load_timeline(_write_timeline(tmp_path, scene, fps=24))
+        clip = timeline.scenes[0].layers[0].dialogue[0]
+        assert clip.duration_frames == 24
+        assert clip.trim_in == pytest.approx(0.5)
+        assert [c.shape for c in clip.cues] == ["B"]
+        mix = timeline.all_audio_clips()
+        assert len(mix) == 1
+        assert mix[0].in_seconds == pytest.approx(0.5)
+        assert mix[0].duration_seconds == pytest.approx(1.0)
+        assert timeline.scenes[0].total_frames == 24
+        mouth = timeline.scenes[0].layers[0].slots["mouth"]
+        assert active_drawing(mouth, 0, 24) == "B"
+
+
 class TestMouthSlotDrivenByDialogue:
     def test_shows_cues_within_clip_window_and_idle_between_lines(self, tmp_path):
         _base_project(tmp_path)

@@ -8,6 +8,8 @@ export type PlaybackAudioClip = {
   startFrame: number;
   endFrame: number;
   exists: boolean;
+  trimInSec?: number;
+  trimOutSec?: number | null;
 };
 
 export type PlaybackStatus = {
@@ -68,35 +70,51 @@ export function isLiveAudioStart(
 }
 
 export function audioClipsFromBlocks(
-  blocks: { lane: string; rel?: string | null; startFrame: number; endFrame: number }[],
-  totalFrames: number
-): { rel: string; startFrame: number; endFrame: number }[] {
+  blocks: {
+    lane: string;
+    rel?: string | null;
+    startFrame: number;
+    endFrame: number;
+    trim?: { inFrames: number; outFrames: number } | null;
+  }[],
+  totalFrames: number,
+  fps = 24
+): { rel: string; startFrame: number; endFrame: number; trimInSec: number; trimOutSec: number | null }[] {
   const max = Math.max(Number(totalFrames) || 0, 0);
+  const safeFps = Math.max(fps, 1);
   return blocks
     .filter((block) => block.lane === "audio" && typeof block.rel === "string" && block.rel.length > 0)
     .map((block) => ({
       rel: block.rel as string,
       startFrame: Math.max(0, block.startFrame),
       endFrame: Math.min(max, Math.max(block.endFrame, block.startFrame)),
+      trimInSec: (block.trim?.inFrames || 0) / safeFps,
+      trimOutSec: block.trim?.outFrames ? block.trim.outFrames / safeFps : null,
     }))
     .filter((clip) => clip.endFrame > clip.startFrame);
 }
 
 /** Where to start a clip in Web Audio relative to the current playhead. */
 export function webAudioSchedule(
-  clip: { startFrame: number; endFrame: number; durationSec: number },
+  clip: { startFrame: number; endFrame: number; durationSec: number; trimInSec?: number; trimOutSec?: number | null },
   playheadFrame: number,
   fps: number,
   totalFrames: number
-): { offsetSec: number; delaySec: number } | null {
+): { offsetSec: number; delaySec: number; playSec: number } | null {
   const safeFps = Math.max(fps, 1);
   const clipEnd = Math.min(clip.endFrame, Math.max(totalFrames, 0));
   if (clipEnd <= playheadFrame) return null;
   if (clip.startFrame >= totalFrames) return null;
-  const offsetSec = Math.max(0, playheadFrame - clip.startFrame) / safeFps;
-  if (offsetSec >= clip.durationSec) return null;
+  const trimIn = Math.max(0, clip.trimInSec || 0);
+  const trimOut = clip.trimOutSec != null && clip.trimOutSec > trimIn ? clip.trimOutSec : trimIn + clip.durationSec;
+  const intoClip = Math.max(0, playheadFrame - clip.startFrame) / safeFps;
+  const offsetSec = trimIn + intoClip;
+  if (offsetSec >= trimOut - 1e-6) return null;
+  const remainOnTimeline = (clipEnd - Math.max(playheadFrame, clip.startFrame)) / safeFps;
+  const playSec = Math.max(0, Math.min(trimOut - offsetSec, remainOnTimeline));
+  if (playSec <= 0) return null;
   const delaySec = Math.max(0, (clip.startFrame - playheadFrame) / safeFps);
-  return { offsetSec, delaySec };
+  return { offsetSec, delaySec, playSec };
 }
 
 export type FrameCache = {

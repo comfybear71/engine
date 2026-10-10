@@ -503,7 +503,13 @@ export default function StagePanel({
       const buffer = audioBuffersRef.current.get(clip.rel);
       if (!buffer) continue;
       const schedule = webAudioSchedule(
-        { startFrame: clip.startFrame, endFrame: clip.endFrame, durationSec: buffer.duration },
+        {
+          startFrame: clip.startFrame,
+          endFrame: clip.endFrame,
+          durationSec: buffer.duration,
+          trimInSec: clip.trimInSec,
+          trimOutSec: clip.trimOutSec,
+        },
         fromFrame,
         fps,
         totalFrames
@@ -512,7 +518,7 @@ export default function StagePanel({
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);
-      source.start(ctx.currentTime + schedule.delaySec, schedule.offsetSec);
+      source.start(ctx.currentTime + schedule.delaySec, schedule.offsetSec, schedule.playSec);
       const range = playRangeRef.current;
       if (range) {
         const remain = (range.end - fromFrame) / Math.max(fps, 1);

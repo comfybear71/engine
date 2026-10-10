@@ -208,6 +208,31 @@ input[type="range"].studio-scrubber::-moz-range-thumb {
   bottom: 0;
 }
 
+.studio-trim-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  z-index: 3;
+  cursor: ew-resize;
+  background: transparent;
+}
+.studio-trim-handle[data-edge="in"] {
+  left: 0;
+}
+.studio-trim-handle[data-edge="out"] {
+  right: 0;
+}
+.studio-trim-handle:hover,
+.studio-trim-handle:active {
+  background: rgba(255, 255, 255, 0.55);
+}
+.studio-trim-handle[data-allowed="false"],
+.studio-trim-handle[data-allowed="false"]:hover {
+  cursor: not-allowed;
+  background: rgba(239, 68, 68, 0.45);
+}
+
 .studio-rubber-band {
   position: absolute;
   border: 1px solid rgba(253, 230, 138, 0.9);

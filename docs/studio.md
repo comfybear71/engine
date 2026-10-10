@@ -13,12 +13,12 @@ bar / Script drawer) — that calls `POST /api/projects/:name/import-audio` (Ele
 Speech-to-Text + Rhubarb). You never need the command line for that.
 
 The **script is the source of truth**. Stage lanes are a view of a temp
-parse. Stage 1 timeline edits (select + move in time) rewrite the matching
-script line(s) with `at_time=` / `start=`, then re-parse; they never write
-`timeline.json`. Save, lint, preview, lanes, and Render still parse the
-selected script to a temp timeline (the same `--script` option as the CLI).
-Render writes `renders/<script-stem>.mp4`. Resize and delete are later
-stages.
+parse. Stage 1–2 timeline edits (select, move, trim, split) rewrite the
+matching script line(s) with `at_time=` / duration / `trim_in=` /
+`trim_out=`, then re-parse; they never write `timeline.json`. Save, lint,
+preview, lanes, and Render still parse the selected script to a temp
+timeline (the same `--script` option as the CLI). Render writes
+`renders/<script-stem>.mp4`. Ripple delete is a later stage.
 
 ## Starting Engine Studio
 
@@ -191,10 +191,23 @@ clobber the project's `timeline.json`.
   single source of truth. Instant tags with no time concept show a
   not-allowed cursor. Snap to the playhead, other block edges, whole
   seconds, and frame boundaries (hold Alt to disable); a vertical guide
-  and a start-time tooltip show while dragging. Ctrl+Z / Ctrl+Y (and
+  and a start-time tooltip show while dragging. Hover a block's left or
+  right edge for a thin resize handle (no bulky icons). Dragging the edge
+  trims the clip: timed tags rewrite `over=` / `for=` (start-edge trim
+  also writes `at_time=` so the end stays put); held face/body pins write
+  `over=` for a fixed hold length; dialogue and `[Audio:]` write
+  `trim_in=` / `trim_out=` in the source file (the married mouth track
+  and Audio lane follow). Snap applies to the dragged trim edge (Alt
+  disables). A tooltip shows the new in / out / duration timecodes.
+  Trims cannot go below 1 frame or past the source length (not-allowed
+  cursor). **S** or the header **Split** button splits the selected
+  block(s) at the playhead into two script lines (timed tags keep
+  durations; audio/dialogue become two clips with matching
+  `at_time=` / `trim_in=` / `trim_out=`; word timings stay on the
+  source). Ctrl+Z / Ctrl+Y (and
   Ctrl+Shift+Z) undo/redo as script-text snapshots; the timeline header
-  has the same buttons. Delete and edge trims are later stages (each
-  block already carries `trim: { inFrames, outFrames }` reserved at 0).
+  has the same buttons. Ripple delete, copy/paste, and lane moves are
+  later stages.
   Dialogue owns its lip-sync: dragging a Dialogue block moves its audio,
   Rhubarb mouth cues, and mouth track together. Face pins (`face=` /
   wink) stay independent. A thin mouth-cue strip appears under a Dialogue
@@ -295,7 +308,7 @@ other media durations are cached by path + mtime + size.
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |
 | `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. |
-| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`, `row`, `tag`, `sourceStartFrame`, `timing`, `movable`, `cues`, `view`, `marriedId`, `trim`, `sync`, `audioRel`, `cuesRel`). `timing` says which attribute holds the event (`over=`, `for=`, `at_time=` / `start=`, or a pin / `[Audio:]` / dialogue placement). `sync` on Dialogue is `not_synced` / `synced` / `stale`. Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Overlapping blocks in one lane get distinct `row` indexes. Does **not** write `timeline.json`. |
+| `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`, `row`, `tag`, `sourceStartFrame`, `timing`, `movable`, `cues`, `view`, `marriedId`, `trim`, `sourceDurationFrames`, `words`, `sync`, `audioRel`, `cuesRel`). `timing` says which attribute holds the event (`over=`, `for=`, `at_time=` / `start=`, or a pin / `[Audio:]` / dialogue placement). `sync` on Dialogue is `not_synced` / `synced` / `stale`. `trim` is `{ inFrames, outFrames }` in the source file (0 / source length when untrimmed). Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Overlapping blocks in one lane get distinct `row` indexes. Does **not** write `timeline.json`. |
 | `GET` | `/api/projects/:name/settings` | Project `studio.json`. `{ "lipSync": "auto" \| "manual" }` (default auto). |
 | `PUT` | `/api/projects/:name/settings` | JSON `{ "lipSync": "auto" \| "manual" }`. Writes `studio.json`. |
 | `POST` | `/api/projects/:name/lipsync?script=` | Run Rhubarb for Dialogue lines. JSON `{ "scriptLine": N }`, `{ "scriptLines": [N] }`, or `{ "all": true }`. `{ "force": true }` redoes a synced line. Writes `<wav>.rhubarb.json` plus an `engine` text fingerprint. Returns `{ ok, results }`. |
@@ -329,8 +342,10 @@ blocks this is the file start, not the sentence start), and `timing`
 `over`, `for`, `at_time`, `start`, or null). Studio move-in-time always
 writes `at_time=` on that line. Dialogue and its married audio share
 `marriedId` (`line:<scene>:<scriptLine>`); Face blocks never join that
-group. `sync` is only set on Dialogue. `trim` is always
-`{ inFrames: 0, outFrames: 0 }` until Stage 2 edge handles.
+group. `sync` is only set on Dialogue. `trim` is
+`{ inFrames, outFrames }` in the source file; untrimmed clips use
+`0` / `sourceDurationFrames`. Playback clips also carry `trimInSec` /
+`trimOutSec` so Stage Web Audio starts inside the file.
 
 ## Image assets (Grok Imagine)
 

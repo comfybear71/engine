@@ -4,12 +4,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatTimecode } from "@/lib/playhead";
 import {
   HEAD_VIEWS,
+  applyTrimWrite,
   blockIsMovable,
+  blockIsTrimmable,
+  clampTrimEdge,
   collectSnapFrames,
   idsForMarriedGroup,
   moveBlocksInScript,
+  planSplit,
+  planTrim,
   setViewOnLine,
   snapStart,
+  splitBlocksInScript,
+  takeWindowForIds,
+  uniqueSplitWrites,
 } from "@/lib/timelineEdit";
 import {
   DEFAULT_LANE_SCALE,
@@ -149,6 +157,13 @@ export default function TimelineLanes({
   const [scrollLeft, setScrollLeft] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [draftDelta, setDraftDelta] = useState(0);
+  const [draftTrim, setDraftTrim] = useState<{
+    ids: Set<string>;
+    edge: "in" | "out";
+    start: number;
+    end: number;
+    allowed: boolean;
+  } | null>(null);
   const [snapGuide, setSnapGuide] = useState<number | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
   const [rubber, setRubber] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
@@ -169,6 +184,13 @@ export default function TimelineLanes({
     moved: boolean;
     alt: boolean;
     delta: number;
+  } | null>(null);
+  const trimRef = useRef<{
+    pointerId: number;
+    edge: "in" | "out";
+    ids: Set<string>;
+    origin: number;
+    allowed: boolean;
   } | null>(null);
   const rubberRef = useRef<{
     pointerId: number;
@@ -369,6 +391,134 @@ export default function TimelineLanes({
     if (next !== scriptText) onEditScript(next);
   }
 
+  function snapEdge(raw: number, ignoreIds: Iterable<string>, alt: boolean): { frame: number; snappedTo: number | null } {
+    if (alt) return { frame: Math.max(0, Math.round(raw)), snappedTo: null };
+    return snapStart(
+      raw,
+      collectSnapFrames({
+        playhead: frame,
+        blocks: allBlocks,
+        ignoreIds,
+        fps,
+        totalFrames: total,
+      }),
+      Math.max(1, Math.round(SNAP_PX / Math.max(ppf, 1e-6)))
+    );
+  }
+
+  function applyTrim(edge: "in" | "out", newEdgeFrame: number, ids: Set<string>) {
+    if (!onEditScript || !scriptText) return;
+    const write = planTrim({
+      blocks: allBlocks,
+      ids,
+      edge,
+      newEdgeFrame,
+      scenes,
+      fps,
+      script: scriptText,
+    });
+    if (!write) return;
+    const next = applyTrimWrite(scriptText, write);
+    if (next !== scriptText) onEditScript(next);
+  }
+
+  function applySplit() {
+    if (!onEditScript || !scriptText) return;
+    const seeds = selectedIds.size > 0 ? selectedIds : new Set(allBlocks.filter((block) => block.scriptLine === selectedLine).map((block) => block.id));
+    if (seeds.size === 0) return;
+    const groups = new Map<number, Set<string>>();
+    for (const id of relatedMoveIds(allBlocks, seeds)) {
+      const block = allBlocks.find((item) => item.id === id);
+      if (!block || block.scriptLine == null) continue;
+      const set = groups.get(block.scriptLine) || new Set<string>();
+      set.add(block.id);
+      groups.set(block.scriptLine, set);
+    }
+    const writes = uniqueSplitWrites(
+      [...groups.values()].map((ids) =>
+        planSplit({
+          blocks: allBlocks,
+          ids,
+          playhead: frame,
+          scenes,
+          fps,
+          script: scriptText,
+        })
+      )
+    );
+    if (writes.length === 0) return;
+    const next = splitBlocksInScript(scriptText, writes);
+    if (next !== scriptText) onEditScript(next);
+  }
+
+  function canSplitSelection(): boolean {
+    if (!scriptText) return false;
+    const seeds = selectedIds.size > 0 ? selectedIds : new Set(allBlocks.filter((block) => block.scriptLine === selectedLine).map((block) => block.id));
+    if (seeds.size === 0) return false;
+    const take = takeWindowForIds(allBlocks, relatedMoveIds(allBlocks, seeds));
+    if (!take) return false;
+    return frame > take.start && frame < take.end;
+  }
+
+  function onTrimPointerDown(event: React.PointerEvent<HTMLDivElement>, block: LaneBlock, edge: "in" | "out") {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const next = selectedIds.has(block.id) ? new Set(selectedIds) : new Set<string>([block.id]);
+    commitSelection(next);
+    const related = relatedMoveIds(allBlocks, next);
+    const take = takeWindowForIds(allBlocks, related);
+    if (!take || !blockIsTrimmable(block)) return;
+    followLockRef.current = true;
+    const drag = {
+      pointerId: event.pointerId,
+      edge,
+      ids: related,
+      origin: edge === "in" ? take.start : take.end,
+      edgeFrame: edge === "in" ? take.start : take.end,
+      allowed: true,
+    };
+    trimRef.current = drag;
+
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== drag.pointerId) return;
+      ev.preventDefault();
+      const raw = drag.origin + (ev.clientX - event.clientX) / Math.max(ppf, 1e-6);
+      const snapped = snapEdge(raw, drag.ids, ev.altKey);
+      const clamped = clampTrimEdge({ edge: drag.edge, rawFrame: snapped.frame, take });
+      drag.allowed = clamped.allowed;
+      drag.edgeFrame = clamped.frame;
+      const start = drag.edge === "in" ? clamped.frame : take.start;
+      const end = drag.edge === "out" ? clamped.frame : take.end;
+      setDraftTrim({ ids: drag.ids, edge: drag.edge, start, end, allowed: clamped.allowed });
+      setSnapGuide(snapped.snappedTo);
+      const inFrame = take.trimIn + (start - take.start);
+      const outFrame = take.trimIn + (end - take.start);
+      setTooltip({
+        x: ev.clientX,
+        y: ev.clientY,
+        text: `in ${formatTimecode(inFrame, fps)}  out ${formatTimecode(outFrame, fps)}  ${formatTimecode(Math.max(1, end - start), fps)}`,
+      });
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== drag.pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (trimRef.current?.pointerId === drag.pointerId) trimRef.current = null;
+      followLockRef.current = false;
+      setDraftTrim(null);
+      setSnapGuide(null);
+      setTooltip(null);
+      if (drag.edgeFrame !== drag.origin) applyTrim(drag.edge, drag.edgeFrame, drag.ids);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
+
   function onChipPointerDown(event: React.PointerEvent<HTMLDivElement>, block: LaneBlock) {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -557,6 +707,11 @@ export default function TimelineLanes({
         return;
       }
       const key = event.key.toLowerCase();
+      if (key === "s" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        applySplit();
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey)) return;
       if (key === "z" && event.shiftKey) {
         event.preventDefault();
@@ -575,7 +730,7 @@ export default function TimelineLanes({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onUndo, onRedo]);
+  }, [onUndo, onRedo, applySplit, scriptText, selectedIds, selectedLine, frame, allBlocks, scenes, fps]);
 
   function nudgeZoom(factor: number) {
     const h = hScrollRef.current;
@@ -624,6 +779,17 @@ export default function TimelineLanes({
             className="studio-header-iconbtn"
           >
             ↷
+          </button>
+          <button
+            type="button"
+            data-testid="timeline-split"
+            title="Split selected block(s) at the playhead (S)"
+            aria-label="Split at playhead"
+            onClick={() => applySplit()}
+            disabled={!onEditScript || !canSplitSelection()}
+            className="studio-header-textbtn"
+          >
+            Split
           </button>
           {allBlocks.some((block) => block.lane === "dialogue" && selectedIds.has(block.id)) ? (
             <label className="ml-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-neutral-500" data-testid="timeline-view-control">
@@ -878,6 +1044,11 @@ export default function TimelineLanes({
                                   (item) => selectedIds.has(item.id) && item.marriedId === block.marriedId
                                 )) ||
                               (block.scriptLine != null && selectedLinesRef.current.has(block.scriptLine)));
+                          const take = draftTrim && draftTrim.ids.has(block.id) ? draftTrim : null;
+                          const group = relatedMoveIds(allBlocks, new Set([block.id]));
+                          const members = allBlocks.filter((item) => group.has(item.id));
+                          const groupStart = members.length ? Math.min(...members.map((item) => item.startFrame)) : block.startFrame;
+                          const groupEnd = members.length ? Math.max(...members.map((item) => item.endFrame)) : block.endFrame;
                           return (
                             <LaneChip
                               key={block.id}
@@ -889,9 +1060,15 @@ export default function TimelineLanes({
                               selected={selected}
                               bar={lane.bar}
                               text={lane.text}
-                              draftDelta={shifting ? draftDelta : 0}
+                              draftDelta={take ? 0 : shifting ? draftDelta : 0}
+                              draftStart={take && block.startFrame === groupStart ? take.start : null}
+                              draftEnd={take && block.endFrame === groupEnd ? take.end : null}
+                              trimAllowed={take ? take.allowed : true}
+                              showInHandle={blockIsTrimmable(block) && block.startFrame === groupStart}
+                              showOutHandle={blockIsTrimmable(block) && block.endFrame === groupEnd}
                               syncing={syncing}
                               onPointerDown={onChipPointerDown}
+                              onTrimPointerDown={onTrimPointerDown}
                               onSyncLine={
                                 onSyncLines
                                   ? () =>
@@ -939,7 +1116,7 @@ export default function TimelineLanes({
         <div
           className="pointer-events-none fixed z-50 rounded bg-black/80 px-1.5 py-0.5 font-mono text-[10px] text-amber-100"
           style={{ left: tooltip.x + 12, top: tooltip.y + 16 }}
-          data-testid="timeline-move-tooltip"
+          data-testid="timeline-edit-tooltip"
         >
           {tooltip.text}
         </div>
@@ -971,8 +1148,14 @@ function LaneChip({
   bar,
   text,
   draftDelta,
+  draftStart,
+  draftEnd,
+  trimAllowed,
+  showInHandle,
+  showOutHandle,
   syncing,
   onPointerDown,
+  onTrimPointerDown,
   onSyncLine,
 }: {
   block: LaneBlock;
@@ -984,13 +1167,21 @@ function LaneChip({
   bar: string;
   text: string;
   draftDelta: number;
+  draftStart: number | null;
+  draftEnd: number | null;
+  trimAllowed: boolean;
+  showInHandle: boolean;
+  showOutHandle: boolean;
   syncing: boolean;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock) => void;
+  onTrimPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock, edge: "in" | "out") => void;
   onSyncLine?: () => void;
 }) {
   const movable = blockIsMovable(block);
-  const left = (block.startFrame + draftDelta) * ppf;
-  const width = Math.max(Math.max(block.endFrame - block.startFrame, 1) * ppf, 2);
+  const start = draftStart != null ? draftStart : block.startFrame + draftDelta;
+  const end = draftEnd != null ? draftEnd : block.endFrame + draftDelta;
+  const left = start * ppf;
+  const width = Math.max(Math.max(end - start, 1) * ppf, 2);
   const top = (block.row ?? 0) * rowPx + 2;
   const durationSec = Math.max((block.endFrame - block.startFrame) / Math.max(fps, 1), 0.001);
   const synced = block.sync === "synced";
@@ -1022,6 +1213,26 @@ function LaneChip({
       } ${movable ? "cursor-grab active:cursor-grabbing" : "cursor-not-allowed"}`}
       style={{ left, width, top, height: chipPx, lineHeight: `${Math.max(12, chipPx - 6)}px`, touchAction: "none" }}
     >
+      {showInHandle ? (
+        <span
+          className="studio-trim-handle"
+          data-edge="in"
+          data-testid="timeline-trim-in"
+          data-allowed={trimAllowed ? "true" : "false"}
+          title="Trim in"
+          onPointerDown={(event) => onTrimPointerDown(event, block, "in")}
+        />
+      ) : null}
+      {showOutHandle ? (
+        <span
+          className="studio-trim-handle"
+          data-edge="out"
+          data-testid="timeline-trim-out"
+          data-allowed={trimAllowed ? "true" : "false"}
+          title="Trim out"
+          onPointerDown={(event) => onTrimPointerDown(event, block, "out")}
+        />
+      ) : null}
       <span className="flex h-full items-start gap-1">
         {block.lane === "dialogue" ? (
           <span className="studio-sync-dot mt-1.5" data-testid="timeline-sync-dot" data-sync={block.sync || "not_synced"} />

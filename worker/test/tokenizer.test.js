@@ -72,6 +72,12 @@ describe("tokenizer", () => {
     assert.equal(token.kv.view, "left_side");
   });
 
+  test("dialogue speaker accepts trim_in= and trim_out=", () => {
+    const [token] = tokenize("Alice trim_in=0.5s trim_out=2s: Hello.");
+    assert.equal(token.kv.trim_in, "0.5s");
+    assert.equal(token.kv.trim_out, "2s");
+  });
+
   test("unknown bracket tag throws a line-numbered ScriptError", () => {
     assert.throws(
       () => tokenize("[Foo: bar]"),

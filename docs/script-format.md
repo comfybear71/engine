@@ -106,6 +106,7 @@ in the scene's timeline onward (held until the next change):
 | `scale=<number>` | Overrides the resolved scale for this character from here on. |
 | `flip` (bare) or `flip=true`/`flip=false` | Overrides `flip_x` from here on. |
 | `z=<integer>` | Overrides this character's draw order from here on. |
+| `over=<secs>s` | Optional hold length for this pin (Studio trim). When set, the lane block lasts that long instead of stretching to the next pin. Does not advance the scene clock. |
 | *(anything else)* | Treated as a **slot name** on that character (e.g. `eyes=furious`, `right_hand=point`, `body=walk_side`): the value is either a **named cycle** declared on that slot in `character.json` (emits a `{ frame, cycle, fps }` keyframe) or a drawing that must exist in that slot's folder (see [docs/assets.md](assets.md)). A drawing becomes a held-until-changed keyframe at the current frame. The reserved `mouth` slot can't be set this way -- it's always driven by dialogue. |
 
 Any `at=`/`scale=`/`flip`/`z` change **that actually differs** from the
@@ -263,6 +264,7 @@ timeline then advances by the **real file duration** (via `ffprobe`), so a
 
 ```text
 [Audio: Hicks file=monologue]
+[Audio: Hicks file=monologue trim_in=1s trim_out=4s]
 ```
 
 `file=` is the `--name` label from import-audio (not a raw path). The
@@ -305,8 +307,8 @@ takes by that character. See [Head view](#head-view-view--view).
 ### `Character: dialogue text`
 
 A spoken line. `Character` is matched the same way as in `[Cast: ...]`.
-Optional `at_time=` / `start=` and `view=` may sit on the name:
-`Hicks at_time=2s view=left_side: text`.
+Optional `at_time=` / `start=`, `view=`, and `trim_in=` / `trim_out=` may
+sit on the name: `Hicks at_time=2s view=left_side trim_in=0.5s: text`.
 Lines run **strictly in sequence against one shared per-scene cursor** --
 there's no overlapping dialogue -- so each line's `start_frame` is wherever
 the cursor currently is, and the cursor then advances by that line's
@@ -364,6 +366,46 @@ Studio always writes the canonical `at_time=` name (seconds when that is
 exact, otherwise a frame count). Several lane blocks that share one
 script line (an `[Audio:]` take plus its sentence chips) share one
 `at_time=` — moving any of them moves the tag.
+
+## Trim (`trim_in=` / `trim_out=` / duration)
+
+Studio edge-trims rewrite the script, then re-parse.
+
+**Timed tags** (`[Move:]`, `[Pose:]`, `[Camera:]`, `[Swing:]`) change
+`over=` or `for=`. Dragging the start edge also writes `at_time=` so the
+end stays put. Instant pins (`[Action:]` / `[Prop:]` / `[Layer:]`) accept
+optional `over=` to hold a fixed length instead of stretching to the next
+pin.
+
+**Dialogue and `[Audio:]`** set in/out points in the **source file**:
+
+| Form | Meaning |
+|---|---|
+| `trim_in=0.5s` | Start 0.5 seconds into the WAV (or the estimated length if the file is still missing). |
+| `trim_out=2s` | Stop at 2 seconds into the source. Omit to use the file end. |
+| `trim_in=12` / `trim_out=48` | Same, as a frame count at the document fps. |
+
+`start=` remains the timeline-start alias for `at_time=` — it is **not**
+a source in-point. Playback, Rhubarb mouth cues, words, lane length, and
+the cursor advance all use `[trim_in, trim_out)`. The married mouth
+track follows the dialogue clip. Trims cannot go below 1 frame or past
+the source length.
+
+**Split at the playhead** (`S`, or the timeline **Split** button) turns
+one line into two. Timed tags become two tags whose durations add up.
+Audio/dialogue become two lines: the first keeps `trim_out=` at the
+split, the second gets `at_time=` at the playhead and `trim_in=` at the
+same source time. Word timings stay on the source file; spoken text is
+split on those words when they exist.
+
+```text
+[Move: Hicks to=right over=1s]
+[Move: Hicks to=right over=1s at_time=1s]
+[Audio: Hicks file=monologue trim_out=2s]
+[Audio: Hicks file=monologue at_time=2s trim_in=2s]
+Hicks trim_out=0.8s: Hello there
+Hicks at_time=0.8s trim_in=0.8s: friend.
+```
 
 ```text
 [Move: Hicks to=right over=2s at_time=1.5s]

@@ -124,6 +124,8 @@ export type LaneBlock = {
   view?: string | null;
   marriedId?: string | null;
   trim?: { inFrames: number; outFrames: number };
+  sourceDurationFrames?: number;
+  words?: { word: string; start: number; end: number }[];
   audioRel?: string | null;
   cuesRel?: string | null;
   sync?: "not_synced" | "synced" | "stale" | null;
@@ -613,6 +615,8 @@ export type PlaybackAudioInfo = {
   startFrame: number;
   endFrame: number;
   exists: boolean;
+  trimInSec?: number;
+  trimOutSec?: number | null;
 };
 export type PlaybackStatus = {
   fps: number;
