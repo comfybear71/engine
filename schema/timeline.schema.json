@@ -414,6 +414,20 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "Word-count estimate used when the audio file is missing. The script parser writes this onto the clip; the compositor also accepts the same field from lines.json if the clip itself does not have it."
+        },
+        "words": {
+          "type": "array",
+          "description": "Optional word-level timestamps from `import-audio` / ElevenLabs Speech-to-Text, so the Studio Dialogue lane can show them. Times are seconds from the start of this clip's audio.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["word", "start", "end"],
+            "properties": {
+              "word": { "type": "string", "minLength": 1 },
+              "start": { "type": "number", "minimum": 0, "description": "Seconds from the start of this clip's audio." },
+              "end": { "type": "number", "minimum": 0, "description": "Seconds from the start of this clip's audio." }
+            }
+          }
         }
       }
     },

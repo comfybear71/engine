@@ -195,6 +195,7 @@ carries a *list* of dialogue clips instead of a single `audio` field:
 | `start_frame` | integer | yes | Relative to the owning layer's `timing.start_frame` (layer-local): a clip at 0 on a layer that starts at 47 plays at scene frame 47. Typically computed by the script parser from the running total of prior lines/pauses in the scene minus that layer segment's start (see [docs/script-format.md](script-format.md)), but may be hand-set. |
 | `cues` | string | no | This clip's Rhubarb cues JSON. Defaults to `"<audio>.rhubarb.json"` -- same [resolution order](#lip-sync-cue-resolution-order) as any other lipsync source. |
 | `text` | string | no | The spoken line text. Used as Rhubarb's `--dialogFile` hint if cues must be generated from audio, and purely informational otherwise (it's what ends up in `lines.json` for a future ElevenLabs generation step). |
+| `words` | array | no | Optional word-level timestamps from `import-audio` / ElevenLabs Speech-to-Text: `[{ "word": "Hello", "start": 0.0, "end": 0.32 }, ...]`. Times are seconds from the start of this clip's audio. The Studio Dialogue lane can show them; the compositor ignores them. |
 
 Every clip's audio is mixed into the final render at
 `scene_start + layer.start_frame + clip.start_frame`. A `slots.mouth` with

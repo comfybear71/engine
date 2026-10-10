@@ -3,8 +3,9 @@
 /**
  * Express server for the Studio app. Binds to 127.0.0.1 only and reads
  * project files on this machine. The browser talks to this process directly
- * (CORS for localhost:3000 / :3001 plus optional STUDIO_ORIGIN). Voices /
- * ElevenLabs stay CLI-only -- this file must never import worker/src/voices.
+ * (CORS for localhost:3000 / :3001 plus optional STUDIO_ORIGIN). Voices TTS
+ * stays CLI-only. `POST /api/projects/:name/import-audio` is the Studio
+ * hook for ElevenLabs Speech-to-Text + Rhubarb on a pre-recorded file.
  */
 
 require("dotenv").config({ path: require("path").resolve(__dirname, "..", "..", ".env") });
@@ -41,6 +42,7 @@ const { cachedBackgroundThumb } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
 const { previewIngest, confirmIngest, cancelIngest } = require("./assetIngest");
 const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, SLOT_NAME } = require("./characterLocal");
+const { runImportAudio, readImportAudioRequest, VoicesFatalError } = require("./importAudio");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
 const DEFAULT_STUDIO_ORIGINS = [
@@ -705,6 +707,60 @@ function createApp(options = {}) {
       res.status(status).json({ error: err.message });
     } finally {
       cleanupTempParse(result);
+    }
+  });
+
+  app.post("/api/projects/:name/import-audio", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    let parsed;
+    try {
+      parsed = await readImportAudioRequest(req);
+    } catch (err) {
+      return res.status(err.status || 400).json({ error: err.message });
+    }
+    if (!parsed.character) {
+      if (parsed.cleanup) parsed.cleanup();
+      return res.status(400).json({ error: "character is required" });
+    }
+    if (!parsed.sourcePath) {
+      if (parsed.cleanup) parsed.cleanup();
+      return res.status(400).json({ error: "path (or multipart file) is required" });
+    }
+    try {
+      const result = await runImportAudio(projectDir, parsed.sourcePath, {
+        character: parsed.character,
+        name: parsed.name,
+        dryRun: parsed.dryRun,
+        noTranscribe: parsed.noTranscribe,
+      });
+      res.json({
+        ok: result.ok,
+        dryRun: result.dryRun,
+        noTranscribe: result.noTranscribe,
+        label: result.label,
+        character: result.character,
+        durationSeconds: result.durationSeconds,
+        creditNote: result.creditNote,
+        wavPath: result.wavPath,
+        cuesPath: result.cuesPath,
+        wordsPath: result.wordsPath,
+        transcribed: result.transcribed,
+        tag: `[Audio: ${result.character} file=${result.label}]`,
+      });
+    } catch (err) {
+      const status =
+        err.status ||
+        (err instanceof VoicesFatalError
+          ? 400
+          : /not found|required|Unknown character|Unsupported|empty|Invalid import|Project folder not found/i.test(
+              err.message
+            )
+            ? 400
+            : 500);
+      res.status(status).json({ error: err.message });
+    } finally {
+      if (parsed && parsed.cleanup) parsed.cleanup();
     }
   });
 

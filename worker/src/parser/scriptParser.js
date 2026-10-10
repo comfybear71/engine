@@ -16,6 +16,9 @@
  * keyframes on the current layer; wait=true (default) advances the cursor
  * like [Pause], wait=false leaves it so following lines run during the motion.
  * [Camera:] writes scene-level camera keyframes the same way.
+ * [Audio: Name file=<label>] places an import-audio track (WAV + Rhubarb
+ * cues + optional words.json) as that character's dialogue at the cursor
+ * and advances by the real file duration.
  *
  * A character gets exactly one Layer per *cut* they hold in a scene:
  * an [Action: ... at=/flip=/scale=/z=] that actually changes their resolved
@@ -51,6 +54,7 @@ const { ScriptError } = require("./errors");
 const assetLibrary = require("./assetLibrary");
 const { probeDurationSeconds } = require("./ffprobeDuration");
 const { findOverlapWarnings, findMouthSheetErrors, findMissingPropAssets } = require("./lint");
+const { resolveImportedTrack, wordsToSentences, transcriptFromWords } = require("../importAudio");
 
 const WORDS_PER_SECOND = 2.5;
 const ESTIMATE_PAD_SECONDS = 0.3;
@@ -321,6 +325,9 @@ class ScriptParser {
         return;
       case "pause":
         this._handlePause(token);
+        return;
+      case "audio":
+        await this._handleImportedAudio(token);
         return;
       case "dialogue":
         await this._handleDialogue(token);
@@ -1486,6 +1493,127 @@ class ScriptParser {
     const { frames, seconds } = parsePauseValue(token.body, token.lineNumber);
     const advance = frames !== undefined ? frames : framesFromSeconds(seconds, this.fps);
     scene.cursorFrames += advance;
+  }
+
+  // ---- [Audio: Name file=<label>] ---------------------------------------
+
+  async _handleImportedAudio(token) {
+    const scene = this._requireScene(token.lineNumber, "Audio");
+    const { character: scriptName, kv, note } = parseActionTag(token.body);
+    if (!scriptName) {
+      throw new ScriptError(token.lineNumber, "[Audio: ...] needs a character name, e.g. [Audio: Hicks file=monologue].");
+    }
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "Audio", note);
+    const labelRaw = kv.file;
+    if (!labelRaw) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[Audio: ...] needs file=<label> (the --name from import-audio).`
+      );
+    }
+    const extra = Object.keys(kv).filter((key) => key !== "file" && key !== "lines");
+    if (extra.length > 0) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[Audio: ...] unknown key "${extra[0]}". Expected file=<label> and optional lines=true|false.`
+      );
+    }
+    let emitSentenceLines = true;
+    if (kv.lines !== undefined) {
+      try {
+        emitSentenceLines = parseWaitValue(kv.lines, token.lineNumber);
+      } catch {
+        throw new ScriptError(token.lineNumber, `Invalid lines "${kv.lines}" -- expected true or false.`);
+      }
+    }
+    const characterId = this._resolveCharacterIdOrThrow(scriptName, token.lineNumber);
+    const label = slugify(labelRaw);
+    const imported = resolveImportedTrack(this.projectDir, label, characterId);
+    if (!imported) {
+      throw new ScriptError(
+        token.lineNumber,
+        `No imported audio "${labelRaw}" for ${scriptName} (looked for audio/${label}/001_${characterId}.wav). ` +
+          `Run: node src/cli.js import-audio <project> <file> --character ${characterId} --name ${label}`
+      );
+    }
+
+    if (!scene.castOrder.includes(characterId)) {
+      this.warnings.push(
+        `Line ${token.lineNumber}: "${scriptName}" has [Audio: ...] but was not in [Cast: ...] for scene "${scene.displayName}"; added automatically.`
+      );
+      scene.castOrder.push(characterId);
+    }
+    const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
+
+    const absAudioPath = path.join(this.projectDir, imported.wav);
+    const durationSeconds = await probeDurationSeconds(absAudioPath);
+    const durationFrames = framesFromSeconds(durationSeconds, this.fps);
+    const startFrame = scene.cursorFrames;
+    const words = imported.words;
+    const text = transcriptFromWords(words) || `[Audio: ${label}]`;
+
+    scene.lineCounter += 1;
+    const clip = {
+      audio: imported.wav,
+      start_frame: startFrame - state.current.startFrame,
+      text,
+    };
+    if (fs.existsSync(path.join(this.projectDir, imported.cues))) {
+      clip.cues = imported.cues;
+    }
+    if (words && words.length > 0) {
+      clip.words = words;
+    }
+    state.current.dialogue.push(clip);
+
+    const sentences =
+      emitSentenceLines && words && words.length > 0 ? wordsToSentences(words) : [];
+    if (sentences.length > 0) {
+      for (const sentence of sentences) {
+        const lineStart = startFrame + framesFromSeconds(sentence.start, this.fps);
+        const lineEnd = startFrame + framesFromSeconds(sentence.end, this.fps);
+        this._emitLane({
+          lane: "dialogue",
+          token,
+          startFrame: lineStart,
+          endFrame: Math.max(lineEnd, lineStart + 1),
+          label: `${scriptName}: ${sentence.text}`,
+          subject: characterId,
+        });
+      }
+    } else {
+      this._emitLane({
+        lane: "dialogue",
+        token,
+        startFrame,
+        endFrame: startFrame + durationFrames,
+        label: `${scriptName}: ${text}`,
+        subject: characterId,
+      });
+    }
+    this._emitLane({
+      lane: "audio",
+      token,
+      startFrame,
+      endFrame: startFrame + durationFrames,
+      label: path.basename(imported.wav),
+      subject: characterId,
+    });
+
+    this.lines.push({
+      scene_id: scene.sceneId,
+      line_number: scene.lineCounter,
+      character: characterId,
+      text,
+      audio_path: imported.wav,
+      cues_path: imported.cues,
+      words_path: words && words.length > 0 ? imported.wordsPath : undefined,
+      voice_id: (state.config && state.config.voice_id) || null,
+      status: "ok",
+      source: "import",
+    });
+
+    scene.cursorFrames += durationFrames;
   }
 
   // ---- dialogue lines ----------------------------------------------------

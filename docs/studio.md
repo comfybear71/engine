@@ -6,8 +6,11 @@ itself. The browser talks to the worker Express server running on the
 user's PC (`WORKER_PORT`, default `4100` from the repo-root `.env`). That
 server is bound to `127.0.0.1` only.
 
-No Vercel Blob, no database, no auth. Voices / ElevenLabs stay on the
-CLI (`node src/cli.js voices`); the Studio server API does not call them.
+No Vercel Blob, no database, no auth. Voices TTS stays on the CLI
+(`node src/cli.js voices`). The worker also exposes
+`POST /api/projects/:name/import-audio` for a later Studio UI (ElevenLabs
+Speech-to-Text + Rhubarb on a pre-recorded file); there is no Studio UI
+for it in this change.
 
 The **script is the source of truth**. Stage lanes are a read-only view of
 a temp parse; dragging/resizing clips comes later. Save, lint, preview,
@@ -197,6 +200,7 @@ project root). Those paths parse to **temp** files and never write
 | `GET` | `/api/projects/:name/stage?script=` | Parse the selected script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
 | `POST` | `/api/projects/:name/preview-frame?script=` | Parse the selected script to a temp timeline, compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a PNG. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. |
 | `POST` | `/api/projects/:name/render?script=` | Parse the selected script to a temp timeline (never `timeline.json`), run the compositor with `--output renders/<script-stem>.mp4`. Same `--script` choice as the CLI. One render at a time. |
+| `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?" }` or multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe`). Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Dry-run prints length + the STT credit note and writes nothing. No Studio UI for this yet. |
 | `GET` | `/api/projects/:name/renders/:file` | Stream a render (`script.mp4`, `script_mcd.mp4`, or a leftover `output.mp4`). |
 | `POST` | `/render` | Original CLI-oriented contract: `{ "projectDir": "..." }`. |
 
