@@ -4,8 +4,8 @@
  * Express server for the Studio app. Binds to 127.0.0.1 only and reads
  * project files on this machine. The browser talks to this process directly
  * (CORS for localhost:3000 / :3001 plus optional STUDIO_ORIGIN). Voices TTS
- * stays CLI-only. `POST /api/projects/:name/import-audio` is the Studio
- * hook for ElevenLabs Speech-to-Text + Rhubarb on a pre-recorded file.
+ * stays CLI-only. Studio **Import audio** posts
+ * `/api/projects/:name/import-audio` (ElevenLabs Speech-to-Text + Rhubarb).
  */
 
 require("dotenv").config({ path: require("path").resolve(__dirname, "..", "..", ".env") });
