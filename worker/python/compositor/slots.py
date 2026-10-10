@@ -60,6 +60,10 @@ class Slot:
     # Optional per-head-view mouth sheets (mouth_left_side/, …). Missing
     # views fall back to "front", then to ``images``.
     images_by_view: dict[str, dict[str, Path]] = field(default_factory=dict)
+    # Subtle head bob on mouth/face/eyes only (layer-local start frames).
+    head_bob_starts: list[int] = field(default_factory=list)
+    head_bob_amp: float = 0.0
+    head_bob_rotation: float = 0.0
 
     def resolve_image(self, drawing: str | None, view: str | None = None) -> Path | None:
         pools: list[dict[str, Path]] = []
@@ -72,9 +76,17 @@ class Slot:
                 if front:
                     pools.append(front)
         pools.append(self.images)
-        for pool in pools:
-            if drawing is not None and drawing in pool:
-                return pool[drawing]
+        names: list[str] = []
+        if drawing:
+            names.append(drawing)
+            # B_loud.png is optional; fall back to B.png when the loud
+            # variant was never drawn.
+            if drawing.endswith("_loud"):
+                names.append(drawing[: -len("_loud")])
+        for name in names:
+            for pool in pools:
+                if name in pool:
+                    return pool[name]
         for pool in pools:
             if FALLBACK_SHAPE in pool:
                 return pool[FALLBACK_SHAPE]

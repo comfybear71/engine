@@ -58,6 +58,8 @@ function collectParseInputFiles(projectDir, scriptName) {
   if (fs.existsSync(scriptPath)) files.push(scriptPath);
   const libraryPath = path.join(projectDir, "library.json");
   if (fs.existsSync(libraryPath)) files.push(libraryPath);
+  const studioPath = path.join(projectDir, "studio.json");
+  if (fs.existsSync(studioPath)) files.push(studioPath);
 
   const roots = [projectDir, resolveShowAssetsDir(projectDir), resolveGlobalAssetsDir(projectDir)].filter(Boolean);
   for (const root of roots) {

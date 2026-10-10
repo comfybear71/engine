@@ -26,6 +26,30 @@ stylised painted caricature, battered crimson felt fedora with pinched crown, da
 
 stylised painted caricature, battered crimson felt fedora with pinched crown, dark swept-back hair, sideburns, thick angry brows, moustache and goatee, tanned skin, deep red cape with tall popped collar and ragged hem, white open-collared shirt with cream tie under brown-and-black leopard-print shirt with rolled sleeves, wide dark brown studded belt with big ornate gold-brass buckle, short frayed red shorts, dark leather knee straps with gold-brass buckle plates, tall brown leopard-tooled cowboy boots; flat #00FF00 green background, no shadow, no text, no watermark, full figure fully visible. A 3x3 mouth-and-head sheet of Rodney. Nine cells, left to right, top to bottom, in this exact Rhubarb order: X relaxed smirk rest, A lips pressed (M/P), B slightly apart showing teeth (EE/K), C medium open (EH), D wide open (AH), E rounded (OH), F pushed-forward (OO/W), G upper teeth on lower lip (F/V), H tongue raised (L). Same head size, crop, fedora, hair, brows, and position in every cell — only the mouth changes. Ordinary eye shape in every cell; never slanted eyes or a mocking ethnic eye gesture. Neck included, no shoulders. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop the head, ears, or chin. Small empty margin inside each cell. One character only.
 
+### 2b. Thirteen mouths per view (X, A–H plus loud B/C/D/E)
+
+One 5×3 sheet per head view (`front`, `left_34`, `left_side`, `right_34`, `right_side`, `up`, `down`). Thirteen filled cells, last two empty green. Files land in `mouth_<view>/` as `X.png`, `A.png`–`H.png`, `B_loud.png`, `C_loud.png`, `D_loud.png`, `E_loud.png`. Missing loud files are fine — the compositor keeps the normal shape.
+
+The complete Generate prompt is the style block plus the sheet line. Studio reads these as `mouth_13_<view>` in `rodney.json`.
+
+**Front** (`mouth_13_front` → `mouth_front/`):
+
+stylised painted caricature, battered crimson felt fedora with pinched crown, dark swept-back hair, sideburns, thick angry brows, moustache and goatee, tanned skin, deep red cape with tall popped collar and ragged hem, white open-collared shirt with cream tie under brown-and-black leopard-print shirt with rolled sleeves, wide dark brown studded belt with big ornate gold-brass buckle, short frayed red shorts, dark leather knee straps with gold-brass buckle plates, tall brown leopard-tooled cowboy boots; flat #00FF00 green background, no shadow, no text, no watermark, full figure fully visible. A 5x3 mouth-and-head sheet of Rodney, head front-facing. Thirteen filled cells, left to right, top to bottom, in this exact order: X relaxed smirk rest, A lips pressed (M/P), B slightly apart showing teeth (EE/K), C medium open (EH), D wide open (AH), E rounded (OH), F pushed-forward (OO/W), G upper teeth on lower lip (F/V), H tongue raised (L), B_loud — same as B but wider and more open for a loud line, C_loud — same as C but bigger for a loud line, D_loud — same as D but a wide shout, E_loud — same as E but a bigger rounded shout. Last two cells empty green. Same head size, crop, fedora, hair, brows, and position in every filled cell — only the mouth changes. The four loud cells (B_loud, C_loud, D_loud, E_loud) are the same phoneme as B, C, D, E but with a bigger, more open mouth for a shouted or stressed line. Ordinary eye shape in every cell; never slanted eyes or a mocking ethnic eye gesture. Neck included, no shoulders. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop the head, ears, or chin. Small empty margin inside each cell. One character only.
+
+**Left three-quarter** (`mouth_13_left_34` → `mouth_left_34/`): same prompt with “head turned left three-quarter (viewer sees more of the left side of the face)” in place of “head front-facing”.
+
+**Left side** (`mouth_13_left_side` → `mouth_left_side/`): “head in a left side profile, nose pointing left”.
+
+**Right three-quarter** (`mouth_13_right_34` → `mouth_right_34/`): “head turned right three-quarter (viewer sees more of the right side of the face)”.
+
+**Right side** (`mouth_13_right_side` → `mouth_right_side/`): “head in a right side profile, nose pointing right”.
+
+**Up** (`mouth_13_up` → `mouth_up/`): “head tilted looking up, chin raised”.
+
+**Down** (`mouth_13_down` → `mouth_down/`): “head tilted looking down, chin lowered”.
+
+Each of those six non-front prompts is otherwise identical to the front prompt above (same style block, same 13-cell order, same “never slanted eyes” line). The JSON copies are complete, not fragments.
+
 ### 3. Comedy expressions
 
 stylised painted caricature, battered crimson felt fedora with pinched crown, dark swept-back hair, sideburns, thick angry brows, moustache and goatee, tanned skin, deep red cape with tall popped collar and ragged hem, white open-collared shirt with cream tie under brown-and-black leopard-print shirt with rolled sleeves, wide dark brown studded belt with big ornate gold-brass buckle, short frayed red shorts, dark leather knee straps with gold-brass buckle plates, tall brown leopard-tooled cowboy boots; flat #00FF00 green background, no shadow, no text, no watermark, full figure fully visible. A 3x3 comedy-expression head sheet of Rodney. Nine cells, left to right, top to bottom: belly laugh, cheeky grin, pout, sneer, innocent, smug, drool shock, growl, kiss. Same head size, crop, fedora, hair, and position in every cell — only the expression changes. Include the neck, no torso. Ordinary eye shape in every cell (wide, narrow, or closed as the expression needs); never slanted eyes or a mocking ethnic eye gesture. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop hair, ears, or chin. Small empty margin inside each cell. One character only.

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import AssetsPanel from "@/components/AssetsPanel";
 import EngineStatus from "@/components/EngineStatus";
 import ImagineDock from "@/components/ImagineDock";
+import { LipSyncSettingsPage } from "@/components/LipSyncSettings";
 import ScriptPanel from "@/components/ScriptPanel";
 import StagePanel from "@/components/StagePanel";
 import StudioSettings from "@/components/StudioSettings";
@@ -22,8 +23,8 @@ const TABS = [
   { id: "assets", label: "Assets", ready: true },
   { id: "stage", label: "Stage", ready: true },
   { id: "script", label: "Script", ready: true },
-  { id: "edit", label: "Edit", ready: false },
-  { id: "deliver", label: "Deliver", ready: false },
+  { id: "edit", label: "Edit", ready: true },
+  { id: "deliver", label: "Deliver", ready: true },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -265,6 +266,7 @@ export default function StudioApp({
             onSaved={() => setScriptEpoch((n) => n + 1)}
           />
         ) : null}
+        {tab === "edit" || tab === "deliver" ? <LipSyncSettingsPage project={project} /> : null}
         {!active.ready ? <PlaceholderPage name={active.label} /> : null}
       </main>
 

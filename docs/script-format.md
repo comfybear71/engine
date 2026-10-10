@@ -499,6 +499,12 @@ A line is **not synced** until `<wav>.rhubarb.json` has mouth cues,
 **synced** when those cues match the current WAV + spoken text, and
 **stale** when the WAV or text changed after the last sync.
 
+At render / Stage preview the compositor then applies optional natural
+lip-sync (2-frame minimum hold, light smoothing, loud B/C/D/E variants,
+head bob, auto blinks). See [docs/assets.md](assets.md#thirteen-mouths-per-view)
+and project `studio.json` `lipsync`. Missing loud or closed-eye drawings
+are skipped, never errors.
+
 ## Timing and layers
 
 - **One layer per character per position they hold in a scene.** Every

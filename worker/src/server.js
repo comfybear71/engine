@@ -1403,6 +1403,7 @@ function createApp(options = {}) {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const patch = {};
     if (body.lipSync === "auto" || body.lipSync === "manual") patch.lipSync = body.lipSync;
+    if (body.lipsync && typeof body.lipsync === "object") patch.lipsync = body.lipsync;
     res.json(writeStudioSettings(projectDir, patch));
   });
 

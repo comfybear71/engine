@@ -723,10 +723,18 @@ describe("studio worker API", () => {
     const put = await fetch(`${ctx.url}/api/projects/project/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lipSync: "manual" }),
+      body: JSON.stringify({
+        lipSync: "manual",
+        lipsync: { smoothing: "medium", head_bob: "strong", blinks: false, loud_threshold: 0.8 },
+      }),
     });
     assert.equal(put.status, 200);
-    assert.equal((await put.json()).lipSync, "manual");
+    const saved = await put.json();
+    assert.equal(saved.lipSync, "manual");
+    assert.equal(saved.lipsync.smoothing, "medium");
+    assert.equal(saved.lipsync.head_bob, "strong");
+    assert.equal(saved.lipsync.blinks, false);
+    assert.equal(saved.lipsync.loud_threshold, 0.8);
     await fetch(`${ctx.url}/api/projects/project/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

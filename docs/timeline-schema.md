@@ -198,7 +198,7 @@ carries a *list* of dialogue clips instead of a single `audio` field:
 | `view` | string | no | Head/mouth set for this line: `front`, `left_34`, `left_side`, `right_34`, `right_side`, `up`, `down`. The compositor looks up `slot.images_by_view[view]`, then `front`, then `images`. |
 | `trim_in` | number | no | In-point in seconds from the start of the source audio file. Playback, Rhubarb cues, and duration use `[trim_in, trim_out)`. |
 | `trim_out` | number | no | Out-point in seconds from the start of the source file. Omit to use the file end. |
-| `words` | array | no | Optional word-level timestamps from `import-audio` / ElevenLabs Speech-to-Text: `[{ "word": "Hello", "start": 0.0, "end": 0.32 }, ...]`. Times are seconds from the start of this clip's **source** audio (not shifted by `trim_in`). The Studio Dialogue lane can show them; the compositor ignores them. |
+| `words` | array | no | Optional word-level timestamps from `import-audio` / ElevenLabs Speech-to-Text: `[{ "word": "Hello", "start": 0.0, "end": 0.32 }, ...]`. Times are seconds from the start of this clip's **source** audio (not shifted by `trim_in`). The Studio Dialogue lane can show them. The compositor uses them (or WAV loudness peaks when they are missing) to place a subtle head bob on mouth/face/eyes slots. |
 
 Every clip's audio is mixed into the final render at
 `scene_start + layer.start_frame + clip.start_frame`. A `slots.mouth` with
@@ -386,6 +386,29 @@ A cues file is Rhubarb's own JSON output format:
 At render time, for a given frame the compositor converts the frame index to
 a scene/layer-relative timestamp (`frame / fps`) and picks whichever cue's
 `[start, end)` range contains it.
+
+After cues are loaded, `compositor.lipsync_natural` (shared by Render and
+the Stage preview) applies, all optional and all no-ops when art is missing:
+
+1. **Minimum hold** — no shape shorter than 2 frames at 24 fps; sub-2-frame
+   cues merge into a neighbour. A closed-mouth `A` that already lasts 2+
+   frames is kept (a real M/B/P between words).
+2. **Smoothing** — `lipsync.smoothing` `off` / `light` (default) / `medium`.
+   Light collapses a 1-frame flicker such as C-B-C within 3 frames.
+3. **Loud variants** — for shapes B, C, D, E, if RMS over that cue is above
+   the clip's configured percentile (default ~75th, `lipsync.loud_threshold`
+   in `studio.json` or `character.json`) the compositor looks for
+   `B_loud.png` (and the same name under `mouth_<view>/`). Missing loud
+   files stay on the normal drawing.
+4. **Head bob** — `lipsync.head_bob` `off` / `subtle` (default) / `strong`.
+   Stressed words (from `words`) or loudness peaks add a 6-frame down-and-back
+   offset (4–10 px, ±1–1.5°) on `mouth` / `face` / `eyes` only.
+5. **Auto blinks** — if `eyes` has a `closed` drawing, seeded blinks every
+   3–6 s (`blinks: { every: [3, 6], frames: 5 }` on the character). Off
+   when there is no closed drawing, or during a held `eyes=` pin.
+
+See [docs/assets.md](assets.md#thirteen-mouths-per-view) for the 13-file
+naming (`X`, `A`–`H`, `B_loud`, `C_loud`, `D_loud`, `E_loud` per view).
 
 ## Cut-out rig nesting
 

@@ -21,6 +21,35 @@ function studioSettingsPath(projectDir) {
   return path.join(projectDir, STUDIO_SETTINGS_FILE);
 }
 
+const SMOOTHING_MODES = new Set(["off", "light", "medium"]);
+const HEAD_BOB_MODES = new Set(["off", "subtle", "strong"]);
+const DEFAULT_LIPSYNC = {
+  smoothing: "light",
+  head_bob: "subtle",
+  blinks: true,
+  loud_threshold: 0.75,
+};
+
+function normalizeLipsync(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const smoothing = SMOOTHING_MODES.has(src.smoothing) ? src.smoothing : DEFAULT_LIPSYNC.smoothing;
+  const headBob = HEAD_BOB_MODES.has(src.head_bob) ? src.head_bob : DEFAULT_LIPSYNC.head_bob;
+  let blinks = DEFAULT_LIPSYNC.blinks;
+  if (src.blinks === false || src.blinks === "off") blinks = false;
+  else if (src.blinks === true || src.blinks === "on") blinks = true;
+  let loud = DEFAULT_LIPSYNC.loud_threshold;
+  if (typeof src.loud_threshold === "number" && Number.isFinite(src.loud_threshold)) {
+    loud = src.loud_threshold > 1 ? src.loud_threshold / 100 : src.loud_threshold;
+    loud = Math.min(1, Math.max(0, loud));
+  }
+  return {
+    smoothing,
+    head_bob: headBob,
+    blinks,
+    loud_threshold: loud,
+  };
+}
+
 function readStudioSettings(projectDir) {
   const filePath = studioSettingsPath(projectDir);
   let data = {};
@@ -33,12 +62,20 @@ function readStudioSettings(projectDir) {
   }
   return {
     lipSync: data.lipSync === "manual" ? "manual" : "auto",
+    lipsync: normalizeLipsync(data.lipsync),
   };
 }
 
 function writeStudioSettings(projectDir, patch) {
   const current = readStudioSettings(projectDir);
-  const next = { ...current, ...(patch && typeof patch === "object" ? patch : {}) };
+  const incoming = patch && typeof patch === "object" ? patch : {};
+  const next = {
+    lipSync: incoming.lipSync === "manual" || incoming.lipSync === "auto" ? incoming.lipSync : current.lipSync,
+    lipsync: normalizeLipsync({
+      ...current.lipsync,
+      ...(incoming.lipsync && typeof incoming.lipsync === "object" ? incoming.lipsync : {}),
+    }),
+  };
   next.lipSync = next.lipSync === "manual" ? "manual" : "auto";
   fs.writeFileSync(studioSettingsPath(projectDir), `${JSON.stringify(next, null, 2)}\n`);
   return next;
