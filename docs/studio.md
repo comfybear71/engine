@@ -71,6 +71,8 @@ stays in the [README](../README.md#setup).
 | `STUDIO_ORIGIN` | repo-root `.env` | unset | Extra CORS origin, for a future Vercel URL. `http://localhost:3000`, `http://127.0.0.1:3000`, and the same pair on port `3001` are always allowed. |
 | `NEXT_PUBLIC_WORKER_URL` | `studio/.env.local` (see `studio/.env.example`) | `http://localhost:4100` | Worker URL the browser uses. Change this if `WORKER_PORT` is not 4100. |
 | `STUDIO_DEV` | process env / repo-root `.env` | unset | `1` or `true` keeps Studio on `next dev` instead of `next build` + `next start`. |
+| `XAI_API_KEY` | repo-root `.env` | unset | Bearer key for Studio **Generate** (`POST /api/generate-image`). Studio Settings writes this same field (masked, never shown back). |
+| `XAI_IMAGE_MODEL` | repo-root `.env` | `grok-imagine-image-2.0` | xAI Grok Imagine image model id. |
 
 Copy `studio/.env.example` to `studio/.env.local` only if you need to
 override the worker URL.
@@ -138,11 +140,11 @@ clobber the project's `timeline.json`.
   the Assets page. Drag the dock's top splitter to resize (persisted in
   `localStorage` as `engine.studio.imagineDock.v1`); double-click to reset;
   Close or the tab again hides it so the asset grids stay fully visible
-  above. The dock builds a ready-to-copy prompt per character and need
-  (templates in `studio/lib/assetNeeds.json`; includes **Full body
-  reference** and an **Attach reference to prompt** reminder), then a drop
-  zone ingests the PNG you generated in the browser — there is no
-  image-generation API. See [Image assets](#image-assets-grok-imagine)
+  above. The dock prefills a prompt per character and set (built-in Prompt
+  Pack for Rodney in `docs/prompt-packs/`; generic templates in
+  `studio/lib/assetNeeds.json`), then **Generate** calls xAI from the
+  worker so you do not copy the prompt out. The drop zone still ingests a
+  PNG you made in the browser. See [Image assets](#image-assets-grok-imagine)
   below.
 - **Stage** — the main workspace. A large frame preview from
   `POST /api/projects/:name/preview-frame?script=`, a thin transport bar under
@@ -338,6 +340,10 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64", "filename?", "frames?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. |
 | `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }] }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames), backs up overwritten **local** files to `_backup/<timestamp>/`, merges new slots/cycles into project-local `character.json` without deleting other entries. |
 | `POST` | `/api/projects/:name/characters/:id/ingest/cancel` | JSON `{ "sessionId" }`. Deletes the preview session dir. |
+| `GET` | `/api/engine/settings` | `{ "xaiKeyConfigured", "xaiImageModel" }`. Never returns the key. |
+| `PUT` | `/api/engine/settings` | JSON `{ "xaiApiKey" }`. Writes `XAI_API_KEY` into the repo-root `.env` and `process.env`. Never echoes the key. |
+| `GET` | `/api/prompt-packs` | Built-in Imagine packs. `?character=` returns the matching pack summary. |
+| `POST` | `/api/generate-image` | JSON `{ "project", "characterId", "needId", "n?", "prompt?", "frames?", "dryRun?" }`. Dry-run returns a credit note (published xAI prices when known, else “uses xAI credits”) and writes nothing. Otherwise calls `https://api.x.ai/v1/images/generations` or `/images/edits` (Bearer `XAI_API_KEY`, model `XAI_IMAGE_MODEL` / `grok-imagine-image-2.0`) with `n` variants, auto-attaches the character full-body reference and body when present, saves each raw sheet under `characters/<id>/_library/`, and returns image URLs/base64. Plain-language errors for a missing key, rate limits, and content refusals. Never logs the key. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks for locations this project uses. |
 | `GET` | `/api/projects/:name/audio` | WAV files under `audio/`: imported `audio/<label>/001_<character>.wav` and generated `audio/<scene>/<nnn>_<character>.wav`, with `kind`, `label`, `characterId`, `durationSeconds`. |
 | `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for Assets-list character / background / prop cards. Pass `?v=<mtime>` (Studio does this) for `Cache-Control: public, max-age=31536000, immutable`. |
@@ -389,33 +395,48 @@ on that Face mouth block. `trim` is
 
 ## Image assets (Grok Imagine)
 
-Generation happens in the browser (Grok Imagine). The Studio only builds
-the prompt and cuts the resulting PNG.
+Studio **Generate** calls the xAI image API from the worker on this PC so
+you do not copy prompts into the browser. The drop zone is still there if
+you generate a PNG yourself.
 
 1. Open the **Grok Imagine** dock (bottom-edge tab, or the button on
-   **Assets**) and pick a character. It lists needs from
-   `studio/lib/assetNeeds.json` (edit that file to change copy or grids):
-   full-body reference (stored original, no cut-out), full body without
-   head/mouth, mouth/head sheet (3×3 Rhubarb `X,A–H`), expression heads,
-   arm/hand pieces, walk cycle sheet (side/front/back, N frames), prop on
-   its own, background plate. **Attach reference to prompt** reminds you to
-   attach the full-body reference in Grok Imagine and appends a match-the-
-   attached-image sentence to the copied prompt.
-2. Style notes come from `character.json` `style` (free text, e.g.
-   `painted semi-real` or `flat cartoon`). Save writes a **project-local**
-   `character.json`; shared `_global_assets` is never modified. The same
-   copy-on-write path stores `reference` and slot `offset` / `scale` /
-   `rotation` from the character panel.
-3. **Copy prompt**, paste into Grok Imagine. Character/prop prompts always
-   ask for a plain `#00FF00` green background, the same size/position in
-   each cell, no watermark text, and no cropped body parts. Background
-   plates skip the green screen (and skip chroma key) so the plate stays
-   opaque.
-4. Drop or paste the PNG onto the need. The worker saves the original to
+   **Assets**) and pick a character plus a set. Rodney uses the built-in
+   Prompt Pack in [docs/prompt-packs/rodney.md](prompt-packs/rodney.md)
+   (`rodney.json` is what Studio reads): a character-parametric **style
+   block** plus complete prompts for armless body, lip-sync mouths,
+   comedy expressions, eyes, hands-to-face, arm poses, head/body turns,
+   walk cycles, and the speaker prop / slapstick sheets. Other characters
+   fall back to `studio/lib/assetNeeds.json` (full-body reference, body
+   without head, mouth sheet, expression heads, arm/hand pieces, walk
+   cycle, prop, background). Paste an xAI key once in **Settings**
+   (stored as `XAI_API_KEY` in the engine `.env`, masked, never shown
+   back) or set it in env.
+2. The prompt is prefilled from the pack (or the generic template).
+   **Generate** asks how many variants (`n`, 1 / 2 / 4), shows a dry-run
+   credit note first (published xAI prices when known, otherwise “uses
+   xAI credits”), then calls `POST /api/generate-image`. The worker
+   attaches the character’s full-body reference and body when those files
+   exist (`/v1/images/edits`, otherwise `/v1/images/generations`). Raw
+   sheets land in `characters/<id>/_library/`. Thumbnails come back in
+   the dock; pick one and it goes through the same green-screen cut-out
+   preview as a drop. **Copy prompt** and the drop zone stay for the
+   manual path. **Attach reference to prompt** still applies to copied
+   generic prompts.
+3. Style notes on characters without a pack come from `character.json`
+   `style` (free text, e.g. `painted semi-real` or `flat cartoon`). Save
+   writes a **project-local** `character.json`; shared `_global_assets`
+   is never modified. The same copy-on-write path stores `reference` and
+   slot `offset` / `scale` / `rotation` from the character panel.
+4. Character/prop prompts always ask for a plain `#00FF00` green
+   background, the same size/position in each cell, no watermark text,
+   and no cropped body parts. Background plates skip the green screen
+   (and skip chroma key) so the plate stays opaque. Rodney prompts never
+   ask for slanted eyes or a mocking ethnic eye gesture.
+5. Drop, paste, or pick a generated PNG. The worker saves the original to
    `projects/<name>/characters/<id>/_library/`, then
    `python -m compositor.cutout` keys `#00FF00` with despill, trims, and
    splits by the template grid (or connected components).
-5. The preview grid lets you rename / reassign a cell (mouth cells map in
+6. The preview grid lets you rename / reassign a cell (mouth cells map in
    order `X,A,B,…`) before **Confirm**. Confirm writes
    `mouth/<shape>.png`, numbered cycle frames, `parts/`, `props/`, or
    `backgrounds/<name>/bg.png`. Existing **project-local** files are copied

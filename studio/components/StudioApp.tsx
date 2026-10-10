@@ -7,6 +7,7 @@ import EngineStatus from "@/components/EngineStatus";
 import ImagineDock from "@/components/ImagineDock";
 import ScriptPanel from "@/components/ScriptPanel";
 import StagePanel from "@/components/StagePanel";
+import StudioSettings from "@/components/StudioSettings";
 import {
   checkWorker,
   loadScripts,
@@ -41,6 +42,7 @@ export default function StudioApp({ projectName }: { projectName: string }) {
   const [imagineOpen, setImagineOpen] = useState(false);
   const [assetCharacterId, setAssetCharacterId] = useState<string | null>(null);
   const [assetEpoch, setAssetEpoch] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     const up = await checkWorker();
@@ -158,6 +160,14 @@ export default function StudioApp({ projectName }: { projectName: string }) {
           ) : null}
           <button
             type="button"
+            data-testid="studio-settings"
+            onClick={() => setSettingsOpen(true)}
+            className="text-xs text-studio-muted hover:text-white"
+          >
+            Settings
+          </button>
+          <button
+            type="button"
             data-testid="studio-render"
             onClick={() => void onRender()}
             disabled={!project || !workerUp || rendering}
@@ -212,6 +222,12 @@ export default function StudioApp({ projectName }: { projectName: string }) {
         ) : null}
         {!active.ready ? <PlaceholderPage name={active.label} /> : null}
       </main>
+
+      <StudioSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onChanged={() => setAssetEpoch((n) => n + 1)}
+      />
 
       <ImagineDock
         project={project}

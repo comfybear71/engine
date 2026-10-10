@@ -9,6 +9,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { getPackSet, packSetToNeed } = require("./promptPacks");
 
 const NEEDS_PATH = path.resolve(__dirname, "..", "..", "studio", "lib", "assetNeeds.json");
 
@@ -23,7 +24,28 @@ function loadNeeds() {
 }
 
 function getNeed(id) {
-  return loadNeeds().find((need) => need.id === id) || null;
+  const fromAssets = loadNeeds().find((need) => need.id === id);
+  if (fromAssets) return fromAssets;
+  const found = getPackSet(id);
+  return found ? packSetToNeed(found.set) : null;
+}
+
+function styleClause(style) {
+  const trimmed = String(style || "").trim();
+  if (!trimmed) return "in a consistent character style";
+  return `in a ${trimmed} style`;
+}
+
+function fillNeedPrompt(need, vars = {}) {
+  const expanded = expandNeed(need, vars.frames);
+  const frames = expanded.grid && expanded.grid.cols != null ? expanded.grid.cols : vars.frames ?? "";
+  const rows = expanded.grid && expanded.grid.rows != null ? expanded.grid.rows : "";
+  return String(need.prompt || "")
+    .replaceAll("{{name}}", vars.name || "")
+    .replaceAll("{{style}}", styleClause(vars.style))
+    .replaceAll("{{frames}}", String(frames))
+    .replaceAll("{{rows}}", String(rows))
+    .replaceAll("{{grid}}", expanded.grid ? `${expanded.grid.cols}x${expanded.grid.rows}` : "1x1");
 }
 
 function clampFrames(need, frames) {
@@ -45,7 +67,7 @@ function expandNeed(need, frames) {
       grid: need.grid || null,
       key,
       cells,
-      cycles: null,
+      cycles: need.cycles || null,
     };
   }
 
@@ -84,4 +106,6 @@ module.exports = {
   getNeed,
   clampFrames,
   expandNeed,
+  styleClause,
+  fillNeedPrompt,
 };
