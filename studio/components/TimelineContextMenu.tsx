@@ -1,5 +1,7 @@
 "use client";
 
+import { useLayoutEffect, useRef, useState } from "react";
+
 export type TimelineContextAction =
   | "copy"
   | "cut"
@@ -37,6 +39,20 @@ export default function TimelineContextMenu({
   onAction: (action: TimelineContextAction) => void;
   onClose: () => void;
 }) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState({ x, y });
+
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    let nextX = x;
+    let nextY = y;
+    if (y + rect.height > window.innerHeight - 8) nextY = Math.max(8, y - rect.height);
+    if (x + rect.width > window.innerWidth - 8) nextX = Math.max(8, x - rect.width);
+    setPos({ x: nextX, y: nextY });
+  }, [x, y, showSplitLong, showSync, mouthOnly]);
+
   function run(action: TimelineContextAction) {
     onAction(action);
     onClose();
@@ -44,9 +60,10 @@ export default function TimelineContextMenu({
 
   return (
     <div
+      ref={menuRef}
       className="studio-ctx-menu"
       data-testid="timeline-context-menu"
-      style={{ left: x, top: y }}
+      style={{ left: pos.x, top: pos.y }}
       onPointerDown={(event) => event.stopPropagation()}
     >
       <MenuItem label="Copy" kbd="Ctrl+C" disabled={!hasSelection} onClick={() => run("copy")} />

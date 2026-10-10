@@ -149,6 +149,7 @@ describe("writeAudioChunks", () => {
       const result = await splitExistingAudio(fixture.projectDir, {
         rel,
         durationSec: 130,
+        probeDuration: async () => 130,
         extractWavSlice: async (from, to) => {
           fs.mkdirSync(path.dirname(to), { recursive: true });
           fs.copyFileSync(from, to);
@@ -159,6 +160,34 @@ describe("writeAudioChunks", () => {
       assert.equal(result.reusedCues, true);
       assert.ok(result.chunks.length >= 2);
       assert.ok(result.chunks.every((c) => c.durationSec <= 60.5));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("clamps an overstated duration to the probed length and skips empty slices", async () => {
+    const fixture = createFixtureLibrary();
+    try {
+      const rel = "audio/mono/001_alice.wav";
+      const wavAbs = path.join(fixture.projectDir, rel);
+      writeSilentWav(wavAbs, 2);
+      const result = await splitExistingAudio(fixture.projectDir, {
+        rel,
+        durationSec: 200,
+        probeDuration: async () => 90,
+        extractWavSlice: async (from, to, start, dur) => {
+          fs.mkdirSync(path.dirname(to), { recursive: true });
+          if (start >= 90) {
+            fs.writeFileSync(to, "");
+            return;
+          }
+          fs.copyFileSync(from, to);
+        },
+      });
+      assert.equal(result.durationSeconds, 90);
+      assert.ok(result.chunks.length >= 2);
+      assert.ok(result.chunks.every((c) => c.offsetSec + c.durationSec <= 90.01));
+      assert.equal(result.chunks.some((c) => c.offsetSec >= 90), false);
     } finally {
       fixture.cleanup();
     }

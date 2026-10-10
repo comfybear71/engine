@@ -263,6 +263,14 @@ async function writeAudioChunks(opts) {
     const rel = chunkRelPaths(label, characterId);
     const wavAbs = path.join(projectDir, rel.wav);
     await extract(sourceWavAbs, wavAbs, range.start, range.end - range.start);
+    if (!fs.existsSync(wavAbs) || fs.statSync(wavAbs).size < 44) {
+      try {
+        if (fs.existsSync(wavAbs)) fs.unlinkSync(wavAbs);
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
     const chunkWords = sliceWords(words, range.start, range.end);
     if (chunkWords.length) writeWordsFile(path.join(projectDir, rel.words), chunkWords);
     const chunkCues = sliceCues(cues, range.start, range.end);
@@ -294,7 +302,14 @@ async function splitExistingAudio(projectDir, opts = {}) {
   const baseLabel = String(opts.label || labelFromWavRel(rel) || "take");
   const { probeDurationSeconds } = require("./parser/ffprobeDuration");
   const probe = opts.probeDuration || probeDurationSeconds;
-  const durationSec = opts.durationSec != null ? Number(opts.durationSec) : await probe(wavAbs);
+  const probed = await probe(wavAbs);
+  const requested = opts.durationSec != null ? Number(opts.durationSec) : probed;
+  const durationSec =
+    Number.isFinite(probed) && probed > 0 && Number.isFinite(requested)
+      ? Math.min(requested, probed)
+      : Number.isFinite(requested) && requested > 0
+        ? requested
+        : probed;
   const words = readWords(path.join(projectDir, wordsPathForWav(rel)));
   const cues = readCues(path.join(projectDir, cuesPathForWav(rel)));
   if (durationSec <= SPLIT_OVER_SEC + 0.01) {
