@@ -1494,9 +1494,7 @@ function createApp(options = {}) {
           uniqueCuesRel: clear === true,
           fps,
         });
-        if (body.all === true) {
-          if (!force && !clear) targets = targets.filter((item) => item.sync !== "synced");
-        } else {
+        if (body.all !== true) {
           const lines = new Set();
           if (Number.isInteger(body.scriptLine) && body.scriptLine > 0) lines.add(body.scriptLine);
           if (Array.isArray(body.scriptLines)) {

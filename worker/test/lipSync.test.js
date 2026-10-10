@@ -186,6 +186,8 @@ describe("lip-sync state", () => {
       assert.equal(all.ok, true);
       assert.equal(all.results.length, 2);
       assert.equal(all.results.filter((item) => item.skipped).length, 2);
+      assert.ok(all.results[0].mouthCues.length > 0);
+      assert.equal(all.results[0].cuesPath, cuesRel);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

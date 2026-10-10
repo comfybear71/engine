@@ -479,7 +479,7 @@ export default function TimelineLanes({
     const next = lines.join("\n");
     if (next === scriptText) return;
     const optimistic = lanes ? shiftLanesForView(lanes, block.scriptLine, view) : undefined;
-    onEditScript(next, { lanes: optimistic });
+    onEditScript(next, { lanes: optimistic, keepLanes: true });
   }
 
   function snapEdge(raw: number, ignoreIds: Iterable<string>, alt: boolean): { frame: number; snappedTo: number | null } {

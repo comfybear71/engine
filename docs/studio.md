@@ -323,7 +323,8 @@ clobber the project's `timeline.json`.
   Dialogue block also gets a small **View** dropdown
   (`front` / `left_34` / `left_side` / `right_34` / `right_side` / `up` /
   `down`) that writes `view=` on that script line only — it does not
-  delete, invalidate, or re-run lip-sync cues.
+  delete, invalidate, or re-run lip-sync cues, and it does not reload
+  `/lanes` (that reload was wiping in-memory mouths).
   The timeline zooms like Resolve: `+` / `−` and a
   slider, Ctrl+wheel centred on the cursor, **Fit** for the whole shot,
   horizontal scroll (wheel / drag / scrollbar) when zoomed in, a ruler

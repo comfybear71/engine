@@ -212,6 +212,8 @@ export type MovableLaneBlock = {
   movable?: boolean;
   role?: string | null;
   view?: string | null;
+  cuesRel?: string | null;
+  sync?: string | null;
   cues?: { shape?: string; start: number; end: number; pinned?: boolean }[] | null;
 };
 
@@ -227,7 +229,40 @@ export type ScriptEditMeta = {
   lanes?: MovableLanes;
   delta?: number;
   ids?: string[];
+  /** Script-only edit (e.g. view=). Keep current lane cues; do not reload /lanes. */
+  keepLanes?: boolean;
 };
+
+/** Keep mouth cues when a /lanes reload returns empty slices for the same chips. */
+export function preserveLaneCues<T extends MovableLanes>(current: T, incoming: T): T {
+  const prior = new Map<string, (typeof current.blocks)[number]>();
+  for (const block of current.blocks) {
+    if ((block.lane === "dialogue" || block.lane === "mouth" || block.role === "mouth") && block.cues && block.cues.length) {
+      prior.set(`${block.lane}|${block.cuesRel || ""}|${block.startFrame}|${block.endFrame}`, block);
+    }
+  }
+  const blocks = incoming.blocks.map((block) => {
+    if (block.cues && block.cues.length) return block;
+    const kept = prior.get(`${block.lane}|${block.cuesRel || ""}|${block.startFrame}|${block.endFrame}`);
+    if (!kept || !kept.cues || !kept.cues.length) return block;
+    return { ...block, cues: kept.cues, sync: kept.sync || block.sync || "synced" };
+  });
+  const incomingHasMouth = incoming.blocks.some((block) => block.lane === "mouth");
+  const keptMouth = current.blocks.filter((block) => block.lane === "mouth" && block.cues && block.cues.length);
+  if (!incomingHasMouth && keptMouth.length) {
+    for (const mouth of keptMouth) {
+      if (blocks.some((block) => block.id === mouth.id)) continue;
+      const dialogue = blocks.find(
+        (block) =>
+          block.lane === "dialogue" &&
+          block.startFrame === mouth.startFrame &&
+          block.endFrame === mouth.endFrame
+      );
+      blocks.push(dialogue ? { ...mouth, view: dialogue.view } : mouth);
+    }
+  }
+  return { ...incoming, blocks };
+}
 
 function shiftFrame(value: number, delta: number): number {
   return Math.max(0, Math.round(value + delta));

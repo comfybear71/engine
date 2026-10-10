@@ -271,6 +271,10 @@ async function syncDialogueLines({ projectDir, targets, force = false, runRhubar
           skipped: true,
           sync: state === "stale" ? "stale" : "synced",
           windowed: true,
+          cuesPath: target.cuesRel,
+          inSec: target.inSec,
+          outSec: target.outSec,
+          mouthCues: existing && Array.isArray(existing.mouthCues) ? existing.mouthCues : [],
         });
         continue;
       }

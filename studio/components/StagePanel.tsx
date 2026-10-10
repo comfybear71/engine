@@ -42,6 +42,7 @@ import {
   sliceMouthCuesForWindow,
   dialogueSourceWindowSec,
   dialogueSyncText,
+  preserveLaneCues,
   type ScriptEditMeta,
 } from "@/lib/timelineEdit";
 import { replaceLineWithAudioChunks } from "@/lib/importAudio";
@@ -143,6 +144,7 @@ export default function StagePanel({
   const saveTimerRef = useRef<number | null>(null);
   const pendingScriptRef = useRef<string | null>(null);
   const lanesRefreshGenRef = useRef(0);
+  const keepLanesRefreshRef = useRef(false);
   const skipPreviewRef = useRef(false);
   const previewUrlRef = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -381,10 +383,29 @@ export default function StagePanel({
     try {
       await saveScript(project, text, script, { parse: false });
       const gen = ++lanesRefreshGenRef.current;
+      const keepLanes = keepLanesRefreshRef.current;
+      keepLanesRefreshRef.current = false;
+      if (keepLanes) {
+        void Promise.all([loadStage(project, script), loadPlayback(project, script)])
+          .then(([nextStage, nextPlayback]) => {
+            if (gen !== lanesRefreshGenRef.current || pendingScriptRef.current != null) return;
+            setStage(nextStage);
+            setPlayback(nextPlayback);
+            skipPreviewRef.current = false;
+            frameCacheRef.current.clear();
+            setLanesEpoch((n) => n + 1);
+          })
+          .catch((err: Error) => {
+            if (gen !== lanesRefreshGenRef.current) return;
+            skipPreviewRef.current = false;
+            setError(err.message || "Timeline reload failed");
+          });
+        return;
+      }
       void Promise.all([loadLanes(project, script), loadStage(project, script), loadPlayback(project, script)])
         .then(([nextLanes, nextStage, nextPlayback]) => {
           if (gen !== lanesRefreshGenRef.current || pendingScriptRef.current != null) return;
-          setLanes(nextLanes);
+          setLanes((current) => (current ? preserveLaneCues(current, nextLanes) : nextLanes));
           setStage(nextStage);
           setPlayback(nextPlayback);
           if (nextLanes.totalFrames > 0) {
@@ -424,6 +445,7 @@ export default function StagePanel({
 
   const onEditScript = useCallback(
     (next: string, meta?: ScriptEditMeta) => {
+      if (meta?.keepLanes) keepLanesRefreshRef.current = true;
       if (meta?.lanes) {
         skipPreviewRef.current = true;
         setLanes(meta.lanes);

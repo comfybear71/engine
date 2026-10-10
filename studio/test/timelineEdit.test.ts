@@ -15,6 +15,7 @@ import {
   shiftLanesForMove,
   shiftLanesForSplit,
   shiftLanesForView,
+  preserveLaneCues,
   shiftLanesForTrim,
   shiftPlaybackAudio,
   planSplit,
@@ -421,6 +422,14 @@ describe("timeline script rewrite", () => {
     assert.equal(next.blocks[1].view, null);
     assert.deepEqual(next.blocks[1].cues, [{ shape: "B", start: 0, end: 0.3 }]);
     assert.equal(setViewOnLine("[Audio: Alice file=monologue]", "left_side"), "[Audio: Alice file=monologue view=left_side]");
+    const emptied = {
+      ...next,
+      blocks: next.blocks.map((block) => ({ ...block, cues: [], view: "left_side" })),
+    };
+    const preserved = preserveLaneCues(next, emptied);
+    assert.deepEqual(preserved.blocks[0].cues, [{ shape: "A", start: 0, end: 0.4 }]);
+    assert.deepEqual(preserved.blocks[1].cues, [{ shape: "B", start: 0, end: 0.3 }]);
+    assert.equal(preserved.blocks[0].view, "left_side");
   });
 
   test("trim dialogue writes trim_in=/trim_out= and split keeps word timings", () => {

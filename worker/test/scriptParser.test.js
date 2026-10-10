@@ -917,6 +917,57 @@ describe("[Audio: Name file=<label>]", () => {
     assert.ok(dialogue.every((e) => e.syncText !== "Hello there. Later on."));
     fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
   });
+
+  test("view= on [Audio:] does not drop existing mouth cues", async () => {
+    const audioDir = path.join(fixture.projectDir, "audio", "monologue");
+    wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 3.0);
+    fs.writeFileSync(
+      path.join(audioDir, "001_alice.words.json"),
+      JSON.stringify([
+        { word: "Hello", start: 0.0, end: 0.4 },
+        { word: "there.", start: 0.4, end: 0.8 },
+        { word: "Later", start: 1.5, end: 1.9 },
+        { word: "on.", start: 1.9, end: 2.3 },
+      ])
+    );
+    fs.writeFileSync(
+      path.join(audioDir, "001_alice.wav.rhubarb.json"),
+      JSON.stringify({
+        mouthCues: [
+          { start: 0.0, end: 0.5, value: "A" },
+          { start: 1.5, end: 2.1, value: "B" },
+        ],
+        engine: { text: "Hello there. Later on." },
+      })
+    );
+    const base = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Audio: Alice file=monologue]",
+    ].join("\n");
+    const before = (await parseScript(fixture.projectDir, fixture.globalAssetsDir, base, { fps: 24 })).laneEvents.filter(
+      (e) => e.lane === "dialogue"
+    );
+    const after = (
+      await parseScript(
+        fixture.projectDir,
+        fixture.globalAssetsDir,
+        base.replace("[Audio: Alice file=monologue]", "[Audio: Alice file=monologue view=left_side]"),
+        { fps: 24 }
+      )
+    ).laneEvents.filter((e) => e.lane === "dialogue");
+    assert.ok(before.length >= 2);
+    assert.equal(after.length, before.length);
+    assert.ok(before.every((e) => Array.isArray(e.cues) && e.cues.length > 0));
+    assert.ok(after.every((e) => Array.isArray(e.cues) && e.cues.length > 0));
+    assert.deepEqual(
+      after.map((e) => e.cues.map((c) => c.shape)),
+      before.map((e) => e.cues.map((c) => c.shape))
+    );
+    assert.ok(after.every((e) => e.view === "left_side"));
+    fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
+  });
 });
 
 describe("at_time= / start= explicit start", () => {
