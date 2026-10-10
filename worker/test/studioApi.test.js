@@ -134,6 +134,30 @@ describe("studio worker API", () => {
     assert.equal(carol.thumbRel, "characters/carol/body.png");
   });
 
+  test("GET slot/drawing editor endpoints are path-safe and include mouth metadata", async () => {
+    const slot = await fetch(`${ctx.url}/api/projects/project/characters/alice/slots/mouth`);
+    assert.equal(slot.status, 200);
+    const body = await slot.json();
+    assert.equal(body.mouth, true);
+    assert.ok(body.drawings.some((d) => d.name === "A"));
+    assert.deepEqual(body.missingShapes, []);
+
+    const drawing = await fetch(`${ctx.url}/api/projects/project/characters/alice/slots/mouth/drawings/A`);
+    assert.equal(drawing.status, 200);
+    const detail = await drawing.json();
+    assert.equal(detail.drawing.name, "A");
+    assert.equal(detail.drawing.width, 1);
+
+    const badSlot = await fetch(`${ctx.url}/api/projects/project/characters/alice/slots/../mouth`);
+    assert.equal(badSlot.status, 400);
+    const badDrawing = await fetch(`${ctx.url}/api/projects/project/characters/alice/slots/mouth/drawings/../A`);
+    assert.equal(badDrawing.status, 400);
+    const traversal = await fetch(
+      `${ctx.url}/api/projects/project/characters/alice/slots/mouth/drawings/${encodeURIComponent("..")}`
+    );
+    assert.equal(traversal.status, 400);
+  });
+
   test("GET /api/projects/:name/audio lists imported and generated wavs", async () => {
     writeSilentWav(path.join(fixture.projectDir, "audio", "intro", "001_alice.wav"), 0.4);
     writeSilentWav(path.join(fixture.projectDir, "audio", "monologue", "001_alice.wav"), 0.8);

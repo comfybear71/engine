@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import AlignHeadModal from "@/components/AlignHeadModal";
+import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import CharacterReferenceCard from "@/components/CharacterReferenceCard";
+import type { AssetFocus } from "@/lib/assetEditor";
 import { alignableSlots } from "@/lib/headAlign";
 import {
   addLibraryCharacter,
@@ -63,13 +65,30 @@ function Thumb({
   );
 }
 
-function SlotBlock({ slot, project }: { slot: CharacterSlot; project: string }) {
+function SlotBlock({
+  slot,
+  project,
+  characterId,
+  onOpen,
+}: {
+  slot: CharacterSlot;
+  project: string;
+  characterId: string;
+  onOpen?: (focus: AssetFocus) => void;
+}) {
   const cycleEntries = Object.entries(slot.cycles || {});
   return (
     <section className="space-y-2">
       <div className="flex items-baseline justify-between gap-2">
         <h4 className="text-sm font-medium text-white">
-          {slot.name}
+          <button
+            type="button"
+            className="hover:text-studio-accent"
+            data-testid={`assets-slot-${slot.name}`}
+            onClick={() => onOpen?.({ mode: "slot", characterId, slot: slot.name })}
+          >
+            {slot.name}
+          </button>
           {slot.owner ? <span className="ml-2 text-xs font-normal text-studio-muted">on {slot.owner}</span> : null}
         </h4>
         {slot.default_drawing ? (
@@ -97,6 +116,9 @@ function SlotBlock({ slot, project }: { slot: CharacterSlot; project: string }) 
             label={drawing.name}
             selected={drawing.name === slot.default_drawing}
             fit="contain"
+            onClick={() =>
+              onOpen?.({ mode: "drawing", characterId, slot: slot.name, drawing: drawing.name })
+            }
           />
         ))}
       </div>
@@ -124,7 +146,7 @@ export default function AssetsPanel({
   poolSection?: "assets" | "media" | "effects";
   selectedId?: string | null;
   onSelectId?: (id: string | null) => void;
-  onOpenImagine?: () => void;
+  onOpenImagine?: (opts?: { characterId?: string; needId?: string }) => void;
   refreshToken?: number;
 }) {
   const pool = variant === "pool";
@@ -142,6 +164,7 @@ export default function AssetsPanel({
   const [addingId, setAddingId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [alignOpen, setAlignOpen] = useState(false);
+  const [assetFocus, setAssetFocus] = useState<AssetFocus | null>(null);
 
   useEffect(() => {
     if (!project || !workerUp) return;
@@ -344,7 +367,13 @@ export default function AssetsPanel({
               <p className="text-sm text-studio-muted">No slots on this character.</p>
             ) : (
               selected.slots.map((slot) => (
-                <SlotBlock key={`${slot.owner || "root"}:${slot.name}`} slot={slot} project={project} />
+                <SlotBlock
+                  key={`${slot.owner || "root"}:${slot.name}`}
+                  slot={slot}
+                  project={project}
+                  characterId={selected.id}
+                  onOpen={setAssetFocus}
+                />
               ))
             )}
           </div>
@@ -353,6 +382,25 @@ export default function AssetsPanel({
         )}
       </aside>
       )}
+
+      {assetFocus && project ? (
+        <div className="fixed inset-8 z-40 overflow-hidden rounded-md shadow-2xl">
+          <AssetEditorOverlay
+            project={project}
+            focus={assetFocus}
+            onFocus={setAssetFocus}
+            onClose={() => setAssetFocus(null)}
+            onChanged={() => {
+              setReloadKey((n) => n + 1);
+              onLibraryChange?.();
+            }}
+            onOpenImagine={(opts) => {
+              setSelectedId(opts.characterId);
+              onOpenImagine?.(opts);
+            }}
+          />
+        </div>
+      ) : null}
 
       {alignOpen && selected ? (
         <AlignHeadModal

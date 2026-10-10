@@ -525,3 +525,71 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 .studio-lane-drop[data-drop-active="true"] {
   outline-color: #f97316;
 }
+
+.studio-asset-editor {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: #121212;
+  border: 1px solid #2e2e2e;
+}
+
+.studio-asset-editor-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+  padding: 0 6px;
+  border-bottom: 1px solid #2e2e2e;
+  background: #161616;
+}
+
+.studio-asset-editor-meta {
+  width: 196px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-left: 1px solid #2e2e2e;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.studio-asset-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.studio-asset-cell-thumb {
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid #2e2e2e;
+}
+
+.studio-asset-cell-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.studio-asset-cell[data-missing="true"] .studio-asset-cell-thumb {
+  outline: 1px dashed #525252;
+}
+
+.studio-asset-cell[data-playing="true"] .studio-asset-cell-thumb {
+  outline: 1px solid #fbbf24;
+}
+
+.studio-asset-leaf[data-selected="true"] {
+  background: #222;
+  color: #fff;
+}

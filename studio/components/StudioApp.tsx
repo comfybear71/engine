@@ -40,6 +40,7 @@ export default function StudioApp({ projectName }: { projectName: string }) {
   const [selectedScriptLine, setSelectedScriptLine] = useState<number | null>(null);
   const [scriptEpoch, setScriptEpoch] = useState(0);
   const [imagineOpen, setImagineOpen] = useState(false);
+  const [imagineNeedId, setImagineNeedId] = useState<string | null>(null);
   const [assetCharacterId, setAssetCharacterId] = useState<string | null>(null);
   const [assetEpoch, setAssetEpoch] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -193,7 +194,11 @@ export default function StudioApp({ projectName }: { projectName: string }) {
             }}
             selectedId={assetCharacterId}
             onSelectId={setAssetCharacterId}
-            onOpenImagine={() => setImagineOpen(true)}
+            onOpenImagine={(opts) => {
+              if (opts?.characterId) setAssetCharacterId(opts.characterId);
+              if (opts?.needId) setImagineNeedId(opts.needId);
+              setImagineOpen(true);
+            }}
             refreshToken={assetEpoch}
           />
         ) : null}
@@ -207,6 +212,11 @@ export default function StudioApp({ projectName }: { projectName: string }) {
             onSelectLine={setSelectedScriptLine}
             onSaved={() => setScriptEpoch((n) => n + 1)}
             renderNonce={videoBust}
+            onOpenImagine={(opts) => {
+              setAssetCharacterId(opts.characterId);
+              setImagineNeedId(opts.needId);
+              setImagineOpen(true);
+            }}
           />
         ) : null}
         {tab === "script" ? (
@@ -234,8 +244,10 @@ export default function StudioApp({ projectName }: { projectName: string }) {
         workerUp={workerUp === true}
         open={imagineOpen}
         characterId={assetCharacterId}
+        needId={imagineNeedId}
         onOpenChange={setImagineOpen}
         onCharacterId={setAssetCharacterId}
+        onNeedId={setImagineNeedId}
         refreshToken={assetEpoch}
         onChanged={() => {
           setAssetEpoch((n) => n + 1);

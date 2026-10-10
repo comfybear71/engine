@@ -126,12 +126,33 @@ clobber the project's `timeline.json`.
   `library.json`; backgrounds from `[Location:]` / local `backgrounds/`;
   props from those locations' `staging.json`. **Library** opens a drawer of
   global characters from `projects/_global_assets` and **Add** records a
-  reference in `library.json` without copying art. Click a character to see
+  reference in `library.json` without copying art.   Click a character to see
   its slots (mouth, eyes, hands, …), drawings, named cycles, an optional
   **full-body reference** (drop/paste, stored as-is under
   `characters/<id>/_reference/`), and **Align head** (overlay the current
   head/mouth on the body or reference, then save slot offset/scale/rotation
-  into a project-local `character.json`). Character thumbnails use
+  into a project-local `character.json`). On Stage, the left Assets tree
+  opens the same viewer without leaving the Stage: click a **slot**
+  (`mouth`, `face`, `eyes`, `right_hand`, `mic_arm`, `body`, …) for a
+  labelled grid, or click / double-click a drawing for a large preview on
+  a checkerboard (or a chosen background) with name, size, slot, offset,
+  scale, and which script/cycle uses it. Prev/next arrows and the arrow
+  keys step through that slot. Zoom/pan the preview. Mouth grids label
+  each Rhubarb shape (X, A–H) with the plain-English sound, flag
+  byte-identical duplicates, list missing shapes, and show view-set
+  folders (`mouth_left_side/`, …) plus loud variants when those files
+  exist. **Play sample** animates the head through a chosen sample
+  sentence (or a project take that already has Rhubarb cues). Drop or
+  paste an image onto a drawing/cell to replace it through the green-screen
+  cut-out + trim pipeline (before/after, Accept/Cancel); the old file is
+  copied to `characters/<id>/_replaced/<timestamp>/`, never deleted.
+  **+** adds a named drawing the same way. **Open Grok Imagine for this
+  slot** opens the Generate dock preselected for that character and set.
+  Rename updates `character.json` cycle lists. Delete asks once, then
+  moves the file to `characters/<id>/_trash/<timestamp>/`; if a script
+  uses the drawing, Studio lists those lines and refuses until you
+  confirm. Shared-library drawings cannot be renamed or deleted from a
+  project (replace still writes a local override). Character thumbnails use
   `object-fit: contain` so the whole figure is visible. Character body and
   prop cards in the Assets lists use the same cached ~480px JPEG as
   background cards (`?thumb=1&v=<mtime>`).
@@ -262,7 +283,9 @@ clobber the project's `timeline.json`.
   `engine.studio.stageLayout.v1` / `engine.studio.stageLeftPool.v1`).
   **Assets** is a slim tree of this project's characters (slots /
   drawings / cycles), props, backgrounds, imported and generated audio,
-  and a placeholder **SFX / Music** group. **Media** filters to
+  and a placeholder **SFX / Music** group. Click a slot or drawing to
+  open the viewer/grid overlay on the Stage preview (see Assets above).
+  **Media** filters to
   backgrounds + audio; **Effects** is the SFX/Music placeholder. Search
   filters the tree. Drag a drawing onto Face / Body-Move / Props at a
   time to insert the matching script line (`[Action: Name face=…]`,
@@ -337,6 +360,17 @@ other media durations are cached by path + mtime + size.
 | `PUT` | `/api/projects/:name/characters/:id` | JSON `{ "style": "painted semi-real" }`. Writes a project-local `character.json` (copied from global if needed) with that free-text style field. Does not touch `_global_assets`. |
 | `POST` | `/api/projects/:name/characters/:id/reference` | JSON `{ "imageBase64", "filename?" }`. Stores the original image under `characters/<id>/_reference/full.<ext>` (no cut-out) and sets `reference` on a project-local `character.json`. |
 | `PUT` | `/api/projects/:name/characters/:id/slots/:slot` | JSON `{ "offset"?: {x,y}, "scale"?: number, "rotation"?: number }`. Copy-on-write into project-local `character.json`. Used by **Align head**. |
+| `GET` | `/api/projects/:name/characters/:id/slots/:slot` | Slot editor payload: drawings (size, hash, source), view folders (`?view=`), offset/scale, cycles, mouth-shape labels, duplicates, missing Rhubarb shapes. Restricted to `characters/<id>/`. |
+| `GET` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing` | Drawing viewer payload plus script/cycle usages and prev/next names in that view. |
+| `GET` | `/api/projects/:name/characters/:id/slots/:slot/lipsync-preview` | Builtin sample cue tracks plus project audio that already has `.rhubarb.json`. Mouth slots only. |
+| `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing/replace` | JSON `{ "imageBase64", "filename?", "view?" }`. Green-screen cut-out + trim preview (before/after). |
+| `POST` | `…/replace/confirm` | JSON `{ "sessionId" }`. Writes the new PNG as a project-local file; copies the previous file to `_replaced/<timestamp>/`. |
+| `POST` | `…/replace/cancel` | JSON `{ "sessionId" }`. Drops the preview session. |
+| `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings` | Add-drawing preview. JSON `{ "imageBase64", "filename?", "name?", "view?" }`. |
+| `POST` | `…/drawings/confirm` | JSON `{ "sessionId", "name" }`. Writes `characters/<id>/<drawings_dir>/<name>.png`. |
+| `POST` | `…/drawings/cancel` | JSON `{ "sessionId" }`. |
+| `POST` | `…/drawings/:drawing/rename` | JSON `{ "name", "view?" }`. Project-local files only; updates cycle lists and `default_drawing`. |
+| `POST` | `…/drawings/:drawing/delete` | JSON `{ "confirm": true, "force?", "view?" }`. Moves a project-local file to `_trash/<timestamp>/`. If a script uses it and `force` is not set, returns **409** with `{ used, usages }`. |
 | `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64", "filename?", "frames?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. |
 | `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }] }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames), backs up overwritten **local** files to `_backup/<timestamp>/`, merges new slots/cycles into project-local `character.json` without deleting other entries. |
 | `POST` | `/api/projects/:name/characters/:id/ingest/cancel` | JSON `{ "sessionId" }`. Deletes the preview session dir. |

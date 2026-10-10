@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { AssetFocus } from "@/lib/assetEditor";
 import { encodeAssetDrag, ASSET_DRAG_MIME, slotLane, type AssetDrag } from "@/lib/stageAssets";
 import { loadAssetsTreeOpen, saveAssetsTreeOpen } from "@/lib/stageLayout";
 import {
@@ -116,21 +117,28 @@ function Leaf({
   src,
   asset,
   draggable = true,
+  selected = false,
+  onOpen,
 }: {
   testId: string;
   label: string;
   src: string | null;
   asset: AssetDrag;
   draggable?: boolean;
+  selected?: boolean;
+  onOpen?: () => void;
 }) {
   return (
     <div
       className="studio-asset-leaf"
       data-testid={testId}
       data-draggable={draggable ? "true" : "false"}
+      data-selected={selected ? "true" : "false"}
       draggable={draggable}
       title={draggable ? label : `${label} — listed only`}
       onDragStart={draggable ? (event) => startDrag(event, asset) : undefined}
+      onClick={onOpen}
+      onDoubleClick={onOpen}
     >
       <TinyThumb src={src} label={label} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -143,11 +151,15 @@ export default function StageAssetsPanel({
   workerUp,
   poolSection = "assets",
   refreshToken = 0,
+  assetFocus = null,
+  onOpenAsset,
 }: {
   project: string | null;
   workerUp: boolean;
   poolSection?: LeftPoolId;
   refreshToken?: number;
+  assetFocus?: AssetFocus | null;
+  onOpenAsset?: (focus: AssetFocus) => void;
 }) {
   const [characters, setCharacters] = useState<Character[]>([]);
   const [staging, setStaging] = useState<Staging | null>(null);
@@ -231,6 +243,8 @@ export default function StageAssetsPanel({
                       query={q}
                       isOpen={isOpen}
                       onToggle={toggle}
+                      assetFocus={assetFocus}
+                      onOpenAsset={onOpenAsset}
                     />
                   ))
               : null}
@@ -306,12 +320,16 @@ function CharacterBranch({
   query,
   isOpen,
   onToggle,
+  assetFocus,
+  onOpenAsset,
 }: {
   project: string;
   character: Character;
   query: string;
   isOpen: (id: string, fallback?: boolean) => boolean;
   onToggle: (id: string, fallback?: boolean) => void;
+  assetFocus?: AssetFocus | null;
+  onOpenAsset?: (focus: AssetFocus) => void;
 }) {
   const id = `char:${character.id}`;
   const grouped = new Map<ReturnType<typeof slotGroup>, CharacterSlot[]>();
@@ -343,7 +361,7 @@ function CharacterBranch({
             const slots = grouped.get(group);
             if (!slots || slots.length === 0) return null;
             const gid = `${id}:${group}`;
-            const leaves = slotLeaves(project, character, slots, query);
+            const leaves = slotLeaves(project, character, slots, query, assetFocus, onOpenAsset);
             if (query && leaves.length === 0) return null;
             const showLeaves = isOpen(gid) || Boolean(query);
             return (
@@ -358,10 +376,34 @@ function CharacterBranch({
   );
 }
 
-function slotLeaves(project: string, character: Character, slots: CharacterSlot[], query: string) {
+function slotLeaves(
+  project: string,
+  character: Character,
+  slots: CharacterSlot[],
+  query: string,
+  assetFocus?: AssetFocus | null,
+  onOpenAsset?: (focus: AssetFocus) => void
+) {
   const out: ReactNode[] = [];
   for (const slot of slots) {
     const canDrop = slotLane(slot.name) != null;
+    const slotLabel = slot.name;
+    if (!query || matchesQuery(slotLabel, query) || slot.drawings.some((d) => matchesQuery(`${slot.name} ${d.name}`, query))) {
+      out.push(
+        <div
+          key={`${slot.name}:slot`}
+          className="studio-asset-leaf"
+          data-testid={`stage-asset-slot-${character.id}-${slot.name}`}
+          data-selected={assetFocus?.slot === slot.name && assetFocus.characterId === character.id && assetFocus.mode === "slot" && !assetFocus.view ? "true" : "false"}
+          onClick={() => onOpenAsset?.({ mode: "slot", characterId: character.id, slot: slot.name })}
+        >
+          <span className="studio-asset-chevron" aria-hidden>
+            ▸
+          </span>
+          <span className="min-w-0 flex-1 truncate">{slot.name}</span>
+        </div>
+      );
+    }
     for (const [cycleName] of Object.entries(slot.cycles || {})) {
       const label = `${slot.name} ${cycleName}`;
       if (!matchesQuery(label, query)) continue;
@@ -392,6 +434,20 @@ function slotLeaves(project: string, character: Character, slots: CharacterSlot[
           label={drawing.name}
           src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
           draggable={canDrop}
+          selected={
+            assetFocus?.mode === "drawing" &&
+            assetFocus.characterId === character.id &&
+            assetFocus.slot === slot.name &&
+            assetFocus.drawing === drawing.name
+          }
+          onOpen={() =>
+            onOpenAsset?.({
+              mode: "drawing",
+              characterId: character.id,
+              slot: slot.name,
+              drawing: drawing.name,
+            })
+          }
           asset={{
             kind: "drawing",
             characterId: character.id,
@@ -401,6 +457,54 @@ function slotLeaves(project: string, character: Character, slots: CharacterSlot[
           }}
         />
       );
+    }
+    for (const view of slot.views || []) {
+      if (view.id === "front") continue;
+      if (query && !matchesQuery(`${slot.name} ${view.id}`, query) && !view.drawings.some((d) => matchesQuery(d.name, query))) {
+        continue;
+      }
+      out.push(
+        <div
+          key={`${slot.name}:view:${view.id}`}
+          className="studio-asset-leaf"
+          data-testid={`stage-asset-view-${character.id}-${slot.name}-${view.id}`}
+          onClick={() => onOpenAsset?.({ mode: "slot", characterId: character.id, slot: slot.name, view: view.id })}
+        >
+          <span className="studio-asset-chevron" aria-hidden>
+            ▸
+          </span>
+          <span className="min-w-0 flex-1 truncate">{view.id}</span>
+        </div>
+      );
+      for (const drawing of view.drawings) {
+        const label = `${slot.name} ${view.id} ${drawing.name}`;
+        if (!matchesQuery(label, query)) continue;
+        out.push(
+          <Leaf
+            key={`${slot.name}:${view.id}:${drawing.name}`}
+            testId={`stage-asset-drawing-${character.id}-${slot.name}-${view.id}-${drawing.name}`}
+            label={`${drawing.name} · ${view.id}`}
+            src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
+            draggable={canDrop}
+            onOpen={() =>
+              onOpenAsset?.({
+                mode: "drawing",
+                characterId: character.id,
+                slot: slot.name,
+                drawing: drawing.name,
+                view: view.id,
+              })
+            }
+            asset={{
+              kind: "drawing",
+              characterId: character.id,
+              characterName: character.display_name,
+              slot: slot.name,
+              drawing: drawing.name,
+            }}
+          />
+        );
+      }
     }
   }
   return out;

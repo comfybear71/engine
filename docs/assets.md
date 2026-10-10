@@ -288,6 +288,14 @@ rig-part image, a single drawing inside a slot folder, a location's
 specific filenames you provide; any other drawing names in that slot still
 come from the global version.
 
+Studio's Assets viewer/editor writes only under the episode's
+`characters/<id>/` folder (never `_global_assets`). Replacing a drawing
+copies the previous file to `characters/<id>/_replaced/<timestamp>/`.
+Delete moves a **project-local** file to
+`characters/<id>/_trash/<timestamp>/` — it is never unlinked without that
+copy, and a shared-library drawing cannot be removed from here. Those
+history folders are ignored when scanning slot drawings.
+
 Paths written into the generated `timeline.json` reflect wherever the file
 actually came from: `"characters/hicks/mouth/D.png"` for a project-local
 override, or `"../_global_assets/characters/hicks/mouth/D.png"` for the

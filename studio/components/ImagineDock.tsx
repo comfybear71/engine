@@ -16,8 +16,10 @@ export default function ImagineDock({
   workerUp,
   open,
   characterId,
+  needId = null,
   onOpenChange,
   onCharacterId,
+  onNeedId,
   onChanged,
   refreshToken = 0,
 }: {
@@ -25,8 +27,10 @@ export default function ImagineDock({
   workerUp: boolean;
   open: boolean;
   characterId: string | null;
+  needId?: string | null;
   onOpenChange: (open: boolean) => void;
   onCharacterId: (id: string | null) => void;
+  onNeedId?: (id: string | null) => void;
   onChanged: () => void;
   refreshToken?: number;
 }) {
@@ -117,6 +121,8 @@ export default function ImagineDock({
                   project={project}
                   character={selected}
                   embedded
+                  initialNeedId={needId}
+                  onNeedId={onNeedId}
                   onChanged={() => {
                     setReloadKey((n) => n + 1);
                     onChanged();

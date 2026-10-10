@@ -10,13 +10,15 @@ export class WorkerUnreachableError extends Error {
   }
 }
 
-export type Drawing = { name: string; rel: string; mtime?: number | null };
+export type Drawing = { name: string; rel: string; mtime?: number | null; view?: string };
 export type SlotCycle = { drawings: string[]; fps: number };
+export type SlotView = { id: string; drawingsDir: string; drawings: Drawing[] };
 export type CharacterSlot = {
   name: string;
   owner: string | null;
   default_drawing: string | null;
   drawings: Drawing[];
+  views?: SlotView[];
   cycles: Record<string, SlotCycle>;
   offset: { x: number; y: number };
   scale: number;
