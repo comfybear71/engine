@@ -7,6 +7,7 @@ import {
   duplicateBlocksInScript,
   pasteClipboardInScript,
   pinMissingAtTimes,
+  selectionIsMouthOnly,
 } from "../lib/timelineClipboard.ts";
 
 const scenes = [{ id: "intro", startFrame: 0, endFrame: 96, frames: 96 }];
@@ -25,7 +26,7 @@ const blocks = [
   { id: "eyes", scriptLine: 4, sceneId: "intro", startFrame: 0, endFrame: 24, lane: "face", tag: "action" },
   { id: "d1", scriptLine: 5, sceneId: "intro", startFrame: 0, endFrame: 24, lane: "dialogue", marriedId: "line:intro:5" },
   { id: "a1", scriptLine: 5, sceneId: "intro", startFrame: 0, endFrame: 24, lane: "audio", marriedId: "line:intro:5" },
-  { id: "m1", scriptLine: 5, sceneId: "intro", startFrame: 0, endFrame: 24, lane: "face", tag: "mouth", role: "mouth", marriedId: "line:intro:5" },
+  { id: "m1", scriptLine: 5, sceneId: "intro", startFrame: 0, endFrame: 24, lane: "mouth", tag: "mouth", role: "mouth", marriedId: "line:intro:5" },
   { id: "hand", scriptLine: 6, sceneId: "intro", startFrame: 24, endFrame: 48, lane: "body", tag: "action" },
   { id: "d2", scriptLine: 7, sceneId: "intro", startFrame: 24, endFrame: 48, lane: "dialogue", marriedId: "line:intro:7" },
 ];
@@ -62,17 +63,10 @@ describe("timeline clipboard and delete", () => {
     assert.equal(lines.some((line) => /Hello there/.test(line)), false);
   });
 
-  test("mouth-only selection deletes the married dialogue line", () => {
-    const next = deleteBlocksInScript({
-      script,
-      blocks,
-      ids: ["m1"],
-      scenes,
-      fps: 24,
-      ripple: false,
-    });
-    assert.equal(next.includes("Hello there"), false);
-    assert.equal(next.includes("Later line"), true);
+  test("mouth-only selection is not a script-line delete", () => {
+    assert.equal(selectionIsMouthOnly(blocks, ["m1"]), true);
+    assert.equal(selectionIsMouthOnly(blocks, ["d1"]), false);
+    assert.equal(selectionIsMouthOnly(blocks, ["d1", "m1"]), false);
   });
 
   test("paste copies the married audio/dialogue line at the playhead", () => {

@@ -93,13 +93,48 @@ def load_studio_lipsync(project_dir: Path) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+def _show_assets_dir(project_dir: Path) -> Path | None:
+    """Episode at shows/<id>/episodes/<ep> shares the show folder; else None."""
+
+    episodes_dir = project_dir.parent
+    show_dir = episodes_dir.parent
+    if episodes_dir.name != "episodes":
+        return None
+    if not (show_dir / "show.json").is_file():
+        return None
+    return show_dir
+
+
+def _global_assets_dir(project_dir: Path) -> Path:
+    sibling = project_dir.parent / "_global_assets"
+    if sibling.is_dir():
+        return sibling
+    current = project_dir.resolve()
+    for _ in range(8):
+        parent = current.parent
+        next_to_parent = parent / "_global_assets"
+        if next_to_parent.is_dir():
+            return next_to_parent
+        under_projects = parent / "projects" / "_global_assets"
+        if under_projects.is_dir():
+            return under_projects
+        if parent == current:
+            break
+        current = parent
+    return sibling
+
+
 def load_character_config(project_dir: Path, character_id: str | None) -> dict:
+    """episode → show → global, same order as the parser asset library."""
+
     if not character_id:
         return {}
-    candidates = [
-        project_dir / "characters" / character_id / "character.json",
-        project_dir.parent / "_global_assets" / "characters" / character_id / "character.json",
-    ]
+    rel = Path("characters") / character_id / "character.json"
+    candidates = [project_dir / rel]
+    show_dir = _show_assets_dir(project_dir)
+    if show_dir is not None:
+        candidates.append(show_dir / rel)
+    candidates.append(_global_assets_dir(project_dir) / rel)
     for path in candidates:
         data = load_json_object(path)
         if data:

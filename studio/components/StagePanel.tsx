@@ -721,7 +721,7 @@ export default function StagePanel({
     playSelection(next);
   }
 
-  async function runLipSync(opts: { all?: boolean; scriptLine?: number; force?: boolean }) {
+  async function runLipSync(opts: { all?: boolean; scriptLine?: number; force?: boolean; clear?: boolean }) {
     if (!project) return;
     await flushTimelineSave();
     setSyncing(true);
@@ -1049,6 +1049,7 @@ export default function StagePanel({
             onToggleLipSyncMode={() => void toggleLipSyncMode()}
             loopSelection={loopSelection}
             onPatchCue={(patch) => void patchMouthCue(patch)}
+            onClearLipSync={(opts) => void runLipSync({ ...opts, clear: true })}
           />
         </div>
       </div>

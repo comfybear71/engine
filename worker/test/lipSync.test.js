@@ -14,6 +14,7 @@ const {
   readStudioSettings,
   writeStudioSettings,
   patchMouthCue,
+  clearDialogueLipSync,
 } = require("../src/voices/lipSync");
 const { writeSilentWav } = require("./helpers/wav");
 
@@ -108,6 +109,14 @@ describe("lip-sync state", () => {
     try {
       const rel = "audio/intro/001_alice.wav.rhubarb.json";
       const abs = path.join(dir, rel);
+      writeCues(abs, [{ start: 0.2, end: 0.4, value: "B" }]);
+      const cleared = clearDialogueLipSync({
+        projectDir: dir,
+        targets: [{ scriptLine: 4, cuesRel: "audio/intro/001_alice.wav.rhubarb.json" }],
+      });
+      assert.equal(cleared.ok, true);
+      assert.equal(cleared.results[0].sync, "not_synced");
+      assert.equal(fs.existsSync(abs), false);
       writeCues(abs, [{ start: 0.2, end: 0.4, value: "B" }]);
       const swapped = patchMouthCue(dir, { rel, start: 0.2, end: 0.4, value: "G", pinned: true });
       assert.equal(swapped.ok, true);

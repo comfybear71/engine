@@ -15,15 +15,12 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const assetLibrary = require("./parser/assetLibrary");
+const { resolveGlobalAssetsDir } = assetLibrary;
 const { probeDurationSeconds } = require("./parser/ffprobeDuration");
 const { resolveApiKey, VoicesFatalError } = require("./voices/elevenlabs");
 const { runRhubarbOnWav } = require("./voices/rhubarb");
 const { shouldAutoLipSync, stampCuesMeta } = require("./voices/lipSync");
 const { transcribeWav, mergeChunkWords, STT_MODEL_ID } = require("./voices/speechToText");
-
-function resolveGlobalAssetsDir(projectDir) {
-  return path.join(path.dirname(projectDir), "_global_assets");
-}
 
 function slugifyLabel(text) {
   return String(text || "")

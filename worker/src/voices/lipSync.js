@@ -244,6 +244,29 @@ function resolveProjectCues(projectDir, rel) {
   return resolved;
 }
 
+function clearDialogueLipSync({ projectDir, targets } = {}) {
+  const results = [];
+  for (const target of targets || []) {
+    const rel = target && target.cuesRel;
+    const abs = rel ? resolveProjectCues(projectDir, rel) : null;
+    if (abs) {
+      try {
+        fs.unlinkSync(abs);
+      } catch {
+        /* already gone */
+      }
+    }
+    results.push({
+      scriptLine: target && target.scriptLine,
+      ok: true,
+      cleared: true,
+      sync: "not_synced",
+      cuesPath: rel || null,
+    });
+  }
+  return { ok: true, results };
+}
+
 function patchMouthCue(projectDir, { rel, start, end, value, shape, pinned } = {}) {
   const abs = resolveProjectCues(projectDir, rel);
   if (!abs) return { ok: false, error: "Cues file not found" };
@@ -286,5 +309,6 @@ module.exports = {
   isSafeCuesRel,
   resolveProjectCues,
   patchMouthCue,
+  clearDialogueLipSync,
   shouldAutoLipSync,
 };

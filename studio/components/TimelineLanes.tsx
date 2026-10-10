@@ -15,6 +15,7 @@ import {
   duplicateBlocksInScript,
   pasteClipboardInScript,
   relatedEditIds,
+  selectionIsMouthOnly,
   type TimelineClipboard,
 } from "@/lib/timelineClipboard";
 import {
@@ -78,6 +79,7 @@ const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
   { id: "face", label: "Face", bar: "bg-rose-500/80", text: "text-rose-50" },
   { id: "props", label: "Props", bar: "bg-teal-500/80", text: "text-teal-50" },
   { id: "dialogue", label: "Dialogue", bar: "bg-sky-500/80", text: "text-sky-50" },
+  { id: "mouth", label: "Mouth", bar: "bg-red-600/80", text: "text-red-50" },
   { id: "audio", label: "Audio", bar: "bg-emerald-600/80", text: "text-emerald-50" },
   { id: "sfx", label: "SFX", bar: "bg-amber-500/80", text: "text-amber-50" },
   { id: "camera", label: "Camera", bar: "bg-violet-500/80", text: "text-violet-50" },
@@ -144,6 +146,7 @@ export default function TimelineLanes({
   onToggleLipSyncMode,
   loopSelection = false,
   onPatchCue,
+  onClearLipSync,
 }: {
   project: string | null;
   lanes: LanesResponse | null;
@@ -173,6 +176,7 @@ export default function TimelineLanes({
     value?: string;
     pinned?: boolean;
   }) => void;
+  onClearLipSync?: (opts: { scriptLine: number }) => void;
 }) {
   const total = Math.max(totalFrames || lanes?.totalFrames || 1, 1);
   const fps = Math.max(lanes?.fps || 24, 1);
@@ -209,6 +213,7 @@ export default function TimelineLanes({
     y: number;
     lane: LaneId | null;
   } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ ripple: boolean } | null>(null);
   const hScrollRef = useRef<HTMLDivElement | null>(null);
   const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const laneHRef = useRef<HTMLDivElement | null>(null);
@@ -248,10 +253,10 @@ export default function TimelineLanes({
   const chipPx = chipHeightPx(laneScale);
 
   const laneBlocks = useMemo(() => {
-    const faceExpanded = allBlocks.some((block) => isMouthBlock(block) && expandedMouthIds.has(block.id));
+    const mouthExpanded = allBlocks.some((block) => isMouthBlock(block) && expandedMouthIds.has(block.id));
     return LANE_META.map((lane) => {
       const list = allBlocks.filter((b) => b.lane === lane.id);
-      const extra = lane.id === "face" && faceExpanded ? 18 : 0;
+      const extra = lane.id === "mouth" && mouthExpanded ? 18 : 0;
       return { ...lane, blocks: list, height: laneHeightPx(list, laneScale) + extra, rows: laneRowCount(list) };
     });
   }, [allBlocks, laneScale, expandedMouthIds]);
@@ -530,7 +535,20 @@ export default function TimelineLanes({
     setClipboard(clipboardFromBlocks(scriptText, allBlocks, seeds));
   }
 
-  function applyDelete(ripple: boolean) {
+  function mouthSelectionLine(): number | null {
+    const seeds = selectionSeeds();
+    if (!selectionIsMouthOnly(allBlocks, seeds)) return null;
+    const block = allBlocks.find((item) => seeds.has(item.id) && item.scriptLine != null);
+    return block?.scriptLine ?? null;
+  }
+
+  function applyClearLipSync() {
+    const line = mouthSelectionLine();
+    if (line == null) return;
+    onClearLipSync?.({ scriptLine: line });
+  }
+
+  function applyDeleteLines(ripple: boolean) {
     if (!onEditScript || !scriptText) return;
     const seeds = selectionSeeds();
     if (seeds.size === 0) return;
@@ -543,6 +561,21 @@ export default function TimelineLanes({
       ripple,
     });
     if (next !== scriptText) onEditScript(next);
+    setDeleteConfirm(null);
+  }
+
+  function requestDelete(ripple: boolean) {
+    const seeds = selectionSeeds();
+    if (seeds.size === 0) return;
+    if (selectionIsMouthOnly(allBlocks, seeds)) {
+      applyClearLipSync();
+      return;
+    }
+    setDeleteConfirm({ ripple });
+  }
+
+  function applyDelete(ripple: boolean) {
+    requestDelete(ripple);
   }
 
   function applyCut() {
@@ -586,8 +619,12 @@ export default function TimelineLanes({
     else if (action === "duplicate") applyDuplicate();
     else if (action === "delete") applyDelete(false);
     else if (action === "ripple") applyDelete(true);
+    else if (action === "clear-lipsync") applyClearLipSync();
     else if (action === "sync" || action === "redo-sync") {
-      const block = allBlocks.find((item) => selectedIds.has(item.id) && item.lane === "dialogue");
+      const seeds = selectionSeeds();
+      const block =
+        allBlocks.find((item) => seeds.has(item.id) && item.lane === "dialogue") ||
+        allBlocks.find((item) => seeds.has(item.id) && item.scriptLine != null);
       if (block?.scriptLine != null) onSyncLines?.({ scriptLine: block.scriptLine, force: action === "redo-sync" });
     }
   }
@@ -596,8 +633,12 @@ export default function TimelineLanes({
     event.preventDefault();
     event.stopPropagation();
     if (block) {
-      const next = selectedIds.has(block.id) ? new Set(selectedIds) : new Set<string>([block.id]);
-      commitSelection(relatedEditIds(allBlocks, next));
+      if (isMouthBlock(block)) {
+        commitSelection(selectedIds.has(block.id) ? new Set(selectedIds) : new Set<string>([block.id]));
+      } else {
+        const next = selectedIds.has(block.id) ? new Set(selectedIds) : new Set<string>([block.id]);
+        commitSelection(relatedEditIds(allBlocks, next));
+      }
     }
     setContextMenu({ x: event.clientX, y: event.clientY, lane });
   }
@@ -695,8 +736,9 @@ export default function TimelineLanes({
     event.preventDefault();
     event.stopPropagation();
     if (isMouthBlock(block)) {
-      const group = relatedMoveIds(allBlocks, new Set([block.id]));
-      commitSelection(group);
+      const next = event.shiftKey || event.ctrlKey || event.metaKey ? new Set(selectedIds) : new Set<string>();
+      next.add(block.id);
+      commitSelection(next);
       onSeek(block.startFrame, block.scriptLine);
       return;
     }
@@ -879,9 +921,18 @@ export default function TimelineLanes({
       const target = event.target as HTMLElement | null;
       if (target && target.closest("textarea, input, [contenteditable='true']")) return;
       if (event.key === "Escape") {
+        if (deleteConfirm) {
+          setDeleteConfirm(null);
+          return;
+        }
         clearSelection();
         setRubber(null);
         setContextMenu(null);
+        return;
+      }
+      if (deleteConfirm && event.key === "Enter") {
+        event.preventDefault();
+        applyDeleteLines(deleteConfirm.ripple);
         return;
       }
       const key = event.key.toLowerCase();
@@ -933,7 +984,7 @@ export default function TimelineLanes({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onUndo, onRedo, applySplit, scriptText, selectedIds, selectedLine, frame, allBlocks, scenes, fps, clipboard, onEditScript, onSyncLines]);
+  }, [onUndo, onRedo, applySplit, scriptText, selectedIds, selectedLine, frame, allBlocks, scenes, fps, clipboard, onEditScript, onSyncLines, onClearLipSync, deleteConfirm]);
 
   function nudgeZoom(factor: number) {
     const h = hScrollRef.current;
@@ -957,7 +1008,7 @@ export default function TimelineLanes({
     "flex h-6 w-6 items-center justify-center rounded border border-neutral-600 bg-black/40 text-white hover:bg-neutral-700 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-studio-accent";
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-studio-panel" data-testid="timeline-lanes">
+    <div className="relative flex h-full min-h-0 flex-col bg-studio-panel" data-testid="timeline-lanes">
       <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-[11px] text-studio-muted">
         <span className="uppercase tracking-[0.14em]">Timeline</span>
         <div className="flex items-center gap-1" data-testid="timeline-edit-controls">
@@ -1292,10 +1343,8 @@ export default function TimelineLanes({
                               onToggleMouth={(event) => {
                                 event.stopPropagation();
                                 setExpandedMouthIds((current) => {
-                                  const next = new Set(current);
-                                  if (next.has(block.id)) next.delete(block.id);
-                                  else next.add(block.id);
-                                  return next;
+                                  if (current.has(block.id)) return new Set();
+                                  return new Set([block.id]);
                                 });
                                 setCueEditor(null);
                               }}
@@ -1392,6 +1441,7 @@ export default function TimelineLanes({
             clipboard.items.some((item) => clipboardItemFitsLane(item, contextMenu.lane))
           }
           hasSelection={selectedIds.size > 0}
+          mouthOnly={selectionIsMouthOnly(allBlocks, selectedIds)}
           showSync={allBlocks.some((block) => block.lane === "dialogue" && selectedIds.has(block.id))}
           syncLabel={
             allBlocks.find((block) => block.lane === "dialogue" && selectedIds.has(block.id))?.sync === "synced"
@@ -1401,6 +1451,36 @@ export default function TimelineLanes({
           onAction={applyContextAction}
           onClose={() => setContextMenu(null)}
         />
+      ) : null}
+      {deleteConfirm ? (
+        <div
+          className="studio-delete-confirm"
+          data-testid="timeline-delete-confirm"
+          role="dialog"
+          aria-label="Delete line, audio and mouth?"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <p className="studio-delete-confirm-text">Delete line, audio and mouth?</p>
+          <div className="studio-delete-confirm-actions">
+            <button
+              type="button"
+              className="studio-delete-confirm-btn"
+              data-testid="timeline-delete-cancel"
+              onClick={() => setDeleteConfirm(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="studio-delete-confirm-btn studio-delete-confirm-btn--go"
+              data-testid="timeline-delete-ok"
+              onClick={() => applyDeleteLines(deleteConfirm.ripple)}
+            >
+              Delete
+            </button>
+          </div>
+          <p className="studio-delete-confirm-hint">Enter to confirm · Esc cancel</p>
+        </div>
       ) : null}
     </div>
   );
@@ -1493,9 +1573,11 @@ function LaneChip({
       }`}
       onPointerDown={(event) => onPointerDown(event, block)}
       onContextMenu={onContextMenu}
-      className={`absolute z-[1] select-none rounded-sm px-1 text-left text-[10px] ${bar} ${text} ${
+      data-hold={block.implicitHold ? "default" : block.timing?.attr || ""}
+      data-face-override={block.faceOverridesMouth ? "true" : "false"}
+      className={`absolute z-[1] overflow-hidden select-none rounded-sm px-1 text-left text-[10px] ${bar} ${text} ${
         selected ? "ring-1 ring-white/80" : ""
-      } ${mouthExpanded ? "overflow-visible" : "overflow-hidden"} ${
+      } ${block.implicitHold ? "studio-pin-default-hold" : ""} ${
         movable ? "cursor-grab active:cursor-grabbing" : mouth ? "cursor-default" : "cursor-not-allowed"
       }`}
       style={{
@@ -1546,6 +1628,16 @@ function LaneChip({
           </button>
         ) : null}
         <span className="min-w-0 flex-1 truncate">{block.label}</span>
+        {block.faceOverridesMouth ? (
+          <span
+            className="studio-face-warn"
+            data-testid="timeline-face-yap-warn"
+            title="face=yap replaces lip-sync mouths here"
+            aria-label="face=yap replaces lip-sync mouths here"
+          >
+            !
+          </span>
+        ) : null}
         {block.lane === "dialogue" && onSyncLine ? (
           <button
             type="button"

@@ -12,6 +12,7 @@ from compositor.lipsync_natural import (
     frames_to_cues,
     head_bob_at,
     head_bob_starts,
+    load_character_config,
     project_seed,
     schedule_blinks,
     select_loud_variants,
@@ -153,3 +154,21 @@ def test_quantize_roundtrip_preserves_held_shapes():
     frames = cues_to_frames(cues, 24, 24)
     back = frames_to_cues(frames, 24)
     assert [c.shape for c in back] == ["X", "B"]
+
+
+def test_character_config_resolves_episode_then_show_then_global(tmp_path):
+    global_dir = tmp_path / "_global_assets" / "characters" / "rodney"
+    show_dir = tmp_path / "shows" / "sunny" / "characters" / "rodney"
+    episode = tmp_path / "shows" / "sunny" / "episodes" / "ep1"
+    (tmp_path / "shows" / "sunny").mkdir(parents=True)
+    (tmp_path / "shows" / "sunny" / "show.json").write_text("{}")
+    global_dir.mkdir(parents=True)
+    show_dir.mkdir(parents=True)
+    (episode / "characters" / "rodney").mkdir(parents=True)
+    (global_dir / "character.json").write_text('{"id":"rodney","lipsync":{"head_bob":"off"}}')
+    (show_dir / "character.json").write_text('{"id":"rodney","lipsync":{"head_bob":"strong"}}')
+    assert load_character_config(episode, "rodney")["lipsync"]["head_bob"] == "strong"
+    (episode / "characters" / "rodney" / "character.json").write_text(
+        '{"id":"rodney","lipsync":{"head_bob":"subtle"}}'
+    )
+    assert load_character_config(episode, "rodney")["lipsync"]["head_bob"] == "subtle"
