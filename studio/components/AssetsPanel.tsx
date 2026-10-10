@@ -265,7 +265,7 @@ export default function AssetsPanel({
                 <button
                   type="button"
                   data-testid="imagine-open"
-                  onClick={onOpenImagine}
+                  onClick={() => onOpenImagine()}
                   className="rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white"
                 >
                   Grok Imagine

@@ -301,12 +301,15 @@ export function neighborDrawing(names: string[], current: string, dir: -1 | 1): 
 
 export function needIdForSlot(
   slot: string,
-  packSets?: { id: string; needId?: string; cells?: { dest?: { slot?: string; drawings_dir?: string } }[] }[]
+  packSets?: readonly { id: string; needId?: string; cells?: readonly { dest?: unknown }[] }[]
 ): string {
   const n = String(slot || "").toLowerCase();
   if (packSets && packSets.length) {
     const hit = packSets.find((set) =>
-      (set.cells || []).some((cell) => cell.dest?.slot === n || cell.dest?.drawings_dir === n)
+      (set.cells || []).some((cell) => {
+        const dest = cell.dest as { slot?: string; drawings_dir?: string } | null | undefined;
+        return dest?.slot === n || dest?.drawings_dir === n;
+      })
     );
     if (hit) return hit.needId || hit.id;
   }
