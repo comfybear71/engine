@@ -182,6 +182,97 @@ export function moveBlocksInScript(script: string, moves: BlockMove[], fps: numb
   return lines.join("\n");
 }
 
+export type MovableLaneBlock = {
+  id: string;
+  lane?: string;
+  startFrame: number;
+  endFrame: number;
+  scriptLine?: number | null;
+  sourceStartFrame?: number;
+  sceneId?: string;
+  rel?: string | null;
+};
+
+export type MovableLanes = {
+  fps: number;
+  totalFrames: number;
+  lanes: string[];
+  scenes: { id: string; startFrame: number; endFrame: number; frames: number }[];
+  blocks: MovableLaneBlock[];
+};
+
+export type ScriptEditMeta = {
+  lanes?: MovableLanes;
+  delta?: number;
+  ids?: string[];
+};
+
+function shiftFrame(value: number, delta: number): number {
+  return Math.max(0, Math.round(value + delta));
+}
+
+/** Shift selected (and same-line married) blocks in memory — no re-parse. */
+export function shiftLanesForMove<T extends MovableLanes>(lanes: T, ids: Iterable<string>, delta: number): T {
+  const amount = Math.round(delta);
+  if (!amount) return lanes;
+  const wanted = new Set(ids);
+  const lines = new Set<number>();
+  for (const block of lanes.blocks) {
+    if (wanted.has(block.id) && block.scriptLine != null) lines.add(block.scriptLine);
+  }
+  const blocks = lanes.blocks.map((block) => {
+    const sameLine = block.scriptLine != null && lines.has(block.scriptLine);
+    if (!wanted.has(block.id) && !sameLine) return block;
+    const start = shiftFrame(block.startFrame, amount);
+    const span = Math.max(1, block.endFrame - block.startFrame);
+    return {
+      ...block,
+      startFrame: start,
+      endFrame: start + span,
+      sourceStartFrame:
+        block.sourceStartFrame == null ? block.sourceStartFrame : shiftFrame(block.sourceStartFrame, amount),
+    };
+  });
+  const byScene = new Map<string, { start: number; end: number }>();
+  for (const block of blocks) {
+    if (!block.sceneId) continue;
+    const cur = byScene.get(block.sceneId);
+    if (!cur) byScene.set(block.sceneId, { start: block.startFrame, end: block.endFrame });
+    else {
+      cur.start = Math.min(cur.start, block.startFrame);
+      cur.end = Math.max(cur.end, block.endFrame);
+    }
+  }
+  const scenes = (lanes.scenes || []).map((scene) => {
+    const span = byScene.get(scene.id);
+    if (!span) return scene;
+    return {
+      ...scene,
+      startFrame: span.start,
+      endFrame: span.end,
+      frames: Math.max(1, span.end - span.start),
+    };
+  });
+  const maxEnd = blocks.reduce((max, block) => Math.max(max, block.endFrame), 0);
+  return { ...lanes, blocks, scenes, totalFrames: Math.max(1, maxEnd) };
+}
+
+export function shiftPlaybackAudio<T extends { startFrame: number; endFrame: number; rel?: string | null }>(
+  clips: T[],
+  delta: number,
+  movedStarts: Iterable<number>
+): T[] {
+  const amount = Math.round(delta);
+  if (!amount) return clips;
+  const starts = new Set(movedStarts);
+  return clips.map((clip) => {
+    if (!starts.has(clip.startFrame)) return clip;
+    const start = shiftFrame(clip.startFrame, amount);
+    const span = Math.max(1, clip.endFrame - clip.startFrame);
+    return { ...clip, startFrame: start, endFrame: start + span };
+  });
+}
+
 export type SnapKind = "playhead" | "block" | "second" | "frame";
 
 export function collectSnapFrames(opts: {

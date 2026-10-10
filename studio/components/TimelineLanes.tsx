@@ -30,6 +30,8 @@ import {
   isMouthBlock,
   lineHasPinHold,
   moveBlocksInScript,
+  shiftLanesForMove,
+  type ScriptEditMeta,
   planSplit,
   planTrim,
   setViewOnLine,
@@ -156,7 +158,7 @@ export default function TimelineLanes({
   totalFrames?: number;
   playing?: boolean;
   scriptText?: string;
-  onEditScript?: (next: string) => void;
+  onEditScript?: (next: string, meta?: ScriptEditMeta) => void;
   canUndo?: boolean;
   canRedo?: boolean;
   onUndo?: () => void;
@@ -421,13 +423,14 @@ export default function TimelineLanes({
     if (!onEditScript || !scriptText || delta === 0) return;
     const moves = [];
     const seen = new Set<number>();
+    const lines = scriptText.split("\n");
     for (const block of allBlocks) {
       if (!ids.has(block.id) || !blockIsMovable(block) || block.scriptLine == null) continue;
       if (seen.has(block.scriptLine)) continue;
       seen.add(block.scriptLine);
       const scene = scenes.find((item) => item.id === block.sceneId);
       const source = block.sourceStartFrame ?? block.startFrame;
-      const line = scriptText.split("\n")[block.scriptLine - 1] || "";
+      const line = lines[block.scriptLine - 1] || "";
       const hold =
         trimKindForBlock(block) === "pin" && !lineHasPinHold(line)
           ? formatAtTime(Math.max(1, block.endFrame - block.startFrame), fps)
@@ -440,7 +443,9 @@ export default function TimelineLanes({
       });
     }
     const next = moveBlocksInScript(scriptText, moves, fps);
-    if (next !== scriptText) onEditScript(next);
+    if (next === scriptText) return;
+    const optimistic = lanes ? shiftLanesForMove(lanes, ids, delta) : undefined;
+    onEditScript(next, { lanes: optimistic, delta, ids: [...ids] });
   }
 
   function applyView(view: string) {
@@ -811,13 +816,14 @@ export default function TimelineLanes({
       window.removeEventListener("pointercancel", onUp);
       if (dragRef.current?.pointerId === drag.pointerId) dragRef.current = null;
       followLockRef.current = false;
-      setDraftDelta(0);
       setSnapGuide(null);
       setTooltip(null);
       if (drag.moved) {
         applyMove(drag.delta, drag.ids);
+        setDraftDelta(0);
         return;
       }
+      setDraftDelta(0);
       selectFromClick(block, ev.shiftKey || ev.ctrlKey || ev.metaKey);
       onSeek(block.startFrame, block.scriptLine);
     };

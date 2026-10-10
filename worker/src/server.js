@@ -1378,6 +1378,16 @@ function createApp(options = {}) {
     snapshotScriptWrite(projectDir, scriptName, scriptText);
     fs.writeFileSync(path.join(projectDir, scriptName), scriptText);
 
+    const skipParse = req.query && (req.query.parse === "0" || req.query.parse === "false");
+    if (skipParse) {
+      return res.json({
+        ok: true,
+        saved: true,
+        parsed: false,
+        lint: { errors: [], warnings: [] },
+      });
+    }
+
     let result;
     let parseError = null;
     try {

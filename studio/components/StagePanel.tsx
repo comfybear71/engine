@@ -38,6 +38,8 @@ import {
   historyPush,
   historyRedo,
   historyUndo,
+  shiftPlaybackAudio,
+  type ScriptEditMeta,
 } from "@/lib/timelineEdit";
 import {
   DEFAULT_STAGE_LAYOUT,
@@ -133,6 +135,8 @@ export default function StagePanel({
   const historyRef = useRef(emptyScriptHistory());
   const saveTimerRef = useRef<number | null>(null);
   const pendingScriptRef = useRef<string | null>(null);
+  const lanesRefreshGenRef = useRef(0);
+  const skipPreviewRef = useRef(false);
   const previewUrlRef = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playingRef = useRef(false);
@@ -255,6 +259,7 @@ export default function StagePanel({
   useEffect(() => {
     if (!project || !workerUp) return;
     if (playing && (videoSrc || previewStatus === "buffering")) return;
+    if (skipPreviewRef.current || pendingScriptRef.current != null) return;
     const cached = frameCacheRef.current.get(frame);
     if (cached) {
       setPreviewUrl(cached);
@@ -367,27 +372,42 @@ export default function StagePanel({
       saveTimerRef.current = null;
     }
     try {
-      await saveScript(project, text, script);
-      const [nextLanes, nextStage, nextPlayback] = await Promise.all([
-        loadLanes(project, script),
-        loadStage(project, script),
-        loadPlayback(project, script),
-      ]);
-      setLanes(nextLanes);
-      setStage(nextStage);
-      setPlayback(nextPlayback);
-      if (nextLanes.totalFrames > 0) setTotalFrames(nextLanes.totalFrames);
-      frameCacheRef.current.clear();
-      setLanesEpoch((n) => n + 1);
+      await saveScript(project, text, script, { parse: false });
+      const gen = ++lanesRefreshGenRef.current;
+      void Promise.all([loadLanes(project, script), loadStage(project, script), loadPlayback(project, script)])
+        .then(([nextLanes, nextStage, nextPlayback]) => {
+          if (gen !== lanesRefreshGenRef.current || pendingScriptRef.current != null) return;
+          setLanes(nextLanes);
+          setStage(nextStage);
+          setPlayback(nextPlayback);
+          if (nextLanes.totalFrames > 0) {
+            playableTotalRef.current = nextLanes.totalFrames;
+            setTotalFrames(nextLanes.totalFrames);
+          }
+          skipPreviewRef.current = false;
+          frameCacheRef.current.clear();
+          setLanesEpoch((n) => n + 1);
+        })
+        .catch((err: Error) => {
+          if (gen !== lanesRefreshGenRef.current) return;
+          skipPreviewRef.current = false;
+          setError(err.message || "Timeline reload failed");
+        });
     } catch (err) {
+      skipPreviewRef.current = false;
       setError(err instanceof Error ? err.message : "Timeline save failed");
     }
   }, [project, script]);
 
   const scheduleTimelineSave = useCallback(
-    (text: string) => {
+    (text: string, immediate = false) => {
       pendingScriptRef.current = text;
       if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+      if (immediate) {
+        saveTimerRef.current = null;
+        void flushTimelineSave();
+        return;
+      }
       saveTimerRef.current = window.setTimeout(() => {
         void flushTimelineSave();
       }, 280);
@@ -396,16 +416,34 @@ export default function StagePanel({
   );
 
   const onEditScript = useCallback(
-    (next: string) => {
+    (next: string, meta?: ScriptEditMeta) => {
+      if (meta?.lanes) {
+        skipPreviewRef.current = true;
+        setLanes(meta.lanes);
+        if (meta.lanes.totalFrames > 0) {
+          playableTotalRef.current = meta.lanes.totalFrames;
+          setTotalFrames(meta.lanes.totalFrames);
+        }
+        if (meta.delta) {
+          const starts = new Set(
+            (lanes?.blocks || [])
+              .filter((block) => meta.ids?.includes(block.id) && block.lane === "audio")
+              .map((block) => block.startFrame)
+          );
+          setPlayback((current) =>
+            current ? { ...current, audio: shiftPlaybackAudio(current.audio, meta.delta || 0, starts) } : current
+          );
+        }
+      }
       setScriptText((current) => {
         if (next === current) return current;
         historyRef.current = historyPush(historyRef.current, current);
         setHistoryTick((n) => n + 1);
-        scheduleTimelineSave(next);
+        scheduleTimelineSave(next, Boolean(meta?.lanes));
         return next;
       });
     },
-    [scheduleTimelineSave]
+    [scheduleTimelineSave, lanes]
   );
 
   const undoTimeline = useCallback(() => {

@@ -12,6 +12,8 @@ import {
   isMouthBlock,
   moveBlocksInScript,
   pinDurationWriteAttr,
+  shiftLanesForMove,
+  shiftPlaybackAudio,
   planSplit,
   planTrim,
   setAtTimeOnLine,
@@ -45,6 +47,16 @@ describe("timeline script rewrite", () => {
       24
     );
     assert.equal(movedLine.split("\n")[4], "Alice at_time=0.5s: Hello there.");
+
+    const many = Array.from({ length: 50 }, (_, i) => `Hicks at_time=${i}s: Line ${i}.`);
+    const fat = ["[Scene: Intro]", "[Cast: Hicks]", ...many].join("\n");
+    const moves = many.map((_, i) => ({ scriptLine: i + 3, startFrame: (i + 2) * 24, sceneStartFrame: 0 }));
+    const t0 = performance.now();
+    const shifted = moveBlocksInScript(fat, moves, 24);
+    const rewriteMs = performance.now() - t0;
+    assert.equal(shifted.split("\n")[2], "Hicks at_time=2s: Line 0.");
+    assert.equal(shifted.split("\n")[51], "Hicks at_time=51s: Line 49.");
+    assert.ok(rewriteMs < 50, `batched rewrite ${rewriteMs}ms`);
 
     let history = emptyScriptHistory();
     history = historyPush(history, script);
@@ -176,5 +188,40 @@ describe("timeline script rewrite", () => {
     assert.equal(pinDurationWriteAttr("[Action: Rodney face=yap]"), "hold");
     assert.equal(isMouthBlock({ role: "mouth" }), true);
     assert.equal(isMouthBlock({ tag: "action" }), false);
+  });
+
+  test("shiftLanesForMove updates every selected block in one pass", () => {
+    const blocks = Array.from({ length: 146 }, (_, i) => ({
+      id: `b${i}`,
+      lane: i % 3 === 0 ? "dialogue" : i % 3 === 1 ? "mouth" : "audio",
+      startFrame: i * 24,
+      endFrame: i * 24 + 12,
+      scriptLine: Math.floor(i / 3) + 1,
+      sourceStartFrame: i * 24,
+      sceneId: "s1",
+      rel: i % 3 === 2 ? `audio/hicks/${i}.wav` : null,
+    }));
+    const lanes = {
+      fps: 24,
+      totalFrames: 146 * 24,
+      lanes: ["dialogue"],
+      scenes: [{ id: "s1", startFrame: 0, endFrame: 146 * 24, frames: 146 * 24 }],
+      blocks,
+    };
+    const t0 = performance.now();
+    const next = shiftLanesForMove(lanes, blocks.map((b) => b.id), -24);
+    const ms = performance.now() - t0;
+    assert.equal(next.blocks[0].startFrame, 0);
+    assert.equal(next.blocks[3].startFrame, 48);
+    assert.equal(next.blocks[3].endFrame, 60);
+    assert.equal(next.scenes[0].startFrame, 0);
+    assert.ok(next.totalFrames < lanes.totalFrames);
+    assert.ok(ms < 20, `optimistic shift ${ms}ms`);
+    const audio = shiftPlaybackAudio(
+      [{ startFrame: 48, endFrame: 60, rel: "audio/hicks/5.wav" }],
+      -24,
+      [48]
+    );
+    assert.deepEqual(audio[0], { startFrame: 24, endFrame: 36, rel: "audio/hicks/5.wav" });
   });
 });

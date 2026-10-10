@@ -238,8 +238,10 @@ clobber the project's `timeline.json`.
   selects it and starts a drag; Shift/Ctrl-click adds to the selection;
   drag a rubber-band on empty lane area selects several; Esc clears.
   Drag a selected block (or several) left/right to change its start:
-  Studio writes `at_time=` on the matching script line(s), saves
-  (debounced), and re-parses so the script stays human-readable and the
+  Studio writes `at_time=` on every moved line in one pass, updates the
+  lane chips immediately, and saves the script without waiting for a
+  re-parse (`/lanes` on a 146-block shot can take ~10 s). One
+  background parse follows. The script stays human-readable and the
   single source of truth. Instant tags with no time concept show a
   not-allowed cursor. Snap to the playhead, other block edges, whole
   seconds, and frame boundaries (hold Alt to disable); a vertical guide

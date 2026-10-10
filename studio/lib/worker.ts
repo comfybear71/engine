@@ -589,8 +589,15 @@ export async function restoreScriptHistory(
   return body;
 }
 
-export async function saveScript(name: string, text: string, script?: string | null): Promise<LintResult> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, script), {
+export async function saveScript(
+  name: string,
+  text: string,
+  script?: string | null,
+  opts?: { parse?: boolean }
+): Promise<LintResult> {
+  const path = withScript(`/api/projects/${encodeURIComponent(name)}/script`, script);
+  const url = opts?.parse === false ? `${path}${path.includes("?") ? "&" : "?"}parse=0` : path;
+  const res = await workerFetch(url, {
     method: "PUT",
     headers: { "Content-Type": "text/plain" },
     body: text,

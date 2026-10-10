@@ -285,6 +285,21 @@ describe("studio worker API", () => {
     assert.equal(goodBody.saved, true);
     assert.equal(goodBody.ok, true);
     assert.equal(fs.readFileSync(path.join(fixture.projectDir, "script.txt"), "utf8"), script);
+
+    const moved = script.replace("Alice: Hello there friend.", "Alice at_time=2s: Hello there friend.");
+    const t0 = Date.now();
+    const fast = await fetch(`${ctx.url}/api/projects/project/script?parse=0`, {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain" },
+      body: moved,
+    });
+    const fastMs = Date.now() - t0;
+    const fastBody = await fast.json();
+    assert.equal(fast.status, 200, JSON.stringify(fastBody));
+    assert.equal(fastBody.saved, true);
+    assert.equal(fastBody.parsed, false);
+    assert.equal(fs.readFileSync(path.join(fixture.projectDir, "script.txt"), "utf8"), moved);
+    assert.ok(fastMs < 200, `parse=0 save ${fastMs}ms`);
     assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
 
     const lint = await fetch(`${ctx.url}/api/projects/project/lint`, {
