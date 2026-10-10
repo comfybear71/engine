@@ -9,13 +9,13 @@ export type StageLayout = {
 export const DEFAULT_STAGE_LAYOUT: StageLayout = {
   leftWidth: 280,
   rightWidth: 320,
-  timelineHeight: 176,
+  timelineHeight: 220,
 };
 
 export const STAGE_LAYOUT_LIMITS = {
   leftWidth: { min: 200, max: 520 },
   rightWidth: { min: 240, max: 480 },
-  timelineHeight: { min: 120, max: 420 },
+  timelineHeight: { min: 140, max: 480 },
 } as const;
 
 function clamp(value: number, min: number, max: number): number {
