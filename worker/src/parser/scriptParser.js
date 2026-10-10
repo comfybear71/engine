@@ -2296,11 +2296,21 @@ class ScriptParser {
     return { images: byView.front && Object.keys(byView.front).length > 0 ? byView.front : images, images_by_view: byView };
   }
 
+  _excludeFromLipSync(slotConfig) {
+    const drawings = slotConfig && slotConfig.drawings;
+    if (!drawings || typeof drawings !== "object") return [];
+    return Object.entries(drawings)
+      .filter(([, meta]) => meta && meta.excludeFromLipSync)
+      .map(([name]) => name);
+  }
+
   _buildSlotJson(characterId, slotName, slotConfig, keyframes) {
     if (slotName === "mouth") {
       const { images, images_by_view } = this._scanMouthViewImages(characterId, slotConfig);
       const mouth = { offset: slotConfig.offset || { x: 0, y: 0 }, images, images_by_view, lipsync: { source: "dialogue" } };
       if (slotConfig.visible_when) mouth.visible_when = slotConfig.visible_when;
+      const excluded = this._excludeFromLipSync(slotConfig);
+      if (excluded.length) mouth.exclude_from_lipsync = excluded;
       return this._applySlotTransform(mouth, slotConfig);
     }
     const sorted = [...keyframes].sort((a, b) => a.frame - b.frame);

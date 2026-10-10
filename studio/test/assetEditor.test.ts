@@ -7,6 +7,7 @@ import {
   mouthSound,
   needIdForSlot,
   neighborDrawing,
+  remapLipSyncShape,
   RHUBARB_SHAPES,
 } from "../lib/assetEditor.ts";
 
@@ -59,6 +60,13 @@ describe("asset editor helpers", () => {
     assert.equal(cueAtTime(cues, 0.2), "A");
     assert.equal(cueAtTime(cues, 0.7), "D");
     assert.match(formatUsage({ kind: "dialogue", script: "script.txt", line: 4, text: "Dee: Hi." }), /script.txt:4/);
+  });
+
+  test("excluded H remaps to an open mouth, not the tongue drawing", () => {
+    assert.equal(remapLipSyncShape("H", ["H"]), "C");
+    assert.equal(remapLipSyncShape("H", ["H", "C"]), "D");
+    assert.equal(remapLipSyncShape("H", ["H", "C", "D"], "B"), "B");
+    assert.equal(remapLipSyncShape("B", ["H"]), "B");
   });
 
   test("head nudge clamps to a small usable range", () => {

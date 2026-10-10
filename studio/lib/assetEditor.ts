@@ -45,6 +45,7 @@ export type EditorDrawing = {
   view?: string;
   duplicateOf?: string | null;
   duplicates?: string[];
+  excludeFromLipSync?: boolean;
 };
 
 export type SlotEditor = {
@@ -239,6 +240,25 @@ export async function cancelDrawingEdit(
   if (!res.ok) throw new Error(await readError(res));
 }
 
+export async function saveDrawingFlags(
+  project: string,
+  characterId: string,
+  slot: string,
+  drawing: string,
+  body: { excludeFromLipSync: boolean; view?: string }
+): Promise<{ ok: boolean; drawing: string; excludeFromLipSync: boolean }> {
+  const res = await workerFetch(
+    slotPath(project, characterId, slot, `/drawings/${encodeURIComponent(drawing)}/flags`, body.view),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ ok: boolean; drawing: string; excludeFromLipSync: boolean }>;
+}
+
 export async function renameEditorDrawing(
   project: string,
   characterId: string,
@@ -328,6 +348,48 @@ export async function loadLipsyncPreview(
   const res = await workerFetch(slotPath(project, characterId, slot, "/lipsync-preview", view));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<LipsyncPreview>;
+}
+
+const LIPSYNC_FALLBACK: Record<string, string[]> = {
+  H: ["C", "D", "B", "G", "E", "F", "A", "X"],
+};
+
+export function excludedLipSyncShapes(drawings: { name: string; shape?: string | null; excludeFromLipSync?: boolean }[]): string[] {
+  return drawings
+    .filter((drawing) => drawing.excludeFromLipSync)
+    .map((drawing) => String(drawing.shape || drawing.name).replace(/_loud$/i, "").toUpperCase())
+    .filter(Boolean);
+}
+
+export function remapLipSyncShape(
+  shape: string,
+  excluded: Iterable<string>,
+  previous?: string | null
+): string {
+  const excludedSet = new Set(
+    [...excluded].map((name) => String(name || "").replace(/_loud$/i, "").toUpperCase()).filter(Boolean)
+  );
+  const loud = /_loud$/i.test(shape);
+  const base = String(shape || "X").replace(/_loud$/i, "").toUpperCase() || "X";
+  if (!excludedSet.has(base)) return shape;
+  const candidates = [...(LIPSYNC_FALLBACK[base] || [])];
+  if (previous) candidates.push(String(previous).replace(/_loud$/i, "").toUpperCase());
+  const index = RHUBARB_SHAPES.indexOf(base as (typeof RHUBARB_SHAPES)[number]);
+  if (index >= 0) {
+    for (let dist = 1; dist < RHUBARB_SHAPES.length; dist += 1) {
+      if (index - dist >= 0) candidates.push(RHUBARB_SHAPES[index - dist]);
+      if (index + dist < RHUBARB_SHAPES.length) candidates.push(RHUBARB_SHAPES[index + dist]);
+    }
+  }
+  candidates.push("X");
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const letter = String(candidate || "").replace(/_loud$/i, "").toUpperCase();
+    if (!letter || excludedSet.has(letter) || seen.has(letter)) continue;
+    seen.add(letter);
+    return loud ? `${letter}_loud` : letter;
+  }
+  return "X";
 }
 
 export function mouthSound(name: string): string | null {

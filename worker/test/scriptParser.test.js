@@ -1039,6 +1039,18 @@ describe("at_time= / start= explicit start", () => {
     assert.match(String(mouth.images_by_view.front.X || ""), /mouth_front/);
   });
 
+  test("excludeFromLipSync on a mouth drawing is copied onto the timeline slot", async () => {
+    const aliceDir = path.join(fixture.projectDir, "characters", "alice");
+    const globalJson = path.join(fixture.globalAssetsDir, "characters", "alice", "character.json");
+    const character = JSON.parse(fs.readFileSync(globalJson, "utf8"));
+    character.slots.mouth.drawings = { H: { excludeFromLipSync: true } };
+    fs.mkdirSync(aliceDir, { recursive: true });
+    fs.writeFileSync(path.join(aliceDir, "character.json"), JSON.stringify(character, null, 2) + "\n");
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hello."].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    assert.deepEqual(timeline.scenes[0].layers[0].slots.mouth.exclude_from_lipsync, ["H"]);
+  });
+
   test("trim_in=/trim_out= shorten dialogue and over= holds a face pin", async () => {
     const script = [
       "[Scene: Intro]",

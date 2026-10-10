@@ -16,6 +16,7 @@ const {
   confirmAdd,
   renameDrawing,
   deleteDrawing,
+  saveDrawingFlags,
   listLipsyncPreview,
   missingMouthShapes,
   rhubarbShapeOf,
@@ -172,6 +173,25 @@ describe("asset editor", { concurrency: 1 }, () => {
     const result = confirmAdd(fixture.projectDir, fixture.globalAssetsDir, "dee", { sessionId: sid, name: "C" });
     assert.equal(result.drawing, "C");
     assert.ok(fs.existsSync(path.join(deeDir, "mouth", "C.png")));
+  });
+
+  test("exclude from lip sync persists per drawing and follows rename", () => {
+    writePng(path.join(deeDir, "mouth", "H.png"));
+    const saved = saveDrawingFlags(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "H", {
+      excludeFromLipSync: true,
+    });
+    assert.equal(saved.excludeFromLipSync, true);
+    const slot = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth");
+    const h = slot.drawings.find((d) => d.name === "H");
+    assert.equal(h.excludeFromLipSync, true);
+    const json = JSON.parse(fs.readFileSync(path.join(deeDir, "character.json"), "utf8"));
+    assert.equal(json.slots.mouth.drawings.H.excludeFromLipSync, true);
+    const renamed = renameDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "H", { name: "H2" });
+    assert.equal(renamed.drawing, "H2");
+    const after = JSON.parse(fs.readFileSync(path.join(deeDir, "character.json"), "utf8"));
+    assert.equal(after.slots.mouth.drawings.H2.excludeFromLipSync, true);
+    assert.equal(after.slots.mouth.drawings.H, undefined);
+    renameDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "H2", { name: "H" });
   });
 
   test("rename updates cycle lists in the project-local character.json", () => {

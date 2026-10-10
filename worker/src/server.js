@@ -58,6 +58,7 @@ const {
   cancelEdit,
   renameDrawing,
   deleteDrawing,
+  saveDrawingFlags,
   listLipsyncPreview,
   promoteSlotView,
   realignSlotView,
@@ -1176,6 +1177,23 @@ function createApp(options = {}) {
     if (!characterId) return;
     try {
       res.json(cancelEdit(projectDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/flags", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const drawingName = drawingNameFromRequest(req, res);
+    if (!drawingName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(saveDrawingFlags(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.body || {}));
     } catch (err) {
       sendIngestError(res, err);
     }

@@ -248,6 +248,35 @@ function rhubarbShapeOf(name) {
   return RHUBARB_SHAPES.includes(base) ? base : null;
 }
 
+function slotDrawingMeta(spec) {
+  const drawings = spec && spec.drawings;
+  return drawings && typeof drawings === "object" && !Array.isArray(drawings) ? drawings : {};
+}
+
+function isExcludedFromLipSync(spec, drawingName) {
+  const meta = slotDrawingMeta(spec);
+  const name = String(drawingName || "");
+  const base = name.replace(/_loud$/i, "");
+  return Boolean((meta[name] && meta[name].excludeFromLipSync) || (meta[base] && meta[base].excludeFromLipSync));
+}
+
+function applyDrawingFlags(drawings, spec) {
+  return drawings.map((drawing) => ({
+    ...drawing,
+    excludeFromLipSync: isExcludedFromLipSync(spec, drawing.name),
+  }));
+}
+
+function setDrawingFlag(spec, drawingName, key, value) {
+  spec.drawings = spec.drawings && typeof spec.drawings === "object" ? spec.drawings : {};
+  const current = spec.drawings[drawingName] && typeof spec.drawings[drawingName] === "object" ? { ...spec.drawings[drawingName] } : {};
+  if (value) current[key] = true;
+  else delete current[key];
+  if (Object.keys(current).length) spec.drawings[drawingName] = current;
+  else delete spec.drawings[drawingName];
+  if (Object.keys(spec.drawings).length === 0) delete spec.drawings;
+}
+
 function markDuplicates(drawings) {
   const byHash = new Map();
   for (const drawing of drawings) {
@@ -389,13 +418,14 @@ function drawingsForView(projectDir, globalAssetsDir, characterId, view) {
   return markDuplicates(drawings);
 }
 
+
 function describeSlot(projectDir, globalAssetsDir, characterId, slotName, viewId) {
   const { character, spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
   const views = discoverSlotViews(projectDir, globalAssetsDir, characterId, slotName, spec);
   const wanted = normalizeView(viewId);
   const view = views.find((item) => item.id === wanted) || views[0];
   if (!view) throw editorError(`No drawings folder for slot ${slotName}`, "ENOTFOUND");
-  const drawings = drawingsForView(projectDir, globalAssetsDir, characterId, view);
+  const drawings = applyDrawingFlags(drawingsForView(projectDir, globalAssetsDir, characterId, view), spec);
   const mouth = isMouthSlot(slotName, spec.drawings_dir);
   const offset = spec.offset || { x: 0, y: 0 };
   return {
@@ -838,6 +868,11 @@ function renameDrawing(projectDir, globalAssetsDir, characterId, slotName, drawi
         if (changed) jsonDirty = true;
       }
     }
+    if (live.drawings && live.drawings[drawingName]) {
+      live.drawings[next] = live.drawings[drawingName];
+      delete live.drawings[drawingName];
+      jsonDirty = true;
+    }
   }
   if (jsonDirty) writeCharacterJson(projectDir, characterId, character, null);
   return { ok: true, drawing: next, rel: destRel, renamed: true };
@@ -895,9 +930,35 @@ function deleteDrawing(projectDir, globalAssetsDir, characterId, slotName, drawi
         }
       }
     }
+    if (live.drawings && live.drawings[drawingName]) {
+      delete live.drawings[drawingName];
+      if (Object.keys(live.drawings).length === 0) delete live.drawings;
+      jsonDirty = true;
+    }
   }
   if (jsonDirty) writeCharacterJson(projectDir, characterId, character, null);
   return { ok: true, drawing: drawingName, trash: historyRel, usages };
+}
+
+function saveDrawingFlags(projectDir, globalAssetsDir, characterId, slotName, drawingName, body) {
+  assertDrawingName(drawingName);
+  const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
+  const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
+  const current = describeDrawingFile(projectDir, globalAssetsDir, characterId, view.drawingsDir, drawingName);
+  if (!current) throw editorError(`Unknown drawing: ${drawingName}`, "ENOTFOUND");
+  if (body == null || typeof body !== "object" || !("excludeFromLipSync" in body)) {
+    throw editorError("excludeFromLipSync is required");
+  }
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  const live = findSlotSpec(character, slotName);
+  if (!live) throw editorError(`Unknown slot: ${slotName}`, "ENOTFOUND");
+  setDrawingFlag(live, drawingName, "excludeFromLipSync", Boolean(body.excludeFromLipSync));
+  writeCharacterJson(projectDir, characterId, character, null);
+  return {
+    ok: true,
+    drawing: drawingName,
+    excludeFromLipSync: isExcludedFromLipSync(live, drawingName),
+  };
 }
 
 function readRhubarbCues(absPath) {
@@ -973,6 +1034,7 @@ module.exports = {
   cancelEdit,
   renameDrawing,
   deleteDrawing,
+  saveDrawingFlags,
   listLipsyncPreview,
   missingMouthShapes,
   rhubarbShapeOf,

@@ -280,6 +280,11 @@
           "description": "Held-until-changed drawing changes: sorted by `frame`. Each keyframe is either a single `drawing` (held until the next keyframe) or a `cycle` + `fps` that loops those drawings from this frame until the next keyframe. Frames are relative to this slot's owner's own start_frame (not the scene). Before the first keyframe, the first keyframe's drawing/cycle is used. A scene `frame_step` of N>1 already holds the picture on in-between frames, so the cycle is only evaluated on recomputed frames.",
           "items": { "$ref": "#/definitions/slot_keyframe" }
         },
+        "exclude_from_lipsync": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Drawing names (usually Rhubarb letters) that automatic lip sync must skip. The drawing stays in `images` for manual face/expression pins. Cue letters fall back to a neighbour (H → C or D, or the previous shape)."
+        },
         "visible_when": {
           "type": "object",
           "description": "Optional visibility gate: this slot only draws when each named slot's currently active drawing is in the given list. Names are resolved on the same layer (the layer's own slots and every child's slots). Example: hide a mouth unless a body slot is showing \"front\".",

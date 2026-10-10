@@ -175,8 +175,12 @@ clobber the project's `timeline.json`.
   with a before/after overlay and x/y/scale nudge. The drawing viewer
   has **Crop to head** and a draggable collar-line handle. The Align
   head tool fits the full body plus the head overlay so handles stay
-  on-screen. **Play sample** animates the head through a chosen sample
-  sentence (or a project take that already has Rhubarb cues). Drop or
+  on-screen.   **Play sample** animates the head through a chosen sample
+  sentence (or a project take that already has Rhubarb cues). **Exclude
+  from lip sync** (drawing viewer) keeps a mouth drawing in the slot for
+  manual face/expression pins but automatic lip sync — including natural
+  lipsync — skips it and falls back to a neighbour (H → C or D, or the
+  previous shape). The mouth grid tags those cells **manual only**. Drop or
   paste an image onto a drawing/cell to replace it through the green-screen
   cut-out + trim pipeline (before/after, Accept/Cancel); the old file is
   copied to `characters/<id>/_replaced/<timestamp>/`, never deleted.
@@ -454,6 +458,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings` | Add-drawing preview. JSON `{ "imageBase64", "filename?", "name?", "view?" }`. |
 | `POST` | `…/drawings/confirm` | JSON `{ "sessionId", "name" }`. Writes `characters/<id>/<drawings_dir>/<name>.png`. |
 | `POST` | `…/drawings/cancel` | JSON `{ "sessionId" }`. |
+| `POST` | `…/drawings/:drawing/flags` | JSON `{ "excludeFromLipSync", "view?" }`. Persist a per-drawing lip-sync skip in project-local `character.json` (`slots.<slot>.drawings.<name>.excludeFromLipSync`). |
 | `POST` | `…/drawings/:drawing/rename` | JSON `{ "name", "view?" }`. Project-local files only; updates cycle lists and `default_drawing`. |
 | `POST` | `…/drawings/:drawing/delete` | JSON `{ "confirm": true, "force?", "view?" }`. Moves a project-local file to `_trash/<timestamp>/`. If a script uses it and `force` is not set, returns **409** with `{ used, usages }`. |
 | `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64", "filename?", "frames?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. |

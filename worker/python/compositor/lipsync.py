@@ -23,6 +23,11 @@ from pathlib import Path
 
 MOUTH_SHAPES = ("A", "B", "C", "D", "E", "F", "G", "H", "X")
 DEFAULT_SHAPE = "X"
+# Tongue-out H is often a drawn expression, not a spoken shape. Prefer an
+# open mouth, then the previous cue, then a neighbour letter.
+PREFERRED_FALLBACK = {
+    "H": ("C", "D", "B", "G", "E", "F", "A", "X"),
+}
 
 RHUBARB_INSTALL_HINT = (
     "Rhubarb Lip Sync binary not found on PATH (expected `rhubarb` or "
@@ -142,10 +147,113 @@ def get_cues(
     return []
 
 
-def shape_at_time(cues: list[MouthCue], t_seconds: float) -> str:
+def _base_shape(shape: str) -> str:
+    text = str(shape or DEFAULT_SHAPE)
+    if text.endswith("_loud"):
+        return text[: -len("_loud")]
+    return text
+
+
+def excluded_shape_set(names: object) -> set[str]:
+    out: set[str] = set()
+    if not names:
+        return out
+    for name in names:
+        base = _base_shape(str(name)).upper()
+        if base:
+            out.add(base)
+    return out
+
+
+def remap_shape(
+    shape: str,
+    excluded: object = None,
+    previous: str | None = None,
+    available: object = None,
+) -> str:
+    """Map an excluded auto-lipsync shape to the nearest kept drawing.
+
+    Keyframe / manual pins keep the original name — this is only for cue
+    letters. ``H`` prefers C or D (open mouth), then the previous cue.
+    """
+
+    excluded_set = excluded if isinstance(excluded, set) else excluded_shape_set(excluded)
+    loud = str(shape or "").endswith("_loud")
+    base = _base_shape(shape).upper() or DEFAULT_SHAPE
+    if not excluded_set or base not in excluded_set:
+        return str(shape or DEFAULT_SHAPE)
+
+    available_set: set[str] | None
+    if available is None:
+        available_set = None
+    else:
+        available_set = {str(name) for name in available}
+
+    candidates: list[str] = []
+    candidates.extend(PREFERRED_FALLBACK.get(base, ()))
+    if previous:
+        prev_base = _base_shape(previous).upper()
+        if prev_base and prev_base not in excluded_set:
+            candidates.append(prev_base)
+    if base in MOUTH_SHAPES:
+        index = MOUTH_SHAPES.index(base)
+        for dist in range(1, len(MOUTH_SHAPES)):
+            if index - dist >= 0:
+                candidates.append(MOUTH_SHAPES[index - dist])
+            if index + dist < len(MOUTH_SHAPES):
+                candidates.append(MOUTH_SHAPES[index + dist])
+    candidates.append(DEFAULT_SHAPE)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        letter = _base_shape(candidate).upper()
+        if not letter or letter in excluded_set or letter in seen:
+            continue
+        seen.add(letter)
+        if available_set is not None and letter not in available_set and f"{letter}_loud" not in available_set:
+            continue
+        if loud and (available_set is None or f"{letter}_loud" in available_set):
+            return f"{letter}_loud"
+        return letter
+    return DEFAULT_SHAPE
+
+
+def remap_cues(
+    cues: list[MouthCue],
+    excluded: object = None,
+    available: object = None,
+) -> list[MouthCue]:
+    excluded_set = excluded if isinstance(excluded, set) else excluded_shape_set(excluded)
+    if not excluded_set or not cues:
+        return list(cues)
+    out: list[MouthCue] = []
+    previous = DEFAULT_SHAPE
+    for cue in cues:
+        shape = remap_shape(cue.shape, excluded_set, previous=previous, available=available)
+        out.append(MouthCue(start=cue.start, end=cue.end, shape=shape))
+        previous = _base_shape(shape)
+    return out
+
+
+def shape_at_time(
+    cues: list[MouthCue],
+    t_seconds: float,
+    excluded: object = None,
+    available: object = None,
+) -> str:
     """Return the mouth shape active at ``t_seconds``, or DEFAULT_SHAPE."""
 
+    excluded_set = excluded if isinstance(excluded, set) else excluded_shape_set(excluded)
+    previous = DEFAULT_SHAPE
+    chosen = DEFAULT_SHAPE
+    found = False
     for cue in cues:
+        mapped = remap_shape(cue.shape, excluded_set, previous=previous, available=available)
         if cue.start <= t_seconds < cue.end:
-            return cue.shape
-    return DEFAULT_SHAPE
+            chosen = mapped
+            found = True
+        if cue.end <= t_seconds:
+            previous = _base_shape(mapped)
+        elif found:
+            break
+    return chosen if found else DEFAULT_SHAPE

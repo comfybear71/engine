@@ -20,7 +20,10 @@ import {
   previewReplaceDrawing,
   promoteSlotView,
   realignSlotView,
+  remapLipSyncShape,
+  excludedLipSyncShapes,
   renameEditorDrawing,
+  saveDrawingFlags,
   type AssetFocus,
   type DrawingEditor,
   type DrawingUsage,
@@ -347,6 +350,7 @@ export default function AssetEditorOverlay({
     if (playRef.current != null) window.cancelAnimationFrame(playRef.current);
     const started = performance.now();
     const last = sample.cues[sample.cues.length - 1]?.end || 1;
+    const excluded = excludedLipSyncShapes(slot?.drawings || []);
     const tick = (now: number) => {
       const t = (now - started) / 1000;
       if (t >= last) {
@@ -354,10 +358,28 @@ export default function AssetEditorOverlay({
         playRef.current = null;
         return;
       }
-      setPlayShape(cueAtTime(sample.cues, t));
+      setPlayShape(remapLipSyncShape(cueAtTime(sample.cues, t), excluded));
       playRef.current = window.requestAnimationFrame(tick);
     };
     playRef.current = window.requestAnimationFrame(tick);
+  }
+
+  async function onExcludeFromLipSync(exclude: boolean) {
+    if (focus.mode !== "drawing") return;
+    setBusy(exclude ? "Excluding…" : "Including…");
+    setError(null);
+    try {
+      await saveDrawingFlags(project, focus.characterId, focus.slot, focus.drawing, {
+        excludeFromLipSync: exclude,
+        view,
+      });
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update lip sync");
+    } finally {
+      setBusy(null);
+    }
   }
 
   function openImagine() {
@@ -479,6 +501,7 @@ export default function AssetEditorOverlay({
           nudge={nudge}
           onNudge={(next) => setNudge(clampHeadNudge(next))}
           onRealign={(opts) => void onRealign(current.name, opts)}
+          onExcludeFromLipSync={slot?.mouth ? (value) => void onExcludeFromLipSync(value) : undefined}
           defaultRel={
             slot?.canRealign && slot.defaultDrawingsDir
               ? `characters/${focus.characterId}/${slot.defaultDrawingsDir}/${current.name}.png`
@@ -602,6 +625,7 @@ function DrawingView({
   nudge,
   onNudge,
   onRealign,
+  onExcludeFromLipSync,
   defaultRel,
 }: {
   slot: SlotEditor | null;
@@ -622,6 +646,7 @@ function DrawingView({
   nudge: { x: number; y: number; scale: number };
   onNudge: (nudge: { x: number; y: number; scale: number }) => void;
   onRealign: (opts?: { collarY?: number; cropToHead?: boolean }) => void;
+  onExcludeFromLipSync?: (exclude: boolean) => void;
   defaultRel: string | null;
 }) {
   const defaultSrc = defaultRel ? assetUrl(project, defaultRel) : null;
@@ -662,6 +687,17 @@ function DrawingView({
         />
         <MetaRow label="Scale" value={slot ? String(slot.scale) : "—"} />
         {current.shape ? <MetaRow label="Shape" value={`${current.shape} · ${mouthSound(current.name) || ""}`} /> : null}
+        {onExcludeFromLipSync ? (
+          <label className="flex items-center gap-1 text-[10px] text-neutral-400">
+            <input
+              type="checkbox"
+              checked={Boolean(current.excludeFromLipSync)}
+              onChange={(event) => onExcludeFromLipSync(event.target.checked)}
+              data-testid="asset-exclude-lipsync"
+            />
+            Exclude from lip sync
+          </label>
+        ) : null}
         {current.duplicateOf ? (
           <p className="text-[10px] text-amber-300" data-testid="asset-duplicate">
             Duplicate of {current.duplicateOf}
@@ -1055,6 +1091,11 @@ function SlotGrid({
                 <span className="text-[9px] text-amber-300">dup {cell.drawing.duplicateOf}</span>
               ) : null}
               {cell.loud ? <span className="text-[9px] text-neutral-400">loud</span> : null}
+              {cell.drawing?.excludeFromLipSync ? (
+                <span className="text-[9px] text-amber-200" data-testid="asset-manual-only">
+                  manual only
+                </span>
+              ) : null}
             </button>
           ))}
           <button
@@ -1094,6 +1135,9 @@ function SlotGrid({
                   <img src={assetUrl(project, drawing.rel, { v: drawing.mtime }) || ""} alt={drawing.name} />
                 </span>
                 <span className="truncate text-[11px] text-neutral-200">{drawing.name}</span>
+                {drawing.excludeFromLipSync ? (
+                  <span className="text-[9px] text-amber-200">manual only</span>
+                ) : null}
               </button>
             ))}
           </div>
