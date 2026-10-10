@@ -44,9 +44,22 @@ export function frameFromElapsedMs(elapsedMs: number, startFrame: number, fps: n
 
 /** Upcoming play window rendered as a low-res proxy segment. */
 export const PROXY_SEGMENT_SEC = 25;
+/** First window after Play — short so the mouth can start without a 30s wait. */
+export const PROXY_SEGMENT_FIRST_SEC = 6;
 export const PROXY_SEGMENT_SIZE = { width: 960, height: 540 };
 /** Start the next window when this much of the current segment remains. */
 export const PROXY_SEGMENT_PREFETCH_SEC = 8;
+/** Reseek line audio when it drifts this far from the picture clock. */
+export const AUDIO_SYNC_SLACK_SEC = 0.35;
+
+export function playSegmentDurationSec(firstWindow: boolean): number {
+  return firstWindow ? PROXY_SEGMENT_FIRST_SEC : PROXY_SEGMENT_SEC;
+}
+
+/** Hold line audio until the proxy picture is actually playing. */
+export function shouldHoldLineAudio(buffering: boolean, picturePlaying: boolean): boolean {
+  return buffering === true || picturePlaying !== true;
+}
 
 export function segmentWindow(
   startFrame: number,
@@ -144,6 +157,11 @@ export function webAudioSchedule(
   if (playSec <= 0) return null;
   const delaySec = Math.max(0, (clip.startFrame - playheadFrame) / safeFps);
   return { offsetSec, delaySec, playSec };
+}
+
+export function audioClockDriftSec(elementTime: number, expectedOffsetSec: number): number {
+  if (!Number.isFinite(elementTime) || !Number.isFinite(expectedOffsetSec)) return Infinity;
+  return Math.abs(elementTime - expectedOffsetSec);
 }
 
 export type FrameCache = {

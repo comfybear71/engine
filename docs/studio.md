@@ -220,14 +220,18 @@ clobber the project's `timeline.json`.
   video's own soundtrack is the only sound; (b) otherwise the next ~25 s
   as a 960×540 proxy *segment* from the persistent compositor (in-process
   frame loop, cached by script/asset fingerprint). Stage shows
-  **Buffering preview…** with a progress hint and starts as soon as that
-  window is ready, then keeps rendering ahead. There is no 120 s cap —
-  a 9-minute shot plays from any start the same way. Line audio is
-  streamed with `HTMLAudioElement` (range requests from `/media`) so a
-  long WAV never decodes on the main thread; timeline edits never wait
-  on audio. Pause, stop, rewind, and effect cleanup cancel any pending
-  start so only one WAV copy can play. A seek before Play does not
-  restart audio on the first tick. Scrub still uses `preview-frame`
+  **Buffering preview…** with a progress hint. The first window is ~6 s
+  so the mouth can start without a 30 s wait; later windows are ~25 s
+  and render ahead. Line audio is held until that picture is actually
+  playing and is paused again if Stage has to buffer — it does not run
+  ahead of the mouth. There is no 120 s cap — a 9-minute shot plays
+  from any start the same way. Line audio is streamed with
+  `HTMLAudioElement` (range requests from `/media`) so a long WAV never
+  decodes on the main thread; timeline edits never wait on audio.
+  Pause, stop, rewind, and effect cleanup cancel any pending start so
+  only one WAV copy can play. A seek before Play does not restart
+  audio on the first tick. The audio clock follows the proxy video
+  (reseek if it drifts). Scrub still uses `preview-frame`
   (preview resolution, persisted asset cache). The orange playhead handle sits on the
   time ruler; one vertical line continues down through every lane.
   Click or drag the empty ruler area to seek. Pointer-down on a block

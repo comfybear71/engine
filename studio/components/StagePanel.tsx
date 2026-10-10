@@ -14,17 +14,22 @@ import type { AssetFocus } from "@/lib/assetEditor";
 import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import { ASSET_DRAG_MIME, applyStagePlacement, parseAssetDrag } from "@/lib/stageAssets";
 import {
+  AUDIO_SYNC_SLACK_SEC,
   PROXY_SEGMENT_PREFETCH_SEC,
   PROXY_SEGMENT_SEC,
+  audioClockDriftSec,
   bumpAudioGeneration,
   chooseVideoFile,
   clipDurationSec,
   createFrameCache,
   frameInSegment,
   isLiveAudioStart,
+  playSegmentDurationSec,
   segmentWindow,
+  shouldHoldLineAudio,
   webAudioSchedule,
 } from "@/lib/playback";
+import type { PlaybackAudioInfo } from "@/lib/worker";
 import { clampFrameIndex, scriptLineAtFrame } from "@/lib/playhead";
 import {
   emptyScriptHistory,
@@ -135,10 +140,14 @@ export default function StagePanel({
   const userSeekRef = useRef(false);
   const playableTotalRef = useRef<number | null>(null);
   const frameCacheRef = useRef(createFrameCache());
-  const audioElsRef = useRef<HTMLAudioElement[]>([]);
+  const audioElsRef = useRef<{ el: HTMLAudioElement; clip: PlaybackAudioInfo }[]>([]);
   const audioTimersRef = useRef<number[]>([]);
   const audioGenRef = useRef(0);
   const projectRef = useRef(project);
+  const fpsRef = useRef(fps);
+  const totalFramesRef = useRef(totalFrames);
+  const previewStatusRef = useRef(previewStatus);
+  const playbackRef = useRef(playback);
   const playRangeRef = useRef<{ start: number; end: number; loop: boolean } | null>(null);
   const segmentRef = useRef<typeof segment>(null);
   const nextSegmentRef = useRef<typeof segment>(null);
@@ -147,6 +156,10 @@ export default function StagePanel({
   frameRef.current = frame;
   projectRef.current = project;
   segmentRef.current = segment;
+  fpsRef.current = fps;
+  totalFramesRef.current = totalFrames;
+  previewStatusRef.current = previewStatus;
+  playbackRef.current = playback;
 
   const videoChoice = chooseVideoFile(playback);
   const fullVideoSrc = project && videoChoice ? renderVideoUrl(project, renderNonce || undefined, script, videoChoice.file) : null;
@@ -237,7 +250,7 @@ export default function StagePanel({
     return () => {
       cancelled = true;
     };
-  }, [project, script, workerUp, renderNonce, scriptEpoch, previewStatus]);
+  }, [project, script, workerUp, renderNonce, scriptEpoch]);
 
   useEffect(() => {
     if (!project || !workerUp) return;
@@ -431,11 +444,11 @@ export default function StagePanel({
     audioGenRef.current = bumpAudioGeneration(audioGenRef.current);
     for (const timer of audioTimersRef.current) window.clearTimeout(timer);
     audioTimersRef.current = [];
-    for (const el of audioElsRef.current) {
+    for (const handle of audioElsRef.current) {
       try {
-        el.pause();
-        el.removeAttribute("src");
-        el.load();
+        handle.el.pause();
+        handle.el.removeAttribute("src");
+        handle.el.load();
       } catch {
         /* already stopped */
       }
@@ -443,90 +456,123 @@ export default function StagePanel({
     audioElsRef.current = [];
   }
 
-  function startLineAudio(fromFrame: number) {
-    stopAudio();
-    const gen = bumpAudioGeneration(audioGenRef.current);
-    audioGenRef.current = gen;
-    if (!playback || !project) return;
-    if (!isLiveAudioStart(gen, audioGenRef.current, playingRef.current)) return;
-    for (const clip of playback.audio) {
-      if (!clip.exists) continue;
+  function pauseLineAudio() {
+    for (const handle of audioElsRef.current) {
+      try {
+        handle.el.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  function pictureIsPlaying() {
+    const video = videoRef.current;
+    return Boolean(video && !video.paused && video.readyState >= 2);
+  }
+
+  function syncLineAudio(fromFrame: number) {
+    const fpsNow = fpsRef.current;
+    const totalNow = totalFramesRef.current;
+    if (shouldHoldLineAudio(previewStatusRef.current === "buffering", pictureIsPlaying())) {
+      pauseLineAudio();
+      return;
+    }
+    for (const handle of audioElsRef.current) {
+      const { el, clip } = handle;
       const schedule = webAudioSchedule(
         {
           startFrame: clip.startFrame,
           endFrame: clip.endFrame,
-          durationSec: clipDurationSec(clip, fps),
+          durationSec: clipDurationSec(clip, fpsNow),
           trimInSec: clip.trimInSec,
           trimOutSec: clip.trimOutSec,
         },
         fromFrame,
-        fps,
-        totalFrames
+        fpsNow,
+        totalNow
       );
-      if (!schedule) continue;
-      const el = new Audio();
-      el.preload = "auto";
-      el.src = mediaUrl(project, clip.rel);
-      const start = () => {
-        if (!isLiveAudioStart(gen, audioGenRef.current, playingRef.current)) return;
-        const play = () => {
-          if (!isLiveAudioStart(gen, audioGenRef.current, playingRef.current)) return;
+      if (!schedule || schedule.delaySec > 0.05) {
+        try {
+          el.pause();
+        } catch {
+          /* ignore */
+        }
+        continue;
+      }
+      const apply = () => {
+        if (!isLiveAudioStart(audioGenRef.current, audioGenRef.current, playingRef.current)) return;
+        if (previewStatusRef.current === "buffering") {
+          el.pause();
+          return;
+        }
+        if (audioClockDriftSec(el.currentTime, schedule.offsetSec) > AUDIO_SYNC_SLACK_SEC) {
           try {
             el.currentTime = schedule.offsetSec;
           } catch {
             /* currentTime may be unset until metadata */
           }
-          void el.play().catch(() => undefined);
-        };
-        if (el.readyState >= 1) play();
-        else el.addEventListener("loadedmetadata", play, { once: true });
+        }
+        if (el.paused) void el.play().catch(() => undefined);
       };
-      if (schedule.delaySec > 0) {
-        audioTimersRef.current.push(window.setTimeout(start, schedule.delaySec * 1000));
-      } else {
-        start();
-      }
-      const range = playRangeRef.current;
-      const playSec = range ? Math.min(schedule.playSec, (range.end - fromFrame) / Math.max(fps, 1)) : schedule.playSec;
-      if (playSec > 0) {
-        audioTimersRef.current.push(
-          window.setTimeout(() => {
-            try {
-              el.pause();
-            } catch {
-              /* ignore */
-            }
-          }, (schedule.delaySec + playSec) * 1000)
-        );
-      }
-      audioElsRef.current.push(el);
+      if (el.readyState >= 1) apply();
+      else el.addEventListener("loadedmetadata", apply, { once: true });
     }
   }
 
-  async function ensurePlaySegment(fromFrame: number) {
+  function ensureLineAudio(fromFrame: number) {
+    const playbackNow = playbackRef.current;
+    const projectNow = projectRef.current;
+    if (!playbackNow || !projectNow) return;
+    if (shouldHoldLineAudio(previewStatusRef.current === "buffering", pictureIsPlaying())) {
+      pauseLineAudio();
+      return;
+    }
+    if (audioElsRef.current.length === 0) {
+      const gen = bumpAudioGeneration(audioGenRef.current);
+      audioGenRef.current = gen;
+      if (!isLiveAudioStart(gen, audioGenRef.current, playingRef.current)) return;
+      for (const clip of playbackNow.audio) {
+        if (!clip.exists) continue;
+        const el = new Audio();
+        el.preload = "auto";
+        el.dataset.testid = "stage-line-audio";
+        el.src = mediaUrl(projectNow, clip.rel);
+        audioElsRef.current.push({ el, clip });
+      }
+    }
+    syncLineAudio(fromFrame);
+  }
+
+  async function ensurePlaySegment(fromFrame: number, firstWindow = false) {
     if (!project) return null;
-    const win = segmentWindow(fromFrame, fps, totalFrames, PROXY_SEGMENT_SEC);
+    pauseLineAudio();
+    const durationSec = playSegmentDurationSec(firstWindow);
+    const win = segmentWindow(fromFrame, fpsRef.current, totalFramesRef.current, durationSec);
     setPreviewStatus("buffering");
-    setBufferHint(`0 / ${Math.round(win.frames / Math.max(fps, 1))}s`);
+    previewStatusRef.current = "buffering";
+    setBufferHint(`0 / ${Math.round(win.frames / Math.max(fpsRef.current, 1))}s`);
     try {
       const status = await waitForPreviewSegment(
         project,
-        { startFrame: win.startFrame, durationSec: PROXY_SEGMENT_SEC, frames: win.frames },
+        { startFrame: win.startFrame, durationSec, frames: win.frames },
         script,
         (next: PreviewSegmentStatus) => {
           const done = next.framesDone || 0;
           const total = next.framesTotal || win.frames;
-          setBufferHint(`${Math.round(done / Math.max(fps, 1))}s / ${Math.round(total / Math.max(fps, 1))}s`);
+          setBufferHint(`${Math.round(done / Math.max(fpsRef.current, 1))}s / ${Math.round(total / Math.max(fpsRef.current, 1))}s`);
         }
       );
       if (!status.file) throw new Error("Preview segment missing file");
       const next = { file: status.file, startFrame: status.startFrame, frames: status.frames };
       setSegment(next);
       setPreviewStatus("idle");
+      previewStatusRef.current = "idle";
       setBufferHint(null);
       return next;
     } catch (err) {
       setPreviewStatus("idle");
+      previewStatusRef.current = "idle";
       setBufferHint(null);
       setError(err instanceof Error ? err.message : "Preview segment failed");
       return null;
@@ -547,7 +593,7 @@ export default function StagePanel({
       stopAudio();
       const video = videoRef.current;
       if (!video) return;
-      video.currentTime = frameRef.current / Math.max(fps, 1);
+      video.currentTime = frameRef.current / Math.max(fpsRef.current, 1);
       void video.play().catch(() => setPlaying(false));
       return () => {
         video.pause();
@@ -557,10 +603,11 @@ export default function StagePanel({
 
     let cancelled = false;
     const startFrame = frameRef.current;
+    pauseLineAudio();
     (async () => {
       let current = segmentRef.current;
       if (!frameInSegment(startFrame, current)) {
-        current = await ensurePlaySegment(startFrame);
+        current = await ensurePlaySegment(startFrame, true);
       }
       if (cancelled) return;
       if (!current) {
@@ -569,15 +616,14 @@ export default function StagePanel({
       }
       const video = videoRef.current;
       if (video) {
-        video.currentTime = Math.max(0, (frameRef.current - current.startFrame) / Math.max(fps, 1));
+        video.currentTime = Math.max(0, (frameRef.current - current.startFrame) / Math.max(fpsRef.current, 1));
         void video.play().catch(() => {
           if (!cancelled) setPlaying(false);
         });
       }
-      startLineAudio(frameRef.current);
       const nextStart = current.startFrame + current.frames;
-      if (project && nextStart < totalFrames) {
-        const win = segmentWindow(nextStart, fps, totalFrames, PROXY_SEGMENT_SEC);
+      if (project && nextStart < totalFramesRef.current) {
+        const win = segmentWindow(nextStart, fpsRef.current, totalFramesRef.current, PROXY_SEGMENT_SEC);
         void waitForPreviewSegment(
           project,
           { startFrame: win.startFrame, durationSec: PROXY_SEGMENT_SEC, frames: win.frames },
@@ -590,12 +636,12 @@ export default function StagePanel({
     })();
     return () => {
       cancelled = true;
-      stopAudio();
       videoRef.current?.pause();
     };
-    // Start/stop only — segment file swaps are handled in onVideoTimeUpdate.
+    // Start/stop only — do not depend on fps/totalFrames or a long-shot
+    // duration update will destroy line audio mid-play.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, fullVideoSrc, fps, totalFrames]);
+  }, [playing, fullVideoSrc]);
 
   useEffect(() => {
     if (!playing || !segmentSrc || fullVideoSrc) return;
@@ -604,9 +650,9 @@ export default function StagePanel({
     const video = videoRef.current;
     if (!video) return;
     const origin = current?.startFrame || 0;
-    video.currentTime = Math.max(0, (frameRef.current - origin) / Math.max(fps, 1));
+    video.currentTime = Math.max(0, (frameRef.current - origin) / Math.max(fpsRef.current, 1));
     void video.play().catch(() => undefined);
-  }, [playing, segmentSrc, fullVideoSrc, fps]);
+  }, [playing, segmentSrc, fullVideoSrc]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -635,7 +681,7 @@ export default function StagePanel({
       if (range.loop) {
         video.currentTime = Math.max(0, (range.start - playOriginFrame) / Math.max(fps, 1));
         setFrame(range.start);
-        startLineAudio(range.start);
+        ensureLineAudio(range.start);
         return;
       }
       video.pause();
@@ -644,18 +690,20 @@ export default function StagePanel({
       return;
     }
     setFrame(next);
+    syncLineAudio(next);
     const line = scriptLineAtFrame(lanes?.blocks || [], next);
     if (line != null) onSelectLine(line);
     const current = segmentRef.current;
     if (!fullVideoSrc && current) {
       const remain = current.startFrame + current.frames - next;
-      if (remain <= Math.round(PROXY_SEGMENT_PREFETCH_SEC * fps) && nextSegmentRef.current) {
+      if (remain <= Math.round(PROXY_SEGMENT_PREFETCH_SEC * fpsRef.current) && nextSegmentRef.current) {
         const upcoming = nextSegmentRef.current;
         if (remain <= 1 && upcoming.file !== current.file) {
           nextSegmentRef.current = null;
           setSegment(upcoming);
         }
       } else if (remain <= 0 && next < maxFrame) {
+        pauseLineAudio();
         void ensurePlaySegment(next);
       }
     }
@@ -881,6 +929,19 @@ export default function StagePanel({
                     src={videoSrc}
                     playsInline
                     onTimeUpdate={onVideoTimeUpdate}
+                    onPlaying={() => {
+                      if (fullVideoSrc) return;
+                      if (previewStatusRef.current === "buffering") {
+                        pauseLineAudio();
+                        return;
+                      }
+                      ensureLineAudio(frameRef.current);
+                    }}
+                    onPause={() => {
+                      if (!playingRef.current || previewStatusRef.current === "buffering") {
+                        pauseLineAudio();
+                      }
+                    }}
                     onEnded={() => {
                       if (fullVideoSrc) {
                         setPlaying(false);
@@ -901,6 +962,7 @@ export default function StagePanel({
                         setSegment(upcoming);
                         return;
                       }
+                      pauseLineAudio();
                       void ensurePlaySegment(nextFrame);
                     }}
                     onError={() => {
