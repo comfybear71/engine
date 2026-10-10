@@ -805,3 +805,68 @@ describe("prop layers", () => {
     isolated.cleanup();
   });
 });
+
+describe("[Audio: Name file=<label>]", () => {
+  test("places the imported WAV as dialogue, copies words, and advances by real duration", async () => {
+    const audioDir = path.join(fixture.projectDir, "audio", "monologue");
+    wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 2.0);
+    fs.writeFileSync(
+      path.join(audioDir, "001_alice.words.json"),
+      JSON.stringify([
+        { word: "Hello", start: 0.0, end: 0.4 },
+        { word: "there.", start: 0.4, end: 0.8 },
+        { word: "Okay", start: 1.6, end: 1.9 },
+      ])
+    );
+
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Audio: Alice file=monologue]",
+      "Alice: After the take.",
+    ].join("\n");
+    const { timeline, lines, laneEvents } = await parseScript(
+      fixture.projectDir,
+      fixture.globalAssetsDir,
+      script,
+      { fps: 24 }
+    );
+
+    const [clip] = layersFor(timeline)[0].dialogue;
+    assert.equal(clip.audio, "audio/monologue/001_alice.wav");
+    assert.equal(clip.start_frame, 0);
+    assert.equal(clip.text, "Hello there. Okay");
+    assert.equal(clip.words.length, 3);
+    assert.equal(clip.estimated, undefined);
+    assert.ok(layersFor(timeline)[0].dialogue[1].start_frame >= 48);
+
+    assert.equal(lines[0].status, "ok");
+    assert.equal(lines[0].source, "import");
+    assert.equal(lines[0].audio_path, "audio/monologue/001_alice.wav");
+    assert.equal(lines[0].words_path, "audio/monologue/001_alice.words.json");
+
+    const dialogueLanes = laneEvents.filter((e) => e.lane === "dialogue");
+    assert.equal(dialogueLanes.length, 3);
+    assert.match(dialogueLanes[0].label, /Hello there\./);
+    assert.match(dialogueLanes[1].label, /Okay/);
+    assert.match(dialogueLanes[2].label, /After the take/);
+
+    const audioLanes = laneEvents.filter((e) => e.lane === "audio");
+    assert.equal(audioLanes[0].endFrame - audioLanes[0].startFrame, 48);
+
+    fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
+  });
+
+  test("missing imported WAV is a line-numbered error (no estimate)", async () => {
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Audio: Alice file=missing]"].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /No imported audio "missing"/.test(err.message) &&
+        /import-audio/.test(err.message)
+    );
+  });
+});

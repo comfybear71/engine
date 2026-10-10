@@ -197,6 +197,10 @@ async function runVoices(projectDir, options = {}) {
   const missingVoiceCharacters = new Set();
 
   for (const line of parsed.lines) {
+    if (line.source === "import") {
+      result.skipped += 1;
+      continue;
+    }
     if (!voiceCache.has(line.character)) {
       voiceCache.set(line.character, resolveVoiceId(resolvedProjectDir, globalAssetsDir, line.character));
     }

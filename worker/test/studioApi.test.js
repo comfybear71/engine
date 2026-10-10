@@ -8,6 +8,7 @@ const path = require("path");
 const { createApp, isSafeProjectName, resolveProjectDir, isSafeRelPath } = require("../src/server");
 const { renderOutputName, resolveScriptName } = require("../src/studioProjects");
 const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
+const { writeSilentWav } = require("./helpers/wav");
 
 function listen(app) {
   return new Promise((resolve) => {
@@ -584,7 +585,6 @@ describe("studio worker API", () => {
   });
 
   test("GET /playback and /media report render freshness and serve wavs", async () => {
-    const { writeSilentWav } = require("./helpers/wav");
     fixture.writeScript(
       ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi there."].join("\n")
     );
@@ -609,6 +609,35 @@ describe("studio worker API", () => {
 
     const bad = await fetch(`${ctx.url}/api/projects/project/media?rel=../script.txt`);
     assert.equal(bad.status, 400);
+  });
+
+  test("POST /api/projects/:name/import-audio dry-run reports length and writes nothing", async () => {
+    const src = path.join(fixture.root, "import-take.wav");
+    writeSilentWav(src, 2.0);
+    const res = await fetch(`${ctx.url}/api/projects/project/import-audio`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: src, character: "alice", name: "studio_take", dryRun: true }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    assert.equal(body.dryRun, true);
+    assert.equal(body.label, "studio_take");
+    assert.equal(body.character, "alice");
+    assert.match(body.creditNote, /ElevenLabs Speech-to-Text credits/);
+    assert.equal(fs.existsSync(path.join(fixture.projectDir, "audio", "studio_take")), false);
+  });
+
+  test("POST /api/projects/:name/import-audio without character is 400", async () => {
+    const res = await fetch(`${ctx.url}/api/projects/project/import-audio`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "/tmp/nope.wav" }),
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.match(body.error, /character/i);
   });
 
   test("POST ingest without an image is 400", async () => {

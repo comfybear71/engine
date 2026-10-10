@@ -82,3 +82,11 @@ This is an estimate, not a price.
 
 See [docs/script-format.md](script-format.md) for the script format and
 `lines.json` shape, and [docs/assets.md](assets.md) for `character.json`.
+
+## Related: `import-audio`
+
+For a **pre-recorded** mp3/wav (lip-sync + optional word timestamps) use
+`node src/cli.js import-audio` instead of `voices`. That command uses the
+same `ELEVENLABS_API_KEY` for Speech-to-Text (`scribe_v1`) unless you pass
+`--no-transcribe`. It is also never called by `watch`. See
+[docs/script-format.md](script-format.md#audio-name-filelabel).

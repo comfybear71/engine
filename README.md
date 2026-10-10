@@ -63,7 +63,7 @@ engine/
 │   ├── package.json
 │   ├── test/                    # node:test unit + end-to-end tests
 │   ├── src/                     # Node orchestrator (thin)
-│   │   ├── cli.js               # `node src/cli.js parse|lint|voices|render|watch <projectDir> ...`
+│   │   ├── cli.js               # `node src/cli.js parse|lint|voices|import-audio|render|watch <projectDir> ...`
 │   │   ├── server.js            # Express server: Studio JSON API + POST /render
 │   │   ├── render.js            # Spawns the Python compositor
 │   │   ├── watcher.js           # chokidar: re-parse (if --from-script) + re-render; never ElevenLabs
@@ -253,7 +253,9 @@ cd ..                             # back to repo root
 Copy `.env.example` to `.env` and fill in real values locally. `.env` is
 gitignored -- **this repo is public, never commit real secrets.**
 `ELEVENLABS_API_KEY` / `ELEVENLABS_MODEL_ID` are only used by
-`node src/cli.js voices` -- see [docs/voices.md](docs/voices.md).
+`node src/cli.js voices` (TTS) and `node src/cli.js import-audio`
+(Speech-to-Text) -- see [docs/voices.md](docs/voices.md) and
+[docs/script-format.md](docs/script-format.md#audio-name-filelabel).
 
 ```bash
 cp .env.example .env
@@ -332,7 +334,7 @@ cd worker/python
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pytest -q
 
-# Node (script parser + voices): tag parsing, one-layer-per-character, sequential
+# Node (script parser + voices + import-audio): tag parsing, one-layer-per-character, sequential
 # timing (real + estimated durations), mark resolution order, slot keyframes
 # from Action tags, line-numbered errors, the lines.json manifest, schema
 # validity of parser output, an end-to-end parse+render+ffprobe check,
@@ -361,5 +363,6 @@ npm start
 # GET  http://127.0.0.1:4100/api/projects/<name>/lanes
 # POST http://127.0.0.1:4100/api/projects/<name>/preview-frame  { "frame": 0 }
 # POST http://127.0.0.1:4100/api/projects/<name>/render
+# POST http://127.0.0.1:4100/api/projects/<name>/import-audio  { "path", "character", "name?" }
 # POST http://127.0.0.1:4100/render  { "projectDir": "../projects/sample" }
 ```
