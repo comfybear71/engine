@@ -111,3 +111,71 @@ export function saveImagineHeight(height: number): void {
     /* ignore quota / private mode */
   }
 }
+
+export const STAGE_LEFT_POOL_KEY = "engine.studio.stageLeftPool.v1";
+export const LEFT_POOL_IDS = ["assets", "media", "effects"] as const;
+export type StoredLeftPool = (typeof LEFT_POOL_IDS)[number];
+
+export function parseStoredLeftPool(raw: string | null | undefined): StoredLeftPool | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { id?: string | null };
+    const id = parsed && typeof parsed === "object" ? parsed.id : raw;
+    return LEFT_POOL_IDS.includes(id as StoredLeftPool) ? (id as StoredLeftPool) : null;
+  } catch {
+    return LEFT_POOL_IDS.includes(raw as StoredLeftPool) ? (raw as StoredLeftPool) : null;
+  }
+}
+
+export function loadLeftPool(): StoredLeftPool | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return parseStoredLeftPool(window.localStorage.getItem(STAGE_LEFT_POOL_KEY));
+  } catch {
+    return null;
+  }
+}
+
+export function saveLeftPool(id: StoredLeftPool | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(STAGE_LEFT_POOL_KEY, JSON.stringify({ id }));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+export const STAGE_ASSETS_TREE_KEY = "engine.studio.stageAssetsTree.v1";
+
+export function parseStoredTreeOpen(raw: string | null | undefined): Record<string, boolean> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as { open?: Record<string, boolean> };
+    if (!parsed || typeof parsed.open !== "object" || !parsed.open) return {};
+    const out: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(parsed.open)) {
+      if (typeof value === "boolean") out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function loadAssetsTreeOpen(): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    return parseStoredTreeOpen(window.localStorage.getItem(STAGE_ASSETS_TREE_KEY));
+  } catch {
+    return {};
+  }
+}
+
+export function saveAssetsTreeOpen(open: Record<string, boolean>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(STAGE_ASSETS_TREE_KEY, JSON.stringify({ open }));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}

@@ -134,6 +134,18 @@ describe("studio worker API", () => {
     assert.equal(carol.thumbRel, "characters/carol/body.png");
   });
 
+  test("GET /api/projects/:name/audio lists imported and generated wavs", async () => {
+    writeSilentWav(path.join(fixture.projectDir, "audio", "intro", "001_alice.wav"), 0.4);
+    writeSilentWav(path.join(fixture.projectDir, "audio", "monologue", "001_alice.wav"), 0.8);
+    const res = await fetch(`${ctx.url}/api/projects/project/audio`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    const byLabel = Object.fromEntries((body.files || []).map((file) => [file.label, file]));
+    assert.equal(byLabel.intro.kind, "generated");
+    assert.equal(byLabel.monologue.kind, "imported");
+    assert.equal(byLabel.monologue.characterId, "alice");
+  });
+
   test("GET /api/projects/:name/staging lists backgrounds, props, and marks", async () => {
     const res = await fetch(`${ctx.url}/api/projects/project/staging`);
     assert.equal(res.status, 200);

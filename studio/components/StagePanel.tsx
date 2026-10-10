@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import AssetsPanel from "@/components/AssetsPanel";
 import CameraDrawer from "@/components/CameraDrawer";
+import StageAssetsPanel from "@/components/StageAssetsPanel";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
 import PanelSplitter from "@/components/PanelSplitter";
 import { LayersInspector, MarksInspector, ScriptInspector } from "@/components/StageInspectors";
@@ -10,6 +10,7 @@ import { LeftIconRail, RightIconRail, type LeftPoolId, type RightDrawerId } from
 import TimelineLanes from "@/components/TimelineLanes";
 import TransportBar from "@/components/TransportBar";
 import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
+import { ASSET_DRAG_MIME, applyStagePlacement, parseAssetDrag } from "@/lib/stageAssets";
 import {
   AUTO_PROXY_MAX_DURATION_SEC,
   bumpAudioGeneration,
@@ -32,7 +33,9 @@ import {
 import {
   DEFAULT_STAGE_LAYOUT,
   clampStageLayout,
+  loadLeftPool,
   loadStageLayout,
+  saveLeftPool,
   saveStageLayout,
   type StageLayout,
 } from "@/lib/stageLayout";
@@ -92,6 +95,7 @@ export default function StagePanel({
   const [playback, setPlayback] = useState<PlaybackStatus | null>(null);
   const [previewStatus, setPreviewStatus] = useState<"idle" | "rendering">("idle");
   const [leftPool, setLeftPool] = useState<LeftPoolId | null>(null);
+  const previewBoxRef = useRef<HTMLDivElement | null>(null);
   const [rightDrawer, setRightDrawer] = useState<RightDrawerId | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
@@ -134,11 +138,16 @@ export default function StagePanel({
 
   useEffect(() => {
     setLayout(loadStageLayout());
+    setLeftPool(loadLeftPool());
   }, []);
 
   useEffect(() => {
     saveStageLayout(layout);
   }, [layout]);
+
+  useEffect(() => {
+    saveLeftPool(leftPool);
+  }, [leftPool]);
 
   useEffect(() => {
     if (!project || !workerUp) return;
@@ -765,6 +774,37 @@ export default function StagePanel({
     }
   }
 
+  function onPreviewDragOver(event: React.DragEvent<HTMLDivElement>) {
+    if (![...event.dataTransfer.types].some((type) => type === ASSET_DRAG_MIME || type === "text/plain")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function onPreviewDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const asset = parseAssetDrag(event.dataTransfer.getData(ASSET_DRAG_MIME) || event.dataTransfer.getData("text/plain"));
+    if (!asset) return;
+    const box = previewBoxRef.current;
+    if (!box) return;
+    const rect = box.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
+    const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
+    const marks = locationMarks.map((item) => ({ name: item.name, mark: { x: item.mark.x, y: item.mark.y } }));
+    const next = applyStagePlacement({
+      script: scriptText,
+      asset,
+      x,
+      y,
+      frame,
+      fps,
+      scenes: lanes?.scenes || [],
+      playheadLine: playheadLine ?? selectedLine,
+      marks,
+    });
+    if (next !== scriptText) onEditScript(next);
+  }
+
   async function insertImportedAudio(tag: string) {
     if (!project) return;
     const after = findInsertAfterLine(scriptText, playheadLine ?? selectedLine, sceneId);
@@ -794,10 +834,9 @@ export default function StagePanel({
                 style={{ width: layout.leftWidth }}
                 data-testid="left-media-pool"
               >
-                <AssetsPanel
+                <StageAssetsPanel
                   project={project}
                   workerUp={workerUp}
-                  variant="pool"
                   poolSection={leftPool}
                 />
               </div>
@@ -817,7 +856,13 @@ export default function StagePanel({
 
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-black/40">
             <div className="flex min-h-0 flex-1 items-center justify-center p-3">
-              <div className="relative inline-block max-h-full max-w-full">
+              <div
+                ref={previewBoxRef}
+                className="relative inline-block max-h-full max-w-full"
+                data-testid="stage-preview-drop"
+                onDragOver={onPreviewDragOver}
+                onDrop={onPreviewDrop}
+              >
                 {showVideo && videoSrc ? null : previewUrl ? (
                   // Worker-served preview PNG
                   // eslint-disable-next-line @next/next/no-img-element

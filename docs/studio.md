@@ -13,12 +13,12 @@ bar / Script drawer) — that calls `POST /api/projects/:name/import-audio` (Ele
 Speech-to-Text + Rhubarb). You never need the command line for that.
 
 The **script is the source of truth**. Stage lanes are a view of a temp
-parse. Stage 1–2 timeline edits (select, move, trim, split) rewrite the
-matching script line(s) with `at_time=` / duration / `trim_in=` /
-`trim_out=`, then re-parse; they never write `timeline.json`. Save, lint,
-preview, lanes, and Render still parse the selected script to a temp
-timeline (the same `--script` option as the CLI). Render writes
-`renders/<script-stem>.mp4`. Ripple delete is a later stage.
+parse. Timeline edits (select, move, trim, split, delete, ripple,
+copy/paste, asset drops) rewrite the matching script line(s) with
+`at_time=` / duration / `trim_in=` / `trim_out=`, then re-parse; they
+never write `timeline.json`. Save, lint, preview, lanes, and Render
+still parse the selected script to a temp timeline (the same `--script`
+option as the CLI). Render writes `renders/<script-stem>.mp4`.
 
 ## Starting Engine Studio
 
@@ -207,8 +207,21 @@ clobber the project's `timeline.json`.
   `at_time=` / `trim_in=` / `trim_out=`; word timings stay on the
   source). Ctrl+Z / Ctrl+Y (and
   Ctrl+Shift+Z) undo/redo as script-text snapshots; the timeline header
-  has the same buttons. Ripple delete, copy/paste, and lane moves are
-  later stages.
+  has the same buttons.
+  Right-click a block for a slim menu: **Copy**, **Cut**, **Paste** (at
+  the playhead), **Duplicate**, **Delete**, **Ripple delete**, and on
+  Dialogue **Sync** / **Redo sync**. Keyboard: Ctrl+C / Ctrl+X / Ctrl+V /
+  Ctrl+D, Delete, Shift+Delete = ripple. Multi-select applies to all of
+  those. Delete removes the block's script line(s). Married
+  Dialogue+Audio+mouth share a line, so they go together; a mouth block
+  cannot be removed on its own. Before delete, Studio writes `at_time=`
+  on later sequential lines in that scene so they keep their current
+  starts (a gap stays). Ripple delete then subtracts the deleted span
+  from later `at_time=` values on every lane in the same scene. Other
+  scenes are unchanged. Paste of audio/dialogue copies that married set
+  (mouth cues come back on re-parse); paste into another lane only when
+  the block type fits (speech → Dialogue / Audio / Face, face pins →
+  Face, body → Body/Move, props → Props, camera → Camera).
   Dialogue owns its lip-sync: dragging a Dialogue block moves its audio,
   Rhubarb mouth cues, and the red Face **mouth** block together. Synced
   (or stale) lines get exactly one Face mouth block with the same
@@ -242,9 +255,24 @@ clobber the project's `timeline.json`.
   time ruler stays fixed at the top. The horizontal scrollbar is a
   separate bar pinned to the very bottom edge of the timeline panel
   (always visible, never over the lanes), independent of panel height.
-  **Assets / Media / Effects** are a left dock (library characters,
-  backgrounds, props) that slides in over the stage — not a full-page
-  switch. The right icon rail opens **Marks**, **Layers**, **Script**
+  **Assets / Media / Effects** are a left icon-rail dock (collapsible,
+  resizable, width and last-open rail remembered in
+  `engine.studio.stageLayout.v1` / `engine.studio.stageLeftPool.v1`).
+  **Assets** is a slim tree of this project's characters (slots /
+  drawings / cycles), props, backgrounds, imported and generated audio,
+  and a placeholder **SFX / Music** group. **Media** filters to
+  backgrounds + audio; **Effects** is the SFX/Music placeholder. Search
+  filters the tree. Drag a drawing onto Face / Body-Move / Props at a
+  time to insert the matching script line (`[Action: Name face=…]`,
+  `body=<cycle>`, `right_hand=<drawing>`, `[Prop: … show]`); an imported
+  audio file inserts `[Audio: Name file=<label>]`; a background rewrites
+  that scene's `[Location:]`. The tag is inserted in the scene that owns
+  the drop time, not a selected line from another scene. Generated line
+  WAVs and mouth drawings are listed but not droppable (mouths stay
+  dialogue-driven). Drop a character
+  or prop onto the Stage preview to place it (`[Action: Name at=<nearest
+  mark>]` or `[Prop: name at=x,y]`) at the playhead; skip if the format
+  has no mark or position. The right icon rail opens **Marks**, **Layers**, **Script**
   (read-only, playhead line highlighted, plus **Import audio**), and
   **Camera** drawers; they are closed by default so the stage and
   timeline keep their space.
@@ -311,6 +339,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }] }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames), backs up overwritten **local** files to `_backup/<timestamp>/`, merges new slots/cycles into project-local `character.json` without deleting other entries. |
 | `POST` | `/api/projects/:name/characters/:id/ingest/cancel` | JSON `{ "sessionId" }`. Deletes the preview session dir. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks for locations this project uses. |
+| `GET` | `/api/projects/:name/audio` | WAV files under `audio/`: imported `audio/<label>/001_<character>.wav` and generated `audio/<scene>/<nnn>_<character>.wav`, with `kind`, `label`, `characterId`, `durationSeconds`. |
 | `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for Assets-list character / background / prop cards. Pass `?v=<mtime>` (Studio does this) for `Cache-Control: public, max-age=31536000, immutable`. |
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |

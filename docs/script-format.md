@@ -418,6 +418,57 @@ Hicks at_time=0.8s trim_in=0.8s: friend.
 Hicks at_time=4s: Where's the rent money, Dana?
 ```
 
+## Studio clipboard, delete, and asset drops
+
+The script stays the only source of truth. Copy / cut / paste / duplicate /
+delete rewrite lines, then Studio re-parses.
+
+**Delete** removes the selected line(s). Married Dialogue + Audio + the
+red Face mouth block share one script line, so they go together. The
+mouth track cannot be deleted on its own.
+
+Sequential lines with no `at_time=` / `start=` would otherwise slide when
+a clock-advancing line (dialogue, `[Audio:]`, `wait=true` move, `[Pause]`)
+is removed. Studio therefore **pins** every later timed line in that
+scene to an explicit `at_time=` equal to its current parsed start
+*before* removing the selection. The gap stays. Other scenes are not
+rewritten (each scene has its own cursor).
+
+**Ripple delete** (Shift+Delete) does the same pin, removes the line(s),
+then subtracts the deleted visual span from later `at_time=` values on
+**all lanes** in that scene. Overlapping deleted blocks count once.
+
+**Paste** (Ctrl+V, or the context menu at the playhead) inserts a copy of
+the copied line(s) with a new `at_time=` at the playhead. Audio/dialogue
+paste copies that one married line (mouth cues return on re-parse).
+Paste onto a lane only when the type fits: speech on Dialogue / Audio /
+Face, face pins on Face, body on Body/Move, `[Prop:]` on Props,
+`[Camera:]` on Camera.
+
+Dragging from the Stage Assets tree inserts the same tags a person would
+type. The new line is inserted in the scene that owns the drop time
+(after the selected line if that line is in the same scene; otherwise
+after the last line of that scene) — a hallway line selected while you
+drop on scene 1 does not move the tag into the hallway:
+
+```text
+[Action: Hicks face=yap at_time=2s]
+[Action: Hicks body=walk_side at_time=1s]
+[Action: Hicks right_hand=point at_time=0.5s]
+[Prop: letterbox show at_time=3s]
+[Audio: Hicks file=monologue at_time=1s]
+[Location: bedroom]
+[Action: Hicks at=left at_time=0s]
+[Prop: letterbox at=640,480 at_time=2s]
+```
+
+`[Location:]` still belongs at the start of the scene (see the tag
+above). A background drop rewrites that scene's location tag; it does
+not add `at_time=`. Generated `audio/<scene>/<nnn>_<character>.wav`
+files are listed in the tree but do not create an `[Audio:]` tag — that
+tag only resolves `audio/<label>/001_<character>.wav` from Import audio.
+The reserved `mouth` slot still cannot be set with `[Action:]`.
+
 ## Head view (`view=` / `[View:]`)
 
 Each spoken line (and `[Audio:]` take) can pick which mouth/head drawing

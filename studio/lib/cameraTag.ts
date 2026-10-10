@@ -80,8 +80,25 @@ export function slugifySceneName(text: string): string {
   );
 }
 
+/** True when 1-based `lineNo` sits inside `[Scene: …]` whose slug is `sceneId`. */
+export function scriptLineInScene(
+  scriptText: string,
+  lineNo: number | null | undefined,
+  sceneId: string | null
+): boolean {
+  if (lineNo == null || lineNo < 1 || !sceneId) return false;
+  const lines = scriptText.split("\n");
+  let current: string | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(/^\s*\[Scene:\s*(.+?)\s*\]/i);
+    if (match) current = slugifySceneName(match[1]);
+    if (i + 1 === lineNo) return current === sceneId;
+  }
+  return false;
+}
+
 /**
- * Where to insert a new [Camera:] tag: after the playhead's script line when
+ * Where to insert a new tag: after the playhead's script line when
  * it is in this shot, otherwise after the last line of the current scene.
  */
 export function findInsertAfterLine(
@@ -90,7 +107,11 @@ export function findInsertAfterLine(
   sceneId: string | null
 ): number {
   const lines = scriptText.split("\n");
-  if (playheadLine != null && playheadLine >= 1) {
+  if (
+    playheadLine != null &&
+    playheadLine >= 1 &&
+    (!sceneId || scriptLineInScene(scriptText, playheadLine, sceneId))
+  ) {
     return Math.min(playheadLine, lines.length);
   }
   if (!sceneId) return lines.length;

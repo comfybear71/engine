@@ -7,6 +7,8 @@ import {
   clampImagineHeight,
   clampStageLayout,
   parseStoredLayout,
+  parseStoredLeftPool,
+  parseStoredTreeOpen,
 } from "../lib/stageLayout.ts";
 import { clampFrameIndex, formatTimecode, frameFromTrackX, scriptLineAtFrame } from "../lib/playhead.ts";
 import {
@@ -54,6 +56,15 @@ describe("stage layout", () => {
     assert.ok(DEFAULT_STAGE_LAYOUT.timelineHeight >= 7 * LANE_ROW_PX + 60);
     assert.equal(STAGE_LAYOUT_LIMITS.timelineHeight.min, 180);
     assert.equal(STAGE_LAYOUT_LIMITS.timelineHeight.max, 560);
+  });
+
+  test("left pool and assets tree persist helpers ignore junk", () => {
+    assert.equal(parseStoredLeftPool(null), null);
+    assert.equal(parseStoredLeftPool(JSON.stringify({ id: "assets" })), "assets");
+    assert.equal(parseStoredLeftPool("effects"), "effects");
+    assert.equal(parseStoredLeftPool(JSON.stringify({ id: "nope" })), null);
+    assert.deepEqual(parseStoredTreeOpen(null), {});
+    assert.deepEqual(parseStoredTreeOpen(JSON.stringify({ open: { characters: true } })), { characters: true });
   });
 
   test("legacy short timeline heights migrate to the new default", () => {

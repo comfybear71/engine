@@ -385,6 +385,24 @@ export async function loadStaging(name: string): Promise<Staging> {
   return res.json() as Promise<Staging>;
 }
 
+export type ProjectAudioFile = {
+  kind: "imported" | "generated";
+  label: string;
+  sceneId: string | null;
+  characterId: string;
+  characterName: string;
+  rel: string;
+  durationSeconds: number | null;
+  mtime?: number | null;
+};
+
+export async function loadProjectAudio(name: string): Promise<ProjectAudioFile[]> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/audio`);
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { files?: ProjectAudioFile[] };
+  return body.files || [];
+}
+
 export async function loadStage(name: string, script?: string | null): Promise<StageInfo> {
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/stage`, script));
   if (!res.ok) throw new Error(await readError(res));
