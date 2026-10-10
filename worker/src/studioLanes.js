@@ -93,6 +93,7 @@ function buildLaneBlocks(parsed) {
       endFrame: Math.max(endFrame, startFrame),
       scriptLine: event.scriptLine,
       sceneId: event.sceneId,
+      rel: event.rel || null,
     };
   });
 

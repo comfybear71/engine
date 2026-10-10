@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
         metavar="N",
         help="Compose global frame N to a PNG instead of rendering video (Studio preview)",
     )
+    parser.add_argument("--width", type=int, default=None, help="Optional output width (even, for proxy renders)")
+    parser.add_argument("--height", type=int, default=None, help="Optional output height (even, for proxy renders)")
     args = parser.parse_args(argv)
 
     project_dir: Path = args.project_dir.resolve()
@@ -69,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{len(timeline.scenes)} scene(s), {timeline.total_frames} frames "
         f"@ {timeline.fps}fps, codec={args.codec} -> {output_path}"
     )
-    render(timeline, output_path, codec=args.codec)
+    render(timeline, output_path, codec=args.codec, width=args.width, height=args.height)
     print(f"Done: {output_path}")
     return 0
 

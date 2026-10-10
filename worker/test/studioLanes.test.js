@@ -30,6 +30,26 @@ describe("studio lanes playhead", () => {
     });
     assert.equal(built.totalFrames, 10);
     assert.equal(built.blocks[0].endFrame, 12);
+    assert.equal(built.blocks[0].rel, null);
     assert.equal(clampFrame(built.blocks[0].endFrame, built.totalFrames), 9);
+  });
+
+  test("passes audio rel through to the block", () => {
+    const built = buildLaneBlocks({
+      timeline: { fps: 24 },
+      sceneLengths: [{ id: "intro", frames: 24 }],
+      laneEvents: [
+        {
+          lane: "audio",
+          sceneId: "intro",
+          startFrame: 0,
+          endFrame: 12,
+          label: "001_alice.wav",
+          scriptLine: 4,
+          rel: "audio/intro/001_alice.wav",
+        },
+      ],
+    });
+    assert.equal(built.blocks[0].rel, "audio/intro/001_alice.wav");
   });
 });

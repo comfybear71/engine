@@ -93,3 +93,32 @@ input[type="range"].studio-scrubber::-moz-range-thumb {
 .studio-field:disabled {
   opacity: 0.4;
 }
+
+input[type="range"].studio-zoom-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: #3a3a3a;
+  outline: none;
+}
+
+input[type="range"].studio-zoom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #f97316;
+  border: 2px solid #fff;
+  cursor: pointer;
+}
+
+input[type="range"].studio-zoom-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #f97316;
+  border: 2px solid #fff;
+  cursor: pointer;
+}

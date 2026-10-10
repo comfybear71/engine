@@ -243,7 +243,7 @@ class ScriptParser {
     this.sceneLengths = []; // { id, frames } in parse order, for global offsets
   }
 
-  _emitLane({ lane, token, startFrame, endFrame, label, subject }) {
+  _emitLane({ lane, token, startFrame, endFrame, label, subject, rel }) {
     if (!this.scene) return;
     const start = Math.max(0, startFrame);
     const end = Math.max(start, endFrame == null ? start : endFrame);
@@ -255,6 +255,7 @@ class ScriptParser {
       endFrame: end,
       label,
       subject: subject || null,
+      rel: rel || null,
     });
   }
 
@@ -1554,6 +1555,7 @@ class ScriptParser {
       endFrame: startFrame + durationFrames,
       label: path.basename(audioRelPath),
       subject: characterId,
+      rel: audioRelPath,
     });
 
     this.lines.push({

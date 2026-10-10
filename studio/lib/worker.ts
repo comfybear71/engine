@@ -98,6 +98,7 @@ export type LaneBlock = {
   endFrame: number;
   scriptLine: number | null;
   sceneId: string;
+  rel: string | null;
 };
 export type LaneScene = { id: string; startFrame: number; endFrame: number; frames: number };
 export type LanesResponse = {
@@ -505,10 +506,51 @@ export function renderOutputFile(script?: string | null): string {
   return `${base}.mp4`;
 }
 
-export function renderVideoUrl(name: string, bust?: number, script?: string | null): string {
-  const file = renderOutputFile(script);
+export function renderVideoUrl(
+  name: string,
+  bust?: number,
+  script?: string | null,
+  file?: string | null
+): string {
+  const output = file || renderOutputFile(script);
   const qs = bust ? `?t=${bust}` : "";
-  return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/renders/${encodeURIComponent(file)}${qs}`;
+  return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/renders/${encodeURIComponent(output)}${qs}`;
+}
+
+export function mediaUrl(name: string, rel: string): string {
+  return `${WORKER_URL}/api/projects/${encodeURIComponent(name)}/media?rel=${encodeURIComponent(rel)}`;
+}
+
+export type PlaybackVideoInfo = { file: string; upToDate: boolean };
+export type PlaybackAudioInfo = {
+  rel: string;
+  startFrame: number;
+  endFrame: number;
+  exists: boolean;
+};
+export type PlaybackStatus = {
+  fps: number;
+  totalFrames: number;
+  render: PlaybackVideoInfo | null;
+  proxy: PlaybackVideoInfo | null;
+  audio: PlaybackAudioInfo[];
+};
+
+export async function loadPlayback(name: string, script?: string | null): Promise<PlaybackStatus> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/playback`, script));
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<PlaybackStatus>;
+}
+
+export async function startPreviewRender(name: string, script?: string | null): Promise<RenderResponse> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/preview-render`, script), {
+    method: "POST",
+  });
+  const body = (await res.json().catch(() => ({}))) as RenderResponse;
+  if (!res.ok) {
+    throw new Error(body.error || `Preview render failed (${res.status})`);
+  }
+  return body;
 }
 
 export async function renderExists(name: string, script?: string | null): Promise<boolean> {
