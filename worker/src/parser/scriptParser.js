@@ -1914,23 +1914,28 @@ class ScriptParser {
       emitSentenceLines && words && words.length > 0 ? wordsToSentences(words) : [];
     if (sentences.length > 0) {
       for (const sentence of sentences) {
-        const lineStart = startFrame + framesFromSeconds(sentence.start - window.inSec, this.fps);
-        const lineEnd = startFrame + framesFromSeconds(sentence.end - window.inSec, this.fps);
+        if (sentence.end <= window.inSec || sentence.start >= window.outSec) continue;
+        if (sentence.start < window.inSec - 1e-6) continue;
+        const sentStart = Math.max(sentence.start, window.inSec);
+        const sentEnd = Math.min(sentence.end, window.outSec);
+        const lineStart = startFrame + framesFromSeconds(sentStart - window.inSec, this.fps);
+        const lineEnd = startFrame + framesFromSeconds(sentEnd - window.inSec, this.fps);
+        const chipEnd = Math.min(startFrame + window.durationFrames, Math.max(lineEnd, lineStart + 1));
         this._emitLane({
           lane: "dialogue",
           token,
           startFrame: lineStart,
-          endFrame: Math.max(lineEnd, lineStart + 1),
+          endFrame: chipEnd,
           label: `${scriptName}: ${sentence.text}`,
           subject: characterId,
           kv,
           sourceStartFrame: startFrame,
-          cues: this._sliceMouthCues(mouthCues, sentence.start, sentence.end),
+          cues: this._sliceMouthCues(mouthCues, sentStart, sentEnd),
           view: lineView,
           marriedId,
           audioRel: imported.wav,
           cuesRel: imported.cues,
-          syncText: text,
+          syncText: sentence.text || text,
           trim,
           sourceDurationFrames: window.sourceFrames,
           words,

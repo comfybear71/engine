@@ -885,6 +885,38 @@ describe("[Audio: Name file=<label>]", () => {
     assert.equal(clips[1].trim_out, 3.5);
     fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
   });
+
+  test("split [Audio:] windows do not emit overlapping dialogue chips", async () => {
+    const audioDir = path.join(fixture.projectDir, "audio", "monologue");
+    wav.writeSilentWav(path.join(audioDir, "001_alice.wav"), 4.0);
+    fs.writeFileSync(
+      path.join(audioDir, "001_alice.words.json"),
+      JSON.stringify([
+        { word: "Hello", start: 0.0, end: 0.4 },
+        { word: "there.", start: 0.4, end: 0.8 },
+        { word: "Later", start: 1.8, end: 2.1 },
+        { word: "on.", start: 2.1, end: 2.4 },
+      ])
+    );
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Audio: Alice file=monologue trim_out=2s]",
+      "[Audio: Alice file=monologue at_time=2s trim_in=2s]",
+    ].join("\n");
+    const { laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const dialogue = laneEvents.filter((e) => e.lane === "dialogue");
+    assert.ok(dialogue.length >= 2);
+    for (let i = 0; i < dialogue.length; i++) {
+      for (let j = i + 1; j < dialogue.length; j++) {
+        const overlap = dialogue[i].startFrame < dialogue[j].endFrame && dialogue[j].startFrame < dialogue[i].endFrame;
+        assert.equal(overlap, false, `${dialogue[i].label} overlaps ${dialogue[j].label}`);
+      }
+    }
+    assert.ok(dialogue.every((e) => e.syncText !== "Hello there. Later on."));
+    fs.rmSync(path.join(fixture.projectDir, "audio"), { recursive: true, force: true });
+  });
 });
 
 describe("at_time= / start= explicit start", () => {

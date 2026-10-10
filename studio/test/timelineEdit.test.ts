@@ -13,6 +13,7 @@ import {
   moveBlocksInScript,
   pinDurationWriteAttr,
   shiftLanesForMove,
+  shiftLanesForSplit,
   shiftLanesForTrim,
   shiftPlaybackAudio,
   planSplit,
@@ -229,6 +230,111 @@ describe("timeline script rewrite", () => {
     const undo = historyUndo(historyPush(emptyScriptHistory(), splitScript), applyTrimWrite(splitScript, rightOut));
     assert.ok(undo);
     assert.equal(undo.text, splitScript);
+  });
+
+  test("optimistic split does not duplicate dialogue chips", () => {
+    const split = planSplit({
+      blocks: [
+        {
+          id: "d1",
+          scriptLine: 2,
+          sceneId: "intro",
+          startFrame: 0,
+          endFrame: 24,
+          lane: "dialogue",
+          timing: { kind: "dialogue" as const },
+          trim: { inFrames: 0, outFrames: 96 },
+          sourceDurationFrames: 96,
+          sourceStartFrame: 0,
+          movable: true,
+        },
+        {
+          id: "d2",
+          scriptLine: 2,
+          sceneId: "intro",
+          startFrame: 24,
+          endFrame: 72,
+          lane: "dialogue",
+          timing: { kind: "dialogue" as const },
+          trim: { inFrames: 0, outFrames: 96 },
+          sourceDurationFrames: 96,
+          sourceStartFrame: 0,
+          movable: true,
+        },
+        {
+          id: "a",
+          scriptLine: 2,
+          sceneId: "intro",
+          startFrame: 0,
+          endFrame: 96,
+          lane: "audio",
+          timing: { kind: "audio" as const },
+          trim: { inFrames: 0, outFrames: 96 },
+          sourceDurationFrames: 96,
+          sourceStartFrame: 0,
+          movable: true,
+        },
+      ],
+      ids: ["a", "d1", "d2"],
+      playhead: 48,
+      scenes: [{ id: "intro", startFrame: 0 }],
+      fps: 24,
+      script: ["[Scene: Intro]", "[Audio: Alice file=monologue]"].join("\n"),
+    });
+    assert.ok(split);
+    const t0 = performance.now();
+    const next = shiftLanesForSplit(
+      {
+        fps: 24,
+        totalFrames: 96,
+        lanes: ["dialogue", "audio"],
+        scenes: [{ id: "intro", startFrame: 0, endFrame: 96, frames: 96 }],
+        blocks: [
+          {
+            id: "d1",
+            scriptLine: 2,
+            sceneId: "intro",
+            startFrame: 0,
+            endFrame: 24,
+            lane: "dialogue",
+            trim: { inFrames: 0, outFrames: 96 },
+            sourceStartFrame: 0,
+          },
+          {
+            id: "d2",
+            scriptLine: 2,
+            sceneId: "intro",
+            startFrame: 24,
+            endFrame: 72,
+            lane: "dialogue",
+            trim: { inFrames: 0, outFrames: 96 },
+            sourceStartFrame: 0,
+          },
+          {
+            id: "a",
+            scriptLine: 2,
+            sceneId: "intro",
+            startFrame: 0,
+            endFrame: 96,
+            lane: "audio",
+            trim: { inFrames: 0, outFrames: 96 },
+            sourceStartFrame: 0,
+          },
+        ],
+      },
+      [split],
+      48
+    );
+    const ms = performance.now() - t0;
+    const dialogue = next.blocks.filter((block) => block.lane === "dialogue");
+    const audio = next.blocks.filter((block) => block.lane === "audio");
+    assert.equal(audio.length, 2);
+    assert.equal(dialogue.length, 3);
+    assert.equal(dialogue.filter((block) => block.startFrame < 48).length, 2);
+    assert.equal(dialogue.filter((block) => block.startFrame >= 48).length, 1);
+    const at20 = dialogue.filter((block) => block.startFrame <= 24 && block.endFrame > 24);
+    assert.equal(at20.length, 1);
+    assert.ok(ms < 5, `optimistic split ${ms}ms`);
   });
 
   test("trim dialogue writes trim_in=/trim_out= and split keeps word timings", () => {

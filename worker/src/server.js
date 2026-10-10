@@ -78,6 +78,8 @@ const {
   writeStudioSettings,
   patchMouthCue,
   clearDialogueLipSync,
+  isSafeWavRel,
+  isSafeCuesRel,
 } = require("./voices/lipSync");
 const { snapshotScriptWrite, listScriptHistory, restoreScriptSnapshot } = require("./scriptHistory");
 const { describeEngineSettings, saveXaiApiKey } = require("./engineSettings");
@@ -1459,30 +1461,57 @@ function createApp(options = {}) {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const force = body.force === true;
     const clear = body.clear === true;
-    let result;
+    const directWav = typeof body.wavRel === "string" ? body.wavRel.replace(/\\/g, "/") : "";
+    const directCues = typeof body.cuesRel === "string" ? body.cuesRel.replace(/\\/g, "/") : "";
+    const canDirect =
+      !body.all &&
+      !clear &&
+      Number.isInteger(body.scriptLine) &&
+      body.scriptLine > 0 &&
+      isSafeWavRel(directWav) &&
+      isSafeCuesRel(directCues);
+    let result = null;
     try {
-      result = await parseForRead(projectDir, scriptName);
-    } catch (err) {
-      return res.status(400).json(parseErrorPayload(err));
-    }
-    try {
-      let targets = collectDialogueTargets(result.laneEvents);
-      if (body.all === true) {
-        if (!force && !clear) targets = targets.filter((item) => item.sync !== "synced");
+      let targets;
+      if (canDirect) {
+        const inSec = Number(body.inSec);
+        const outSec = Number(body.outSec);
+        targets = [
+          {
+            scriptLine: body.scriptLine,
+            startFrame: body.startFrame,
+            wavRel: directWav,
+            cuesRel: directCues,
+            text: body.text == null ? "" : String(body.text),
+            inSec: Number.isFinite(inSec) ? inSec : 0,
+            outSec: Number.isFinite(outSec) ? outSec : null,
+          },
+        ];
       } else {
-        const lines = new Set();
-        if (Number.isInteger(body.scriptLine) && body.scriptLine > 0) lines.add(body.scriptLine);
-        if (Array.isArray(body.scriptLines)) {
-          for (const line of body.scriptLines) {
-            if (Number.isInteger(line) && line > 0) lines.add(line);
+        result = await parseForRead(projectDir, scriptName);
+        const fps = (result.timeline && result.timeline.fps) || 24;
+        targets = collectDialogueTargets(result.laneEvents, { uniqueCuesRel: body.all === true, fps });
+        if (body.all === true) {
+          if (!force && !clear) targets = targets.filter((item) => item.sync !== "synced");
+        } else {
+          const lines = new Set();
+          if (Number.isInteger(body.scriptLine) && body.scriptLine > 0) lines.add(body.scriptLine);
+          if (Array.isArray(body.scriptLines)) {
+            for (const line of body.scriptLines) {
+              if (Number.isInteger(line) && line > 0) lines.add(line);
+            }
           }
-        }
-        if (lines.size === 0) {
-          return res.status(400).json({ error: "Pass scriptLine, scriptLines, or all: true." });
-        }
-        targets = targets.filter((item) => lines.has(item.scriptLine));
-        if (targets.length === 0) {
-          return res.status(404).json({ error: "No dialogue line to sync on that script line." });
+          if (lines.size === 0) {
+            return res.status(400).json({ error: "Pass scriptLine, scriptLines, or all: true." });
+          }
+          targets = targets.filter((item) => lines.has(item.scriptLine));
+          if (Number.isInteger(body.startFrame)) {
+            const hit = targets.filter((item) => item.startFrame === body.startFrame);
+            if (hit.length) targets = hit;
+          }
+          if (targets.length === 0) {
+            return res.status(404).json({ error: "No dialogue line to sync on that script line." });
+          }
         }
       }
       const synced = clear
@@ -1499,7 +1528,8 @@ function createApp(options = {}) {
         results: synced.results,
       });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      const status = /not found|required|Pass scriptLine/i.test(err.message) ? 400 : 500;
+      res.status(status).json({ error: err.message });
     } finally {
       cleanupTempParse(result);
     }

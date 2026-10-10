@@ -39,6 +39,7 @@ import {
   historyRedo,
   historyUndo,
   shiftPlaybackAudio,
+  sliceMouthCuesForWindow,
   type ScriptEditMeta,
 } from "@/lib/timelineEdit";
 import { replaceLineWithAudioChunks } from "@/lib/importAudio";
@@ -789,7 +790,19 @@ export default function StagePanel({
     playSelection(next);
   }
 
-  async function runLipSync(opts: { all?: boolean; scriptLine?: number; force?: boolean; clear?: boolean }) {
+  async function runLipSync(opts: {
+    all?: boolean;
+    scriptLine?: number;
+    force?: boolean;
+    clear?: boolean;
+    startFrame?: number;
+    endFrame?: number;
+    wavRel?: string;
+    cuesRel?: string;
+    inSec?: number;
+    outSec?: number;
+    text?: string;
+  }) {
     if (!project) return;
     await flushTimelineSave();
     setSyncing(true);
@@ -798,11 +811,45 @@ export default function StagePanel({
       const result = await syncDialogue(project, opts, script);
       const failed = result.results.find((item) => !item.ok);
       if (failed) setError(failed.message || "Lip-sync failed");
-      const nextLanes = await loadLanes(project, script);
-      setLanes(nextLanes);
-      if (nextLanes.totalFrames > 0) setTotalFrames(nextLanes.totalFrames);
-      frameCacheRef.current.clear();
-      setLanesEpoch((n) => n + 1);
+      const patched = result.results.find((item) => item.ok && item.mouthCues && item.cuesPath);
+      if (patched && !opts.all && !opts.clear) {
+        setLanes((current) => {
+          if (!current) return current;
+          const fpsNow = Math.max(1, current.fps || fps);
+          return {
+            ...current,
+            blocks: current.blocks.map((block) => {
+              if ((block.cuesRel || "") !== patched.cuesPath) return block;
+              const window =
+                block.lane === "dialogue" || block.role === "mouth"
+                  ? {
+                      inSec:
+                        ((block.trim?.inFrames || 0) +
+                          (block.startFrame - (block.sourceStartFrame ?? block.startFrame))) /
+                        fpsNow,
+                      outSec:
+                        ((block.trim?.inFrames || 0) +
+                          (block.endFrame - (block.sourceStartFrame ?? block.startFrame))) /
+                        fpsNow,
+                    }
+                  : { inSec: 0, outSec: Number.POSITIVE_INFINITY };
+              return {
+                ...block,
+                sync: "synced" as const,
+                cues: sliceMouthCuesForWindow(patched.mouthCues, window.inSec, window.outSec),
+              };
+            }),
+          };
+        });
+        frameCacheRef.current.clear();
+        setLanesEpoch((n) => n + 1);
+      } else {
+        const nextLanes = await loadLanes(project, script);
+        setLanes(nextLanes);
+        if (nextLanes.totalFrames > 0) setTotalFrames(nextLanes.totalFrames);
+        frameCacheRef.current.clear();
+        setLanesEpoch((n) => n + 1);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Lip-sync failed");
     } finally {

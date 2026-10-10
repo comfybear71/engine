@@ -264,7 +264,10 @@ clobber the project's `timeline.json`.
   block(s) at the playhead into two script lines (timed tags keep
   durations; audio/dialogue become two clips with matching
   `at_time=` / `trim_in=` / `trim_out=`; word timings stay on the
-  source). Ctrl+Z / Ctrl+Y (and
+  source). The chips update immediately (one batched rewrite +
+  optimistic lanes, `PUT /script?parse=0`); a sentence that spans the
+  cut stays on the left half so split pieces do not stack as duplicate
+  Dialogue rows. Ctrl+Z / Ctrl+Y (and
   Ctrl+Shift+Z) undo/redo as script-text snapshots; the timeline header
   has the same buttons.
   Right-click a block for a slim menu: **Copy**, **Cut**, **Paste** (at
@@ -307,7 +310,10 @@ clobber the project's `timeline.json`.
   are not mounted. Each Dialogue chip shows a small
   status dot (grey = not synced, green = synced, amber = stale) and a
   14px sync icon on hover or when selected — Sync this line, or Redo
-  sync when it is already green. The thin header has **Sync all**, play
+  sync when it is already green. Redo on any Dialogue chip (not only
+  the first) slices that line's window out of a shared long WAV, runs
+  Rhubarb on the slice, and merges cues at the source offset — it does
+  not re-parse the script or wipe the rest of the file. The thin header has **Sync all**, play
   selection, loop selection, and an Auto/Manual lip-sync mode (Manual
   skips Rhubarb after ElevenLabs / Import audio; write `studio.json`
   `{ "lipSync": "manual" }` or use the header toggle). A selected

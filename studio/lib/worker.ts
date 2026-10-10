@@ -650,6 +650,10 @@ export type LipSyncResult = {
   message?: string;
   sync?: "not_synced" | "synced" | "stale";
   cuesPath?: string;
+  inSec?: number;
+  outSec?: number | null;
+  mouthCues?: { start: number; end: number; value?: string; shape?: string; pinned?: boolean }[];
+  windowed?: boolean;
 };
 
 export async function loadStudioSettings(name: string): Promise<StudioSettings> {
@@ -670,7 +674,20 @@ export async function saveStudioSettings(name: string, patch: Partial<StudioSett
 
 export async function syncDialogue(
   name: string,
-  body: { all?: boolean; scriptLine?: number; scriptLines?: number[]; force?: boolean; clear?: boolean },
+  body: {
+    all?: boolean;
+    scriptLine?: number;
+    scriptLines?: number[];
+    force?: boolean;
+    clear?: boolean;
+    startFrame?: number;
+    endFrame?: number;
+    wavRel?: string;
+    cuesRel?: string;
+    inSec?: number;
+    outSec?: number;
+    text?: string;
+  },
   script?: string | null
 ): Promise<{ ok: boolean; lipSync: "auto" | "manual"; results: LipSyncResult[] }> {
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lipsync`, script), {

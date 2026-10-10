@@ -31,7 +31,10 @@ import {
   lineHasPinHold,
   moveBlocksInScript,
   shiftLanesForMove,
+  shiftLanesForSplit,
   shiftLanesForTrim,
+  dialogueSourceWindowSec,
+  dialogueSyncText,
   type ScriptEditMeta,
   planSplit,
   planTrim,
@@ -165,7 +168,18 @@ export default function TimelineLanes({
   canRedo?: boolean;
   onUndo?: () => void;
   onRedo?: () => void;
-  onSyncLines?: (opts: { all?: boolean; scriptLine?: number; force?: boolean }) => void;
+  onSyncLines?: (opts: {
+    all?: boolean;
+    scriptLine?: number;
+    force?: boolean;
+    startFrame?: number;
+    endFrame?: number;
+    wavRel?: string;
+    cuesRel?: string;
+    inSec?: number;
+    outSec?: number;
+    text?: string;
+  }) => void;
   onPlaySelection?: () => void;
   onToggleLoopSelection?: () => void;
   onSelectionRange?: (range: { start: number; end: number; scriptLine: number | null } | null) => void;
@@ -522,7 +536,12 @@ export default function TimelineLanes({
     );
     if (writes.length === 0) return;
     const next = splitBlocksInScript(scriptText, writes);
-    if (next !== scriptText) onEditScript(next);
+    if (next === scriptText) return;
+    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const optimistic = lanes ? shiftLanesForSplit(lanes, writes, frame) : undefined;
+    const ms = (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0;
+    if (typeof console !== "undefined") console.debug(`[timeline] split apply ${Math.round(ms)}ms`);
+    onEditScript(next, { lanes: optimistic, ids: [...seeds] });
   }
 
   function canSplitSelection(): boolean {
@@ -621,6 +640,21 @@ export default function TimelineLanes({
     if (next !== scriptText) onEditScript(next);
   }
 
+  function lipSyncOpts(block: LaneBlock, force: boolean) {
+    const window = dialogueSourceWindowSec(block, fps);
+    return {
+      scriptLine: block.scriptLine ?? undefined,
+      force,
+      startFrame: block.startFrame,
+      endFrame: block.endFrame,
+      wavRel: block.audioRel || block.rel || undefined,
+      cuesRel: block.cuesRel || undefined,
+      inSec: window.inSec,
+      outSec: window.outSec,
+      text: dialogueSyncText(block),
+    };
+  }
+
   function longSelectedAudio() {
     return allBlocks.find((block) => {
       if (!selectedIds.has(block.id) || block.lane !== "audio" || !block.rel) return false;
@@ -643,7 +677,7 @@ export default function TimelineLanes({
       const block =
         allBlocks.find((item) => seeds.has(item.id) && item.lane === "dialogue") ||
         allBlocks.find((item) => seeds.has(item.id) && item.scriptLine != null);
-      if (block?.scriptLine != null) onSyncLines?.({ scriptLine: block.scriptLine, force: action === "redo-sync" });
+      if (block?.scriptLine != null) onSyncLines?.(lipSyncOpts(block, action === "redo-sync"));
     } else if (action === "split-long-audio") {
       const block = longSelectedAudio();
       if (block) onSplitLongAudio?.(block);
@@ -1379,11 +1413,7 @@ export default function TimelineLanes({
                               }
                               onSyncLine={
                                 onSyncLines
-                                  ? () =>
-                                      onSyncLines({
-                                        scriptLine: block.scriptLine ?? undefined,
-                                        force: block.sync === "synced",
-                                      })
+                                  ? () => onSyncLines(lipSyncOpts(block, block.sync === "synced"))
                                   : undefined
                               }
                             />

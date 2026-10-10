@@ -319,6 +319,159 @@ export function shiftLanesForTrim<T extends MovableLanes>(
   return { ...lanes, blocks, scenes, totalFrames: Math.max(1, maxEnd) };
 }
 
+export function dialogueSourceWindowSec(
+  block: { startFrame: number; endFrame: number; sourceStartFrame?: number; trim?: { inFrames: number; outFrames: number } | null },
+  fps: number
+): { inSec: number; outSec: number } {
+  const safeFps = Math.max(1, Number(fps) || 24);
+  const trimIn = Number(block.trim && block.trim.inFrames) || 0;
+  const sourceStart = block.sourceStartFrame == null ? block.startFrame : block.sourceStartFrame;
+  const localIn = Math.max(0, (block.startFrame - sourceStart) / safeFps);
+  const localOut = Math.max(localIn + 1 / safeFps, (block.endFrame - sourceStart) / safeFps);
+  return {
+    inSec: Math.round((trimIn / safeFps + localIn) * 1000) / 1000,
+    outSec: Math.round((trimIn / safeFps + localOut) * 1000) / 1000,
+  };
+}
+
+export function dialogueSyncText(block: { label?: string | null; words?: { word: string }[] | null }): string {
+  const label = String(block.label || "");
+  const cut = label.indexOf(": ");
+  if (cut >= 0) return label.slice(cut + 2).trim();
+  if (Array.isArray(block.words) && block.words.length) {
+    return block.words.map((word) => word.word).join(" ").replace(/\s+([,.!?;:])/g, "$1");
+  }
+  return "";
+}
+
+export function sliceMouthCuesForWindow(
+  cues: { start: number; end: number; value?: string; shape?: string; pinned?: boolean }[] | null | undefined,
+  inSec: number,
+  outSec: number
+): { shape: string; start: number; end: number; pinned?: boolean }[] {
+  return (cues || [])
+    .filter((cue) => Number(cue.end) > inSec && Number(cue.start) < outSec)
+    .map((cue) => ({
+      shape: String(cue.shape || cue.value || "X"),
+      start: Math.max(0, Number(cue.start) - inSec),
+      end: Math.max(0, Math.min(outSec, Number(cue.end)) - inSec),
+      ...(cue.pinned ? { pinned: true } : {}),
+    }))
+    .filter((cue) => cue.end > cue.start);
+}
+
+function assignOptimisticRows<T extends { lane?: string; startFrame: number; endFrame: number; row?: number }>(blocks: T[]): T[] {
+  const byLane = new Map<string, T[]>();
+  for (const block of blocks) {
+    const lane = block.lane || "";
+    const list = byLane.get(lane) || [];
+    list.push(block);
+    byLane.set(lane, list);
+  }
+  for (const list of byLane.values()) {
+    const sorted = [...list].sort(
+      (a, b) => a.startFrame - b.startFrame || a.endFrame - b.endFrame
+    );
+    const rowEnds: number[] = [];
+    for (const block of sorted) {
+      let row = 0;
+      for (; row < rowEnds.length; row++) {
+        if (rowEnds[row] <= block.startFrame) break;
+      }
+      if (row === rowEnds.length) rowEnds.push(block.endFrame);
+      else rowEnds[row] = block.endFrame;
+      block.row = block.lane === "mouth" ? 0 : row;
+    }
+  }
+  return blocks;
+}
+
+/** Split selected chips at the playhead in memory — no re-parse. */
+export function shiftLanesForSplit<T extends MovableLanes>(
+  lanes: T,
+  writes: LineSplitWrite[],
+  playhead: number
+): T {
+  if (!writes.length) return lanes;
+  const ordered = [...writes].sort((a, b) => b.scriptLine - a.scriptLine);
+  let blocks = lanes.blocks.map((block) => ({ ...block }));
+  for (const write of ordered) {
+    const line = write.scriptLine;
+    const members = blocks.filter((block) => block.scriptLine === line);
+    if (!members.length) continue;
+    const take = takeWindowForIds(blocks, members.map((block) => block.id));
+    if (!take || playhead <= take.start || playhead >= take.end) continue;
+    const splitSource = take.trimIn + (playhead - take.start);
+    blocks = blocks.map((block) =>
+      block.scriptLine != null && block.scriptLine > line
+        ? { ...block, scriptLine: block.scriptLine + 1 }
+        : block
+    );
+    const next: typeof blocks = [];
+    for (const block of blocks) {
+      if (block.scriptLine !== line) {
+        next.push(block);
+        continue;
+      }
+      const marriedRight = block.marriedId ? `${block.marriedId}:r` : null;
+      if (block.endFrame <= playhead) {
+        next.push({
+          ...block,
+          trim: { inFrames: block.trim?.inFrames ?? take.trimIn, outFrames: splitSource },
+        });
+      } else if (block.startFrame >= playhead) {
+        next.push({
+          ...block,
+          id: `${block.id}-r`,
+          scriptLine: line + 1,
+          marriedId: marriedRight,
+          sourceStartFrame: playhead,
+          trim: { inFrames: splitSource, outFrames: block.trim?.outFrames ?? take.trimOut },
+        });
+      } else {
+        next.push({
+          ...block,
+          endFrame: playhead,
+          trim: { inFrames: block.trim?.inFrames ?? take.trimIn, outFrames: splitSource },
+        });
+        next.push({
+          ...block,
+          id: `${block.id}-r`,
+          scriptLine: line + 1,
+          startFrame: playhead,
+          sourceStartFrame: playhead,
+          marriedId: marriedRight,
+          trim: { inFrames: splitSource, outFrames: block.trim?.outFrames ?? take.trimOut },
+        });
+      }
+    }
+    blocks = next;
+  }
+  assignOptimisticRows(blocks);
+  const byScene = new Map<string, { start: number; end: number }>();
+  for (const block of blocks) {
+    if (!block.sceneId) continue;
+    const cur = byScene.get(block.sceneId);
+    if (!cur) byScene.set(block.sceneId, { start: block.startFrame, end: block.endFrame });
+    else {
+      cur.start = Math.min(cur.start, block.startFrame);
+      cur.end = Math.max(cur.end, block.endFrame);
+    }
+  }
+  const scenes = (lanes.scenes || []).map((scene) => {
+    const span = byScene.get(scene.id);
+    if (!span) return scene;
+    return {
+      ...scene,
+      startFrame: span.start,
+      endFrame: span.end,
+      frames: Math.max(1, span.end - span.start),
+    };
+  });
+  const maxEnd = blocks.reduce((max, block) => Math.max(max, block.endFrame), 0);
+  return { ...lanes, blocks, scenes, totalFrames: Math.max(1, maxEnd) };
+}
+
 export function shiftPlaybackAudio<T extends { startFrame: number; endFrame: number; rel?: string | null }>(
   clips: T[],
   delta: number,
