@@ -4,17 +4,18 @@
 /**
  * CLI entry point. Subcommands:
  *
- *   node src/cli.js parse  <projectDir> [--script script.txt] [--out timeline.json]
- *   node src/cli.js lint   <projectDir> [--script script.txt]
- *   node src/cli.js voices <projectDir> [--dry-run] [--force] [--script script.txt]
- *   node src/cli.js render <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
- *   node src/cli.js watch  <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
+ *   node src/cli.js parse        <projectDir> [--script script.txt] [--out timeline.json]
+ *   node src/cli.js lint         <projectDir> [--script script.txt]
+ *   node src/cli.js voices       <projectDir> [--dry-run] [--force] [--script script.txt]
+ *   node src/cli.js import-audio <projectDir> <file> --character <id> [--name <label>] [--dry-run] [--no-transcribe]
+ *   node src/cli.js render       <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
+ *   node src/cli.js watch        <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
  *
  * `render` parses script.txt first (then renders) when --from-script is
  * given, or automatically when the project has a script.txt but no
  * timeline.json yet. `watch` re-parses (if applicable) and re-renders
  * whenever script.txt or timeline.json changes. `watch` never calls
- * ElevenLabs; use `voices` for that.
+ * ElevenLabs; use `voices` or `import-audio` for that.
  */
 
 const fs = require("fs");
@@ -26,6 +27,7 @@ const { renderProject } = require("./render");
 const { watchProject } = require("./watcher");
 const { parseProjectToFiles } = require("./parser");
 const { runVoices } = require("./voices");
+const { runImportAudio } = require("./importAudio");
 
 function parseFlags(argv) {
   const flags = { _: [] };
@@ -51,11 +53,12 @@ function printUsageAndExit() {
   console.error(
     [
       "Usage:",
-      "  node src/cli.js parse  <projectDir> [--script script.txt] [--out timeline.json]",
-      "  node src/cli.js lint   <projectDir> [--script script.txt]",
-      "  node src/cli.js voices <projectDir> [--dry-run] [--force] [--script script.txt]",
-      "  node src/cli.js render <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
-      "  node src/cli.js watch  <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
+      "  node src/cli.js parse        <projectDir> [--script script.txt] [--out timeline.json]",
+      "  node src/cli.js lint         <projectDir> [--script script.txt]",
+      "  node src/cli.js voices       <projectDir> [--dry-run] [--force] [--script script.txt]",
+      "  node src/cli.js import-audio <projectDir> <file> --character <id> [--name <label>] [--dry-run] [--no-transcribe]",
+      "  node src/cli.js render       <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
+      "  node src/cli.js watch        <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
     ].join("\n")
   );
   process.exit(2);
@@ -161,6 +164,24 @@ async function cmdVoices(flags) {
   }
 }
 
+async function cmdImportAudio(flags) {
+  const projectDir = flags._[0];
+  const sourceFile = flags._[1];
+  if (!projectDir || !sourceFile || !flags.character) printUsageAndExit();
+  try {
+    const result = await runImportAudio(projectDir, sourceFile, {
+      character: flags.character,
+      name: flags.name,
+      dryRun: !!flags["dry-run"],
+      noTranscribe: !!flags["no-transcribe"],
+    });
+    if (!result.ok) process.exit(1);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+}
+
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   const flags = parseFlags(rest);
@@ -176,6 +197,8 @@ async function main() {
       return cmdWatch(flags);
     case "voices":
       return cmdVoices(flags);
+    case "import-audio":
+      return cmdImportAudio(flags);
     default:
       printUsageAndExit();
   }

@@ -21,12 +21,13 @@ describe("tokenizer", () => {
         "[Swing: Alice right_arm=15 period=0.4s for=1s]",
         "[Camera: zoom=1.3 over=2s]",
         "[Pause: 12]",
+        "[Audio: Alice file=monologue]",
         "Alice: Hello there.",
       ].join("\n")
     );
     assert.deepEqual(
       tokens.map((t) => t.kind),
-      ["scene", "location", "cast", "action", "prop", "layer", "move", "pose", "swing", "camera", "pause", "dialogue"]
+      ["scene", "location", "cast", "action", "prop", "layer", "move", "pose", "swing", "camera", "pause", "audio", "dialogue"]
     );
   });
 

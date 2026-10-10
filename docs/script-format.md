@@ -8,11 +8,12 @@ character/slot/drawing/location/mark reference against the
 
 ```bash
 cd worker
-node src/cli.js parse  ../projects/sample              # script.txt -> timeline.json + lines.json
-node src/cli.js lint   ../projects/sample              # parse + validate only, no files written
-node src/cli.js voices ../projects/sample [--dry-run]  # ElevenLabs WAVs + Rhubarb cues (never from watch)
-node src/cli.js render ../projects/sample --from-script # parse, then render
-node src/cli.js watch  ../projects/sample --from-script # re-parse + re-render on every script.txt save
+node src/cli.js parse        ../projects/sample              # script.txt -> timeline.json + lines.json
+node src/cli.js lint         ../projects/sample              # parse + validate only, no files written
+node src/cli.js voices       ../projects/sample [--dry-run]  # ElevenLabs WAVs + Rhubarb cues (never from watch)
+node src/cli.js import-audio ../projects/sample take.mp3 --character hicks --name monologue
+node src/cli.js render       ../projects/sample --from-script # parse, then render
+node src/cli.js watch        ../projects/sample --from-script # re-parse + re-render on every script.txt save
 ```
 
 Every error the parser raises cites the **script.txt line number** it came
@@ -253,6 +254,48 @@ then ends back at it. Ease is always `inout`.
 Keyframe count for `for` = `period` at 24 fps is 5 (frames 0, T/4, T/2,
 3T/4, T), first and last at the start angle.
 
+### `[Audio: Name file=<label>]`
+
+Places a pre-recorded track imported with `node src/cli.js import-audio` as
+that character's dialogue, starting at the current scene cursor. The
+timeline then advances by the **real file duration** (via `ffprobe`), so a
+3+ minute take extends the scene the same way a spoken line does.
+
+```text
+[Audio: Hicks file=monologue]
+```
+
+`file=` is the `--name` label from import-audio (not a raw path). The
+parser looks for:
+
+```
+audio/<label>/001_<character>.wav
+audio/<label>/001_<character>.wav.rhubarb.json
+audio/<label>/001_<character>.words.json
+```
+
+The WAV is mixed and lip-synced through the existing dialogue + Rhubarb
+path (`slots.mouth` with `lipsync.source: "dialogue"`). Missing WAV is a
+line-numbered error -- this tag does not estimate duration. If
+`words.json` is present, those `{word,start,end}` timings are copied onto
+the dialogue clip as `words` (see [timeline-schema.md](timeline-schema.md))
+and, unless `lines=false`, the Dialogue lane gets one block per
+sentence/pause so the transcript is readable. The Audio lane still shows
+the single imported file.
+
+Import first (prints length + an ElevenLabs STT credit note before it
+runs; `--dry-run` stops there; `--no-transcribe` skips STT):
+
+```bash
+cd worker
+node src/cli.js import-audio ../projects/my_ep interview.mp3 --character hicks --name monologue
+node src/cli.js import-audio ../projects/my_ep interview.mp3 --character hicks --name monologue --dry-run
+node src/cli.js import-audio ../projects/my_ep interview.mp3 --character hicks --name monologue --no-transcribe
+```
+
+Single speaker only. Studio can call the same work later via
+`POST /api/projects/:name/import-audio` -- see [docs/studio.md](studio.md).
+
 ### `Character: dialogue text`
 
 A spoken line. `Character` is matched the same way as in `[Cast: ...]`.
@@ -334,6 +377,18 @@ order:
       "cues_path": "audio/morning_argument/001_hicks.wav.rhubarb.json",
       "voice_id": null,
       "status": "ok"
+    },
+    {
+      "scene_id": "interview",
+      "line_number": 1,
+      "character": "hicks",
+      "text": "Full transcript from words.json if present.",
+      "audio_path": "audio/monologue/001_hicks.wav",
+      "cues_path": "audio/monologue/001_hicks.wav.rhubarb.json",
+      "words_path": "audio/monologue/001_hicks.words.json",
+      "voice_id": null,
+      "status": "ok",
+      "source": "import"
     }
   ]
 }
@@ -346,7 +401,9 @@ or `"missing"` if it doesn't (estimated duration used; an
 considered, not only `"missing"` rows), records through ElevenLabs when
 the credit-guard sidecar doesn't match, writes Rhubarb cues next to the
 WAV when Rhubarb is installed, then re-runs parse so timings come from
-the real files -- see [docs/voices.md](voices.md).
+the real files -- see [docs/voices.md](voices.md). Rows with
+`"source": "import"` (from `[Audio: ...]`) are skipped so a pre-recorded
+take is never overwritten.
 
 ## Errors
 
