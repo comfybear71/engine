@@ -83,6 +83,72 @@ describe("loadStaging", () => {
   });
 });
 
+describe("episode -> show -> global resolution", () => {
+  const tmp = fs.mkdtempSync(path.join(require("os").tmpdir(), "engine-show-assets-"));
+  const globalAssetsDir = path.join(tmp, "_global_assets");
+  const showDir = path.join(tmp, "shows", "sunny_banks");
+  const episodeDir = path.join(showDir, "episodes", "pilot");
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  fs.mkdirSync(path.join(globalAssetsDir, "characters", "alice", "mouth"), { recursive: true });
+  fs.mkdirSync(path.join(showDir, "characters", "alice", "mouth"), { recursive: true });
+  fs.mkdirSync(path.join(episodeDir, "characters", "alice", "mouth"), { recursive: true });
+  fs.mkdirSync(path.join(showDir, "characters", "rodney"), { recursive: true });
+  fs.writeFileSync(path.join(showDir, "show.json"), JSON.stringify({ name: "Sunny Banks" }));
+  fs.writeFileSync(path.join(globalAssetsDir, "characters", "alice", "body.png"), "global-body");
+  fs.writeFileSync(path.join(showDir, "characters", "alice", "body.png"), "show-body");
+  fs.writeFileSync(path.join(episodeDir, "characters", "alice", "body.png"), "episode-body");
+  fs.writeFileSync(path.join(globalAssetsDir, "characters", "alice", "mouth", "A.png"), "global-A");
+  fs.writeFileSync(path.join(showDir, "characters", "alice", "mouth", "A.png"), "show-A");
+  fs.writeFileSync(path.join(showDir, "characters", "alice", "mouth", "B.png"), "show-B");
+  fs.writeFileSync(path.join(globalAssetsDir, "characters", "alice", "mouth", "C.png"), "global-C");
+  fs.writeFileSync(path.join(showDir, "characters", "rodney", "character.json"), JSON.stringify({ id: "rodney" }));
+
+  test("episode file wins over show and global", () => {
+    const resolved = assetLibrary.resolveAsset(episodeDir, globalAssetsDir, "characters/alice/body.png");
+    assert.equal(resolved.source, "project");
+    assert.equal(fs.readFileSync(resolved.absPath, "utf8"), "episode-body");
+    assert.equal(resolved.timelinePath, "characters/alice/body.png");
+  });
+
+  test("show file wins over global when the episode has no override", () => {
+    fs.rmSync(path.join(episodeDir, "characters", "alice", "body.png"));
+    const resolved = assetLibrary.resolveAsset(episodeDir, globalAssetsDir, "characters/alice/body.png");
+    assert.equal(resolved.source, "show");
+    assert.equal(fs.readFileSync(resolved.absPath, "utf8"), "show-body");
+    assert.match(resolved.timelinePath, /characters\/alice\/body\.png$/);
+    assert.match(resolved.timelinePath, /\.\.\//);
+    fs.writeFileSync(path.join(episodeDir, "characters", "alice", "body.png"), "episode-body");
+  });
+
+  test("global is still used when neither episode nor show has the file", () => {
+    const resolved = assetLibrary.resolveAsset(episodeDir, globalAssetsDir, "characters/alice/mouth/C.png");
+    assert.equal(resolved.source, "global");
+  });
+
+  test("scanDrawingsDir merges global then show then episode", () => {
+    fs.writeFileSync(path.join(episodeDir, "characters", "alice", "mouth", "A.png"), "episode-A");
+    const drawings = assetLibrary.scanDrawingsDir(episodeDir, globalAssetsDir, "characters/alice/mouth");
+    assert.equal(fs.readFileSync(drawings.get("A").absPath, "utf8"), "episode-A");
+    assert.equal(fs.readFileSync(drawings.get("B").absPath, "utf8"), "show-B");
+    assert.equal(fs.readFileSync(drawings.get("C").absPath, "utf8"), "global-C");
+  });
+
+  test("show-only characters are known to the episode", () => {
+    const ids = assetLibrary.listKnownCharacterIds(episodeDir, globalAssetsDir);
+    assert.ok(ids.includes("rodney"));
+    assert.ok(ids.includes("alice"));
+  });
+
+  test("flat projects still ignore a sibling shows folder", () => {
+    const flat = path.join(tmp, "experiment");
+    fs.mkdirSync(flat, { recursive: true });
+    const resolved = assetLibrary.resolveAsset(flat, globalAssetsDir, "characters/alice/body.png");
+    assert.equal(resolved.source, "global");
+    assert.equal(assetLibrary.resolveShowAssetsDir(flat), null);
+  });
+});
+
 describe("loadCharacter / listKnownCharacterIds", () => {
   test("loads a character.json by id", () => {
     const alice = assetLibrary.loadCharacter(fixture.projectDir, fixture.globalAssetsDir, "alice");

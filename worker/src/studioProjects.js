@@ -20,6 +20,7 @@ const {
   listKnownCharacterIds,
   listKnownLocations,
   resolveAsset,
+  resolveShowAssetsDir,
 } = require("./parser/assetLibrary");
 
 const DEFAULT_SCRIPT = "script.txt";
@@ -326,8 +327,10 @@ async function summarizeProject(projectDir, name, globalAssetsDir) {
   const scriptName = used.scripts[0] || DEFAULT_SCRIPT;
   const durationSeconds = await resolveProjectDuration(projectDir, scriptName);
   const thumbRel = firstThumbRel(projectDir, globalAssetsDir, used.locationIds);
+  const showDir = resolveShowAssetsDir(projectDir);
   return {
     name,
+    showId: showDir ? path.basename(showDir) : null,
     scripts: used.scripts,
     thumbRel,
     thumbMtime: resolvedMtime(projectDir, globalAssetsDir, thumbRel),
@@ -339,10 +342,10 @@ async function summarizeProject(projectDir, name, globalAssetsDir) {
 
 async function summarizeProjectCached(projectDir, name, globalAssetsDir) {
   const fp = projectSummaryFingerprint(projectDir);
-  const hit = summaryCache.get(name);
+  const hit = summaryCache.get(projectDir);
   if (hit && hit.fp === fp) return hit.summary;
   const summary = await summarizeProject(projectDir, name, globalAssetsDir);
-  summaryCache.set(name, { fp, summary });
+  summaryCache.set(projectDir, { fp, summary });
   return summary;
 }
 
@@ -374,8 +377,24 @@ function trashRoot(projectsDir) {
 }
 
 function originalNameFromTrash(folder) {
-  const match = String(folder).match(/^(.*)-(\d+)$/);
+  const match = String(folder).match(/^(?:show-)?(.*)-(\d+)$/);
   return match ? match[1] : folder;
+}
+
+const TRASH_META_FILENAME = "engine-trash.json";
+
+function writeTrashMeta(folder, meta) {
+  fs.writeFileSync(path.join(folder, TRASH_META_FILENAME), JSON.stringify(meta, null, 2) + "\n");
+}
+
+function readTrashMeta(folder) {
+  const file = path.join(folder, TRASH_META_FILENAME);
+  if (!fs.existsSync(file)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 function walkStats(absPath) {
@@ -462,18 +481,11 @@ function assertManagedProject(projectsDir, name) {
   return projectDir;
 }
 
-function moveProjectToTrash(projectsDir, name) {
-  const projectDir = assertManagedProject(projectsDir, name);
-  const root = path.resolve(projectsDir);
-  const globalDir = path.resolve(root, GLOBAL_ASSETS_NAME);
-  if (path.resolve(projectDir) === globalDir) {
-    const err = new Error("Cannot delete _global_assets");
-    err.code = "EINVAL";
-    throw err;
-  }
-  const trashDir = trashRoot(projectsDir);
+function moveFolderToTrash(trashHome, folderDir, originalName, meta) {
+  const trashDir = trashRoot(trashHome);
   fs.mkdirSync(trashDir, { recursive: true });
-  const trashName = `${name}-${Date.now()}`;
+  const prefix = meta && meta.kind === "show" ? "show-" : "";
+  const trashName = `${prefix}${originalName}-${Date.now()}`;
   if (!SAFE_FOLDER_NAME.test(trashName)) {
     const err = new Error("Invalid trash name");
     err.code = "EINVAL";
@@ -486,8 +498,28 @@ function moveProjectToTrash(projectsDir, name) {
     err.code = "EINVAL";
     throw err;
   }
-  fs.renameSync(projectDir, dest);
-  return { id: trashName, originalName: name, deletedAt: new Date().toISOString() };
+  fs.renameSync(folderDir, dest);
+  if (meta) writeTrashMeta(dest, { ...meta, originalName });
+  return {
+    id: trashName,
+    originalName,
+    deletedAt: new Date().toISOString(),
+    kind: (meta && meta.kind) || "project",
+    showId: (meta && meta.showId) || null,
+  };
+}
+
+function moveProjectToTrash(projectsDir, name, options = {}) {
+  const parentDir = options.parentDir || projectsDir;
+  const projectDir = assertManagedProject(parentDir, name);
+  const root = path.resolve(projectsDir);
+  const globalDir = path.resolve(root, GLOBAL_ASSETS_NAME);
+  if (path.resolve(projectDir) === globalDir) {
+    const err = new Error("Cannot delete _global_assets");
+    err.code = "EINVAL";
+    throw err;
+  }
+  return moveFolderToTrash(projectsDir, projectDir, name, options.meta || null);
 }
 
 function listTrash(projectsDir) {
@@ -500,11 +532,14 @@ function listTrash(projectsDir) {
       const full = path.join(dir, entry.name);
       const match = entry.name.match(/-(\d+)$/);
       const deletedAt = match ? new Date(Number(match[1])).toISOString() : fs.statSync(full).mtime.toISOString();
+      const meta = readTrashMeta(full);
       return {
         id: entry.name,
-        originalName: originalNameFromTrash(entry.name),
+        originalName: (meta && meta.originalName) || originalNameFromTrash(entry.name),
         deletedAt,
         bytes: walkStats(full).bytes,
+        kind: (meta && meta.kind) || "project",
+        showId: (meta && meta.showId) || null,
       };
     })
     .sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
@@ -521,15 +556,45 @@ function resolveTrashEntry(projectsDir, trashName) {
   return resolved;
 }
 
-function restoreFromTrash(projectsDir, trashName) {
+function restoreFromTrash(projectsDir, trashName, options = {}) {
   const src = resolveTrashEntry(projectsDir, trashName);
   if (!src || !fs.existsSync(src) || !fs.statSync(src).isDirectory()) {
     const err = new Error(`Trash item not found: ${trashName}`);
     err.code = "ENOENT";
     throw err;
   }
-  const originalName = originalNameFromTrash(trashName);
-  const dest = resolveInside(projectsDir, originalName);
+  const meta = readTrashMeta(src);
+  const originalName = (meta && meta.originalName) || originalNameFromTrash(trashName);
+  let dest;
+  let kind = (meta && meta.kind) || "project";
+  if (kind === "show") {
+    const showsDir = options.showsDir;
+    if (!showsDir) {
+      const err = new Error("Cannot restore a show without a shows folder");
+      err.code = "EINVAL";
+      throw err;
+    }
+    dest = resolveInside(showsDir, originalName);
+  } else if (kind === "episode") {
+    const showsDir = options.showsDir;
+    const showId = meta && meta.showId;
+    if (!showsDir || !showId) {
+      const err = new Error("Cannot restore an episode without its show");
+      err.code = "EINVAL";
+      throw err;
+    }
+    dest = path.resolve(showsDir, showId, "episodes", originalName);
+    const episodesRoot = path.resolve(showsDir, showId, "episodes");
+    fs.mkdirSync(episodesRoot, { recursive: true });
+    const rel = path.relative(episodesRoot, dest);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      const err = new Error("Invalid episode name");
+      err.code = "EINVAL";
+      throw err;
+    }
+  } else {
+    dest = resolveInside(projectsDir, originalName);
+  }
   if (!dest) {
     const err = new Error("Invalid project name");
     err.code = "EINVAL";
@@ -540,8 +605,10 @@ function restoreFromTrash(projectsDir, trashName) {
     err.code = "EEXIST";
     throw err;
   }
+  const metaFile = path.join(src, TRASH_META_FILENAME);
+  if (fs.existsSync(metaFile)) fs.rmSync(metaFile);
   fs.renameSync(src, dest);
-  return { name: originalName, projectDir: dest };
+  return { name: originalName, projectDir: dest, kind, showId: (meta && meta.showId) || null };
 }
 
 function emptyTrash(projectsDir) {
@@ -663,6 +730,10 @@ module.exports = {
   resetSummaryCache,
   describeProjectContents,
   moveProjectToTrash,
+  moveFolderToTrash,
+  writeTrashMeta,
+  readTrashMeta,
+  TRASH_META_FILENAME,
   listTrash,
   restoreFromTrash,
   emptyTrash,
