@@ -26,6 +26,11 @@
  * moving one block does not ripple-shift later lines. Omit the attribute
  * and timing is unchanged (script order + wait=).
  *
+ * Dialogue and [Audio:] accept trim_in= / trim_out= (seconds or frames into
+ * the source file). Playback, Rhubarb cues, words, and the cursor advance
+ * use the trimmed window. Instant pins accept optional hold= (or over=) to
+ * lock a fixed length instead of stretching to the next pin.
+ *
  * A character gets exactly one Layer per *cut* they hold in a scene:
  * an [Action: ... at=/flip=/scale=/z=] that actually changes their resolved
  * transform closes the current layer "segment" and opens a new one with the
@@ -74,6 +79,9 @@ const DEFAULT_CANVAS_HEIGHT = 1080;
 const RESERVED_SLOT_NAMES = new Set(["mouth"]); // dialogue-driven only, never settable via [Action: ...]
 const CAMERA_KEYS = new Set(["zoom", "pan", "tilt", "to", "over", "ease", "wait", "reset", "at_time", "start"]);
 const TIMING_KEYS = new Set(["at_time", "start"]);
+const HOLD_KEYS = new Set(["over", "hold"]);
+const TRIM_KEYS = new Set(["trim_in", "trim_out"]);
+const AUDIO_KEYS = new Set(["file", "lines", "view", "at_time", "start", "trim_in", "trim_out"]);
 
 function slugify(text) {
   return (
@@ -271,13 +279,103 @@ class ScriptParser {
               ? "over"
               : "pin";
     const explicit = kv && kv.at_time !== undefined ? "at_time" : kv && kv.start !== undefined ? "start" : null;
-    const durationAttr = kind === "over" ? "over" : kind === "for" ? "for" : null;
+    const durationAttr =
+      kind === "over"
+        ? "over"
+        : kind === "for"
+          ? "for"
+          : kind === "pin" && kv && kv.hold !== undefined
+            ? "hold"
+            : kind === "pin" && kv && kv.over !== undefined
+              ? "over"
+              : null;
     return {
       kind,
       tag: token.kind,
       attr: explicit || durationAttr,
       movable: true,
     };
+  }
+
+  _specToSeconds(spec, fps) {
+    if (spec.frames !== undefined) return spec.frames / Math.max(1, fps);
+    return spec.seconds;
+  }
+
+  _audioWindow(kv, sourceSeconds, fps, lineNumber) {
+    const source = Math.max(0, Number(sourceSeconds) || 0);
+    let inSec = 0;
+    let outSec = source;
+    if (kv && kv.trim_in !== undefined) {
+      inSec = this._specToSeconds(parseAtTimeSpec(kv.trim_in, lineNumber, "trim_in"), fps);
+    }
+    if (kv && kv.trim_out !== undefined) {
+      outSec = this._specToSeconds(parseAtTimeSpec(kv.trim_out, lineNumber, "trim_out"), fps);
+    }
+    if (!(inSec >= 0) || !(outSec >= 0)) {
+      throw new ScriptError(lineNumber, `Invalid trim_in/trim_out -- must be 0 or greater.`);
+    }
+    if (inSec > source + 1e-6) {
+      throw new ScriptError(
+        lineNumber,
+        `trim_in ${kv.trim_in} is past the source length (${source.toFixed(3)}s).`
+      );
+    }
+    if (outSec > source + 1e-6) {
+      throw new ScriptError(
+        lineNumber,
+        `trim_out ${kv.trim_out} is past the source length (${source.toFixed(3)}s).`
+      );
+    }
+    if (outSec <= inSec) {
+      throw new ScriptError(lineNumber, `trim_out must be greater than trim_in.`);
+    }
+    const durationSec = outSec - inSec;
+    const durationFrames = framesFromSeconds(durationSec, fps);
+    if (durationFrames < 1) {
+      throw new ScriptError(
+        lineNumber,
+        `Trimmed duration rounds to 0 frames at ${fps} fps -- need at least 1 frame.`
+      );
+    }
+    return {
+      inSec,
+      outSec,
+      durationSec,
+      durationFrames,
+      inFrames: framesFromSeconds(inSec, fps),
+      outFrames: framesFromSeconds(outSec, fps),
+      sourceFrames: framesFromSeconds(source, fps),
+    };
+  }
+
+  _readWords(relPath) {
+    if (!relPath) return [];
+    const candidates = [];
+    if (/\.wav$/i.test(relPath)) candidates.push(relPath.replace(/\.wav$/i, ".words.json"));
+    candidates.push(`${relPath}.words.json`);
+    for (const rel of candidates) {
+      const abs = path.isAbsolute(rel) ? rel : path.join(this.projectDir, rel);
+      try {
+        if (!fs.existsSync(abs)) continue;
+        const parsed = JSON.parse(fs.readFileSync(abs, "utf8"));
+        const raw = Array.isArray(parsed) ? parsed : Array.isArray(parsed.words) ? parsed.words : [];
+        return raw
+          .map((item) => ({
+            word: String(item.word || item.text || "").trim(),
+            start: Number(item.start) || 0,
+            end: Number(item.end) || 0,
+          }))
+          .filter((item) => item.word && item.end > item.start);
+      } catch {
+        /* try the next candidate */
+      }
+    }
+    return [];
+  }
+
+  _wordsInWindow(words, inSec, outSec) {
+    return (words || []).filter((word) => word.end > inSec && word.start < outSec);
   }
 
   /** Scene-local start: at_time= / start= if present, else the shared cursor. */
@@ -320,10 +418,21 @@ class ScriptParser {
     audioRel,
     cuesRel,
     syncText,
+    trim,
+    sourceDurationFrames,
+    words,
   }) {
     if (!this.scene) return;
     const start = Math.max(0, startFrame);
-    const end = Math.max(start, endFrame == null ? start : endFrame);
+    let end = Math.max(start, endFrame == null ? start : endFrame);
+    if (end <= start && kv) {
+      const spec = kv.hold !== undefined ? kv.hold : kv.over;
+      const key = kv.hold !== undefined ? "hold" : "over";
+      if (spec !== undefined) {
+        const hold = framesFromSeconds(parseSecondsSpec(spec, token.lineNumber, key), this.fps);
+        if (hold >= 1) end = start + hold;
+      }
+    }
     const sourceStart = sourceStartFrame == null ? start : Math.max(0, sourceStartFrame);
     const spokenText = syncText == null ? "" : String(syncText);
     const sync =
@@ -352,7 +461,9 @@ class ScriptParser {
       cues: Array.isArray(cues) ? cues : [],
       view: view || null,
       marriedId: marriedId || null,
-      trim: { inFrames: 0, outFrames: 0 },
+      trim: trim || { inFrames: 0, outFrames: sourceDurationFrames || 0 },
+      sourceDurationFrames: sourceDurationFrames || 0,
+      words: Array.isArray(words) ? words : [],
       audioRel: audioRel || null,
       cuesRel: cuesRel || null,
       syncText: spokenText || null,
@@ -377,6 +488,7 @@ class ScriptParser {
           shape: String(cue.value || cue.shape || "X"),
           start: Number(cue.start) || 0,
           end: Number(cue.end) || 0,
+          pinned: Boolean(cue.pinned),
         }))
         .filter((cue) => cue.end > cue.start);
     } catch {
@@ -391,6 +503,7 @@ class ScriptParser {
         shape: cue.shape,
         start: Math.max(0, cue.start - fromSec),
         end: Math.max(0, Math.min(toSec, cue.end) - fromSec),
+        pinned: Boolean(cue.pinned),
       }))
       .filter((cue) => cue.end > cue.start);
   }
@@ -914,11 +1027,11 @@ class ScriptParser {
     if (kv.z === undefined) {
       throw new ScriptError(token.lineNumber, `[Layer: ...] needs z=<integer>.`);
     }
-    const extraKeys = Object.keys(kv).filter((key) => key !== "z" && !TIMING_KEYS.has(key));
+    const extraKeys = Object.keys(kv).filter((key) => key !== "z" && !TIMING_KEYS.has(key) && !HOLD_KEYS.has(key));
     if (extraKeys.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[Layer: ...] only accepts z= and optional at_time=/start=; use [Action: ...] or [Prop: ...] to move. Unexpected: ${extraKeys.join(", ")}`
+        `[Layer: ...] only accepts z= and optional at_time=/start=/hold=/over=; use [Action: ...] or [Prop: ...] to move. Unexpected: ${extraKeys.join(", ")}`
       );
     }
     const newZ = parseInt(kv.z, 10);
@@ -980,7 +1093,7 @@ class ScriptParser {
 
   _handleActionOnProp(scene, state, kv, note, lineNumber) {
     this._warnNoteLooksLikeAssignments(lineNumber, "Action", note);
-    const allowed = new Set(["at", "scale", "z", "at_time", "start"]);
+    const allowed = new Set(["at", "scale", "z", "at_time", "start", "over"]);
     const extra = Object.keys(kv).filter((key) => !allowed.has(key));
     if (extra.length > 0) {
       throw new ScriptError(
@@ -1134,7 +1247,7 @@ class ScriptParser {
     }
 
     for (const [key, value] of Object.entries(kv)) {
-      if (positionKeys.includes(key) || TIMING_KEYS.has(key)) continue;
+      if (positionKeys.includes(key) || TIMING_KEYS.has(key) || HOLD_KEYS.has(key) || TRIM_KEYS.has(key)) continue;
       this._applySlotKeyframe(scene, state, characterId, key, value, token.lineNumber);
     }
 
@@ -1144,9 +1257,11 @@ class ScriptParser {
     if (kv.scale) bits.push(`scale=${kv.scale}`);
     if (kv.flip) bits.push("flip");
     for (const [key, value] of Object.entries(kv)) {
-      if (positionKeys.includes(key) || TIMING_KEYS.has(key)) continue;
+      if (positionKeys.includes(key) || TIMING_KEYS.has(key) || HOLD_KEYS.has(key) || TRIM_KEYS.has(key)) continue;
       bits.push(`${key}=${value}`);
     }
+    if (kv.hold) bits.push(`hold=${kv.hold}`);
+    else if (kv.over) bits.push(`over=${kv.over}`);
     if (note) bits.push(note);
     this._emitLane({
       lane: "action",
@@ -1733,13 +1848,11 @@ class ScriptParser {
         `[Audio: ...] needs file=<label> (the --name from import-audio).`
       );
     }
-    const extra = Object.keys(kv).filter(
-      (key) => key !== "file" && key !== "lines" && key !== "view" && !TIMING_KEYS.has(key)
-    );
+    const extra = Object.keys(kv).filter((key) => !AUDIO_KEYS.has(key));
     if (extra.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[Audio: ...] unknown key "${extra[0]}". Expected file=<label>, optional lines=true|false, view=, and at_time=/start=.`
+        `[Audio: ...] unknown key "${extra[0]}". Expected file=<label>, optional lines=true|false, view=, at_time=/start=, and trim_in=/trim_out=.`
       );
     }
     let emitSentenceLines = true;
@@ -1770,11 +1883,11 @@ class ScriptParser {
     const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
 
     const absAudioPath = path.join(this.projectDir, imported.wav);
-    const durationSeconds = await probeDurationSeconds(absAudioPath);
-    const durationFrames = framesFromSeconds(durationSeconds, this.fps);
+    const sourceSeconds = await probeDurationSeconds(absAudioPath);
+    const window = this._audioWindow(kv, sourceSeconds, this.fps, token.lineNumber);
     const startFrame = this._eventStartFrame(kv, scene, token.lineNumber);
-    const words = imported.words;
-    const text = transcriptFromWords(words) || `[Audio: ${label}]`;
+    const words = this._wordsInWindow(imported.words || [], window.inSec, window.outSec);
+    const text = transcriptFromWords(words) || transcriptFromWords(imported.words) || `[Audio: ${label}]`;
 
     scene.lineCounter += 1;
     const lineView = this._resolveLineView(kv, state, token.lineNumber);
@@ -1790,16 +1903,19 @@ class ScriptParser {
       clip.words = words;
     }
     if (lineView) clip.view = lineView;
+    if (window.inSec > 0) clip.trim_in = Math.round(window.inSec * 1000) / 1000;
+    if (window.outSec + 1e-6 < sourceSeconds) clip.trim_out = Math.round(window.outSec * 1000) / 1000;
     state.current.dialogue.push(clip);
 
     const mouthCues = this._readMouthCues(imported.cues);
     const marriedId = this._marriedId(token);
+    const trim = { inFrames: window.inFrames, outFrames: window.outFrames };
     const sentences =
       emitSentenceLines && words && words.length > 0 ? wordsToSentences(words) : [];
     if (sentences.length > 0) {
       for (const sentence of sentences) {
-        const lineStart = startFrame + framesFromSeconds(sentence.start, this.fps);
-        const lineEnd = startFrame + framesFromSeconds(sentence.end, this.fps);
+        const lineStart = startFrame + framesFromSeconds(sentence.start - window.inSec, this.fps);
+        const lineEnd = startFrame + framesFromSeconds(sentence.end - window.inSec, this.fps);
         this._emitLane({
           lane: "dialogue",
           token,
@@ -1815,6 +1931,9 @@ class ScriptParser {
           audioRel: imported.wav,
           cuesRel: imported.cues,
           syncText: text,
+          trim,
+          sourceDurationFrames: window.sourceFrames,
+          words,
         });
       }
     } else {
@@ -1822,24 +1941,27 @@ class ScriptParser {
         lane: "dialogue",
         token,
         startFrame,
-        endFrame: startFrame + durationFrames,
+        endFrame: startFrame + window.durationFrames,
         label: `${scriptName}: ${text}`,
         subject: characterId,
         kv,
         sourceStartFrame: startFrame,
-        cues: mouthCues,
+        cues: this._sliceMouthCues(mouthCues, window.inSec, window.outSec),
         view: lineView,
         marriedId,
         audioRel: imported.wav,
         cuesRel: imported.cues,
         syncText: text,
+        trim,
+        sourceDurationFrames: window.sourceFrames,
+        words,
       });
     }
     this._emitLane({
       lane: "audio",
       token,
       startFrame,
-      endFrame: startFrame + durationFrames,
+      endFrame: startFrame + window.durationFrames,
       label: path.basename(imported.wav),
       subject: characterId,
       rel: imported.wav,
@@ -1850,6 +1972,9 @@ class ScriptParser {
       audioRel: imported.wav,
       cuesRel: imported.cues,
       syncText: text,
+      trim,
+      sourceDurationFrames: window.sourceFrames,
+      words,
     });
 
     this.lines.push({
@@ -1859,14 +1984,14 @@ class ScriptParser {
       text,
       audio_path: imported.wav,
       cues_path: imported.cues,
-      words_path: words && words.length > 0 ? imported.wordsPath : undefined,
+      words_path: imported.wordsPath,
       voice_id: (state.config && state.config.voice_id) || null,
       status: "ok",
       source: "import",
     });
 
-    this._noteHorizon(scene, startFrame + durationFrames);
-    scene.cursorFrames += durationFrames;
+    this._noteHorizon(scene, startFrame + window.durationFrames);
+    scene.cursorFrames += window.durationFrames;
   }
 
   // ---- dialogue lines ----------------------------------------------------
@@ -1894,42 +2019,48 @@ class ScriptParser {
     const audioRelPath = `audio/${scene.sceneId}/${lineNo}_${characterId}.wav`;
     const absAudioPath = path.join(this.projectDir, audioRelPath);
 
-    let durationSeconds;
+    let sourceSeconds;
     let status;
     if (fs.existsSync(absAudioPath)) {
-      durationSeconds = await probeDurationSeconds(absAudioPath);
+      sourceSeconds = await probeDurationSeconds(absAudioPath);
       status = "ok";
     } else {
-      durationSeconds = estimateDurationSeconds(token.text);
+      sourceSeconds = estimateDurationSeconds(token.text);
       status = "missing";
     }
-    const durationFrames = framesFromSeconds(durationSeconds, this.fps);
     const kv = token.kv || {};
+    const window = this._audioWindow(kv, sourceSeconds, this.fps, token.lineNumber);
     const startFrame = this._eventStartFrame(kv, scene, token.lineNumber);
+    const words = this._wordsInWindow(this._readWords(audioRelPath), window.inSec, window.outSec);
+    const spokenText = words.length > 0 ? transcriptFromWords(words) : token.text;
 
     const lineView = this._resolveLineView(kv, state, token.lineNumber);
     const clip = {
       audio: audioRelPath,
       start_frame: startFrame - state.current.startFrame,
-      text: token.text,
+      text: spokenText,
     };
     if (status === "missing") {
       // Marked on the clip itself (not only in lines.json) so a silent
       // preview render can use the estimate without re-reading the manifest.
       clip.estimated = true;
-      clip.estimated_duration_seconds = Math.round(durationSeconds * 100) / 100;
+      clip.estimated_duration_seconds = Math.round(window.durationSec * 100) / 100;
     }
     if (lineView) clip.view = lineView;
+    if (words.length > 0) clip.words = words;
+    if (window.inSec > 0) clip.trim_in = Math.round(window.inSec * 1000) / 1000;
+    if (window.outSec + 1e-6 < sourceSeconds) clip.trim_out = Math.round(window.outSec * 1000) / 1000;
     state.current.dialogue.push(clip);
 
-    const mouthCues = this._readMouthCues(`${audioRelPath}.rhubarb.json`);
+    const mouthCues = this._sliceMouthCues(this._readMouthCues(`${audioRelPath}.rhubarb.json`), window.inSec, window.outSec);
     const marriedId = this._marriedId(token);
-    const spoken = `${token.character}: ${token.text}`;
+    const trim = { inFrames: window.inFrames, outFrames: window.outFrames };
+    const spoken = `${token.character}: ${spokenText}`;
     this._emitLane({
       lane: "dialogue",
       token,
       startFrame,
-      endFrame: startFrame + durationFrames,
+      endFrame: startFrame + window.durationFrames,
       label: spoken,
       subject: characterId,
       kv,
@@ -1939,13 +2070,16 @@ class ScriptParser {
       marriedId,
       audioRel: audioRelPath,
       cuesRel: `${audioRelPath}.rhubarb.json`,
-      syncText: token.text,
+      syncText: spokenText,
+      trim,
+      sourceDurationFrames: window.sourceFrames,
+      words,
     });
     this._emitLane({
       lane: "audio",
       token,
       startFrame,
-      endFrame: startFrame + durationFrames,
+      endFrame: startFrame + window.durationFrames,
       label: path.basename(audioRelPath),
       subject: characterId,
       rel: audioRelPath,
@@ -1955,23 +2089,26 @@ class ScriptParser {
       marriedId,
       audioRel: audioRelPath,
       cuesRel: `${audioRelPath}.rhubarb.json`,
-      syncText: token.text,
+      syncText: spokenText,
+      trim,
+      sourceDurationFrames: window.sourceFrames,
+      words,
     });
 
     this.lines.push({
       scene_id: scene.sceneId,
       line_number: scene.lineCounter,
       character: characterId,
-      text: token.text,
+      text: spokenText,
       audio_path: audioRelPath,
       cues_path: `${audioRelPath}.rhubarb.json`,
       voice_id: (state.config && state.config.voice_id) || null,
       status,
-      ...(status === "missing" ? { estimated_duration_seconds: Math.round(durationSeconds * 100) / 100 } : {}),
+      ...(status === "missing" ? { estimated_duration_seconds: Math.round(window.durationSec * 100) / 100 } : {}),
     });
 
-    this._noteHorizon(scene, startFrame + durationFrames);
-    scene.cursorFrames += durationFrames;
+    this._noteHorizon(scene, startFrame + window.durationFrames);
+    scene.cursorFrames += window.durationFrames;
   }
 
   // ---- lint (overlap warnings + mouth-sheet errors) ----------------------

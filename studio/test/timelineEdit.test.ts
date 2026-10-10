@@ -1,15 +1,24 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  applySplitWrite,
+  applyTrimWrite,
   emptyScriptHistory,
   formatAtTime,
   historyPush,
   historyRedo,
   historyUndo,
   idsForMarriedGroup,
+  isMouthBlock,
   moveBlocksInScript,
+  pinDurationWriteAttr,
+  planSplit,
+  planTrim,
   setAtTimeOnLine,
+  setDurationOnLine,
+  setTrimOnLine,
   setViewOnLine,
+  splitDialogueText,
 } from "../lib/timelineEdit.ts";
 
 describe("timeline script rewrite", () => {
@@ -75,5 +84,97 @@ describe("timeline script rewrite", () => {
     );
     assert.equal(grouped.has("a"), true);
     assert.equal(grouped.has("face"), false);
+  });
+
+  test("trim a move writes over= and start-edge also writes at_time=", () => {
+    const script = ["[Scene: Intro]", "[Move: Alice to=right over=2s]"].join("\n");
+    const blocks = [
+      {
+        id: "m",
+        scriptLine: 2,
+        sceneId: "intro",
+        startFrame: 0,
+        endFrame: 48,
+        timing: { kind: "over" as const },
+        tag: "move",
+      },
+    ];
+    const right = planTrim({
+      blocks,
+      ids: ["m"],
+      edge: "out",
+      newEdgeFrame: 24,
+      scenes: [{ id: "intro", startFrame: 0 }],
+      fps: 24,
+      script,
+    });
+    assert.ok(right);
+    assert.equal(applyTrimWrite(script, right).split("\n")[1], "[Move: Alice to=right over=1s]");
+    const left = planTrim({
+      blocks,
+      ids: ["m"],
+      edge: "in",
+      newEdgeFrame: 24,
+      scenes: [{ id: "intro", startFrame: 0 }],
+      fps: 24,
+      script,
+    });
+    assert.ok(left);
+    assert.equal(applyTrimWrite(script, left).split("\n")[1], "[Move: Alice to=right over=1s at_time=1s]");
+  });
+
+  test("trim dialogue writes trim_in=/trim_out= and split keeps word timings", () => {
+    assert.equal(
+      setTrimOnLine("Alice: Hello there friend.", { trimIn: "0.5s", trimOut: "2s" }),
+      "Alice trim_in=0.5s trim_out=2s: Hello there friend."
+    );
+    assert.equal(setDurationOnLine("[Swing: Alice right_arm=20 period=0.4s for=2s]", "for", "1s"), "[Swing: Alice right_arm=20 period=0.4s for=1s]");
+    const words = [
+      { word: "Hello", start: 0, end: 0.4 },
+      { word: "there", start: 0.4, end: 0.8 },
+      { word: "friend", start: 0.8, end: 1.2 },
+    ];
+    assert.deepEqual(splitDialogueText("Hello there friend", words, 0.8), { left: "Hello there", right: "friend" });
+    const script = ["[Scene: Intro]", "Alice: Hello there friend."].join("\n");
+    const blocks = [
+      {
+        id: "d",
+        scriptLine: 2,
+        sceneId: "intro",
+        startFrame: 0,
+        endFrame: 48,
+        lane: "dialogue",
+        timing: { kind: "dialogue" as const },
+        trim: { inFrames: 0, outFrames: 48 },
+        sourceDurationFrames: 72,
+        words,
+      },
+    ];
+    const split = planSplit({
+      blocks,
+      ids: ["d"],
+      playhead: 24,
+      scenes: [{ id: "intro", startFrame: 0 }],
+      fps: 24,
+      script,
+    });
+    assert.ok(split);
+    const next = applySplitWrite(script, split);
+    assert.equal(next.split("\n")[1], "Alice trim_out=1s: Hello there");
+    assert.equal(next.split("\n")[2], "Alice at_time=1s trim_in=1s trim_out=2s: friend");
+  });
+
+  test("moving a face pin writes at_time= and locks hold= so it does not stretch", () => {
+    const script = ["[Scene: Intro]", "[Action: Rodney face=yap]", "[Action: Rodney face=rest]"].join("\n");
+    const moved = moveBlocksInScript(
+      script,
+      [{ scriptLine: 2, startFrame: 12, sceneStartFrame: 0, hold: "0.5s" }],
+      24
+    );
+    assert.equal(moved.split("\n")[1], "[Action: Rodney face=yap at_time=0.5s hold=0.5s]");
+    assert.equal(pinDurationWriteAttr("[Action: Rodney face=yap over=1s]"), "over");
+    assert.equal(pinDurationWriteAttr("[Action: Rodney face=yap]"), "hold");
+    assert.equal(isMouthBlock({ role: "mouth" }), true);
+    assert.equal(isMouthBlock({ tag: "action" }), false);
   });
 });

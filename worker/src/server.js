@@ -58,6 +58,7 @@ const {
   syncDialogueLines,
   readStudioSettings,
   writeStudioSettings,
+  patchMouthCue,
 } = require("./voices/lipSync");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
@@ -704,6 +705,15 @@ function createApp(options = {}) {
     } finally {
       cleanupTempParse(result);
     }
+  });
+
+  app.put("/api/projects/:name/cues", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const result = patchMouthCue(projectDir, body);
+    if (!result.ok) return res.status(400).json({ error: result.error || "Cue save failed" });
+    res.json(result);
   });
 
   app.get("/api/projects/:name/lanes", async (req, res) => {

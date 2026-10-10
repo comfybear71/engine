@@ -55,6 +55,10 @@ def _build_audio_filter(
     mix_parts = ["[1:a]"]
     for i, clip in enumerate(audio_clips):
         input_index = i + 2
+        if clip.in_seconds > 1e-6:
+            input_args += ["-ss", f"{clip.in_seconds:.6f}"]
+        if clip.duration_seconds is not None:
+            input_args += ["-t", f"{clip.duration_seconds:.6f}"]
         input_args += ["-i", str(clip.path)]
         delay_ms = max(0, round(clip.start_seconds * 1000))
         labels.append(f"[{input_index}:a]adelay={delay_ms}:all=1[a{i}]")

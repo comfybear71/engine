@@ -909,8 +909,46 @@ describe("at_time= / start= explicit start", () => {
     const audio = laneEvents.filter((e) => e.lane === "audio");
     assert.equal(dlg[0].marriedId, audio[0].marriedId);
     assert.ok(dlg[0].marriedId);
-    assert.deepEqual(dlg[0].trim, { inFrames: 0, outFrames: 0 });
+    assert.equal(dlg[0].trim.inFrames, 0);
+    assert.ok(dlg[0].trim.outFrames > 0);
     assert.equal(dlg[0].sync, "not_synced");
+  });
+
+  test("trim_in=/trim_out= shorten dialogue and over= holds a face pin", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Action: Alice eyes=closed over=1s]",
+      "Alice trim_in=0.5s trim_out=1s: Hello there friend.",
+    ].join("\n");
+    const { timeline, laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, {
+      fps: 24,
+    });
+    const pin = laneEvents.find((e) => e.tag === "action");
+    assert.equal(pin.startFrame, 0);
+    assert.equal(pin.endFrame, 24);
+    const spoken = laneEvents.filter((e) => e.lane === "dialogue")[0];
+    assert.equal(spoken.endFrame - spoken.startFrame, 12);
+    assert.deepEqual(spoken.trim, { inFrames: 12, outFrames: 24 });
+    const clip = timeline.scenes[0].layers[0].dialogue[0];
+    assert.equal(clip.trim_in, 0.5);
+    assert.equal(clip.trim_out, 1);
+    assert.equal(clip.estimated_duration_seconds, 0.5);
+  });
+
+  test("hold= locks a face pin the same way over= does", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Action: Alice eyes=closed hold=0.5s]",
+      "Alice: Hello.",
+    ].join("\n");
+    const { laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const pin = laneEvents.find((e) => e.tag === "action");
+    assert.equal(pin.endFrame - pin.startFrame, 12);
+    assert.equal(pin.timing.attr, "hold");
   });
 });
 

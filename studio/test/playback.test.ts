@@ -83,9 +83,16 @@ describe("stage playback helpers", () => {
 
   test("webAudioSchedule offsets into a clip already under the playhead", () => {
     const mid = webAudioSchedule({ startFrame: 24, endFrame: 72, durationSec: 2 }, 36, 24, 200);
-    assert.deepEqual(mid, { offsetSec: 0.5, delaySec: 0 });
+    assert.deepEqual(mid, { offsetSec: 0.5, delaySec: 0, playSec: 1.5 });
     const later = webAudioSchedule({ startFrame: 48, endFrame: 72, durationSec: 1 }, 24, 24, 200);
-    assert.deepEqual(later, { offsetSec: 0, delaySec: 1 });
+    assert.deepEqual(later, { offsetSec: 0, delaySec: 1, playSec: 1 });
     assert.equal(webAudioSchedule({ startFrame: 0, endFrame: 10, durationSec: 0.4 }, 12, 24, 200), null);
+    const trimmed = webAudioSchedule(
+      { startFrame: 0, endFrame: 24, durationSec: 3, trimInSec: 1, trimOutSec: 2 },
+      0,
+      24,
+      200
+    );
+    assert.deepEqual(trimmed, { offsetSec: 1, delaySec: 0, playSec: 1 });
   });
 });

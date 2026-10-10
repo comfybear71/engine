@@ -13,6 +13,7 @@ const {
   collectDialogueTargets,
   readStudioSettings,
   writeStudioSettings,
+  patchMouthCue,
 } = require("../src/voices/lipSync");
 const { writeSilentWav } = require("./helpers/wav");
 
@@ -91,6 +92,24 @@ describe("lip-sync state", () => {
         { lane: "face", scriptLine: 5 },
       ];
       assert.equal(collectDialogueTargets(events).length, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("patchMouthCue swaps a shape and pins it", () => {
+    const dir = tmpDir();
+    try {
+      const rel = "audio/intro/001_alice.wav.rhubarb.json";
+      const abs = path.join(dir, rel);
+      writeCues(abs, [{ start: 0.2, end: 0.4, value: "B" }]);
+      const swapped = patchMouthCue(dir, { rel, start: 0.2, end: 0.4, value: "G", pinned: true });
+      assert.equal(swapped.ok, true);
+      assert.equal(swapped.cue.value, "G");
+      assert.equal(swapped.cue.pinned, true);
+      const saved = JSON.parse(fs.readFileSync(abs, "utf8"));
+      assert.equal(saved.mouthCues[0].value, "G");
+      assert.equal(saved.mouthCues[0].pinned, true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -4,13 +4,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatTimecode } from "@/lib/playhead";
 import {
   HEAD_VIEWS,
+  applyTrimWrite,
   blockIsMovable,
+  blockIsTrimmable,
+  clampTrimEdge,
   collectSnapFrames,
+  formatAtTime,
   idsForMarriedGroup,
+  isMouthBlock,
+  lineHasPinHold,
   moveBlocksInScript,
+  planSplit,
+  planTrim,
   setViewOnLine,
   snapStart,
+  splitBlocksInScript,
+  takeWindowForIds,
+  trimKindForBlock,
+  uniqueSplitWrites,
 } from "@/lib/timelineEdit";
+import { MOUTH_SHAPES, blocksIntersectingView, cueSourceTimes, visibleCueIndexes } from "@/lib/mouthCues";
 import {
   DEFAULT_LANE_SCALE,
   H_SCROLLBAR_PX,
@@ -115,6 +128,7 @@ export default function TimelineLanes({
   lipSyncMode = "auto",
   onToggleLipSyncMode,
   loopSelection = false,
+  onPatchCue,
 }: {
   project: string | null;
   lanes: LanesResponse | null;
@@ -137,6 +151,13 @@ export default function TimelineLanes({
   lipSyncMode?: "auto" | "manual";
   onToggleLipSyncMode?: () => void;
   loopSelection?: boolean;
+  onPatchCue?: (patch: {
+    rel: string;
+    start: number;
+    end: number;
+    value?: string;
+    pinned?: boolean;
+  }) => void;
 }) {
   const total = Math.max(totalFrames || lanes?.totalFrames || 1, 1);
   const fps = Math.max(lanes?.fps || 24, 1);
@@ -149,8 +170,22 @@ export default function TimelineLanes({
   const [scrollLeft, setScrollLeft] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [draftDelta, setDraftDelta] = useState(0);
+  const [draftTrim, setDraftTrim] = useState<{
+    ids: Set<string>;
+    edge: "in" | "out";
+    start: number;
+    end: number;
+    allowed: boolean;
+  } | null>(null);
   const [snapGuide, setSnapGuide] = useState<number | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [expandedMouthIds, setExpandedMouthIds] = useState<Set<string>>(new Set());
+  const [cueEditor, setCueEditor] = useState<{
+    blockId: string;
+    index: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const [rubber, setRubber] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const hScrollRef = useRef<HTMLDivElement | null>(null);
   const rulerScrollRef = useRef<HTMLDivElement | null>(null);
@@ -170,6 +205,13 @@ export default function TimelineLanes({
     alt: boolean;
     delta: number;
   } | null>(null);
+  const trimRef = useRef<{
+    pointerId: number;
+    edge: "in" | "out";
+    ids: Set<string>;
+    origin: number;
+    allowed: boolean;
+  } | null>(null);
   const rubberRef = useRef<{
     pointerId: number;
     x0: number;
@@ -184,11 +226,13 @@ export default function TimelineLanes({
   const chipPx = chipHeightPx(laneScale);
 
   const laneBlocks = useMemo(() => {
+    const faceExpanded = allBlocks.some((block) => isMouthBlock(block) && expandedMouthIds.has(block.id));
     return LANE_META.map((lane) => {
       const list = allBlocks.filter((b) => b.lane === lane.id);
-      return { ...lane, blocks: list, height: laneHeightPx(list, laneScale), rows: laneRowCount(list) };
+      const extra = lane.id === "face" && faceExpanded ? 18 : 0;
+      return { ...lane, blocks: list, height: laneHeightPx(list, laneScale) + extra, rows: laneRowCount(list) };
     });
-  }, [allBlocks, laneScale]);
+  }, [allBlocks, laneScale, expandedMouthIds]);
 
   useEffect(() => {
     if (!project) {
@@ -347,10 +391,16 @@ export default function TimelineLanes({
       seen.add(block.scriptLine);
       const scene = scenes.find((item) => item.id === block.sceneId);
       const source = block.sourceStartFrame ?? block.startFrame;
+      const line = scriptText.split("\n")[block.scriptLine - 1] || "";
+      const hold =
+        trimKindForBlock(block) === "pin" && !lineHasPinHold(line)
+          ? formatAtTime(Math.max(1, block.endFrame - block.startFrame), fps)
+          : undefined;
       moves.push({
         scriptLine: block.scriptLine,
         startFrame: Math.max(0, source + delta),
         sceneStartFrame: scene?.startFrame ?? 0,
+        hold,
       });
     }
     const next = moveBlocksInScript(scriptText, moves, fps);
@@ -369,10 +419,144 @@ export default function TimelineLanes({
     if (next !== scriptText) onEditScript(next);
   }
 
+  function snapEdge(raw: number, ignoreIds: Iterable<string>, alt: boolean): { frame: number; snappedTo: number | null } {
+    if (alt) return { frame: Math.max(0, Math.round(raw)), snappedTo: null };
+    return snapStart(
+      raw,
+      collectSnapFrames({
+        playhead: frame,
+        blocks: allBlocks,
+        ignoreIds,
+        fps,
+        totalFrames: total,
+      }),
+      Math.max(1, Math.round(SNAP_PX / Math.max(ppf, 1e-6)))
+    );
+  }
+
+  function applyTrim(edge: "in" | "out", newEdgeFrame: number, ids: Set<string>) {
+    if (!onEditScript || !scriptText) return;
+    const write = planTrim({
+      blocks: allBlocks,
+      ids,
+      edge,
+      newEdgeFrame,
+      scenes,
+      fps,
+      script: scriptText,
+    });
+    if (!write) return;
+    const next = applyTrimWrite(scriptText, write);
+    if (next !== scriptText) onEditScript(next);
+  }
+
+  function applySplit() {
+    if (!onEditScript || !scriptText) return;
+    const seeds = selectedIds.size > 0 ? selectedIds : new Set(allBlocks.filter((block) => block.scriptLine === selectedLine).map((block) => block.id));
+    if (seeds.size === 0) return;
+    const groups = new Map<number, Set<string>>();
+    for (const id of relatedMoveIds(allBlocks, seeds)) {
+      const block = allBlocks.find((item) => item.id === id);
+      if (!block || block.scriptLine == null) continue;
+      const set = groups.get(block.scriptLine) || new Set<string>();
+      set.add(block.id);
+      groups.set(block.scriptLine, set);
+    }
+    const writes = uniqueSplitWrites(
+      [...groups.values()].map((ids) =>
+        planSplit({
+          blocks: allBlocks,
+          ids,
+          playhead: frame,
+          scenes,
+          fps,
+          script: scriptText,
+        })
+      )
+    );
+    if (writes.length === 0) return;
+    const next = splitBlocksInScript(scriptText, writes);
+    if (next !== scriptText) onEditScript(next);
+  }
+
+  function canSplitSelection(): boolean {
+    if (!scriptText) return false;
+    const seeds = selectedIds.size > 0 ? selectedIds : new Set(allBlocks.filter((block) => block.scriptLine === selectedLine).map((block) => block.id));
+    if (seeds.size === 0) return false;
+    const take = takeWindowForIds(allBlocks, relatedMoveIds(allBlocks, seeds));
+    if (!take) return false;
+    return frame > take.start && frame < take.end;
+  }
+
+  function onTrimPointerDown(event: React.PointerEvent<HTMLDivElement>, block: LaneBlock, edge: "in" | "out") {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const next = selectedIds.has(block.id) ? new Set(selectedIds) : new Set<string>([block.id]);
+    commitSelection(next);
+    const related = relatedMoveIds(allBlocks, next);
+    const take = takeWindowForIds(allBlocks, related);
+    if (!take || !blockIsTrimmable(block)) return;
+    followLockRef.current = true;
+    const drag = {
+      pointerId: event.pointerId,
+      edge,
+      ids: related,
+      origin: edge === "in" ? take.start : take.end,
+      edgeFrame: edge === "in" ? take.start : take.end,
+      allowed: true,
+    };
+    trimRef.current = drag;
+
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== drag.pointerId) return;
+      ev.preventDefault();
+      const raw = drag.origin + (ev.clientX - event.clientX) / Math.max(ppf, 1e-6);
+      const snapped = snapEdge(raw, drag.ids, ev.altKey);
+      const clamped = clampTrimEdge({ edge: drag.edge, rawFrame: snapped.frame, take });
+      drag.allowed = clamped.allowed;
+      drag.edgeFrame = clamped.frame;
+      const start = drag.edge === "in" ? clamped.frame : take.start;
+      const end = drag.edge === "out" ? clamped.frame : take.end;
+      setDraftTrim({ ids: drag.ids, edge: drag.edge, start, end, allowed: clamped.allowed });
+      setSnapGuide(snapped.snappedTo);
+      const inFrame = take.trimIn + (start - take.start);
+      const outFrame = take.trimIn + (end - take.start);
+      setTooltip({
+        x: ev.clientX,
+        y: ev.clientY,
+        text: `in ${formatTimecode(inFrame, fps)}  out ${formatTimecode(outFrame, fps)}  ${formatTimecode(Math.max(1, end - start), fps)}`,
+      });
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== drag.pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (trimRef.current?.pointerId === drag.pointerId) trimRef.current = null;
+      followLockRef.current = false;
+      setDraftTrim(null);
+      setSnapGuide(null);
+      setTooltip(null);
+      if (drag.edgeFrame !== drag.origin) applyTrim(drag.edge, drag.edgeFrame, drag.ids);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
+
   function onChipPointerDown(event: React.PointerEvent<HTMLDivElement>, block: LaneBlock) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+    if (isMouthBlock(block)) {
+      const group = relatedMoveIds(allBlocks, new Set([block.id]));
+      commitSelection(group);
+      onSeek(block.startFrame, block.scriptLine);
+      return;
+    }
     const additive = event.shiftKey || event.ctrlKey || event.metaKey;
     const already = selectedIds.has(block.id);
     const next = additive || already ? new Set(selectedIds) : new Set<string>();
@@ -557,6 +741,11 @@ export default function TimelineLanes({
         return;
       }
       const key = event.key.toLowerCase();
+      if (key === "s" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        applySplit();
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey)) return;
       if (key === "z" && event.shiftKey) {
         event.preventDefault();
@@ -575,7 +764,7 @@ export default function TimelineLanes({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onUndo, onRedo]);
+  }, [onUndo, onRedo, applySplit, scriptText, selectedIds, selectedLine, frame, allBlocks, scenes, fps]);
 
   function nudgeZoom(factor: number) {
     const h = hScrollRef.current;
@@ -624,6 +813,17 @@ export default function TimelineLanes({
             className="studio-header-iconbtn"
           >
             ↷
+          </button>
+          <button
+            type="button"
+            data-testid="timeline-split"
+            title="Split selected block(s) at the playhead (S)"
+            aria-label="Split at playhead"
+            onClick={() => applySplit()}
+            disabled={!onEditScript || !canSplitSelection()}
+            className="studio-header-textbtn"
+          >
+            Split
           </button>
           {allBlocks.some((block) => block.lane === "dialogue" && selectedIds.has(block.id)) ? (
             <label className="ml-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-neutral-500" data-testid="timeline-view-control">
@@ -866,7 +1066,11 @@ export default function TimelineLanes({
                         data-rows={lane.rows}
                       >
                         <div className="absolute inset-x-0 inset-y-0.5 rounded-sm bg-black/40" />
-                        {lane.blocks.map((block) => {
+                        {blocksIntersectingView(
+                          lane.blocks,
+                          scrollLeft / Math.max(ppf, 1e-6) - fps,
+                          (scrollLeft + (viewWidth || 1)) / Math.max(ppf, 1e-6) + fps
+                        ).map((block) => {
                           const selected =
                             selectedIds.has(block.id) ||
                             (selectedIds.size === 0 && selectedLine != null && block.scriptLine === selectedLine);
@@ -878,6 +1082,11 @@ export default function TimelineLanes({
                                   (item) => selectedIds.has(item.id) && item.marriedId === block.marriedId
                                 )) ||
                               (block.scriptLine != null && selectedLinesRef.current.has(block.scriptLine)));
+                          const take = draftTrim && draftTrim.ids.has(block.id) ? draftTrim : null;
+                          const group = relatedMoveIds(allBlocks, new Set([block.id]));
+                          const members = allBlocks.filter((item) => group.has(item.id));
+                          const groupStart = members.length ? Math.min(...members.map((item) => item.startFrame)) : block.startFrame;
+                          const groupEnd = members.length ? Math.max(...members.map((item) => item.endFrame)) : block.endFrame;
                           return (
                             <LaneChip
                               key={block.id}
@@ -889,9 +1098,35 @@ export default function TimelineLanes({
                               selected={selected}
                               bar={lane.bar}
                               text={lane.text}
-                              draftDelta={shifting ? draftDelta : 0}
+                              draftDelta={take ? 0 : shifting ? draftDelta : 0}
+                              draftStart={take && block.startFrame === groupStart ? take.start : null}
+                              draftEnd={take && block.endFrame === groupEnd ? take.end : null}
+                              trimAllowed={take ? take.allowed : true}
+                              showInHandle={blockIsTrimmable(block) && block.startFrame === groupStart}
+                              showOutHandle={blockIsTrimmable(block) && block.endFrame === groupEnd}
                               syncing={syncing}
                               onPointerDown={onChipPointerDown}
+                              onTrimPointerDown={onTrimPointerDown}
+                              mouthExpanded={isMouthBlock(block) && expandedMouthIds.has(block.id)}
+                              viewStartFrame={scrollLeft / Math.max(ppf, 1e-6) - fps}
+                              viewEndFrame={(scrollLeft + (viewWidth || 1)) / Math.max(ppf, 1e-6) + fps}
+                              onToggleMouth={(event) => {
+                                event.stopPropagation();
+                                setExpandedMouthIds((current) => {
+                                  const next = new Set(current);
+                                  if (next.has(block.id)) next.delete(block.id);
+                                  else next.add(block.id);
+                                  return next;
+                                });
+                                setCueEditor(null);
+                              }}
+                              onCueClick={
+                                onPatchCue && block.cuesRel
+                                  ? (cue, index, clientX, clientY) => {
+                                      setCueEditor({ blockId: block.id, index, x: clientX, y: clientY });
+                                    }
+                                  : undefined
+                              }
                               onSyncLine={
                                 onSyncLines
                                   ? () =>
@@ -939,7 +1174,7 @@ export default function TimelineLanes({
         <div
           className="pointer-events-none fixed z-50 rounded bg-black/80 px-1.5 py-0.5 font-mono text-[10px] text-amber-100"
           style={{ left: tooltip.x + 12, top: tooltip.y + 16 }}
-          data-testid="timeline-move-tooltip"
+          data-testid="timeline-edit-tooltip"
         >
           {tooltip.text}
         </div>
@@ -957,6 +1192,17 @@ export default function TimelineLanes({
           }}
         />
       ) : null}
+      {cueEditor ? (
+        <CueEditor
+          block={allBlocks.find((item) => item.id === cueEditor.blockId) || null}
+          index={cueEditor.index}
+          x={cueEditor.x}
+          y={cueEditor.y}
+          fps={fps}
+          onClose={() => setCueEditor(null)}
+          onPatch={onPatchCue}
+        />
+      ) : null}
     </div>
   );
 }
@@ -971,8 +1217,19 @@ function LaneChip({
   bar,
   text,
   draftDelta,
+  draftStart,
+  draftEnd,
+  trimAllowed,
+  showInHandle,
+  showOutHandle,
   syncing,
+  mouthExpanded = false,
+  viewStartFrame = 0,
+  viewEndFrame = 0,
   onPointerDown,
+  onTrimPointerDown,
+  onToggleMouth,
+  onCueClick,
   onSyncLine,
 }: {
   block: LaneBlock;
@@ -984,17 +1241,33 @@ function LaneChip({
   bar: string;
   text: string;
   draftDelta: number;
+  draftStart: number | null;
+  draftEnd: number | null;
+  trimAllowed: boolean;
+  showInHandle: boolean;
+  showOutHandle: boolean;
   syncing: boolean;
+  mouthExpanded?: boolean;
+  viewStartFrame?: number;
+  viewEndFrame?: number;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock) => void;
+  onTrimPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock, edge: "in" | "out") => void;
+  onToggleMouth?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onCueClick?: (cue: { shape: string; start: number; end: number; pinned?: boolean }, index: number, x: number, y: number) => void;
   onSyncLine?: () => void;
 }) {
-  const movable = blockIsMovable(block);
-  const left = (block.startFrame + draftDelta) * ppf;
-  const width = Math.max(Math.max(block.endFrame - block.startFrame, 1) * ppf, 2);
+  const mouth = isMouthBlock(block);
+  const movable = blockIsMovable(block) && !mouth;
+  const start = draftStart != null ? draftStart : block.startFrame + draftDelta;
+  const end = draftEnd != null ? draftEnd : block.endFrame + draftDelta;
+  const left = start * ppf;
+  const width = Math.max(Math.max(end - start, 1) * ppf, 2);
   const top = (block.row ?? 0) * rowPx + 2;
   const durationSec = Math.max((block.endFrame - block.startFrame) / Math.max(fps, 1), 0.001);
-  const synced = block.sync === "synced";
-  const cues = block.lane === "dialogue" && synced ? block.cues || [] : [];
+  const cues = mouth ? block.cues || [] : [];
+  const visibleCues = mouthExpanded
+    ? visibleCueIndexes(cues, start, fps, viewStartFrame, viewEndFrame)
+    : [];
   const syncTitle =
     block.sync === "synced"
       ? "Synced — redo lip-sync"
@@ -1007,6 +1280,7 @@ function LaneChip({
       tabIndex={0}
       data-lane-chip="true"
       data-block-id={block.id}
+      data-role={block.role || ""}
       data-selected={selected ? "true" : "false"}
       data-sync={block.sync || ""}
       data-movable={movable ? "true" : "false"}
@@ -1017,14 +1291,57 @@ function LaneChip({
         block.timing?.attr ? ` · ${block.timing.attr}=` : ""
       }`}
       onPointerDown={(event) => onPointerDown(event, block)}
-      className={`absolute z-[1] select-none overflow-hidden rounded-sm px-1 text-left text-[10px] ${bar} ${text} ${
+      className={`absolute z-[1] select-none rounded-sm px-1 text-left text-[10px] ${bar} ${text} ${
         selected ? "ring-1 ring-white/80" : ""
-      } ${movable ? "cursor-grab active:cursor-grabbing" : "cursor-not-allowed"}`}
-      style={{ left, width, top, height: chipPx, lineHeight: `${Math.max(12, chipPx - 6)}px`, touchAction: "none" }}
+      } ${mouthExpanded ? "overflow-visible" : "overflow-hidden"} ${
+        movable ? "cursor-grab active:cursor-grabbing" : mouth ? "cursor-default" : "cursor-not-allowed"
+      }`}
+      style={{
+        left,
+        width,
+        top,
+        height: mouthExpanded ? chipPx + 16 : chipPx,
+        lineHeight: `${Math.max(12, chipPx - 6)}px`,
+        touchAction: "none",
+      }}
     >
-      <span className="flex h-full items-start gap-1">
+      {showInHandle ? (
+        <span
+          className="studio-trim-handle"
+          data-edge="in"
+          data-testid="timeline-trim-in"
+          data-allowed={trimAllowed ? "true" : "false"}
+          title="Trim in"
+          onPointerDown={(event) => onTrimPointerDown(event, block, "in")}
+        />
+      ) : null}
+      {showOutHandle ? (
+        <span
+          className="studio-trim-handle"
+          data-edge="out"
+          data-testid="timeline-trim-out"
+          data-allowed={trimAllowed ? "true" : "false"}
+          title="Trim out"
+          onPointerDown={(event) => onTrimPointerDown(event, block, "out")}
+        />
+      ) : null}
+      <span className="relative flex items-start gap-1" style={{ height: chipPx }}>
         {block.lane === "dialogue" ? (
           <span className="studio-sync-dot mt-1.5" data-testid="timeline-sync-dot" data-sync={block.sync || "not_synced"} />
+        ) : null}
+        {mouth ? (
+          <button
+            type="button"
+            className="studio-mouth-chevron"
+            data-testid="timeline-mouth-expand"
+            data-open={mouthExpanded ? "true" : "false"}
+            title={mouthExpanded ? "Collapse mouth cues" : "Expand mouth cues"}
+            aria-label={mouthExpanded ? "Collapse mouth cues" : "Expand mouth cues"}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={onToggleMouth}
+          >
+            {mouthExpanded ? "▾" : "▸"}
+          </button>
         ) : null}
         <span className="min-w-0 flex-1 truncate">{block.label}</span>
         {block.lane === "dialogue" && onSyncLine ? (
@@ -1048,22 +1365,144 @@ function LaneChip({
             </svg>
           </button>
         ) : null}
+        {mouth && cues.length > 0 ? <CueStrip cues={cues} durationSec={durationSec} width={width} /> : null}
       </span>
-      {cues.length > 0 ? (
-        <div className="studio-mouth-cues" data-testid="timeline-mouth-cues" aria-hidden="true">
-          {cues.map((cue, index) => (
-            <span
-              key={`${cue.shape}-${cue.start}-${index}`}
-              className="studio-mouth-cue"
-              style={{
-                left: `${(cue.start / durationSec) * 100}%`,
-                width: `${Math.max(((cue.end - cue.start) / durationSec) * 100, 0.8)}%`,
-                background: CUE_COLORS[cue.shape] || "#a3a3a3",
-              }}
-            />
-          ))}
+      {mouth && mouthExpanded ? (
+        <div className="studio-mouth-cue-row" data-testid="timeline-mouth-cue-row">
+          {visibleCues.map((index) => {
+            const cue = cues[index];
+            return (
+              <button
+                key={`${cue.shape}-${cue.start}-${index}`}
+                type="button"
+                className="studio-mouth-cue-hit"
+                data-testid="timeline-mouth-cue"
+                data-shape={cue.shape}
+                data-pinned={cue.pinned ? "true" : "false"}
+                title={`${cue.shape}${cue.pinned ? " pinned" : ""}`}
+                style={{
+                  left: `${(cue.start / durationSec) * 100}%`,
+                  width: `${Math.max(((cue.end - cue.start) / durationSec) * 100, 1.2)}%`,
+                  background: CUE_COLORS[cue.shape] || "#a3a3a3",
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCueClick?.(cue, index, event.clientX, event.clientY);
+                }}
+              >
+                {cue.pinned ? `${cue.shape}·` : cue.shape}
+              </button>
+            );
+          })}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function CueStrip({
+  cues,
+  durationSec,
+  width: cssWidth,
+}: {
+  cues: { shape: string; start: number; end: number }[];
+  durationSec: number;
+  width: number;
+}) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const width = canvas.clientWidth || cssWidth || 1;
+    const height = canvas.clientHeight || 4;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(width * dpr));
+    canvas.height = Math.max(1, Math.round(height * dpr));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    for (const cue of cues) {
+      const x = (cue.start / durationSec) * width;
+      const w = Math.max(((cue.end - cue.start) / durationSec) * width, 1);
+      ctx.fillStyle = CUE_COLORS[cue.shape] || "#a3a3a3";
+      ctx.fillRect(x, 0, w, height);
+    }
+  }, [cues, durationSec, cssWidth]);
+  return <canvas ref={ref} className="studio-mouth-cues" data-testid="timeline-mouth-cues" aria-hidden="true" />;
+}
+
+function CueEditor({
+  block,
+  index,
+  x,
+  y,
+  fps,
+  onClose,
+  onPatch,
+}: {
+  block: LaneBlock | null;
+  index: number;
+  x: number;
+  y: number;
+  fps: number;
+  onClose: () => void;
+  onPatch?: (patch: { rel: string; start: number; end: number; value?: string; pinned?: boolean }) => void;
+}) {
+  const cue = block?.cues?.[index];
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  if (!block || !cue || !block.cuesRel || !onPatch) return null;
+  const source = cueSourceTimes(cue, block.trim?.inFrames, fps);
+  return (
+    <div
+      className="studio-cue-editor"
+      data-testid="timeline-cue-editor"
+      style={{ left: Math.min(x + 8, 1100), top: Math.min(y + 12, 820) }}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="flex items-center gap-0.5">
+        {MOUTH_SHAPES.map((shape) => (
+          <button
+            key={shape}
+            type="button"
+            data-testid="timeline-cue-shape"
+            data-shape={shape}
+            data-active={cue.shape === shape ? "true" : "false"}
+            className="studio-cue-shape"
+            onClick={() => {
+              onPatch({ rel: block.cuesRel as string, start: source.start, end: source.end, value: shape });
+              onClose();
+            }}
+          >
+            {shape}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="studio-cue-pin"
+          data-testid="timeline-cue-pin"
+          data-pinned={cue.pinned ? "true" : "false"}
+          title={cue.pinned ? "Unpin this mouth shape" : "Pin this mouth shape"}
+          onClick={() => {
+            onPatch({
+              rel: block.cuesRel as string,
+              start: source.start,
+              end: source.end,
+              pinned: !cue.pinned,
+            });
+            onClose();
+          }}
+        >
+          {cue.pinned ? "unpin" : "pin"}
+        </button>
+      </div>
     </div>
   );
 }

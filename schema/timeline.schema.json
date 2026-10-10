@@ -429,9 +429,19 @@
           "enum": ["front", "left_34", "left_side", "right_34", "right_side", "up", "down"],
           "description": "Head/mouth drawing set for this line's lip-sync. The compositor looks up slot.images_by_view[view], then front, then slot.images. Omitted or unknown views use front."
         },
+        "trim_in": {
+          "type": "number",
+          "minimum": 0,
+          "description": "In-point in seconds from the start of the source audio file. Playback, Rhubarb cues, and duration use the window [trim_in, trim_out)."
+        },
+        "trim_out": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Out-point in seconds from the start of the source audio file. Omit to use the end of the file."
+        },
         "words": {
           "type": "array",
-          "description": "Optional word-level timestamps from `import-audio` / ElevenLabs Speech-to-Text, so the Studio Dialogue lane can show them. Times are seconds from the start of this clip's audio.",
+          "description": "Optional word-level timestamps from `import-audio` / ElevenLabs Speech-to-Text, so the Studio Dialogue lane can show them. Times are seconds from the start of this clip's source audio (not shifted by trim_in).",
           "items": {
             "type": "object",
             "additionalProperties": false,

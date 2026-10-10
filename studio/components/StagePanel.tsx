@@ -43,6 +43,7 @@ import {
   loadScript,
   loadStage,
   loadStudioSettings,
+  saveMouthCue,
   saveScript,
   saveStudioSettings,
   syncDialogue,
@@ -503,7 +504,13 @@ export default function StagePanel({
       const buffer = audioBuffersRef.current.get(clip.rel);
       if (!buffer) continue;
       const schedule = webAudioSchedule(
-        { startFrame: clip.startFrame, endFrame: clip.endFrame, durationSec: buffer.duration },
+        {
+          startFrame: clip.startFrame,
+          endFrame: clip.endFrame,
+          durationSec: buffer.duration,
+          trimInSec: clip.trimInSec,
+          trimOutSec: clip.trimOutSec,
+        },
         fromFrame,
         fps,
         totalFrames
@@ -512,7 +519,7 @@ export default function StagePanel({
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);
-      source.start(ctx.currentTime + schedule.delaySec, schedule.offsetSec);
+      source.start(ctx.currentTime + schedule.delaySec, schedule.offsetSec, schedule.playSec);
       const range = playRangeRef.current;
       if (range) {
         const remain = (range.end - fromFrame) / Math.max(fps, 1);
@@ -723,6 +730,27 @@ export default function StagePanel({
       setError(err instanceof Error ? err.message : "Lip-sync failed");
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function patchMouthCue(patch: {
+    rel: string;
+    start: number;
+    end: number;
+    value?: string;
+    pinned?: boolean;
+  }) {
+    if (!project) return;
+    setError(null);
+    try {
+      await saveMouthCue(project, patch);
+      const nextLanes = await loadLanes(project, script);
+      setLanes(nextLanes);
+      if (nextLanes.totalFrames > 0) setTotalFrames(nextLanes.totalFrames);
+      frameCacheRef.current.clear();
+      setLanesEpoch((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save mouth cue");
     }
   }
 
@@ -975,6 +1003,7 @@ export default function StagePanel({
             lipSyncMode={lipSyncMode}
             onToggleLipSyncMode={() => void toggleLipSyncMode()}
             loopSelection={loopSelection}
+            onPatchCue={(patch) => void patchMouthCue(patch)}
           />
         </div>
       </div>

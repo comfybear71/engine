@@ -63,11 +63,14 @@ function audioClipsFromLanes(projectDir, lanes) {
   for (const block of lanes.blocks || []) {
     if (block.lane !== "audio" || !block.rel) continue;
     if (!isSafeAudioRel(block.rel)) continue;
+    const fps = Math.max(Number(lanes.fps) || 24, 1);
     clips.push({
       rel: block.rel,
       startFrame: block.startFrame,
       endFrame: block.endFrame,
       exists: Boolean(resolveProjectAudio(projectDir, block.rel)),
+      trimInSec: ((block.trim && block.trim.inFrames) || 0) / fps,
+      trimOutSec: block.trim && block.trim.outFrames ? block.trim.outFrames / fps : null,
     });
   }
   return clips;

@@ -113,6 +113,8 @@ class DialogueClip:
     text: str | None = None
     estimated: bool = False  # True => no WAV yet; silent preview at duration_frames
     view: str | None = None  # head/mouth set for this line; compositor falls back to front
+    trim_in: float = 0.0  # seconds into the source file
+    source_duration_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,8 @@ class AudioClip:
 
     path: Path
     start_seconds: float
+    in_seconds: float = 0.0
+    duration_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -208,7 +212,19 @@ class Timeline:
                     clip_start_seconds = scene_start_seconds + (
                         layer.start_frame + dialogue_clip.start_frame
                     ) / float(self.fps)
-                    clips.append(AudioClip(path=dialogue_clip.audio, start_seconds=clip_start_seconds))
+                    play_s = dialogue_clip.duration_frames / float(self.fps)
+                    source_s = dialogue_clip.source_duration_seconds
+                    trimmed = dialogue_clip.trim_in > 1e-6 or (
+                        source_s is not None and play_s + 1e-6 < source_s
+                    )
+                    clips.append(
+                        AudioClip(
+                            path=dialogue_clip.audio,
+                            start_seconds=clip_start_seconds,
+                            in_seconds=dialogue_clip.trim_in,
+                            duration_seconds=play_s if trimmed else None,
+                        )
+                    )
             elapsed_frames += scene.total_frames
         return clips
 
@@ -285,12 +301,12 @@ def _load_lines_manifest(project_dir: Path) -> dict[str, dict]:
     return by_audio
 
 
-def _clip_duration_seconds(
+def _source_duration_seconds(
     clip_raw: dict,
     project_dir: Path,
     lines_by_audio: dict[str, dict],
 ) -> tuple[float, bool]:
-    """Return ``(duration_seconds, estimated)`` for one dialogue clip.
+    """Return ``(source_duration_seconds, estimated)`` for one dialogue clip.
 
     A real audio file on disk always wins (ffprobe). Otherwise the
     estimated length already stored on the clip, then the matching
@@ -303,11 +319,11 @@ def _clip_duration_seconds(
     if audio_path.is_file():
         return probe_duration_seconds(audio_path), False
 
-    if "estimated_duration_seconds" in clip_raw:
+    if "estimated_duration_seconds" in clip_raw and "trim_in" not in clip_raw and "trim_out" not in clip_raw:
         return float(clip_raw["estimated_duration_seconds"]), True
 
     line = lines_by_audio.get(audio_rel)
-    if line is not None and line.get("estimated_duration_seconds") is not None:
+    if line is not None and line.get("estimated_duration_seconds") is not None and "trim_in" not in clip_raw and "trim_out" not in clip_raw:
         return float(line["estimated_duration_seconds"]), True
 
     text = clip_raw.get("text")
@@ -318,6 +334,50 @@ def _clip_duration_seconds(
         f"Dialogue audio is missing ({audio_path}) and no estimated "
         f"duration is stored on the clip or in lines.json"
     )
+
+
+def _apply_trim_window(source_seconds: float, clip_raw: dict) -> tuple[float, float, float]:
+    """Return ``(play_seconds, trim_in, trim_out)`` from optional clip trim."""
+
+    trim_in = float(clip_raw["trim_in"]) if clip_raw.get("trim_in") is not None else 0.0
+    trim_out = float(clip_raw["trim_out"]) if clip_raw.get("trim_out") is not None else source_seconds
+    if trim_in < 0:
+        trim_in = 0.0
+    if trim_out > source_seconds:
+        trim_out = source_seconds
+    play = max(0.0, trim_out - trim_in)
+    return play, trim_in, trim_out
+
+
+def _clip_duration_seconds(
+    clip_raw: dict,
+    project_dir: Path,
+    lines_by_audio: dict[str, dict],
+) -> tuple[float, bool]:
+    """Return ``(play_duration_seconds, estimated)`` for one dialogue clip."""
+
+    source_s, estimated = _source_duration_seconds(clip_raw, project_dir, lines_by_audio)
+    play_s, _trim_in, _trim_out = _apply_trim_window(source_s, clip_raw)
+    if estimated and "estimated_duration_seconds" in clip_raw and (
+        "trim_in" in clip_raw or "trim_out" in clip_raw
+    ):
+        # Parser already stored the play length for a silent/estimated clip.
+        return float(clip_raw["estimated_duration_seconds"]), True
+    return play_s, estimated
+
+
+def _slice_cues(
+    cues: list[lipsync.MouthCue], trim_in: float, trim_out: float
+) -> list[lipsync.MouthCue]:
+    out: list[lipsync.MouthCue] = []
+    for cue in cues:
+        if cue.end <= trim_in or cue.start >= trim_out:
+            continue
+        start = max(0.0, cue.start - trim_in)
+        end = max(0.0, min(trim_out, cue.end) - trim_in)
+        if end > start:
+            out.append(lipsync.MouthCue(start=start, end=end, shape=cue.shape))
+    return out
 
 
 def _build_transform(raw: dict) -> Transform:
@@ -507,7 +567,10 @@ def _build_dialogue_clip(
     lines_by_audio: dict[str, dict],
 ) -> DialogueClip:
     audio_path = _resolve(project_dir, raw["audio"])
-    duration_s, estimated = _clip_duration_seconds(raw, project_dir, lines_by_audio)
+    source_s, estimated = _source_duration_seconds(raw, project_dir, lines_by_audio)
+    play_s, trim_in, trim_out = _apply_trim_window(source_s, raw)
+    if estimated and "estimated_duration_seconds" in raw:
+        play_s = float(raw["estimated_duration_seconds"])
 
     if estimated:
         # No WAV (and therefore no Rhubarb cues) -- mouth stays on X.
@@ -518,17 +581,19 @@ def _build_dialogue_clip(
             lipsync_config["cues"] = raw["cues"]
         if "text" in raw:
             lipsync_config["dialogue_text"] = raw["text"]
-        cues = lipsync.get_cues(lipsync_config, project_dir)
+        cues = _slice_cues(lipsync.get_cues(lipsync_config, project_dir), trim_in, trim_out)
 
     view = raw.get("view")
     return DialogueClip(
         audio=audio_path,
         start_frame=int(raw["start_frame"]),
-        duration_frames=_frames_from_seconds(duration_s, fps),
+        duration_frames=_frames_from_seconds(play_s, fps),
         cues=cues,
         text=raw.get("text"),
         estimated=estimated,
         view=str(view) if view else None,
+        trim_in=trim_in,
+        source_duration_seconds=source_s,
     )
 
 

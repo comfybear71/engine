@@ -14,7 +14,7 @@ const { ScriptError } = require("./errors");
 const BRACKET_TAG_RE = /^\[\s*([A-Za-z]+)\s*:\s*(.*?)\s*\]$/;
 const DECORATIVE_RE = /^=+$/;
 const DIALOGUE_RE = /^([A-Za-z][^:]*?)\s*:\s*(.+)$/;
-const DIALOGUE_ATTR_RE = /^(at_time|start|view)=(\S+)$/i;
+const DIALOGUE_ATTR_RE = /^(at_time|start|view|trim_in|trim_out)=(\S+)$/i;
 
 /**
  * "Hicks at_time=2s" -> { character: "Hicks", kv: { at_time: "2s" } }.
