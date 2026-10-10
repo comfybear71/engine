@@ -256,6 +256,10 @@ gitignored -- **this repo is public, never commit real secrets.**
 `node src/cli.js voices` (TTS) and `node src/cli.js import-audio`
 (Speech-to-Text) -- see [docs/voices.md](docs/voices.md) and
 [docs/script-format.md](docs/script-format.md#audio-name-filelabel).
+`XAI_API_KEY` / `XAI_IMAGE_MODEL` are used by Studio **Generate** in the
+Grok Imagine dock (see [docs/studio.md](docs/studio.md#image-assets-grok-imagine)).
+Studio Settings can write `XAI_API_KEY` into this file; the key is never
+shown back.
 
 ```bash
 cp .env.example .env

@@ -61,6 +61,9 @@ const {
   writeStudioSettings,
   patchMouthCue,
 } = require("./voices/lipSync");
+const { describeEngineSettings, saveXaiApiKey } = require("./engineSettings");
+const { generateProjectImage, GenerateImageError } = require("./generateImage");
+const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
 
 const DEFAULT_PROJECTS_DIR = path.resolve(__dirname, "..", "..", "projects");
 const DEFAULT_STUDIO_ORIGINS = [
@@ -237,6 +240,8 @@ function setAssetCacheControl(req, res, absPath) {
 function createApp(options = {}) {
   const projectsDir = path.resolve(options.projectsDir || process.env.ENGINE_PROJECTS_DIR || DEFAULT_PROJECTS_DIR);
   const skipValidate = options.skipValidate === true;
+  const envPath = options.envPath;
+  const fetchFn = options.fetchFn;
   const app = express();
   let renderInProgress = false;
 
@@ -264,6 +269,73 @@ function createApp(options = {}) {
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  function sendGenerateError(res, err) {
+    if (err instanceof GenerateImageError) {
+      const status = err.status === 401 ? 401 : err.status === 429 ? 429 : err.code === "ENOTFOUND" ? 404 : err.code === "EAUTH" ? 400 : 400;
+      const mapped = err.code === "EXAI" && err.status && err.status >= 500 ? 502 : status;
+      return res.status(mapped).json({ error: err.message });
+    }
+    return res.status(500).json({ error: err.message });
+  }
+
+  app.get("/api/engine/settings", (_req, res) => {
+    const settings = describeEngineSettings(process.env, envPath ? { envPath } : {});
+    res.json({
+      xaiKeyConfigured: settings.xaiKeyConfigured,
+      xaiImageModel: settings.xaiImageModel,
+    });
+  });
+
+  app.put("/api/engine/settings", (req, res) => {
+    const key = req.body && req.body.xaiApiKey;
+    if (typeof key !== "string" || !key.trim()) {
+      return res.status(400).json({ error: "Paste an xAI API key. It is stored in the engine .env on this PC and never shown back." });
+    }
+    try {
+      saveXaiApiKey(key, envPath ? { envPath } : {});
+      res.json({ ok: true, xaiKeyConfigured: true });
+    } catch (err) {
+      if (err.code === "EINVAL") return res.status(400).json({ error: err.message });
+      return res.status(500).json({ error: "Could not save the key to the engine .env file." });
+    }
+  });
+
+  app.get("/api/prompt-packs", (req, res) => {
+    const characterId = typeof req.query.character === "string" ? req.query.character : "";
+    const packs = listPackSummaries();
+    if (!characterId) return res.json({ packs });
+    const match = packForCharacter({ id: characterId, display_name: req.query.name });
+    res.json({ packs, pack: match ? packs.find((item) => item.id === match.id) || null : null });
+  });
+
+  app.get("/api/prompt-packs/:id", (req, res) => {
+    const pack = getPack(req.params.id);
+    if (!pack) return res.status(404).json({ error: "Unknown prompt pack" });
+    res.json({ pack });
+  });
+
+  app.post("/api/generate-image", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectName = req.body && req.body.project;
+    const projectDir = resolveProjectDir(projectsDir, projectName);
+    if (!projectDir) {
+      return res.status(400).json({ error: "Invalid project name" });
+    }
+    if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
+      return res.status(404).json({ error: `Project not found: ${projectName}` });
+    }
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await generateProjectImage(projectDir, globalAssetsDir, req.body || {}, {
+        fetchFn,
+      });
+      res.json(result);
+    } catch (err) {
+      sendGenerateError(res, err);
+    }
   });
 
   async function summarized(projectDir, name) {

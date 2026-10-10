@@ -1,0 +1,261 @@
+{
+  "id": "rodney",
+  "characterIds": ["rodney"],
+  "displayNames": ["Rodney"],
+  "displayName": "Rodney",
+  "styleBlock": "stylised painted caricature, battered crimson felt fedora with pinched crown, dark swept-back hair, sideburns, thick angry brows, moustache and goatee, tanned skin, deep red cape with tall popped collar and ragged hem, white open-collared shirt with cream tie under brown-and-black leopard-print shirt with rolled sleeves, wide dark brown studded belt with big ornate gold-brass buckle, short frayed red shorts, dark leather knee straps with gold-brass buckle plates, tall brown leopard-tooled cowboy boots; flat #00FF00 green background, no shadow, no text, no watermark, full figure fully visible",
+  "sets": [
+    {
+      "id": "full_body_reference",
+      "group": "0",
+      "label": "Full body reference",
+      "description": "Complete standing likeness including head, stored as-is (no cut-out).",
+      "needId": "full_body_reference",
+      "prompt": "{{styleBlock}}. A full-body standing reference of {{name}}. Complete character including head, face, hair, neck, torso, arms, hands, legs, and feet. Front-facing, feet planted, arms slightly off the torso. Same size, crop, stance, and ground line as a production body turnaround. Neutral expression, closed mouth, ordinary eye shape — never slanted eyes or a mocking ethnic eye gesture. Finished illustration, not a sprite sheet. No watermark, no caption, no text, no logo. Do not crop hands, feet, or hair. Small empty margin inside the frame. One character only."
+    },
+    {
+      "id": "body_armless",
+      "group": "1",
+      "label": "Armless body",
+      "description": "Front body, no head, no arms — the puppet torso arms and heads attach to.",
+      "split": "grid",
+      "grid": { "cols": 1, "rows": 1 },
+      "cells": [
+        { "name": "body", "dest": { "kind": "file", "rel": "body.png" } }
+      ],
+      "prompt": "{{styleBlock}}. One production drawing of {{name}}: a front-facing armless body. No head, no neck, no face, no arms, no hands. Clean neck seam at the top and clean shoulder sockets at the sides, ready to attach a separate head and separate arms. Feet planted, cape and costume as in the style, boots fully visible. Flat #00FF00 green background, no shadow, no text, no watermark. Full figure from the neck seam to the boots fully visible. Small empty margin. One figure only. Never draw slanted eyes or a mocking ethnic eye gesture."
+    },
+    {
+      "id": "mouth_sheet",
+      "group": "2",
+      "label": "Lip-sync mouths",
+      "description": "3×3 identical heads; only the mouth changes. Rhubarb X, A–H.",
+      "needId": "mouth_sheet",
+      "prompt": "{{styleBlock}}. A 3x3 mouth-and-head sheet of {{name}}. Nine cells, left to right, top to bottom, in this exact Rhubarb order: X relaxed smirk rest, A lips pressed (M/P), B slightly apart showing teeth (EE/K), C medium open (EH), D wide open (AH), E rounded (OH), F pushed-forward (OO/W), G upper teeth on lower lip (F/V), H tongue raised (L). Same head size, crop, fedora, hair, brows, and position in every cell — only the mouth changes. Ordinary eye shape in every cell; never slanted eyes or a mocking ethnic eye gesture. Neck included, no shoulders. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop the head, ears, or chin. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "comedy_expressions",
+      "group": "3",
+      "label": "Comedy expressions",
+      "description": "Nine comedy heads: laugh, grin, pout, sneer, innocent, smug, drool shock, growl, kiss.",
+      "split": "grid",
+      "grid": { "cols": 3, "rows": 3 },
+      "assignChoices": ["belly_laugh", "cheeky_grin", "pout", "sneer", "innocent", "smug", "drool_shock", "growl", "kiss"],
+      "cells": [
+        { "name": "belly_laugh", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "cheeky_grin", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "pout", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "sneer", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "innocent", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "smug", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "drool_shock", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "growl", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "kiss", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } }
+      ],
+      "prompt": "{{styleBlock}}. A 3x3 comedy-expression head sheet of {{name}}. Nine cells, left to right, top to bottom: belly laugh, cheeky grin, pout, sneer, innocent, smug, drool shock, growl, kiss. Same head size, crop, fedora, hair, and position in every cell — only the expression changes. Include the neck, no torso. Ordinary eye shape in every cell (wide, narrow, or closed as the expression needs); never slanted eyes or a mocking ethnic eye gesture. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop hair, ears, or chin. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "eyes",
+      "group": "4",
+      "label": "Eyes",
+      "description": "Ten eye drawings on a 5×2 sheet.",
+      "split": "grid",
+      "grid": { "cols": 5, "rows": 2 },
+      "assignChoices": ["wide", "squint", "shifty_left", "shifty_right", "bloodshot", "cross", "roll", "closed", "wink_left", "wink_right"],
+      "cells": [
+        { "name": "wide", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } },
+        { "name": "squint", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } },
+        { "name": "shifty_left", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } },
+        { "name": "shifty_right", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } },
+        { "name": "bloodshot", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } },
+        { "name": "cross", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } },
+        { "name": "roll", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } },
+        { "name": "closed", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } },
+        { "name": "wink_left", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } },
+        { "name": "wink_right", "dest": { "kind": "slot", "slot": "eyes", "drawings_dir": "eyes" } }
+      ],
+      "prompt": "{{styleBlock}}. A 5x2 eye sheet of {{name}}. Ten cells, left to right, top to bottom: wide open, narrowed squint (same ordinary eye shape, lids lowered — not slanted, not a mocking ethnic eye gesture), looking shifty left, looking shifty right, bloodshot, cross-eyed, rolled up, closed, wink left (right eye open), wink right (left eye open). Same crop and spacing in every cell; only the eyes change. No face outline beyond the eye area if possible, or a matching head crop if the model needs context. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "hands_to_face",
+      "group": "5",
+      "label": "Hands to face",
+      "description": "Cover, rub, peek, facepalm — front and side.",
+      "split": "grid",
+      "grid": { "cols": 4, "rows": 2 },
+      "assignChoices": ["cover_front", "rub_front", "peek_front", "facepalm_front", "cover_side", "rub_side", "peek_side", "facepalm_side"],
+      "cells": [
+        { "name": "cover_front", "dest": { "kind": "slot", "slot": "hands", "drawings_dir": "hands" } },
+        { "name": "rub_front", "dest": { "kind": "slot", "slot": "hands", "drawings_dir": "hands" } },
+        { "name": "peek_front", "dest": { "kind": "slot", "slot": "hands", "drawings_dir": "hands" } },
+        { "name": "facepalm_front", "dest": { "kind": "slot", "slot": "hands", "drawings_dir": "hands" } },
+        { "name": "cover_side", "dest": { "kind": "slot", "slot": "hands", "drawings_dir": "hands" } },
+        { "name": "rub_side", "dest": { "kind": "slot", "slot": "hands", "drawings_dir": "hands" } },
+        { "name": "peek_side", "dest": { "kind": "slot", "slot": "hands", "drawings_dir": "hands" } },
+        { "name": "facepalm_side", "dest": { "kind": "slot", "slot": "hands", "drawings_dir": "hands" } }
+      ],
+      "prompt": "{{styleBlock}}. A 4x2 hands-to-face sheet of {{name}}. Eight cells. Row 1 front views, left to right: hands covering the face, hands rubbing the face, hands peeking through fingers, facepalm. Row 2 the same four poses in side view. Head plus hands only, matching fedora and face. Ordinary eye shape; never slanted eyes or a mocking ethnic eye gesture. Same scale in every cell. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop fingers or the fedora. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "right_arm_poses",
+      "group": "6",
+      "label": "Right arm poses",
+      "description": "Twelve right-arm poses on a 4×3 sheet.",
+      "split": "grid",
+      "grid": { "cols": 4, "rows": 3 },
+      "assignChoices": ["down", "hip", "point", "point_up", "raised_high", "raised_half", "wave", "fist_pump", "shrug", "chest_thump", "dismiss", "counting"],
+      "cells": [
+        { "name": "down", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "hip", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "point", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "point_up", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "raised_high", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "raised_half", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "wave", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "fist_pump", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "shrug", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "chest_thump", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "dismiss", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } },
+        { "name": "counting", "dest": { "kind": "slot", "slot": "right_hand", "drawings_dir": "right_hand", "child": "right_arm" } }
+      ],
+      "prompt": "{{styleBlock}}. A 4x3 sheet of separate right-arm poses of {{name}}. Twelve cells, left to right, top to bottom: hanging down, hand on hip, point forward, point up, raised high, raised halfway, wave, fist pump, shrug, chest thump, dismissive flick, counting on fingers. Each piece is the right arm and hand only, floating, not attached to a body, matching the leopard-print rolled sleeve. Same scale in every cell. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop the shoulder end or fingertips. Small empty margin inside each cell. One character only. Never draw slanted eyes or a mocking ethnic eye gesture."
+    },
+    {
+      "id": "left_arm_mic",
+      "group": "6",
+      "label": "Left arm (mic)",
+      "description": "Nine left-arm poses holding a black microphone.",
+      "split": "grid",
+      "grid": { "cols": 3, "rows": 3 },
+      "assignChoices": ["down", "mic_chest", "mic_mouth", "mic_out", "mic_up", "mic_side", "mic_point", "mic_down_low", "mic_drop"],
+      "cells": [
+        { "name": "down", "dest": { "kind": "slot", "slot": "left_hand", "drawings_dir": "left_hand", "child": "left_arm" } },
+        { "name": "mic_chest", "dest": { "kind": "slot", "slot": "left_hand", "drawings_dir": "left_hand", "child": "left_arm" } },
+        { "name": "mic_mouth", "dest": { "kind": "slot", "slot": "left_hand", "drawings_dir": "left_hand", "child": "left_arm" } },
+        { "name": "mic_out", "dest": { "kind": "slot", "slot": "left_hand", "drawings_dir": "left_hand", "child": "left_arm" } },
+        { "name": "mic_up", "dest": { "kind": "slot", "slot": "left_hand", "drawings_dir": "left_hand", "child": "left_arm" } },
+        { "name": "mic_side", "dest": { "kind": "slot", "slot": "left_hand", "drawings_dir": "left_hand", "child": "left_arm" } },
+        { "name": "mic_point", "dest": { "kind": "slot", "slot": "left_hand", "drawings_dir": "left_hand", "child": "left_arm" } },
+        { "name": "mic_down_low", "dest": { "kind": "slot", "slot": "left_hand", "drawings_dir": "left_hand", "child": "left_arm" } },
+        { "name": "mic_drop", "dest": { "kind": "slot", "slot": "left_hand", "drawings_dir": "left_hand", "child": "left_arm" } }
+      ],
+      "prompt": "{{styleBlock}}. A 3x3 sheet of separate left-arm poses of {{name}} holding a black handheld microphone. Nine cells, left to right, top to bottom: arm down with mic at the thigh, mic at the chest, mic at the mouth, mic held out toward the audience, mic raised up, mic at the side, mic pointing forward, mic down low, mic being dropped. Each piece is the left arm, hand, and black mic only, floating, not attached to a body, matching the leopard-print rolled sleeve. Same scale in every cell. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop the shoulder end, fingertips, or the mic. Small empty margin inside each cell. One character only. Never draw slanted eyes or a mocking ethnic eye gesture."
+    },
+    {
+      "id": "head_turns",
+      "group": "7",
+      "label": "Head turns",
+      "description": "Left/right 3/4 and side, plus up closed / open / shout.",
+      "split": "grid",
+      "grid": { "cols": 4, "rows": 2 },
+      "assignChoices": ["left_34", "left_side", "right_34", "right_side", "up_closed", "up_open", "up_shout"],
+      "cells": [
+        { "name": "left_34", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "left_side", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "right_34", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "right_side", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "up_closed", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "up_open", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "up_shout", "dest": { "kind": "slot", "slot": "head", "drawings_dir": "head" } },
+        { "name": "empty", "dest": null }
+      ],
+      "prompt": "{{styleBlock}}. A head-turn sheet of {{name}} on a 4x2 grid. Seven heads, left to right, top to bottom: left three-quarter, left side profile, right three-quarter, right side profile, looking up mouth closed, looking up mouth open, looking up shouting. Last cell empty green. Same head size and neck in every filled cell. Ordinary eye shape; never slanted eyes or a mocking ethnic eye gesture. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop the fedora, ears, or chin. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "body_turns",
+      "group": "8",
+      "label": "Body turns",
+      "description": "Front, 3/4, sides, back, plus armless headless.",
+      "split": "grid",
+      "grid": { "cols": 4, "rows": 2 },
+      "assignChoices": ["front", "left_34", "left_side", "right_34", "right_side", "back", "armless_headless"],
+      "cells": [
+        { "name": "front", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "left_34", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "left_side", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "right_34", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "right_side", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "back", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "armless_headless", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "empty", "dest": null }
+      ],
+      "prompt": "{{styleBlock}}. A body-turn sheet of {{name}} on a 4x2 grid. Seven figures, left to right, top to bottom: front, left three-quarter, left side, right three-quarter, right side, back, and a front armless headless body (clean neck and shoulder seams). Last cell empty green. Same body size and ground line in every filled cell. Full costume including cape, shorts, knee straps, and boots. Ordinary anatomy; never slanted eyes or a mocking ethnic eye gesture. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop hands, feet, or the cape. Small empty margin inside each cell. One character only."
+    },
+    {
+      "id": "walk_cycles",
+      "group": "9",
+      "label": "Walk cycles",
+      "description": "Armless walk: side 8 frames, front 4, back 4. Shared canvas and ground line.",
+      "split": "grid",
+      "grid": { "cols": 8, "rows": 3 },
+      "cycleFps": 12,
+      "cycles": {
+        "walk_side": { "drawings": ["walk_side_01", "walk_side_02", "walk_side_03", "walk_side_04", "walk_side_05", "walk_side_06", "walk_side_07", "walk_side_08"], "fps": 12 },
+        "walk_front": { "drawings": ["walk_front_01", "walk_front_02", "walk_front_03", "walk_front_04"], "fps": 12 },
+        "walk_back": { "drawings": ["walk_back_01", "walk_back_02", "walk_back_03", "walk_back_04"], "fps": 12 }
+      },
+      "cells": [
+        { "name": "walk_side_01", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_side" },
+        { "name": "walk_side_02", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_side" },
+        { "name": "walk_side_03", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_side" },
+        { "name": "walk_side_04", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_side" },
+        { "name": "walk_side_05", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_side" },
+        { "name": "walk_side_06", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_side" },
+        { "name": "walk_side_07", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_side" },
+        { "name": "walk_side_08", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_side" },
+        { "name": "walk_front_01", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_front" },
+        { "name": "walk_front_02", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_front" },
+        { "name": "walk_front_03", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_front" },
+        { "name": "walk_front_04", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_front" },
+        { "name": "empty_front_5", "dest": null },
+        { "name": "empty_front_6", "dest": null },
+        { "name": "empty_front_7", "dest": null },
+        { "name": "empty_front_8", "dest": null },
+        { "name": "walk_back_01", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_back" },
+        { "name": "walk_back_02", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_back" },
+        { "name": "walk_back_03", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_back" },
+        { "name": "walk_back_04", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" }, "cycle": "walk_back" },
+        { "name": "empty_back_5", "dest": null },
+        { "name": "empty_back_6", "dest": null },
+        { "name": "empty_back_7", "dest": null },
+        { "name": "empty_back_8", "dest": null }
+      ],
+      "prompt": "{{styleBlock}}. An armless walk-cycle sprite sheet of {{name}} on a shared canvas. 8 columns and 3 rows, same body size and ground line in every filled cell; the character stays in the same spot, only the pose changes. No head, no arms — clean neck seam and shoulder sockets. Row 1: side-view walk, 8 evenly spaced frames (contact through passing and opposite contact). Row 2: front-view walk, 4 frames in the first four cells, last four cells empty green. Row 3: back-view walk, 4 frames in the first four cells, last four cells empty green. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop feet, cape, or boots. Small empty margin inside each cell. One character only. Never draw slanted eyes or a mocking ethnic eye gesture."
+    },
+    {
+      "id": "speaker_prop",
+      "group": "10",
+      "label": "Speaker prop",
+      "description": "Speaker cabinet from front, low, and side.",
+      "split": "grid",
+      "grid": { "cols": 3, "rows": 1 },
+      "assignChoices": ["speaker_front", "speaker_low", "speaker_side"],
+      "cells": [
+        { "name": "speaker_front", "dest": { "kind": "prop" } },
+        { "name": "speaker_low", "dest": { "kind": "prop" } },
+        { "name": "speaker_side", "dest": { "kind": "prop" } }
+      ],
+      "prompt": "{{styleBlock}}. A 1x3 sheet of a single speaker-cabinet prop in the world of {{name}}. Three cells, left to right: front view, low three-quarter looking up at the cabinet, side view. Same cabinet, same scale, no character holding it. Plain #00FF00 green background in every cell. No floor, no drop shadow on the green, no watermark, no caption, no text, no logo. Do not crop any part of the cabinet. Small empty margin inside each cell. One object only."
+    },
+    {
+      "id": "speaker_slapstick",
+      "group": "10",
+      "label": "Speaker slapstick",
+      "description": "Fully clothed cartoon poses with a speaker cabinet: approach through strut-off.",
+      "split": "grid",
+      "grid": { "cols": 4, "rows": 2 },
+      "assignChoices": ["approach", "lean", "hug", "thrust_1", "thrust_2", "thrust_3", "collapse", "strut_off"],
+      "cells": [
+        { "name": "approach", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "lean", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "hug", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "thrust_1", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "thrust_2", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "thrust_3", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "collapse", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } },
+        { "name": "strut_off", "dest": { "kind": "slot", "slot": "body", "drawings_dir": "body" } }
+      ],
+      "prompt": "{{styleBlock}}. A 4x2 comedy slapstick sheet of {{name}} fully clothed, with a speaker cabinet as the other actor. Eight cells, left to right, top to bottom: approach the cabinet, lean on it, hug it, cartoon hip-thrust against the cabinet beat 1, beat 2, beat 3, collapse off it, then strut off. Keep the whole costume on in every cell — shirt, tie, leopard shirt, shorts, cape, boots — this is broad cartoon slapstick, not a nude or sexual image. Same body size and ground line. Ordinary eye shape; never slanted eyes or a mocking ethnic eye gesture. Plain #00FF00 green background in every cell. No watermark, no caption, no text, no logo. Do not crop feet, hands, or the cabinet. Small empty margin inside each cell. One character only."
+    }
+  ]
+}

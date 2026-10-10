@@ -311,7 +311,10 @@ function confirmIngest(projectDir, globalAssetsDir, characterId, body) {
     }
     usedNames.set(name, cell.index);
     const rel = destRelForCell(characterId, cell.dest, name);
-    if (!rel) throw ingestError(`No destination for cell ${cell.index}`);
+    if (!rel) {
+      if (cell.empty || !cell.dest) continue;
+      throw ingestError(`No destination for cell ${cell.index}`);
+    }
     writes.push({ cell, name, rel });
   }
   if (writes.length === 0) throw ingestError("No cells to save");

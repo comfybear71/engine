@@ -716,6 +716,91 @@ export type ImportAudioResponse = {
   creditEstimate?: string | number | null;
 };
 
+export type EngineSettings = {
+  xaiKeyConfigured: boolean;
+  xaiImageModel: string;
+};
+
+export async function loadEngineSettings(): Promise<EngineSettings> {
+  const res = await workerFetch("/api/engine/settings");
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<EngineSettings>;
+}
+
+export async function saveEngineXaiKey(xaiApiKey: string): Promise<EngineSettings> {
+  const res = await workerFetch("/api/engine/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ xaiApiKey }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return { xaiKeyConfigured: true, xaiImageModel: "" };
+}
+
+export type PromptPackSummary = {
+  id: string;
+  displayName: string;
+  characterIds: string[];
+  sets: { id: string; label: string; description: string; group: string | null; needId: string }[];
+};
+
+export async function loadPromptPacks(characterId?: string): Promise<{
+  packs: PromptPackSummary[];
+  pack: PromptPackSummary | null;
+}> {
+  const qs = characterId ? `?character=${encodeURIComponent(characterId)}` : "";
+  const res = await workerFetch(`/api/prompt-packs${qs}`);
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { packs?: PromptPackSummary[]; pack?: PromptPackSummary | null };
+  return { packs: body.packs || [], pack: body.pack || null };
+}
+
+export type GenerateImageRef = { kind: "reference" | "body" | string; rel: string };
+export type GeneratedImage = {
+  index: number;
+  url: string | null;
+  mimeType: string;
+  libraryRel: string;
+  imageBase64: string;
+};
+export type GenerateImageResponse = {
+  ok: boolean;
+  dryRun: boolean;
+  model: string;
+  n: number;
+  needId: string;
+  prompt: string;
+  keyConfigured: boolean;
+  references: GenerateImageRef[];
+  estimatedCost?: number | null;
+  estimatedCostLabel?: string | null;
+  cost?: number | null;
+  creditNote: string;
+  images?: GeneratedImage[];
+  characterId: string;
+};
+
+export async function generateProjectImage(
+  body: {
+    project: string;
+    characterId: string;
+    needId: string;
+    n?: number;
+    prompt?: string;
+    frames?: number;
+    dryRun?: boolean;
+  }
+): Promise<GenerateImageResponse> {
+  const res = await workerFetch("/api/generate-image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json().catch(() => ({}))) as GenerateImageResponse & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Generate failed (${res.status})`);
+  return payload;
+}
+
 export async function importProjectAudio(
   name: string,
   file: File,

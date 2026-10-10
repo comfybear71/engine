@@ -8,13 +8,19 @@ import {
   getAssetNeed,
   type AssetNeed,
 } from "@/lib/assetNeeds";
+import { explainGenerateError, summarizeGenerateCost } from "@/lib/generateImage";
+import { fillPackPrompt, ingestNeedId, packForCharacter } from "@/lib/promptPacks";
 import {
   cancelCharacterIngest,
   confirmCharacterIngest,
+  generateProjectImage,
+  loadEngineSettings,
   previewCharacterIngest,
   saveCharacterReference,
   saveCharacterStyle,
   type Character,
+  type GenerateImageResponse,
+  type GeneratedImage,
   type IngestPreview,
 } from "@/lib/worker";
 
@@ -38,8 +44,28 @@ export default function AssetImaginePanel({
   onChanged: () => void;
   embedded?: boolean;
 }) {
-  const [needId, setNeedId] = useState<string>(ASSET_NEEDS[0]?.id || "mouth_sheet");
-  const need = useMemo(() => getAssetNeed(needId) || ASSET_NEEDS[0], [needId]);
+  const pack = useMemo(() => packForCharacter(character), [character]);
+  const setOptions = pack ? pack.sets : ASSET_NEEDS;
+  const [needId, setNeedId] = useState<string>(setOptions[0]?.id || "mouth_sheet");
+  const packSet = useMemo(() => pack?.sets.find((set) => set.id === needId) || pack?.sets[0] || null, [pack, needId]);
+  const ingestId = packSet ? ingestNeedId(packSet) : needId;
+  const need = useMemo(() => {
+    const fromAssets = getAssetNeed(ingestId) || getAssetNeed(needId);
+    if (fromAssets) return fromAssets;
+    if (packSet) {
+      return {
+        id: packSet.id,
+        label: packSet.label,
+        description: packSet.description,
+        split: packSet.split || "grid",
+        grid: packSet.grid,
+        cells: packSet.cells?.filter((cell) => cell.dest) as AssetNeed["cells"],
+        assignChoices: packSet.assignChoices,
+        prompt: packSet.prompt,
+      } as AssetNeed;
+    }
+    return ASSET_NEEDS[0];
+  }, [ingestId, needId, packSet]);
   const [frames, setFrames] = useState<number>(need?.frameParam?.default ?? 8);
   const [style, setStyle] = useState(character.style || "");
   const [styleSaved, setStyleSaved] = useState(false);
@@ -49,13 +75,23 @@ export default function AssetImaginePanel({
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<IngestPreview | null>(null);
   const [names, setNames] = useState<Record<number, string>>({});
-  const [attachReference, setAttachReference] = useState(false);
+  const [attachReference, setAttachReference] = useState(true);
+  const [variants, setVariants] = useState(2);
+  const [costNote, setCostNote] = useState<string | null>(null);
+  const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null);
+  const [results, setResults] = useState<GeneratedImage[]>([]);
+  const [picked, setPicked] = useState<number | null>(null);
 
   useEffect(() => {
     setStyle(character.style || "");
     setStyleSaved(false);
     setPreview(null);
     setError(null);
+    setResults([]);
+    setPicked(null);
+    const nextPack = packForCharacter(character);
+    const first = nextPack?.sets[0]?.id || ASSET_NEEDS[0]?.id || "mouth_sheet";
+    setNeedId(first);
   }, [character.id, character.style]);
 
   useEffect(() => {
@@ -63,13 +99,56 @@ export default function AssetImaginePanel({
   }, [need]);
 
   const expanded = useMemo(() => (need ? expandNeed(need, frames) : null), [need, frames]);
-  const isReferenceNeed = need?.id === "full_body_reference" || need?.dest?.kind === "reference" || need?.ingest === false;
+  const isReferenceNeed =
+    ingestId === "full_body_reference" || need?.id === "full_body_reference" || need?.dest?.kind === "reference" || need?.ingest === false;
   const prompt = useMemo(() => {
+    if (pack && packSet) {
+      return fillPackPrompt(packSet, { name: character.display_name, styleBlock: pack.styleBlock });
+    }
     if (!need) return "";
     const base = fillNeedPrompt(need, { name: character.display_name, style, frames });
     if (!attachReference) return base;
     return `${base} Match the attached full-body reference image for likeness, costume, proportions, pose, and crop.`;
-  }, [need, character.display_name, style, frames, attachReference]);
+  }, [pack, packSet, need, character.display_name, style, frames, attachReference]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadEngineSettings()
+      .then((settings) => {
+        if (!cancelled) setKeyConfigured(settings.xaiKeyConfigured);
+      })
+      .catch(() => {
+        if (!cancelled) setKeyConfigured(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [character.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    generateProjectImage({
+      project,
+      characterId: character.id,
+      needId: ingestId,
+      n: variants,
+      prompt,
+      frames: need?.frameParam ? frames : undefined,
+      dryRun: true,
+    })
+      .then((result) => {
+        if (cancelled) return;
+        const summary = summarizeGenerateCost(result);
+        setCostNote(summary.creditNote);
+        setKeyConfigured(result.keyConfigured);
+      })
+      .catch(() => {
+        if (!cancelled) setCostNote("This uses xAI credits.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project, character.id, ingestId, variants, prompt, need?.frameParam, frames]);
 
   async function copyPrompt() {
     try {
@@ -116,26 +195,29 @@ export default function AssetImaginePanel({
     [project, character.id, onChanged]
   );
 
-  const ingestFile = useCallback(
-    async (file: File) => {
-      if (!need) return;
-      if (!file.type.startsWith("image/")) {
-        setError("Drop a PNG or JPEG from Grok Imagine.");
-        return;
-      }
+  const ingestBase64 = useCallback(
+    async (imageBase64: string, filename: string) => {
       if (isReferenceNeed) {
-        await saveReferenceFile(file);
+        setBusy("Saving reference…");
+        setError(null);
+        try {
+          await saveCharacterReference(project, character.id, { imageBase64, filename });
+          onChanged();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Could not save reference");
+        } finally {
+          setBusy(null);
+        }
         return;
       }
       setBusy("Cutting out…");
       setError(null);
       try {
-        const imageBase64 = await fileToBase64(file);
         const result = await previewCharacterIngest(project, character.id, {
-          needId: need.id,
+          needId: ingestId,
           imageBase64,
-          filename: file.name,
-          frames: need.frameParam ? frames : undefined,
+          filename,
+          frames: need?.frameParam ? frames : undefined,
         });
         const initial: Record<number, string> = {};
         for (const cell of result.cells) initial[cell.index] = cell.suggestedName;
@@ -147,8 +229,57 @@ export default function AssetImaginePanel({
         setBusy(null);
       }
     },
-    [need, isReferenceNeed, saveReferenceFile, project, character.id, frames]
+    [isReferenceNeed, project, character.id, onChanged, ingestId, need, frames]
   );
+
+  const ingestFile = useCallback(
+    async (file: File) => {
+      if (!file.type.startsWith("image/")) {
+        setError("Drop a PNG or JPEG from Grok Imagine.");
+        return;
+      }
+      if (isReferenceNeed) {
+        await saveReferenceFile(file);
+        return;
+      }
+      try {
+        const imageBase64 = await fileToBase64(file);
+        await ingestBase64(imageBase64, file.name);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Ingest failed");
+      }
+    },
+    [isReferenceNeed, saveReferenceFile, ingestBase64]
+  );
+
+  async function onGenerate() {
+    setBusy("Generating…");
+    setError(null);
+    setResults([]);
+    setPicked(null);
+    try {
+      const result: GenerateImageResponse = await generateProjectImage({
+        project,
+        characterId: character.id,
+        needId: ingestId,
+        n: variants,
+        prompt,
+        frames: need?.frameParam ? frames : undefined,
+      });
+      setResults(result.images || []);
+      setCostNote(summarizeGenerateCost(result).creditNote);
+      setKeyConfigured(result.keyConfigured);
+    } catch (err) {
+      setError(explainGenerateError(err instanceof Error ? err.message : "Generate failed"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onPickGenerated(image: GeneratedImage) {
+    setPicked(image.index);
+    await ingestBase64(image.imageBase64, `${ingestId}_${image.index + 1}.png`);
+  }
 
   useEffect(() => {
     function onPaste(event: ClipboardEvent) {
@@ -207,27 +338,39 @@ export default function AssetImaginePanel({
             <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-studio-muted">Grok Imagine</h3>
           )}
           <p className={`${embedded ? "" : "mt-1 "}text-sm text-neutral-300`}>
-            Copy a prompt, generate in the browser, then drop the PNG onto {character.display_name}.
+            {pack
+              ? `Prompt pack for ${character.display_name}. Generate in-app, or still drop a PNG.`
+              : `Copy a prompt or Generate in-app, then cut out onto ${character.display_name}.`}
           </p>
         </div>
         <label className="flex items-center gap-2 text-[11px] text-studio-muted">
-          Need
+          {pack ? "Set" : "Need"}
           <select
             className="rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-            value={need.id}
-            onChange={(event) => setNeedId(event.target.value)}
+            value={needId}
+            onChange={(event) => {
+              setNeedId(event.target.value);
+              setResults([]);
+              setPicked(null);
+            }}
             data-testid="asset-need"
           >
-            {ASSET_NEEDS.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.label}
-              </option>
-            ))}
+            {pack
+              ? pack.sets.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))
+              : ASSET_NEEDS.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
           </select>
         </label>
       </div>
 
-      <p className="mb-3 text-[12px] text-studio-muted">{need.description}</p>
+      <p className="mb-3 text-[12px] text-studio-muted">{packSet?.description || need.description}</p>
 
       {need.frameParam ? (
         <label className="mb-3 flex items-center gap-2 text-[11px] text-studio-muted">
@@ -294,23 +437,79 @@ export default function AssetImaginePanel({
         </span>
       </label>
 
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <button
-          type="button"
-          onClick={() => void copyPrompt()}
-          className="rounded-md bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover"
-          data-testid="copy-prompt"
-        >
-          {copied ? "Copied" : "Copy prompt"}
-        </button>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void copyPrompt()}
+            className="rounded-md border border-studio-border px-3 py-1.5 text-xs text-neutral-200 hover:text-white"
+            data-testid="copy-prompt"
+          >
+            {copied ? "Copied" : "Copy prompt"}
+          </button>
+          <label className="flex items-center gap-1.5 text-[11px] text-studio-muted">
+            Variants
+            <select
+              className="rounded-md border border-studio-border bg-studio-raised px-1.5 py-1 text-xs text-neutral-200"
+              value={variants}
+              onChange={(event) => setVariants(Number(event.target.value))}
+              data-testid="generate-n"
+            >
+              {[1, 2, 4].map((count) => (
+                <option key={count} value={count}>
+                  {count}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => void onGenerate()}
+            disabled={busy != null}
+            className="rounded-md bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+            data-testid="generate-image"
+          >
+            {busy === "Generating…" ? "Generating…" : "Generate"}
+          </button>
+        </div>
         <span className="text-[11px] text-studio-muted">
           {isReferenceNeed
             ? "stored original · no cut-out"
-            : `${expanded?.grid ? `${expanded.grid.cols}×${expanded.grid.rows} grid` : "connected components"}${
-                need.key === false ? " · no chroma key" : " · key #00FF00"
+            : `${expanded?.grid ? `${expanded.grid.cols}×${expanded.grid.rows} grid` : packSet?.grid ? `${packSet.grid.cols}×${packSet.grid.rows} grid` : "connected components"}${
+                need?.key === false ? " · no chroma key" : " · key #00FF00"
               }`}
         </span>
       </div>
+      <p className="mt-2 text-[11px] text-studio-muted" data-testid="generate-cost">
+        {costNote || "This uses xAI credits."}
+        {keyConfigured === false ? " xAI key is not set — open Settings." : ""}
+        {character.referenceRel || character.bodyRel
+          ? " Reference and body images are attached when present."
+          : ""}
+      </p>
+
+      {results.length > 0 ? (
+        <div className="mt-3 space-y-2" data-testid="generate-results">
+          <p className="text-[11px] text-studio-muted">Pick one to cut out and preview. Confirm still saves into the slot folder.</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {results.map((image) => (
+              <button
+                key={image.index}
+                type="button"
+                onClick={() => void onPickGenerated(image)}
+                disabled={busy != null}
+                className={`studio-checker overflow-hidden rounded-md border ${
+                  picked === image.index ? "border-studio-accent ring-2 ring-studio-accent/40" : "border-studio-border"
+                }`}
+                data-testid={`generate-pick-${image.index}`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={image.imageBase64} alt={`Variant ${image.index + 1}`} className="aspect-square w-full object-contain" />
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <DropZone
         dragging={dragging}
