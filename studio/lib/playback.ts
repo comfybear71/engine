@@ -39,9 +39,32 @@ export function frameFromElapsedMs(elapsedMs: number, startFrame: number, fps: n
   return Math.max(0, Math.min(maxFrame, next));
 }
 
-export function shouldFallbackToProxy(frameFetchMs: number, fps: number): boolean {
+/** Auto-kick a proxy only for shots at most this long. Longer stays on stepped preview. */
+export const AUTO_PROXY_MAX_DURATION_SEC = 120;
+
+export function allowsAutoProxyFallback(fps: number, totalFrames: number): boolean {
+  if (!Number.isFinite(totalFrames) || totalFrames <= 0) return true;
+  return totalFrames / Math.max(fps, 1) <= AUTO_PROXY_MAX_DURATION_SEC;
+}
+
+export function shouldFallbackToProxy(frameFetchMs: number, fps: number, totalFrames = 0): boolean {
   const budget = 1000 / Math.max(fps, 1);
-  return Number.isFinite(frameFetchMs) && frameFetchMs > budget * 1.5;
+  if (!Number.isFinite(frameFetchMs) || frameFetchMs <= budget * 1.5) return false;
+  return allowsAutoProxyFallback(fps, totalFrames);
+}
+
+/** Bump the Stage Web Audio start generation so in-flight starts abort. */
+export function bumpAudioGeneration(generation: number): number {
+  return generation + 1;
+}
+
+/** True when this startLineAudio invocation may still create sources. */
+export function isLiveAudioStart(
+  startedGeneration: number,
+  currentGeneration: number,
+  playing: boolean
+): boolean {
+  return startedGeneration === currentGeneration && playing === true;
 }
 
 export function audioClipsFromBlocks(

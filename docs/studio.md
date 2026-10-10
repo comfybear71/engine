@@ -158,12 +158,20 @@ clobber the project's `timeline.json`.
   play. Stop returns to frame 0; rewind does the same. Play uses, in
   order: (a) an up-to-date `renders/<script-stem>.mp4` or leftover
   `output.mp4` (mtime ≥ the script) in the viewport with sound and a
-  synced playhead / lane highlight; (b) otherwise stepping
+  synced playhead / lane highlight — Web Audio is stopped so the
+  video's own soundtrack is the only sound; (b) otherwise stepping
   `preview-frame` with prefetch/cache plus the audio-lane WAVs through
-  Web Audio at their frame offsets, clamped to `total_frames`; (c) if
-  stepping cannot keep real time, a 960×540 proxy render to
+  Web Audio at their frame offsets, clamped to `total_frames`. Line
+  WAVs are fetched and decoded when the clips load, not on first Play;
+  Stage shows **Loading audio…** until that finishes. Pause, stop,
+  rewind, and effect cleanup cancel any pending start so only one WAV
+  copy can play. A seek before Play does not restart audio on the first
+  tick. (c) if the shot is two minutes or shorter and stepping cannot
+  keep real time, a 960×540 proxy render to
   `renders/<script-stem>_preview.mp4` with a **Rendering preview…**
-  state, then that video plays. The orange playhead handle sits on the
+  state, then that video plays. Shots longer than two minutes stay on
+  stepped preview with line audio; they do not auto-kick a proxy from
+  the first slow frame. The orange playhead handle sits on the
   time ruler; one vertical line continues down through every lane.
   Click or drag the ruler to seek; click a block to seek and highlight
   that script line. The timeline zooms like Resolve: `+` / `−` and a
