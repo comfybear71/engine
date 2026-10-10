@@ -16,9 +16,6 @@ export const TIMELINE_LANE_IDS = [
   "camera",
 ] as const;
 
-/** Previous Stage defaults that predate the stacked Body/Face/Props lanes. */
-export const LEGACY_TIMELINE_HEIGHTS = [176, 220] as const;
-
 export function laneRowCount(blocks: { row?: number }[]): number {
   if (blocks.length === 0) return 0;
   return Math.max(1, ...blocks.map((block) => (block.row ?? 0) + 1));

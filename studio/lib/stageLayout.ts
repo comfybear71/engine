@@ -1,6 +1,7 @@
-import { LEGACY_TIMELINE_HEIGHTS, defaultTimelinePanelHeight } from "./timelineLanes";
-
 export const STAGE_LAYOUT_KEY = "engine.studio.stageLayout.v1";
+
+/** Previous defaults from before the stacked Body/Face/Props lanes. */
+const LEGACY_TIMELINE_HEIGHTS: readonly number[] = [176, 220];
 
 export type StageLayout = {
   leftWidth: number;
@@ -8,10 +9,11 @@ export type StageLayout = {
   timelineHeight: number;
 };
 
+/** Kept in sync with defaultTimelinePanelHeight() in timelineLanes.ts (tested). */
 export const DEFAULT_STAGE_LAYOUT: StageLayout = {
   leftWidth: 280,
   rightWidth: 320,
-  timelineHeight: defaultTimelinePanelHeight(),
+  timelineHeight: 276,
 };
 
 export const STAGE_LAYOUT_LIMITS = {
@@ -50,10 +52,7 @@ export function parseStoredLayout(raw: string | null | undefined): StageLayout {
   if (!raw) return { ...DEFAULT_STAGE_LAYOUT };
   try {
     const parsed = JSON.parse(raw) as Partial<StageLayout>;
-    if (
-      typeof parsed.timelineHeight === "number" &&
-      (LEGACY_TIMELINE_HEIGHTS as readonly number[]).includes(parsed.timelineHeight)
-    ) {
+    if (typeof parsed.timelineHeight === "number" && LEGACY_TIMELINE_HEIGHTS.includes(parsed.timelineHeight)) {
       parsed.timelineHeight = DEFAULT_STAGE_LAYOUT.timelineHeight;
     }
     return clampStageLayout(parsed);
