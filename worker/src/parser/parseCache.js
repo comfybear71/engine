@@ -14,7 +14,7 @@ const path = require("path");
 const { parseProject, resolveGlobalAssetsDir, resolveShowAssetsDir } = require("./index");
 
 const PARSE_INPUT = /\.(json|wav)$/i;
-const SKIP_DIR_NAMES = new Set(["node_modules", "venv", ".venv", ".git", "__pycache__", "renders"]);
+const SKIP_DIR_NAMES = new Set(["node_modules", "venv", ".venv", ".git", "__pycache__", "renders", ".history"]);
 
 const cache = new Map();
 const inflight = new Map();

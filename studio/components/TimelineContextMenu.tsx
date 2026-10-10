@@ -8,7 +8,8 @@ export type TimelineContextAction =
   | "delete"
   | "ripple"
   | "sync"
-  | "redo-sync";
+  | "redo-sync"
+  | "clear-lipsync";
 
 export default function TimelineContextMenu({
   x,
@@ -18,6 +19,7 @@ export default function TimelineContextMenu({
   hasSelection,
   showSync,
   syncLabel,
+  mouthOnly = false,
   onAction,
   onClose,
 }: {
@@ -28,6 +30,7 @@ export default function TimelineContextMenu({
   hasSelection: boolean;
   showSync: boolean;
   syncLabel: string;
+  mouthOnly?: boolean;
   onAction: (action: TimelineContextAction) => void;
   onClose: () => void;
 }) {
@@ -48,19 +51,28 @@ export default function TimelineContextMenu({
       <MenuItem label="Paste" kbd="Ctrl+V" disabled={!canEdit || !canPaste} onClick={() => run("paste")} />
       <MenuItem label="Duplicate" kbd="Ctrl+D" disabled={!canEdit || !hasSelection} onClick={() => run("duplicate")} />
       <div className="studio-ctx-sep" />
-      <MenuItem label="Delete" kbd="Del" disabled={!canEdit || !hasSelection} onClick={() => run("delete")} />
-      <MenuItem
-        label="Ripple delete"
-        kbd="Shift+Del"
-        disabled={!canEdit || !hasSelection}
-        onClick={() => run("ripple")}
-      />
-      {showSync ? (
+      {mouthOnly ? (
         <>
-          <div className="studio-ctx-sep" />
-          <MenuItem label={syncLabel} disabled={!canEdit} onClick={() => run(syncLabel.startsWith("Redo") ? "redo-sync" : "sync")} />
+          <MenuItem label="Clear lip sync" kbd="Del" disabled={!canEdit || !hasSelection} onClick={() => run("clear-lipsync")} />
+          <MenuItem label="Redo sync" disabled={!canEdit} onClick={() => run("redo-sync")} />
         </>
-      ) : null}
+      ) : (
+        <>
+          <MenuItem label="Delete" kbd="Del" disabled={!canEdit || !hasSelection} onClick={() => run("delete")} />
+          <MenuItem
+            label="Ripple delete"
+            kbd="Shift+Del"
+            disabled={!canEdit || !hasSelection}
+            onClick={() => run("ripple")}
+          />
+          {showSync ? (
+            <>
+              <div className="studio-ctx-sep" />
+              <MenuItem label={syncLabel} disabled={!canEdit} onClick={() => run(syncLabel.startsWith("Redo") ? "redo-sync" : "sync")} />
+            </>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

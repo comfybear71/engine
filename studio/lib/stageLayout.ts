@@ -1,7 +1,7 @@
 export const STAGE_LAYOUT_KEY = "engine.studio.stageLayout.v1";
 
 /** Previous defaults from before the stacked Body/Face/Props lanes. */
-const LEGACY_TIMELINE_HEIGHTS: readonly number[] = [176, 220];
+const LEGACY_TIMELINE_HEIGHTS: readonly number[] = [176, 220, 276];
 
 export type StageLayout = {
   leftWidth: number;
@@ -13,7 +13,7 @@ export type StageLayout = {
 export const DEFAULT_STAGE_LAYOUT: StageLayout = {
   leftWidth: 280,
   rightWidth: 320,
-  timelineHeight: 276,
+  timelineHeight: 306,
 };
 
 export const STAGE_LAYOUT_LIMITS = {

@@ -423,9 +423,10 @@ Hicks at_time=4s: Where's the rent money, Dana?
 The script stays the only source of truth. Copy / cut / paste / duplicate /
 delete rewrite lines, then Studio re-parses.
 
-**Delete** removes the selected line(s). Married Dialogue + Audio + the
-red Face mouth block share one script line, so they go together. The
-mouth track cannot be deleted on its own.
+**Delete** on Dialogue or Audio asks first, then removes the married
+line(s) (Dialogue + Audio + the red Mouth block). Delete on a Mouth
+block only clears that line's lip-sync cues (back to not synced) and
+leaves the Dialogue and Audio lines in the script.
 
 Sequential lines with no `at_time=` / `start=` would otherwise slide when
 a clock-advancing line (dialogue, `[Audio:]`, `wait=true` move, `[Pause]`)
@@ -442,7 +443,7 @@ then subtracts the deleted visual span from later `at_time=` values on
 the copied line(s) with a new `at_time=` at the playhead. Audio/dialogue
 paste copies that one married line (mouth cues return on re-parse).
 Paste onto a lane only when the type fits: speech on Dialogue / Audio /
-Face, face pins on Face, body on Body/Move, `[Prop:]` on Props,
+Mouth / Face, face pins on Face, body on Body/Move, `[Prop:]` on Props,
 `[Camera:]` on Camera.
 
 Dragging from the Stage Assets tree inserts the same tags a person would
