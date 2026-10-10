@@ -425,6 +425,7 @@ function ownerOfSlot(character, slotName) {
 }
 
 function describeDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, viewId) {
+  assertDrawingName(drawingName);
   const slot = describeSlot(projectDir, globalAssetsDir, characterId, slotName, viewId);
   const drawing = slot.drawings.find((item) => item.name === drawingName);
   if (!drawing) throw editorError(`Unknown drawing: ${drawingName}`, "ENOTFOUND");

@@ -148,14 +148,14 @@ describe("studio worker API", () => {
     assert.equal(detail.drawing.name, "A");
     assert.equal(detail.drawing.width, 1);
 
-    const badSlot = await fetch(`${ctx.url}/api/projects/project/characters/alice/slots/../mouth`);
-    assert.equal(badSlot.status, 400);
-    const badDrawing = await fetch(`${ctx.url}/api/projects/project/characters/alice/slots/mouth/drawings/../A`);
-    assert.equal(badDrawing.status, 400);
-    const traversal = await fetch(
-      `${ctx.url}/api/projects/project/characters/alice/slots/mouth/drawings/${encodeURIComponent("..")}`
+    const badSlot = await fetch(
+      `${ctx.url}/api/projects/project/characters/alice/slots/${encodeURIComponent("../mouth")}`
     );
-    assert.equal(traversal.status, 400);
+    assert.equal(badSlot.status, 400);
+    const badDrawing = await fetch(
+      `${ctx.url}/api/projects/project/characters/alice/slots/mouth/drawings/${encodeURIComponent("..hidden")}`
+    );
+    assert.equal(badDrawing.status, 400);
   });
 
   test("GET /api/projects/:name/audio lists imported and generated wavs", async () => {
