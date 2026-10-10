@@ -446,7 +446,10 @@ Face, face pins on Face, body on Body/Move, `[Prop:]` on Props,
 `[Camera:]` on Camera.
 
 Dragging from the Stage Assets tree inserts the same tags a person would
-type:
+type. The new line is inserted in the scene that owns the drop time
+(after the selected line if that line is in the same scene; otherwise
+after the last line of that scene) — a hallway line selected while you
+drop on scene 1 does not move the tag into the hallway:
 
 ```text
 [Action: Hicks face=yap at_time=2s]

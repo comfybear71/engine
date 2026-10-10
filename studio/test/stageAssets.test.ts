@@ -130,6 +130,27 @@ describe("stage asset drops", () => {
     assert.equal(bg.split("\n")[1], "[Location: room_b]");
   });
 
+  test("timeline drop inserts in the scene that owns the drop time", () => {
+    const twoScenes = [
+      { id: "intro", startFrame: 0, endFrame: 96 },
+      { id: "hallway", startFrame: 96, endFrame: 192 },
+    ];
+    const twoScript = ["[Scene: Intro]", "Alice: Hi.", "[Scene: Hallway]", "Bob: Bye."].join("\n");
+    const dropped = applyAssetDropToScript({
+      script: twoScript,
+      asset: { kind: "drawing", characterId: "alice", characterName: "Alice", slot: "eyes", drawing: "closed" },
+      lane: "face",
+      frame: 12,
+      fps: 24,
+      scenes: twoScenes,
+      playheadLine: 4,
+    });
+    const lines = dropped.split("\n");
+    assert.equal(lines[2], "[Action: Alice eyes=closed at_time=0.5s]");
+    assert.equal(lines[3], "[Scene: Hallway]");
+    assert.equal(lines[4], "Bob: Bye.");
+  });
+
   test("stage preview drop places a prop at x,y or a character on the nearest mark", () => {
     const marks = [
       { name: "left", mark: { x: 200, y: 1000 } },

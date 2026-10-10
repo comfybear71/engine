@@ -266,8 +266,10 @@ clobber the project's `timeline.json`.
   time to insert the matching script line (`[Action: Name face=…]`,
   `body=<cycle>`, `right_hand=<drawing>`, `[Prop: … show]`); an imported
   audio file inserts `[Audio: Name file=<label>]`; a background rewrites
-  that scene's `[Location:]`. Generated line WAVs are listed but not
-  droppable (they already belong to a dialogue line). Drop a character
+  that scene's `[Location:]`. The tag is inserted in the scene that owns
+  the drop time, not a selected line from another scene. Generated line
+  WAVs and mouth drawings are listed but not droppable (mouths stay
+  dialogue-driven). Drop a character
   or prop onto the Stage preview to place it (`[Action: Name at=<nearest
   mark>]` or `[Prop: name at=x,y]`) at the playhead; skip if the format
   has no mark or position. The right icon rail opens **Marks**, **Layers**, **Script**

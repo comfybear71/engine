@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { encodeAssetDrag, ASSET_DRAG_MIME, type AssetDrag } from "@/lib/stageAssets";
+import { encodeAssetDrag, ASSET_DRAG_MIME, slotLane, type AssetDrag } from "@/lib/stageAssets";
 import { loadAssetsTreeOpen, saveAssetsTreeOpen } from "@/lib/stageLayout";
 import {
   assetUrl,
@@ -45,6 +45,20 @@ const SLOT_GROUP_LABEL: Record<ReturnType<typeof slotGroup>, string> = {
 function matchesQuery(label: string, query: string): boolean {
   if (!query) return true;
   return label.toLowerCase().includes(query);
+}
+
+function characterMatchesQuery(character: Character, query: string): boolean {
+  if (matchesQuery(`${character.display_name} ${character.id}`, query)) return true;
+  for (const slot of character.slots) {
+    if (matchesQuery(slot.name, query)) return true;
+    for (const drawing of slot.drawings) {
+      if (matchesQuery(`${slot.name} ${drawing.name}`, query)) return true;
+    }
+    for (const cycleName of Object.keys(slot.cycles || {})) {
+      if (matchesQuery(`${slot.name} ${cycleName}`, query)) return true;
+    }
+  }
+  return false;
 }
 
 function startDrag(event: React.DragEvent, asset: AssetDrag) {
@@ -101,19 +115,22 @@ function Leaf({
   label,
   src,
   asset,
+  draggable = true,
 }: {
   testId: string;
   label: string;
   src: string | null;
   asset: AssetDrag;
+  draggable?: boolean;
 }) {
   return (
     <div
       className="studio-asset-leaf"
       data-testid={testId}
-      draggable
-      title={label}
-      onDragStart={(event) => startDrag(event, asset)}
+      data-draggable={draggable ? "true" : "false"}
+      draggable={draggable}
+      title={draggable ? label : `${label} — listed only`}
+      onDragStart={draggable ? (event) => startDrag(event, asset) : undefined}
     >
       <TinyThumb src={src} label={label} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -205,7 +222,7 @@ export default function StageAssetsPanel({
             <TreeToggle id="characters" label="Characters" open={isOpen("characters")} onToggle={toggle} count={characters.length} />
             {isOpen("characters")
               ? characters
-                  .filter((character) => matchesQuery(`${character.display_name} ${character.id}`, q))
+                  .filter((character) => characterMatchesQuery(character, q))
                   .map((character) => (
                     <CharacterBranch
                       key={character.id}
@@ -321,17 +338,18 @@ function CharacterBranch({
         <TinyThumb src={assetUrl(project, character.thumbRel, { thumb: true, v: character.mtime })} label={character.display_name} />
         <span className="min-w-0 flex-1 truncate">{character.display_name}</span>
       </div>
-      {isOpen(id, false)
+      {isOpen(id, false) || Boolean(query)
         ? (["mouths", "faces", "eyes", "arms", "bodies", "other"] as const).map((group) => {
             const slots = grouped.get(group);
             if (!slots || slots.length === 0) return null;
             const gid = `${id}:${group}`;
             const leaves = slotLeaves(project, character, slots, query);
             if (query && leaves.length === 0) return null;
+            const showLeaves = isOpen(gid) || Boolean(query);
             return (
               <div key={group} className="pl-2">
-                <TreeToggle id={gid} label={SLOT_GROUP_LABEL[group]} open={isOpen(gid)} onToggle={onToggle} count={leaves.length} />
-                {isOpen(gid) ? leaves : null}
+                <TreeToggle id={gid} label={SLOT_GROUP_LABEL[group]} open={showLeaves} onToggle={onToggle} count={leaves.length} />
+                {showLeaves ? leaves : null}
               </div>
             );
           })
@@ -343,6 +361,7 @@ function CharacterBranch({
 function slotLeaves(project: string, character: Character, slots: CharacterSlot[], query: string) {
   const out: ReactNode[] = [];
   for (const slot of slots) {
+    const canDrop = slotLane(slot.name) != null;
     for (const [cycleName] of Object.entries(slot.cycles || {})) {
       const label = `${slot.name} ${cycleName}`;
       if (!matchesQuery(label, query)) continue;
@@ -352,6 +371,7 @@ function slotLeaves(project: string, character: Character, slots: CharacterSlot[
           testId={`stage-asset-cycle-${character.id}-${slot.name}-${cycleName}`}
           label={`${cycleName} · cycle`}
           src={assetUrl(project, slot.drawings[0]?.rel, { v: slot.drawings[0]?.mtime })}
+          draggable={canDrop}
           asset={{
             kind: "cycle",
             characterId: character.id,
@@ -371,6 +391,7 @@ function slotLeaves(project: string, character: Character, slots: CharacterSlot[
           testId={`stage-asset-drawing-${character.id}-${slot.name}-${drawing.name}`}
           label={drawing.name}
           src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
+          draggable={canDrop}
           asset={{
             kind: "drawing",
             characterId: character.id,
@@ -430,6 +451,7 @@ function AudioBranch({
                   <div
                     key={file.rel}
                     className="studio-asset-leaf"
+                    data-draggable="false"
                     data-testid={`stage-asset-generated-${file.rel}`}
                     title="Generated line audio — already tied to a dialogue line"
                   >

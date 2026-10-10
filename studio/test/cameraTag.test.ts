@@ -64,6 +64,8 @@ describe("insertLineAfter", () => {
     assert.equal(findInsertAfterLine(script, 2, "intro"), 2);
     assert.equal(findInsertAfterLine(script, null, "intro"), 2);
     assert.equal(findInsertAfterLine(script, null, "next"), 4);
+    assert.equal(findInsertAfterLine(script, 4, "intro"), 2);
+    assert.equal(findInsertAfterLine(script, 2, "next"), 4);
   });
 });
 
