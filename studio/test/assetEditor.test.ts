@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  alignProbeUrl,
   applyCollar,
   autoFitHeadNudge,
   canvasLandmarks,
@@ -79,6 +80,15 @@ describe("asset editor helpers", () => {
     assert.equal(remapLipSyncShape("H", ["H", "C"]), "D");
     assert.equal(remapLipSyncShape("H", ["H", "C", "D"], "B"), "B");
     assert.equal(remapLipSyncShape("B", ["H"]), "B");
+  });
+
+  test("align probe URLs stay distinct from the grid cache", () => {
+    assert.equal(alignProbeUrl(null), null);
+    assert.equal(alignProbeUrl("http://localhost:4100/a.png"), "http://localhost:4100/a.png?probe=align");
+    assert.equal(
+      alignProbeUrl("http://localhost:4100/a.png?rel=x&v=1"),
+      "http://localhost:4100/a.png?rel=x&v=1&probe=align"
+    );
   });
 
   test("head nudge clamps to a 0.25x–4x range and the scale slider is logarithmic", () => {

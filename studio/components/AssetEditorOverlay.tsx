@@ -35,6 +35,7 @@ import {
   type SlotEditor,
 } from "@/lib/assetEditor";
 import {
+  alignProbeUrl,
   applyCollar,
   autoFitHeadNudge,
   canvasLandmarks,
@@ -774,6 +775,8 @@ function DrawingView({
             refMarks={refMarks}
             onSrcMarks={setSrcMarks}
             onRefMarks={setRefMarks}
+            knownSrcW={current.width || 0}
+            knownSrcH={current.height || 0}
           />
         ) : (
           <ZoomPane
@@ -1010,6 +1013,8 @@ function AlignPreview({
   refMarks,
   onSrcMarks,
   onRefMarks,
+  knownSrcW = 0,
+  knownSrcH = 0,
 }: {
   src: string | null;
   defaultSrc: string;
@@ -1024,13 +1029,17 @@ function AlignPreview({
   refMarks: HeadLandmarks | null;
   onSrcMarks: (marks: HeadLandmarks) => void;
   onRefMarks: (marks: HeadLandmarks) => void;
+  knownSrcW?: number;
+  knownSrcH?: number;
 }) {
   const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
-  const [srcSize, setSrcSize] = useState({ w: 0, h: 0 });
+  const [srcSize, setSrcSize] = useState({ w: knownSrcW, h: knownSrcH });
   const [refSize, setRefSize] = useState({ w: 0, h: 0 });
+  const displaySrc = alignProbeUrl(src);
+  const displayDefault = alignProbeUrl(defaultSrc) || defaultSrc;
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -1044,6 +1053,42 @@ function AlignPreview({
     observer.observe(stage);
     return () => observer.disconnect();
   }, []);
+
+  const seededSrc = useRef<string | null>(null);
+  useEffect(() => {
+    if (knownSrcW < 1 || knownSrcH < 1) return;
+    const key = `${knownSrcW}x${knownSrcH}:${src || ""}`;
+    if (seededSrc.current === key) return;
+    seededSrc.current = key;
+    setSrcSize({ w: knownSrcW, h: knownSrcH });
+    onSrcMarks(canvasLandmarks(knownSrcW, knownSrcH));
+  }, [knownSrcW, knownSrcH, src, onSrcMarks]);
+
+  useEffect(() => {
+    let cancelled = false;
+    function load(url: string | null, dest: "src" | "ref") {
+      if (!url) return;
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        if (cancelled || img.naturalWidth < 1) return;
+        const marks = readLandmarks(img);
+        if (dest === "src") {
+          setSrcSize({ w: img.naturalWidth, h: img.naturalHeight });
+          onSrcMarks(marks);
+        } else {
+          setRefSize({ w: img.naturalWidth, h: img.naturalHeight });
+          onRefMarks(marks);
+        }
+      };
+      img.src = url;
+    }
+    load(displaySrc, "src");
+    load(displayDefault, "ref");
+    return () => {
+      cancelled = true;
+    };
+  }, [displaySrc, displayDefault, onSrcMarks, onRefMarks]);
 
   const cropped = srcMarks && cropToHead ? applyCollar(srcMarks, collarY) : srcMarks;
   const layout =
@@ -1096,7 +1141,7 @@ function AlignPreview({
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={defaultSrc}
+              src={displayDefault}
               alt=""
               crossOrigin="anonymous"
               data-testid="asset-align-overlay"
@@ -1116,7 +1161,7 @@ function AlignPreview({
             {src ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={src}
+                src={displaySrc || src}
                 alt={label}
                 crossOrigin="anonymous"
                 className="pointer-events-none absolute object-fill"
@@ -1139,7 +1184,7 @@ function AlignPreview({
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={defaultSrc}
+              src={displayDefault}
               alt=""
               crossOrigin="anonymous"
               className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-40 mix-blend-screen"
@@ -1152,7 +1197,7 @@ function AlignPreview({
             {src ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={src}
+                src={displaySrc || src}
                 alt={label}
                 crossOrigin="anonymous"
                 className="pointer-events-none absolute inset-0 m-auto max-h-[70%] max-w-[70%] object-contain"

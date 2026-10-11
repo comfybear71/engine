@@ -224,6 +224,12 @@ export function previewAlignLayout(opts: {
   };
 }
 
+/** Bust an opaque (no-CORS) img cache so canvas can read pixels. */
+export function alignProbeUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return `${url}${url.includes("?") ? "&" : "?"}probe=align`;
+}
+
 export function alignableSlots<T extends { name: string; drawings: unknown[] }>(slots: T[]): T[] {
   const preferred = ["mouth", "head"];
   const named = preferred
