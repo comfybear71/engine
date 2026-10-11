@@ -758,7 +758,7 @@ function DrawingView({
 
   return (
     <div className="flex min-h-0 flex-1">
-      <div className="relative min-h-0 min-w-0 flex-1">
+      <div className="relative flex min-h-0 min-w-0 flex-1">
         {canRealign && overlayDefault && defaultSrc ? (
           <AlignPreview
             src={src}
@@ -1047,7 +1047,7 @@ function AlignPreview({
 
   const cropped = srcMarks && cropToHead ? applyCollar(srcMarks, collarY) : srcMarks;
   const layout =
-    srcSize.w > 0 && refSize.w > 0 && cropped && refMarks && box.w > 0
+    srcSize.w > 0 && refSize.w > 0 && cropped && refMarks && box.w > 0 && box.h > 0
       ? previewAlignLayout({
           boxW: box.w,
           boxH: box.h,
@@ -1064,7 +1064,7 @@ function AlignPreview({
   return (
     <div
       ref={stageRef}
-      className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${bg === "checker" ? "studio-checker" : ""}`}
+      className={`absolute inset-0 overflow-hidden ${bg === "checker" ? "studio-checker" : ""}`}
       style={bg === "checker" ? undefined : { background: BG[bg] }}
       data-testid="asset-viewer-stage"
       onWheel={(event) => {
@@ -1248,7 +1248,7 @@ function ZoomPane({
   return (
     <div
       ref={stageRef}
-      className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${bg === "checker" ? "studio-checker" : ""}`}
+      className={`absolute inset-0 overflow-hidden ${bg === "checker" ? "studio-checker" : ""}`}
       style={bg === "checker" ? undefined : { background: BG[bg] }}
       data-testid="asset-viewer-stage"
       onWheel={(event) => {
