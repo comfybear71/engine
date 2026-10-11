@@ -136,13 +136,23 @@ function loadCharacter(projectDir, globalAssetsDir, characterId) {
   return readJsonAsset(projectDir, globalAssetsDir, `characters/${characterId}/character.json`);
 }
 
-function listIdsInFolder(baseDir, folder) {
+const SAFE_FOLDER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function listIdsInFolder(baseDir, folder, isCharacter) {
   const ids = [];
   if (!baseDir) return ids;
   const dir = path.join(baseDir, folder);
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return ids;
   for (const entry of fs.readdirSync(dir)) {
-    if (fs.statSync(path.join(dir, entry)).isDirectory()) ids.push(entry);
+    if (!SAFE_FOLDER_NAME.test(entry)) continue;
+    const abs = path.join(dir, entry);
+    if (!fs.statSync(abs).isDirectory()) continue;
+    if (isCharacter) {
+      const hasJson = fs.existsSync(path.join(abs, "character.json"));
+      const hasBody = fs.existsSync(path.join(abs, "body.png"));
+      if (!hasJson && !hasBody) continue;
+    }
+    ids.push(entry);
   }
   return ids;
 }
@@ -150,7 +160,7 @@ function listIdsInFolder(baseDir, folder) {
 function listKnownCharacterIds(projectDir, globalAssetsDir) {
   const ids = new Set();
   for (const root of assetSearchRoots(projectDir, globalAssetsDir).reverse()) {
-    for (const id of listIdsInFolder(root.dir, "characters")) ids.add(id);
+    for (const id of listIdsInFolder(root.dir, "characters", true)) ids.add(id);
   }
   return [...ids].sort();
 }
