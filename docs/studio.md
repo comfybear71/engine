@@ -158,8 +158,10 @@ clobber the project's `timeline.json`.
   into a project-local `character.json`). On Stage, the left Assets tree
   opens the same viewer without leaving the Stage: click a **slot**
   (`mouth`, `face`, `eyes`, `right_hand`, `mic_arm`, `body`, …) for a
-  labelled grid. The Assets right-hand panel groups a mouth slot by view
-  (`Front`, `Left 3/4`, `Left side`, …) with a drawing count and a
+  labelled grid. The Assets right-hand panel lists every slot as one
+  horizontally scrolling thumbnail row (slot name + count on the header,
+  slim Resolve-style scrollbar, small labels under thumbs). Mouth views
+  are separate rows (`Front`, `Left 3/4`, `Left side`, …) with a count and a
   **default** tag on the set `drawings_dir` points at. Confirming a Grok
   Imagine mouth-view sheet writes `mouth_<view>/` (e.g. `mouth_left_34/`)
   and the panel reloads without a refresh. Click / double-click a drawing for a large preview on
