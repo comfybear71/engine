@@ -175,6 +175,7 @@ frame briefly after the audio/dialogue ends.
 | `dialogue` | array of [dialogue clip](#multi-line-dialogue-per-character) | no | This character's spoken lines in the scene. See below. |
 | `audio` | string | no, **deprecated** | Single-clip shorthand kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: 0 }]` (the clip begins when the layer becomes visible). Ignored if `dialogue` is also given; prefer `dialogue` for anything with more than one line. |
 | `slots` | object | no | Drawing-swap slots attached to this layer's own root image. See [Slots](#slots--drawing-swaps-mouths-blinks-hand-poses). |
+| `groups` | object | no | Optional slot groups from `character.json`. `head` lists the one-head rig slots; see [docs/assets.md#one-head-rig](assets.md#one-head-rig). |
 | `children` | array | no | Cut-out rig parts nested under this layer. See [Cut-out rig nesting](#cut-out-rig-nesting). |
 
 ## Multi-line dialogue per character
@@ -329,7 +330,9 @@ change. **This is one unified mechanism for mouths, blinks and hand poses**
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `offset.x` / `offset.y` | number | no (default 0,0) | Where this slot's drawing sits, relative to its owner's anchor/pivot point, in the owner's **local (pre-scale) pixel space**. Automatically scaled with the owner, mirrored in `x` when the owner is flipped, and rotated about the owner's pivot by the owner's current rotation, so it tracks the face/part through scale/flip/swing. |
+| `offset.x` / `offset.y` | number | no (default 0,0) | Where this slot's drawing sits, relative to its owner's anchor/pivot point, in the owner's **local (pre-scale) pixel space**. Automatically scaled with the owner, mirrored in `x` when the owner is flipped, and rotated about the owner's pivot by the owner's current rotation, so it tracks the face/part through scale/flip/swing. When `canvas.pivot` is set, that image-space point (the neck) is placed here instead of the image centre. |
+| `z` | integer | no (default 0) | Draw order among slots on the same owner. Sorted by `(z, declaration order)`. |
+| `canvas` | object | no | `{ w, h, pivot: { x, y } }`. Fixed drawing size and neck pivot for a one-head rig slot. Omit for today's centred placement. |
 | `scale` | number > 0 | no (default `1.0`) | Uniform scale of this slot's drawing around its center (the offset point). Multiplies the owner's scale, so the attachment point stays put when the drawing is resized. |
 | `rotation` | number | no (default `0`) | Degrees, clockwise, around this slot's center. Added to the owner's current rotation. |
 | `images` | object | yes | Map of drawing name -> image path. A `lipsync`-driven slot's names must be Rhubarb shapes (`A`-`H`, `X`); a `keyframes`-driven slot's names can be anything (`"fist"`, `"open"`, ...). A missing drawing at render time falls back to `"X"` if present, else the first entry. |

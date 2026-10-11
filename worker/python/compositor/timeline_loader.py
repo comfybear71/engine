@@ -140,6 +140,7 @@ class Layer:
     slots: dict[str, Slot] = field(default_factory=dict)
     children: list[Child] = field(default_factory=list)
     transform_keyframes: list[TransformKeyframe] = field(default_factory=list)
+    groups: dict[str, list[str]] = field(default_factory=dict)
 
     def is_visible_at(self, frame_idx: int, scene_total_frames: int) -> bool:
         end = self.end_frame if self.end_frame is not None else scene_total_frames
@@ -435,6 +436,18 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
 
     excluded = frozenset(str(name) for name in (raw.get("exclude_from_lipsync") or []) if name)
 
+    canvas_raw = raw.get("canvas") if isinstance(raw.get("canvas"), dict) else None
+    canvas_w = canvas_h = None
+    pivot_x = pivot_y = None
+    if canvas_raw:
+        canvas_w = int(canvas_raw["w"])
+        canvas_h = int(canvas_raw["h"])
+        pivot = canvas_raw.get("pivot") or {}
+        pivot_x = float(pivot.get("x", 0.0))
+        pivot_y = float(pivot.get("y", 0.0))
+
+    z = int(raw["z"]) if raw.get("z") is not None else None
+
     return Slot(
         images=images,
         offset_x=float(offset.get("x", 0.0)),
@@ -447,6 +460,11 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
         visible_when=visible_when,
         images_by_view=images_by_view,
         exclude_from_lipsync=excluded,
+        z=z,
+        canvas_w=canvas_w,
+        canvas_h=canvas_h,
+        pivot_x=pivot_x,
+        pivot_y=pivot_y,
     )
 
 
@@ -632,15 +650,19 @@ def _remap_slots(
     bob_amp: float,
     bob_rot: float,
     blink_slot: Slot | None,
+    bob_names: frozenset[str] | None = None,
 ) -> dict[str, Slot]:
     remapped: dict[str, Slot] = {}
+    names = set(lipsync_natural.HEAD_SLOT_NAMES)
+    if bob_names:
+        names.update(bob_names)
     for name, slot in slots.items():
         next_slot = slot
         if slot.dialogue is not None:
             next_slot = replace(next_slot, dialogue=dialogue)
         if blink_slot is not None and name == "eyes":
             next_slot = replace(next_slot, keyframes=blink_slot.keyframes)
-        if name in lipsync_natural.HEAD_SLOT_NAMES:
+        if name in names:
             next_slot = replace(
                 next_slot,
                 head_bob_starts=list(bob_starts),
@@ -715,9 +737,12 @@ def apply_natural_lipsync(
     eyes = _find_named_slot(layer, "eyes")
     blink_slot = None
     if settings.blinks and eyes is not None:
+        eye_images = dict(eyes.images)
+        for pool in eyes.images_by_view.values():
+            eye_images.update(pool)
         blink_kfs = lipsync_natural.insert_auto_blinks(
             eyes.keyframes,
-            eyes.images,
+            eye_images,
             duration_frames=visible_frames,
             fps=fps,
             seed=seed,
@@ -727,6 +752,7 @@ def apply_natural_lipsync(
         blink_slot = replace(eyes, keyframes=blink_kfs)
 
     dialogue_ref = dialogue or None
+    bob_names = frozenset(layer.groups.get("head") or [])
     new_slots = _remap_slots(
         layer.slots,
         dialogue=dialogue_ref,
@@ -734,6 +760,7 @@ def apply_natural_lipsync(
         bob_amp=bob_amp,
         bob_rot=bob_rot,
         blink_slot=blink_slot,
+        bob_names=bob_names,
     )
     new_children = [
         replace(
@@ -745,6 +772,7 @@ def apply_natural_lipsync(
                 bob_amp=bob_amp,
                 bob_rot=bob_rot,
                 blink_slot=blink_slot,
+                bob_names=bob_names,
             ),
         )
         for child in layer.children
@@ -795,7 +823,14 @@ def _build_layer(
         for k in sorted(raw.get("transform_keyframes", []), key=lambda item: item["frame"])
     ]
 
-    return Layer(
+    groups_raw = raw.get("groups") if isinstance(raw.get("groups"), dict) else {}
+    groups = {
+        str(name): [str(member) for member in members if member]
+        for name, members in groups_raw.items()
+        if isinstance(members, list)
+    }
+
+    layer = Layer(
         id=raw["id"],
         character_id=raw.get("character_id"),
         prop_id=raw.get("prop_id"),
@@ -808,17 +843,22 @@ def _build_layer(
         slots=_build_slots(raw.get("slots"), project_dir, dialogue=dialogue or None),
         children=[_build_child(c, project_dir) for c in raw.get("children", [])],
         transform_keyframes=transform_keyframes,
+        groups=groups,
     )
-    character = lipsync_natural.load_character_config(project_dir, layer.character_id)
-    settings = lipsync_natural.merge_lipsync_settings(studio_lipsync, character)
-    char_seed = lipsync_natural.project_seed(project_dir, layer.character_id or layer.id)
-    return apply_natural_lipsync(
-        layer,
-        fps=fps,
-        scene_frames=scene_frames,
-        settings=settings,
-        seed=seed ^ char_seed,
-    )
+    # Natural lipsync (blinks + bob on the whole head group) is opt-in via
+    # groups.head so existing characters without the new field stay unchanged.
+    if groups.get("head"):
+        character = lipsync_natural.load_character_config(project_dir, layer.character_id)
+        settings = lipsync_natural.merge_lipsync_settings(studio_lipsync, character)
+        char_seed = lipsync_natural.project_seed(project_dir, layer.character_id or layer.id)
+        return apply_natural_lipsync(
+            layer,
+            fps=fps,
+            scene_frames=scene_frames,
+            settings=settings,
+            seed=seed ^ char_seed,
+        )
+    return layer
 
 
 def _build_camera(raw: dict | None) -> Camera | None:

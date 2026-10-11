@@ -103,7 +103,8 @@ beyond the generated PNGs/WAVs themselves).
 | `voice_id` | Optional identifier for `node src/cli.js voices`. **Never a secret** -- it's a voice *identifier* (e.g. `"EXAVITQu4vr4xnSDxMaL"`), not an API key. `null` means "not assigned yet"; the real API key lives in `.env` as `ELEVENLABS_API_KEY`, never here. See [docs/voices.md](voices.md). |
 | `style` | Optional free-text art direction for the Studio Grok Imagine prompt builder (e.g. `"painted semi-real"`, `"flat cartoon"`). Empty or omitted means the prompt falls back to "a consistent character style". See [docs/studio.md](studio.md#image-assets-grok-imagine). |
 | `reference` | Optional path, relative to the character folder, to a full-body likeness image (typically `_reference/full.png`). Studio stores the original file — no chroma key or cut-out. Used as a Grok Imagine attach reminder and as the background in **Align head**. |
-| `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing?, cycles?, visible_when?, scale?, rotation?, drawings? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). `cycles` is an optional map of cycle name -> `{ drawings: [drawing, ...], fps }` -- `[Action: Name slot=cycle_name]` emits a looping cycle keyframe; a plain drawing name still emits a held drawing. `visible_when` is copied onto the timeline slot as-is (e.g. hide a mouth unless `body` is showing `"front"`). `scale` (default `1.0`) multiplies the owner's scale around the slot center (the offset point). `rotation` (default `0`, clockwise degrees) is added to the owner's rotation around that same center. The parser copies both onto the timeline slot. `drawings` is an optional per-drawing map (name -> `{ excludeFromLipSync?: true, hand?: "L"\|"R", align?: { x, y, scale } }`). When `excludeFromLipSync` is set, automatic lip sync (Rhubarb cues and natural lipsync) skips that drawing and falls back to a neighbour — `H` becomes `C` or `D`, or the previous cue — but the file stays in the slot for a manual face/expression pin. `align` is the drawing viewer's saved Scale/Nudge (reloaded when that drawing is reopened). Studio **Align head** writes slot-level `offset` / `scale` / `rotation` into a **project-local** `character.json` and never into `_global_assets`. |
+| `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing?, cycles?, visible_when?, scale?, rotation?, z?, canvas?, drawings? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). `cycles` is an optional map of cycle name -> `{ drawings: [drawing, ...], fps }` -- `[Action: Name slot=cycle_name]` emits a looping cycle keyframe; a plain drawing name still emits a held drawing. `visible_when` is copied onto the timeline slot as-is (e.g. hide a mouth unless `body` is showing `"front"`). `scale` (default `1.0`) multiplies the owner's scale around the slot center (the offset point). `rotation` (default `0`, clockwise degrees) is added to the owner's rotation around that same center. Optional `z` is draw order among slots on the same owner (ascending; omitted is 0; ties keep `character.json` order). Optional `canvas: { w, h, pivot: { x, y } }` is a fixed drawing size and neck pivot: the pivot pixel is placed at owner + offset and is the scale/rotation centre. Omit `canvas` for today's centred placement. The parser copies `scale`, `rotation`, `z`, and `canvas` onto the timeline slot. `drawings` is an optional per-drawing map (name -> `{ excludeFromLipSync?: true, hand?: "L"\|"R", align?: { x, y, scale } }`). When `excludeFromLipSync` is set, automatic lip sync (Rhubarb cues and natural lipsync) skips that drawing and falls back to a neighbour — `H` becomes `C` or `D`, or the previous cue — but the file stays in the slot for a manual face/expression pin. `align` is the drawing viewer's saved Scale/Nudge (reloaded when that drawing is reopened). Studio **Align head** writes slot-level `offset` / `scale` / `rotation` into a **project-local** `character.json` and never into `_global_assets`. |
+| `groups` | Optional. `groups.head` lists the one-head rig slots (blank base + overlays). Opt-in: omit it and existing characters draw as they do today. See [One-head rig](#one-head-rig). |
 | `children` | Rig parts, in the same shape as `schema/timeline.schema.json`'s `child` definition (`id`, `asset`, `z`, `offset`, `pivot`, `scale`, `flip_x`, `rotation`, `parent`), plus their own optional `slots` (same shape as above). `parent` and `pivot` are passed through to the generated timeline. `parent` names one other child on the same character (one nesting level, e.g. `forearm` under `upper_arm`). See [docs/timeline-schema.md#cut-out-rig-nesting](timeline-schema.md#cut-out-rig-nesting). |
 
 The `mouth` slot is special: it's always driven by the character's dialogue
@@ -169,7 +170,89 @@ these for a whole episode):
 
 `blinks` is off automatically when the `eyes` slot has no `closed` drawing.
 Auto blinks skip a held `[Action: Name eyes=…]` pin. Head bob only offsets
-`mouth` / `face` / `eyes` slots (not the body).
+`mouth` / `face` / `eyes` slots (not the body). When `groups.head` is set,
+bob applies to every slot in that group (the blank base plus overlays).
+
+## One-head rig
+
+Stage 1 of the rig redesign: **only one head may ever draw**. Eyes and
+mouth are overlays on a blank head base. Every drawing in a rig-head slot
+is the same canvas size, with a fixed neck pivot, so a swap needs no
+per-drawing alignment.
+
+This is opt-in via `groups.head`. Characters without that field are
+unchanged.
+
+```json
+{
+  "groups": { "head": ["head_base", "eyes", "mouth"] },
+  "slots": {
+    "head_base": {
+      "offset": { "x": 0, "y": -200 },
+      "drawings_dir": "head_base",
+      "default_drawing": "neutral",
+      "z": 0,
+      "canvas": { "w": 1024, "h": 1024, "pivot": { "x": 512, "y": 900 } }
+    },
+    "eyes": {
+      "offset": { "x": 0, "y": -200 },
+      "drawings_dir": "eyes",
+      "default_drawing": "open",
+      "z": 1,
+      "canvas": { "w": 1024, "h": 1024, "pivot": { "x": 512, "y": 900 } }
+    },
+    "mouth": {
+      "offset": { "x": 0, "y": -200 },
+      "drawings_dir": "mouth",
+      "z": 2,
+      "canvas": { "w": 1024, "h": 1024, "pivot": { "x": 512, "y": 900 } }
+    }
+  }
+}
+```
+
+All three slots share the same `offset` and the same `canvas.pivot` (the
+neck). The compositor places that pivot at owner-anchor + offset; scale
+and rotation happen around it. `z` stacks base, then eyes, then mouth.
+
+### File layout
+
+One folder per slot per `view=` (same names as mouth already used).
+Missing files in a view folder fall back to `*_front/`, then to the
+slot's base folder.
+
+```
+characters/<id>/head_base/            # legacy front (used if head_base_front/ is empty)
+characters/<id>/head_base_front/
+characters/<id>/head_base_left_34/
+characters/<id>/head_base_left_side/
+characters/<id>/head_base_right_34/
+characters/<id>/head_base_right_side/
+characters/<id>/head_base_up/
+characters/<id>/head_base_down/
+characters/<id>/eyes/
+characters/<id>/eyes_front/
+characters/<id>/eyes_left_34/
+…
+characters/<id>/mouth/
+characters/<id>/mouth_front/
+…
+```
+
+A line with `view=left_34` draws `head_base_left_34` + `eyes_left_34` +
+`mouth_left_34` only. Legacy full-head slots (`head`, `face`, and an
+`eyes` slot that is **not** in `groups.head`) do not draw a second head.
+
+`head_base_<view>/` holds the blank turn (no painted eyes or mouth).
+`eyes_<view>/` is the overlay set; a drawing named `closed` still drives
+auto-blink. `mouth_<view>/` is the 13-shape sheet as below.
+
+Lint (`node src/cli.js lint`) runs a canvas check on every PNG in these
+slots: exact `canvas.w` × `canvas.h` RGBA, not blank, alpha bbox not
+touching the edge. Studio **Fit to head canvas** takes a raw-cropped
+eyes or mouth set and writes 1024×1024 files with one shared transform
+(from the `head_base` drawing + the slot's default); originals go to
+`_replaced/`.
 
 ### Named cycles
 

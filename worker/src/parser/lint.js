@@ -7,7 +7,11 @@
  * and missing prop assets.
  */
 
+const { spawnSync } = require("child_process");
+const path = require("path");
+
 const assetLibrary = require("./assetLibrary");
+const { resolvePythonBin, PYTHON_DIR } = require("../pythonRuntime");
 
 const RHUBARB_MOUTH_SHAPES = ["A", "B", "C", "D", "E", "F", "G", "H"];
 const REST_MOUTH_SHAPE = "X";
@@ -71,6 +75,25 @@ function findOverlapWarnings(occupancy) {
   }
 
   return warnings;
+}
+
+function slotHasCanvas(spec) {
+  return Boolean(spec && spec.canvas && spec.canvas.w && spec.canvas.h);
+}
+
+function characterHasRigHead(config) {
+  if (!config) return false;
+  const group = config.groups && Array.isArray(config.groups.head) && config.groups.head.length > 0;
+  if (group) return true;
+  for (const spec of Object.values(config.slots || {})) {
+    if (slotHasCanvas(spec)) return true;
+  }
+  for (const child of config.children || []) {
+    for (const spec of Object.values((child && child.slots) || {})) {
+      if (slotHasCanvas(spec)) return true;
+    }
+  }
+  return false;
 }
 
 function findMouthSlot(config) {
@@ -203,12 +226,47 @@ function findSharedLibraryWarnings(timeline) {
   );
 }
 
+/**
+ * Errors from the Python rig-head canvas validator, one line per file.
+ * No-ops when no used character declares groups.head or a slot canvas.
+ *
+ * @param {Map<string, object>} usedCharacters
+ * @param {string} projectDir
+ * @param {string} globalAssetsDir
+ * @returns {string[]}
+ */
+function findRigHeadAssetErrors(usedCharacters, projectDir, globalAssetsDir) {
+  const ids = [];
+  for (const [characterId, config] of usedCharacters) {
+    if (characterHasRigHead(config)) ids.push(characterId);
+  }
+  if (ids.length === 0) return [];
+
+  const pythonBin = resolvePythonBin();
+  const args = ["-m", "compositor.validate_assets", path.resolve(projectDir)];
+  if (globalAssetsDir) args.push("--global-assets", path.resolve(globalAssetsDir));
+  for (const id of ids) args.push("--character", id);
+
+  const result = spawnSync(pythonBin, args, { cwd: PYTHON_DIR, encoding: "utf8" });
+  if (result.error) {
+    return [`Rig-head validator failed to start (${pythonBin}): ${result.error.message}`];
+  }
+  const text = `${result.stdout || ""}\n${result.stderr || ""}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && line !== "OK: rig-head slot drawings");
+  if (result.status === 0) return [];
+  return text.length ? text : ["Rig-head validator failed."];
+}
+
 module.exports = {
   findOverlapWarnings,
   findMouthSheetErrors,
   findMissingPropAssets,
   findSharedLibraryWarnings,
+  findRigHeadAssetErrors,
   findMouthSlot,
+  characterHasRigHead,
   RHUBARB_MOUTH_SHAPES,
   REST_MOUTH_SHAPE,
 };

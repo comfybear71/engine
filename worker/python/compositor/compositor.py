@@ -26,7 +26,7 @@ from typing import Iterator, NamedTuple
 import cv2
 import numpy as np
 
-from .asset_cache import AssetCache, anchor_after_rotation
+from .asset_cache import AssetCache, anchor_after_rotation, point_after_rotation
 from .background import fit_to_canvas
 from .blend import draw_image
 from .camera import apply_camera, scale_camera
@@ -120,17 +120,31 @@ def _draw_transformed(
     rotation: float,
     anchor: str,
     opacity: float,
+    pivot: tuple[float, float] | None = None,
 ) -> None:
     """Draw a scaled/flipped/rotated asset so ``anchor`` stays at ``(x, y)``.
 
     ``AssetCache`` rotates about the image centre and expands the canvas.
     We then find where the original (post-scale) anchor landed in that
     expanded image and place the top-left so that point sits on ``(x, y)``.
+    When ``pivot`` is given (unscaled image pixels), that point is used
+    instead of the named ``anchor`` -- after scale and optional flip.
     """
 
     img = cache.get_variant(path, scale=scale, flip_x=flip_x, rotation=rotation)
     src_w, src_h = cache.pre_rotation_size(path, scale)
-    pivot_x, pivot_y = anchor_after_rotation(src_w, src_h, anchor, rotation)
+    if pivot is not None:
+        raw = cache.get_raw(path)
+        raw_h, raw_w = raw.shape[:2]
+        sx = (src_w / raw_w) if raw_w else scale
+        sy = (src_h / raw_h) if raw_h else scale
+        px = float(pivot[0]) * sx
+        py = float(pivot[1]) * sy
+        if flip_x:
+            px = src_w - px
+        pivot_x, pivot_y = point_after_rotation(src_w, src_h, px, py, rotation)
+    else:
+        pivot_x, pivot_y = anchor_after_rotation(src_w, src_h, anchor, rotation)
     draw_image(canvas, img, x - pivot_x, y - pivot_y, anchor="top-left", opacity=opacity)
 
 
@@ -144,6 +158,40 @@ def _collect_slot_drawings(layer: Layer, local_frame: int, fps: int) -> dict[str
     return drawings
 
 
+LEGACY_FULL_HEAD_SLOTS = frozenset({"head", "face", "eyes"})
+
+
+def _layer_view_at(layer: Layer, local_frame: int) -> str | None:
+    """Held view= from the latest dialogue clip that has started."""
+
+    last: str | None = None
+    for clip in layer.dialogue:
+        if clip.start_frame <= local_frame and getattr(clip, "view", None):
+            last = clip.view
+    return last
+
+
+def _suppressed_head_slots(layer: Layer) -> set[str]:
+    group = layer.groups.get("head") if layer.groups else None
+    if not group:
+        return set()
+    members = set(group)
+    return {name for name in LEGACY_FULL_HEAD_SLOTS if name not in members}
+
+
+def _sorted_slots(slots: dict[str, Slot]) -> list[tuple[str, Slot]]:
+    """Sort by (z or 0, declaration order)."""
+
+    items = list(slots.items())
+    return [
+        item
+        for _, item in sorted(
+            ((slot.z if slot.z is not None else 0, index), (name, slot))
+            for index, (name, slot) in enumerate(items)
+        )
+    ]
+
+
 def _draw_slot(
     canvas: np.ndarray,
     cache: AssetCache,
@@ -152,17 +200,18 @@ def _draw_slot(
     owner_local_frame_idx: int,
     fps: int,
     drawings: dict[str, str | None],
+    view: str | None = None,
 ) -> None:
     if not slot_is_visible(slot, drawings):
         return
     drawing = active_drawing(slot, owner_local_frame_idx, fps)
     if drawing is None or is_hide_drawing(drawing):
         return
-    view = None
-    if slot.dialogue is not None:
+    slot_view = view
+    if slot_view is None and slot.dialogue is not None:
         clip = _find_active_clip(slot.dialogue, owner_local_frame_idx)
-        view = getattr(clip, "view", None) if clip is not None else None
-    image_path = slot.resolve_image(drawing, view=view)
+        slot_view = getattr(clip, "view", None) if clip is not None else None
+    image_path = slot.resolve_image(drawing, view=slot_view)
     if image_path is None:
         return
 
@@ -171,15 +220,17 @@ def _draw_slot(
     bob_dy, bob_rot = slot_head_bob(slot, owner_local_frame_idx)
     slot_x = owner.x + rotated_x * owner.scale
     slot_y = owner.y + rotated_y * owner.scale + bob_dy
-    # Slot scale/rotation are around the attachment point (center anchor),
-    # so the offset stays put when the drawing is resized.
+    # Slot scale/rotation are around the attachment point (center, or the
+    # canvas neck pivot when set), so the offset stays put when resized.
     slot_scale = owner.scale * (slot.scale if slot.scale else 1.0)
     slot_rotation = owner.rotation + slot.rotation + bob_rot
+    pivot = (slot.pivot_x, slot.pivot_y) if slot.has_canvas else None
+    anchor = "center" if pivot is None else "top-left"
 
     _draw_transformed(
         canvas, cache, image_path,
         slot_x, slot_y, slot_scale, owner.flip_x, slot_rotation,
-        anchor="center", opacity=owner.opacity,
+        anchor=anchor, opacity=owner.opacity, pivot=pivot,
     )
 
 
@@ -192,14 +243,21 @@ def _draw_layer(
     world_scale: float = 1.0,
 ) -> None:
     drawings = _collect_slot_drawings(layer, layer_local_frame_idx, fps)
+    suppressed = _suppressed_head_slots(layer)
+    layer_view = _layer_view_at(layer, layer_local_frame_idx) if layer.groups.get("head") else None
     for placed in _resolve_layer_placements(layer, layer_local_frame_idx, world_scale=world_scale):
         _draw_transformed(
             canvas, cache, placed.asset,
             placed.x, placed.y, placed.scale, placed.flip_x, placed.rotation,
             placed.anchor, placed.opacity,
         )
-        for slot in placed.slots.values():
-            _draw_slot(canvas, cache, slot, placed, layer_local_frame_idx, fps, drawings)
+        for name, slot in _sorted_slots(placed.slots):
+            if name in suppressed:
+                continue
+            _draw_slot(
+                canvas, cache, slot, placed, layer_local_frame_idx, fps, drawings,
+                view=layer_view,
+            )
 
 
 def compose_scene_frame(

@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { parseScript } = require("../src/parser/scriptParser");
-const { findOverlapWarnings, findMouthSheetErrors } = require("../src/parser/lint");
+const { findOverlapWarnings, findMouthSheetErrors, characterHasRigHead } = require("../src/parser/lint");
 const { createFixtureLibrary, TRANSPARENT_PNG_1X1 } = require("./helpers/fixtureLibrary");
 
 const fixture = createFixtureLibrary();
@@ -200,6 +200,19 @@ describe("mouth sheet check", () => {
     assert.equal(errors.length, 1);
     assert.match(errors[0], /Cara is missing mouth shape\(s\) X, A, B, C, D, E, F, G, H/);
     assert.match(errors[0], /Available: \(none\)/);
+  });
+});
+
+describe("rig-head lint hook", () => {
+  test("characterHasRigHead is opt-in via groups.head or canvas", () => {
+    assert.equal(characterHasRigHead({ slots: { mouth: { drawings_dir: "mouth" } } }), false);
+    assert.equal(characterHasRigHead({ groups: { head: ["head_base", "eyes"] } }), true);
+    assert.equal(
+      characterHasRigHead({
+        slots: { eyes: { canvas: { w: 1024, h: 1024, pivot: { x: 512, y: 900 } } } },
+      }),
+      true
+    );
   });
 });
 

@@ -71,6 +71,17 @@ class Slot:
     head_bob_rotation: float = 0.0
     # Drawing names skipped by automatic lip sync (still valid as pins).
     exclude_from_lipsync: frozenset[str] = field(default_factory=frozenset)
+    # Optional draw order among sibling slots (None sorts as 0, then dict order).
+    z: int | None = None
+    # Optional fixed canvas + neck pivot. None => centre the drawing (today).
+    canvas_w: int | None = None
+    canvas_h: int | None = None
+    pivot_x: float | None = None
+    pivot_y: float | None = None
+
+    @property
+    def has_canvas(self) -> bool:
+        return self.canvas_w is not None and self.canvas_h is not None and self.pivot_x is not None and self.pivot_y is not None
 
     def resolve_image(self, drawing: str | None, view: str | None = None) -> Path | None:
         if is_hide_drawing(drawing):

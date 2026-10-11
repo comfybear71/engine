@@ -246,7 +246,22 @@
       "properties": {
         "offset": {
           "$ref": "#/definitions/offset",
-          "description": "Offset in the owner's local (pre-scale) pixel space, from the owner's anchor/pivot point to where this slot's drawing should be centered. Mirrored in x when the owner is flipped, scaled with the owner, and rotated about the owner's pivot by the owner's current rotation so the slot stays attached when the owner swings."
+          "description": "Offset in the owner's local (pre-scale) pixel space, from the owner's anchor/pivot point to where this slot's drawing should be centered. Mirrored in x when the owner is flipped, scaled with the owner, and rotated about the owner's pivot by the owner's current rotation so the slot stays attached when the owner swings. When `canvas.pivot` is set, that image-space point (the neck) is placed here instead of the image centre."
+        },
+        "z": {
+          "type": "integer",
+          "description": "Optional draw order among slots on the same owner. Slots are drawn in (z, declaration order); omitted z is treated as 0. Independent of the layer's own z."
+        },
+        "canvas": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["w", "h", "pivot"],
+          "description": "Fixed drawing size and neck pivot for a one-head rig slot. Every PNG in the slot must be exactly w×h. The pivot pixel is anchored at owner + offset and is the scale/rotation centre. Omit for today's centred placement.",
+          "properties": {
+            "w": { "type": "integer", "exclusiveMinimum": 0 },
+            "h": { "type": "integer", "exclusiveMinimum": 0 },
+            "pivot": { "$ref": "#/definitions/offset" }
+          }
         },
         "scale": {
           "type": "number",
@@ -489,6 +504,14 @@
         },
         "audio": { "type": "string", "description": "Deprecated single-clip shorthand, kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: 0 }]` (the clip begins when the layer becomes visible). Ignored if `dialogue` is also given. Prefer `dialogue` for anything with more than one line." },
         "slots": { "$ref": "#/definitions/slots", "description": "Drawing-swap slots attached directly to this layer's own root image (e.g. a mouth on a single-image character with no separate head part)." },
+        "groups": {
+          "type": "object",
+          "description": "Optional named slot groups copied from character.json. `head` lists the one-head rig slots (blank base + overlays). When set, only that group's active view= angle draws, and legacy full-head slots (head/face/eyes not in the group) are skipped.",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        },
         "children": {
           "type": "array",
           "description": "Cut-out rig parts nested under this layer. Optional -- most layers are a single flat image with no children.",

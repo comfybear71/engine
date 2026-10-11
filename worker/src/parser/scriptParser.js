@@ -67,7 +67,7 @@ const {
 const { ScriptError } = require("./errors");
 const assetLibrary = require("./assetLibrary");
 const { probeDurationSeconds } = require("./ffprobeDuration");
-const { findOverlapWarnings, findMouthSheetErrors, findMissingPropAssets, findSharedLibraryWarnings } = require("./lint");
+const { findOverlapWarnings, findMouthSheetErrors, findMissingPropAssets, findSharedLibraryWarnings, findRigHeadAssetErrors } = require("./lint");
 const { resolveImportedTrack, wordsToSentences, transcriptFromWords } = require("../importAudio");
 const { computeSyncState } = require("../voices/lipSync");
 
@@ -2169,6 +2169,7 @@ class ScriptParser {
     this.warnings.push(...findOverlapWarnings(this.occupancy));
     this.errors.push(...findMouthSheetErrors(this.usedCharacters, this.projectDir, this.globalAssetsDir));
     this.errors.push(...findMissingPropAssets(this.usedProps, this.projectDir, this.globalAssetsDir));
+    this.errors.push(...findRigHeadAssetErrors(this.usedCharacters, this.projectDir, this.globalAssetsDir));
   }
 
   // ---- scene finalization -------------------------------------------------
@@ -2277,6 +2278,8 @@ class ScriptParser {
       if (segment.endFrame !== undefined) layer.timing.end_frame = segment.endFrame;
     }
     if (segment.dialogue.length > 0) layer.dialogue = segment.dialogue;
+    const groups = this._characterGroups(config);
+    if (groups) layer.groups = groups;
 
     const slots = {};
     if (segment.dialogue.length > 0 && config.slots && config.slots.mouth) {
@@ -2304,24 +2307,72 @@ class ScriptParser {
     return layer;
   }
 
+  _characterGroups(config) {
+    const raw = config && config.groups;
+    if (!raw || typeof raw !== "object") return null;
+    const groups = {};
+    for (const [name, members] of Object.entries(raw)) {
+      if (!Array.isArray(members) || members.length === 0) continue;
+      groups[name] = members.map((item) => String(item)).filter(Boolean);
+    }
+    return Object.keys(groups).length > 0 ? groups : null;
+  }
+
+  _headGroupNames(characterId) {
+    const config = this.characterLibrary.get(characterId);
+    const groups = this._characterGroups(config);
+    return groups && Array.isArray(groups.head) ? groups.head : null;
+  }
+
   _applySlotTransform(slot, slotConfig) {
     if (slotConfig.scale != null) slot.scale = slotConfig.scale;
     if (slotConfig.rotation != null) slot.rotation = slotConfig.rotation;
     return slot;
   }
 
-  _scanMouthViewImages(characterId, slotConfig) {
-    const baseDir = (slotConfig && slotConfig.drawings_dir) || "mouth";
+  _applySlotMeta(slot, slotConfig) {
+    this._applySlotTransform(slot, slotConfig);
+    if (slotConfig && slotConfig.z != null && Number.isFinite(Number(slotConfig.z))) {
+      slot.z = Number(slotConfig.z);
+    }
+    const canvas = slotConfig && slotConfig.canvas;
+    if (canvas && canvas.w != null && canvas.h != null) {
+      const pivot = canvas.pivot || {};
+      slot.canvas = {
+        w: Number(canvas.w),
+        h: Number(canvas.h),
+        pivot: { x: Number(pivot.x) || 0, y: Number(pivot.y) || 0 },
+      };
+    }
+    return slot;
+  }
+
+  _viewFolderPrefix(drawingsDir, slotName) {
+    const dir = String(drawingsDir || slotName || "");
+    for (const view of HEAD_VIEWS) {
+      const suffix = `_${view}`;
+      if (dir.endsWith(suffix)) return dir.slice(0, -suffix.length);
+    }
+    return dir || slotName;
+  }
+
+  _scanViewImages(characterId, slotName, slotConfig) {
+    const baseDir = (slotConfig && slotConfig.drawings_dir) || slotName;
+    const prefix = this._viewFolderPrefix(baseDir, slotName);
     const images = this._scanSlotImages(characterId, { drawings_dir: baseDir });
     const byView = {};
-    const frontAlt = this._scanSlotImages(characterId, { drawings_dir: "mouth_front" });
+    const frontAlt = this._scanSlotImages(characterId, { drawings_dir: `${prefix}_front` });
     byView.front = Object.keys(frontAlt).length > 0 ? frontAlt : images;
     for (const view of HEAD_VIEWS) {
       if (view === "front") continue;
-      const scanned = this._scanSlotImages(characterId, { drawings_dir: `mouth_${view}` });
+      const scanned = this._scanSlotImages(characterId, { drawings_dir: `${prefix}_${view}` });
       if (Object.keys(scanned).length > 0) byView[view] = scanned;
     }
     return { images: byView.front && Object.keys(byView.front).length > 0 ? byView.front : images, images_by_view: byView };
+  }
+
+  _scanMouthViewImages(characterId, slotConfig) {
+    return this._scanViewImages(characterId, "mouth", slotConfig);
   }
 
   _excludeFromLipSync(slotConfig) {
@@ -2333,13 +2384,15 @@ class ScriptParser {
   }
 
   _buildSlotJson(characterId, slotName, slotConfig, keyframes) {
+    const headGroup = this._headGroupNames(characterId);
+    const scanViews = slotName === "mouth" || (headGroup && headGroup.includes(slotName));
     if (slotName === "mouth") {
       const { images, images_by_view } = this._scanMouthViewImages(characterId, slotConfig);
       const mouth = { offset: slotConfig.offset || { x: 0, y: 0 }, images, images_by_view, lipsync: { source: "dialogue" } };
       if (slotConfig.visible_when) mouth.visible_when = slotConfig.visible_when;
       const excluded = this._excludeFromLipSync(slotConfig);
       if (excluded.length) mouth.exclude_from_lipsync = excluded;
-      return this._applySlotTransform(mouth, slotConfig);
+      return this._applySlotMeta(mouth, slotConfig);
     }
     const sorted = keyframes
       .filter((kf) => kf && Number.isFinite(kf.frame) && (usableSlotDrawing(kf.drawing) || (Array.isArray(kf.cycle) && kf.cycle.length && kf.fps)))
@@ -2348,10 +2401,19 @@ class ScriptParser {
     if (fallback && (sorted.length === 0 || sorted[0].frame !== 0)) {
       sorted.unshift({ frame: 0, drawing: fallback });
     }
-    const images = this._scanSlotImages(characterId, slotConfig);
+    let images;
+    let imagesByView;
+    if (scanViews) {
+      const scanned = this._scanViewImages(characterId, slotName, slotConfig);
+      images = scanned.images;
+      imagesByView = scanned.images_by_view;
+    } else {
+      images = this._scanSlotImages(characterId, slotConfig);
+    }
     const slot = { offset: slotConfig.offset || { x: 0, y: 0 }, images, keyframes: sorted };
+    if (imagesByView) slot.images_by_view = imagesByView;
     if (slotConfig.visible_when) slot.visible_when = slotConfig.visible_when;
-    return this._applySlotTransform(slot, slotConfig);
+    return this._applySlotMeta(slot, slotConfig);
   }
 
   _scanSlotImages(characterId, slotConfig) {
