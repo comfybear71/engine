@@ -397,7 +397,10 @@ clobber the project's `timeline.json`.
   couple of frames past the movie. Horizontal scroll (wheel / middle-drag
   / the pinned scrollbar) and lane-height controls are unchanged.
 - **Script** — full-page line-numbered editor for the selected `script*.txt` with
-  Save (Ctrl/Cmd+S) and Lint. Insert Action buttons drop real tag templates
+  Save (Ctrl/Cmd+S) and Lint. Lint names the script line for a missing
+  slot drawing (`right_hand=` or an unknown name) instead of a raw
+  `timeline.json` schema path. Stage preview uses the same wording.
+  Insert Action buttons drop real tag templates
   from [script-format.md](script-format.md) at the cursor, using character
   names from the project cast. **Import audio (mp3/wav)** (also **Import
   audio** on the Stage transport bar and Script drawer) is a drop zone / file picker: pick a character (defaults to

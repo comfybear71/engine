@@ -89,3 +89,11 @@ class TestSlotResolveImageFallback:
     def test_no_images_returns_none(self):
         slot = Slot(images={})
         assert slot.resolve_image("A") is None
+
+    def test_drawing_none_hides_the_slot(self):
+        slot = Slot(
+            images={"fist": Path("fist.png"), "X": Path("x.png")},
+            keyframes=[SlotKeyframe(frame=0, drawing="none")],
+        )
+        assert active_drawing(slot, 0, fps=24) is None
+        assert slot.resolve_image("none") is None

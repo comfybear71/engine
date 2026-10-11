@@ -14,9 +14,13 @@ import {
   type LintIssue,
   type ScriptHistorySnapshot,
 } from "@/lib/worker";
+import { explainTimelineError } from "@/lib/timelineError";
 
 function flattenLint(result: { lint: { errors: LintIssue[]; warnings: LintIssue[] } }): LintIssue[] {
-  return [...result.lint.errors, ...result.lint.warnings];
+  return [...result.lint.errors, ...result.lint.warnings].map((issue) => ({
+    ...issue,
+    message: explainTimelineError(issue.message),
+  }));
 }
 
 export default function ScriptPanel({

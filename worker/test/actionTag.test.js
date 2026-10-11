@@ -63,6 +63,13 @@ describe("parseActionTag", () => {
     assert.equal(kv.z, "12");
   });
 
+  test("empty slot value is kept so the parser can lint it", () => {
+    const { character, kv, note } = parseActionTag("Rodney right_hand=");
+    assert.equal(character, "Rodney");
+    assert.equal(kv.right_hand, "");
+    assert.equal(note, "");
+  });
+
   test("character name alone with no key=value pairs", () => {
     const { character, kv, note } = parseActionTag("Hicks");
     assert.equal(character, "Hicks");

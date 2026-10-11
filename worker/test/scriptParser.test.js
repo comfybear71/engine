@@ -191,6 +191,28 @@ describe("slot keyframes from [Action: ...]", () => {
     assert.equal(arm.slots.right_hand.keyframes[0].drawing, "point");
   });
 
+  test("right_hand=none hides the slot; empty right_hand= is a line-numbered lint", async () => {
+    const hide = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Action: Alice right_hand=none]"].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, hide);
+    const alice = layersFor(timeline).find((l) => l.character_id === "alice");
+    const arm = alice.children.find((c) => c.id === "right_arm");
+    assert.equal(arm.slots.right_hand.keyframes[0].drawing, "none");
+
+    await assert.rejects(
+      () =>
+        parseScript(
+          fixture.projectDir,
+          fixture.globalAssetsDir,
+          ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Action: Alice right_hand=]"].join("\n")
+        ),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /right_hand is missing a drawing/.test(err.message) &&
+        /none to hide/.test(err.message)
+    );
+  });
+
   test("the mouth slot cannot be set via [Action: ...] (it's dialogue-driven)", async () => {
     const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "[Action: Alice mouth=A]"].join("\n");
     await assert.rejects(
@@ -1110,6 +1132,60 @@ describe("at_time= / start= explicit start", () => {
     const pin = laneEvents.find((e) => e.tag === "action");
     assert.equal(pin.endFrame - pin.startFrame, 12);
     assert.equal(pin.timing.attr, "hold");
+  });
+});
+
+describe("rodney_test slots without default_drawing", () => {
+  const MOUTH = ["A", "B", "C", "D", "E", "F", "G", "H", "X"];
+  const SLOT_NAMES = ["body", "eyes", "hands", "head", "left_hand", "right_hand"];
+
+  function writeRodneyTest() {
+    const root = path.join(fixture.projectDir, "characters", "rodney");
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64"
+    );
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, "body.png"), png);
+    for (const shape of MOUTH) {
+      fs.mkdirSync(path.join(root, "mouth"), { recursive: true });
+      fs.writeFileSync(path.join(root, "mouth", `${shape}.png`), png);
+    }
+    const slots = {
+      mouth: { offset: { x: 0, y: 0 }, drawings_dir: "mouth" },
+    };
+    for (const name of SLOT_NAMES) {
+      fs.mkdirSync(path.join(root, name), { recursive: true });
+      fs.writeFileSync(path.join(root, name, `${name === "right_hand" ? "point" : "default"}.png`), png);
+      slots[name] = { offset: { x: 0, y: 0 }, drawings_dir: name };
+    }
+    fs.writeFileSync(
+      path.join(root, "character.json"),
+      JSON.stringify({
+        id: "rodney",
+        display_name: "Rodney",
+        aliases: ["Rodney"],
+        asset: "body.png",
+        z: 8,
+        slots,
+        children: [],
+      })
+    );
+  }
+
+  test("does not emit empty {frame} keyframes when default_drawing is missing", async () => {
+    writeRodneyTest();
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Rodney]", "Rodney: Hello."].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    assert.ok(rodney);
+    for (const name of SLOT_NAMES) {
+      const kfs = rodney.slots[name].keyframes;
+      assert.ok(Array.isArray(kfs));
+      for (const kf of kfs) {
+        assert.ok(kf.drawing || kf.cycle, `${name} keyframe must have drawing or cycle: ${JSON.stringify(kf)}`);
+      }
+    }
   });
 });
 

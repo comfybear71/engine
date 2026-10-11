@@ -340,7 +340,11 @@
           "required": ["frame", "drawing"],
           "properties": {
             "frame": { "type": "integer", "minimum": 0 },
-            "drawing": { "type": "string" }
+            "drawing": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Named drawing to hold, or \"none\" to hide the slot until the next keyframe."
+            }
           }
         },
         {

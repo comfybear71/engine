@@ -77,6 +77,12 @@ const DEFAULT_SCENE_PADDING_FRAMES = 12;
 const DEFAULT_CANVAS_WIDTH = 1920;
 const DEFAULT_CANVAS_HEIGHT = 1080;
 const RESERVED_SLOT_NAMES = new Set(["mouth"]); // dialogue-driven only, never settable via [Action: ...]
+const HIDE_DRAWING = "none";
+
+function usableSlotDrawing(value) {
+  const name = String(value == null ? "" : value).trim();
+  return name || null;
+}
 const CAMERA_KEYS = new Set(["zoom", "pan", "tilt", "to", "over", "ease", "wait", "reset", "at_time", "start"]);
 const TIMING_KEYS = new Set(["at_time", "start"]);
 const HOLD_KEYS = new Set(["over", "hold"]);
@@ -1311,43 +1317,64 @@ class ScriptParser {
     const drawingsDir = `characters/${characterId}/${owner.slotConfig.drawings_dir}`;
     const drawings = assetLibrary.scanDrawingsDir(this.projectDir, this.globalAssetsDir, drawingsDir);
     const cycles = (owner.slotConfig && owner.slotConfig.cycles) || {};
-    const namedCycle = cycles[drawing];
+    const drawingName = String(drawing == null ? "" : drawing).trim();
+    const namedCycle = cycles[drawingName];
     const displayName = config.display_name || characterId;
+    const available = [...drawings.keys()].join(", ") || "(none)";
 
     let keyframe;
     const segment = state.current;
     const relativeFrame = scene.cursorFrames - segment.startFrame;
 
+    if (!drawingName) {
+      throw new ScriptError(
+        lineNumber,
+        `${displayName} ${slotName} is missing a drawing. Use a drawing name, or none to hide the slot. Available: ${available}`
+      );
+    }
+    if (drawingName.toLowerCase() === HIDE_DRAWING) {
+      keyframe = { frame: relativeFrame, drawing: HIDE_DRAWING };
+      this._writeSlotKeyframe(segment, owner, slotName, keyframe);
+      state.activeSlots.set(slotStateKey(owner, slotName), {
+        ownerType: owner.ownerType,
+        childId: owner.childId,
+        slotName,
+        drawing: "none",
+        startedAtSceneFrame: undefined,
+      });
+      return;
+    }
+
     if (namedCycle) {
       const cycleDrawings = namedCycle.drawings || [];
       if (cycleDrawings.length === 0) {
-        throw new ScriptError(lineNumber, `${displayName} cycle "${drawing}" on ${slotName} has no drawings.`);
+        throw new ScriptError(lineNumber, `${displayName} cycle "${drawingName}" on ${slotName} has no drawings.`);
       }
       const missing = cycleDrawings.filter((d) => !drawings.has(d));
       if (missing.length > 0) {
         throw new ScriptError(
           lineNumber,
-          `${displayName} cycle "${drawing}" on ${slotName} references missing drawing(s) ${missing.join(", ")}. Available: ${[...drawings.keys()].join(", ") || "(none)"}`
+          `${displayName} cycle "${drawingName}" on ${slotName} references missing drawing(s) ${missing.join(", ")}. Available: ${available}`
         );
       }
       const cycleFps = namedCycle.fps;
       if (!Number.isFinite(cycleFps) || cycleFps <= 0) {
-        throw new ScriptError(lineNumber, `${displayName} cycle "${drawing}" on ${slotName} has an invalid fps.`);
+        throw new ScriptError(lineNumber, `${displayName} cycle "${drawingName}" on ${slotName} has an invalid fps.`);
       }
       keyframe = { frame: relativeFrame, cycle: [...cycleDrawings], fps: cycleFps };
-    } else if (drawings.has(drawing)) {
-      keyframe = { frame: relativeFrame, drawing };
+    } else if (drawings.has(drawingName)) {
+      keyframe = { frame: relativeFrame, drawing: drawingName };
     } else {
       const cycleNames = Object.keys(cycles);
       if (cycleNames.length > 0) {
         throw new ScriptError(
           lineNumber,
-          `${displayName} has no ${slotName} drawing or cycle "${drawing}". Available drawings: ${[...drawings.keys()].join(", ") || "(none)"}. Available cycles: ${cycleNames.join(", ")}`
+          `${displayName} has no ${slotName} drawing or cycle "${drawingName}". Available drawings: ${available}. Available cycles: ${cycleNames.join(", ")}`
         );
       }
       throw new ScriptError(
         lineNumber,
-        `${displayName} has no ${slotName} drawing "${drawing}". Available: ${[...drawings.keys()].join(", ") || "(none)"}`
+        `${displayName} has no ${slotName} drawing "${drawingName}". Available: ${available}`
       );
     }
 
@@ -2313,9 +2340,12 @@ class ScriptParser {
       if (excluded.length) mouth.exclude_from_lipsync = excluded;
       return this._applySlotTransform(mouth, slotConfig);
     }
-    const sorted = [...keyframes].sort((a, b) => a.frame - b.frame);
-    if (sorted.length === 0 || sorted[0].frame !== 0) {
-      sorted.unshift({ frame: 0, drawing: slotConfig.default_drawing });
+    const sorted = keyframes
+      .filter((kf) => kf && Number.isFinite(kf.frame) && (usableSlotDrawing(kf.drawing) || (Array.isArray(kf.cycle) && kf.cycle.length && kf.fps)))
+      .sort((a, b) => a.frame - b.frame);
+    const fallback = usableSlotDrawing(slotConfig && slotConfig.default_drawing);
+    if (fallback && (sorted.length === 0 || sorted[0].frame !== 0)) {
+      sorted.unshift({ frame: 0, drawing: fallback });
     }
     const images = this._scanSlotImages(characterId, slotConfig);
     const slot = { offset: slotConfig.offset || { x: 0, y: 0 }, images, keyframes: sorted };

@@ -19,6 +19,7 @@ const { renderProject, previewFrame, parseEstimatedSilent } = require("./render"
 const { parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
 const { getCachedParse } = require("./parser/parseCache");
 const { validateTimelineFile } = require("./parser/validateTimelineFile");
+const { explainTimelineError } = require("./parser/explainTimelineError");
 const { resolveAsset } = require("./parser/assetLibrary");
 const { getCachedPreview, storePreview } = require("./previewCache");
 const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = require("./studioLibrary");
@@ -211,7 +212,7 @@ function lintFromResult(result, parseError) {
     for (const warning of result.warnings || []) warnings.push(lintIssueFromText(warning, "warning"));
     for (const error of result.errors || []) errors.push(lintIssueFromText(error, "error"));
     if (result.validation && result.validation.ok === false && result.validation.message) {
-      errors.push({ level: "error", line: null, message: result.validation.message });
+      errors.push({ level: "error", line: null, message: explainTimelineError(result.validation.message) });
     }
   }
 
@@ -863,7 +864,7 @@ function createApp(options = {}) {
         const parsed = await parseForWrite(projectDir, parseOpts(skipValidate, item.script));
         if (parsed.validation && parsed.validation.ok === false) {
           cleanupTempParse(parsed);
-          return res.status(400).json({ error: parsed.validation.message || `Render failed for ${item.episodeId}` });
+          return res.status(400).json({ error: explainTimelineError(parsed.validation.message) || `Render failed for ${item.episodeId}` });
         }
         const outputFile = renderOutputName(item.script);
         const outputPath = path.join(projectDir, "renders", outputFile);
@@ -1715,7 +1716,7 @@ function createApp(options = {}) {
       sendPreview(type, buffer, meta);
     } catch (err) {
       const status = /past the end|must be >= 0/.test(err.message) ? 400 : 500;
-      if (!res.headersSent) res.status(status).json({ error: err.message });
+      if (!res.headersSent) res.status(status).json({ error: explainTimelineError(err.message) });
     } finally {
       fs.unlink(tmp, () => {});
       cleanupTempParse(result);
@@ -1966,7 +1967,7 @@ function createApp(options = {}) {
         return res.status(400).json(parseErrorPayload(err));
       }
       if (parsed.validation && parsed.validation.ok === false) {
-        return res.status(400).json({ error: parsed.validation.message || "timeline validation failed" });
+        return res.status(400).json({ error: explainTimelineError(parsed.validation.message) || "timeline validation failed" });
       }
 
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -1986,7 +1987,7 @@ function createApp(options = {}) {
         estimatedSilent,
       });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: explainTimelineError(err.message) });
     } finally {
       cleanupTempParse(parsed);
       renderInProgress = false;
@@ -2013,7 +2014,7 @@ function createApp(options = {}) {
         return res.status(400).json(parseErrorPayload(err));
       }
       if (parsed.validation && parsed.validation.ok === false) {
-        return res.status(400).json({ error: parsed.validation.message || "timeline validation failed" });
+        return res.status(400).json({ error: explainTimelineError(parsed.validation.message) || "timeline validation failed" });
       }
 
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -2034,7 +2035,7 @@ function createApp(options = {}) {
         url: `/api/projects/${encodeURIComponent(req.params.name)}/renders/${encodeURIComponent(outputFile)}`,
       });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: explainTimelineError(err.message) });
     } finally {
       cleanupTempParse(parsed);
       renderInProgress = false;

@@ -108,7 +108,7 @@ in the scene's timeline onward (held until the next change):
 | `z=<integer>` | Overrides this character's draw order from here on. |
 | `hold=<secs>s` | Optional hold length for this pin (Studio move / trim). When set, the lane block lasts that long instead of stretching to the next pin. Does not advance the scene clock. Studio writes `hold=` when you drag a pin so the block never silently lengthens. |
 | `over=<secs>s` | Same as `hold=` on a pin (older alias). On `[Move:]` / `[Pose:]` / `[Camera:]`, `over=` is the timed duration and may advance the clock. |
-| *(anything else)* | Treated as a **slot name** on that character (e.g. `eyes=furious`, `right_hand=point`, `body=walk_side`): the value is either a **named cycle** declared on that slot in `character.json` (emits a `{ frame, cycle, fps }` keyframe) or a drawing that must exist in that slot's folder (see [docs/assets.md](assets.md)). A drawing becomes a held-until-changed keyframe at the current frame. The reserved `mouth` slot can't be set this way -- it's always driven by dialogue. |
+| *(anything else)* | Treated as a **slot name** on that character (e.g. `eyes=furious`, `right_hand=point`, `body=walk_side`): the value is either a **named cycle** declared on that slot in `character.json` (emits a `{ frame, cycle, fps }` keyframe), a drawing that must exist in that slot's folder (see [docs/assets.md](assets.md)), or `none` to hide the slot. A drawing becomes a held-until-changed keyframe at the current frame. An empty value (`right_hand=`) is a lint error that names the line and the missing drawing. The reserved `mouth` slot can't be set this way -- it's always driven by dialogue. |
 
 Any `at=`/`scale=`/`flip`/`z` change **that actually differs** from the
 character's current values ends their current layer and starts a new one
@@ -597,6 +597,7 @@ asset library to fix a typo:
 
 ```
 Line 14: Hicks has no right_hand drawing "pointt". Available: fist, flat, point
+Line 15: Rodney right_hand is missing a drawing. Use a drawing name, or none to hide the slot. Available: fist, point
 Line 9: Alice has no eyes drawing or cycle "walk_side". Available drawings: open, closed. Available cycles: blink_loop
 Line 11: Unknown part "left_foot" on Alice. Available: right_arm, forearm
 Line 8: Invalid over "nope" -- expected seconds like "1s" or "0.5s".

@@ -31,6 +31,11 @@ from typing import Sequence
 from . import lipsync
 
 FALLBACK_SHAPE = lipsync.DEFAULT_SHAPE  # "X": used as the generic idle fallback
+NONE_DRAWING = "none"
+
+
+def is_hide_drawing(drawing: str | None) -> bool:
+    return bool(drawing) and str(drawing).strip().lower() == NONE_DRAWING
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,8 @@ class Slot:
     exclude_from_lipsync: frozenset[str] = field(default_factory=frozenset)
 
     def resolve_image(self, drawing: str | None, view: str | None = None) -> Path | None:
+        if is_hide_drawing(drawing):
+            return None
         pools: list[dict[str, Path]] = []
         # No view= (and empty view) means the default head: mouth_front/
         # when that set exists, then mouth/. Named views still fall back
@@ -152,6 +159,8 @@ def active_drawing(slot: Slot, owner_local_frame_idx: int, fps: int) -> str | No
             cycle_fps = held_kf.fps if held_kf.fps is not None else float(fps)
             index = int((elapsed / float(fps)) * cycle_fps) % len(held_kf.cycle)
             return held_kf.cycle[index]
+        if is_hide_drawing(held_kf.drawing):
+            return None
         return held_kf.drawing
 
     return None
