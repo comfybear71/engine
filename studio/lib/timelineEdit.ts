@@ -245,6 +245,7 @@ export type MovableLaneBlock = {
   cuesRel?: string | null;
   sync?: string | null;
   cues?: { shape?: string; start: number; end: number; pinned?: boolean }[] | null;
+  marriedId?: string | null;
 };
 
 export type MovableLanes = {

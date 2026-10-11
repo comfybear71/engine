@@ -450,12 +450,12 @@ export default function StagePanel({
     (next: string, meta?: ScriptEditMeta) => {
       if (meta?.keepLanes) keepLanesRefreshRef.current = true;
       if (meta?.lanes) {
-        const optimistic = meta.lanes;
+        const nextLanes = meta.lanes;
         skipPreviewRef.current = true;
-        setLanes(optimistic as LanesResponse);
-        if (optimistic.totalFrames > 0) {
-          playableTotalRef.current = optimistic.totalFrames;
-          setTotalFrames(optimistic.totalFrames);
+        setLanes(nextLanes as LanesResponse);
+        if (nextLanes.totalFrames > 0) {
+          playableTotalRef.current = nextLanes.totalFrames;
+          setTotalFrames(nextLanes.totalFrames);
         }
         if (meta.delta) {
           const starts = new Set(
@@ -481,9 +481,9 @@ export default function StagePanel({
                   ...current,
                   audio: mergePlaybackAudioFromLanes(
                     current.audio,
-                    optimistic.blocks,
-                    optimistic.totalFrames,
-                    optimistic.fps
+                    nextLanes.blocks,
+                    nextLanes.totalFrames,
+                    nextLanes.fps
                   ),
                 }
               : current
