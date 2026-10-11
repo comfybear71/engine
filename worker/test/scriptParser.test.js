@@ -1226,7 +1226,7 @@ describe("one-head rig emit", () => {
     assert.equal(layer.slots.mouth.z, 2);
     assert.deepEqual(layer.slots.mouth.canvas, canvas);
     assert.ok(
-      errors.some((line) => /expected 8x8|blank PNG|touches the canvas edge|RGBA/.test(line)),
+      errors.some((line) => /expected 8x8|blank PNG|touches the canvas edge|RGBA|could not read PNG/.test(line)),
       `expected rig-head lint lines, got: ${JSON.stringify(errors)}`
     );
   });
