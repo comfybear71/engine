@@ -653,10 +653,18 @@ async function realignSlotView(projectDir, globalAssetsDir, characterId, slotNam
     const destRel = posixJoin("characters", characterId, view.drawingsDir, destName);
     const destAbs = absFromProjectRel(projectDir, destRel);
     const prev = srcScan.get(path.basename(destName, path.extname(destName)));
-    if (prev) writeHistoryCopy(projectDir, characterId, "replaced", destRel, prev.absPath);
-    fs.mkdirSync(path.dirname(destAbs), { recursive: true });
-    fs.copyFileSync(item.out, destAbs);
-    written.push({ name: path.basename(destName, path.extname(destName)), rel: destRel });
+    const outBuf = fs.readFileSync(item.out);
+    const unchanged = Boolean(prev && fs.existsSync(prev.absPath) && fs.readFileSync(prev.absPath).equals(outBuf));
+    if (!unchanged) {
+      if (prev) writeHistoryCopy(projectDir, characterId, "replaced", destRel, prev.absPath);
+      fs.mkdirSync(path.dirname(destAbs), { recursive: true });
+      fs.copyFileSync(item.out, destAbs);
+    }
+    written.push({
+      name: path.basename(destName, path.extname(destName)),
+      rel: destRel,
+      unchanged,
+    });
   }
   fs.rmSync(sessionRoot, { recursive: true, force: true });
   if (written.length) {

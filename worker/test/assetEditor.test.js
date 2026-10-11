@@ -318,12 +318,32 @@ describe("asset editor", { concurrency: 1 }, () => {
     assert.equal(afterA.height, ref.height);
     assert.equal(afterC.width, ref.width);
     assert.equal(afterC.height, ref.height);
+    function headHeight(filePath) {
+      const png = decodePng(fs.readFileSync(filePath));
+      let y0 = png.height;
+      let y1 = 0;
+      for (let y = 0; y < png.height; y += 1) {
+        for (let x = 0; x < png.width; x += 1) {
+          if (png.pixels[(y * png.width + x) * png.bpp + (png.bpp - 1)] > 16) {
+            if (y < y0) y0 = y;
+            if (y + 1 > y1) y1 = y + 1;
+          }
+        }
+      }
+      return y1 - y0;
+    }
+    const heightA = headHeight(path.join(rodneyDir, "mouth", "A.png"));
+    const heightC = headHeight(path.join(rodneyDir, "mouth", "C.png"));
+    const heightX = headHeight(path.join(rodneyDir, "mouth", "X.png"));
+    assert.ok(Math.abs(heightA - heightX) <= 6, `A head ${heightA} vs X ${heightX}`);
+    assert.ok(Math.abs(heightC - heightX) <= 6, `C head ${heightC} vs X ${heightX}`);
     const hashA = require("crypto").createHash("sha256").update(fs.readFileSync(path.join(rodneyDir, "mouth", "A.png"))).digest("hex");
     const hashC = require("crypto").createHash("sha256").update(fs.readFileSync(path.join(rodneyDir, "mouth", "C.png"))).digest("hex");
     const second = await realignSlotView(fixture.projectDir, fixture.globalAssetsDir, "rodney", "mouth", {
       normalize: true,
     });
     assert.equal(second.written.length, first.written.length);
+    assert.ok(second.written.every((item) => item.unchanged));
     assert.equal(
       require("crypto").createHash("sha256").update(fs.readFileSync(path.join(rodneyDir, "mouth", "A.png"))).digest("hex"),
       hashA
@@ -332,6 +352,8 @@ describe("asset editor", { concurrency: 1 }, () => {
       require("crypto").createHash("sha256").update(fs.readFileSync(path.join(rodneyDir, "mouth", "C.png"))).digest("hex"),
       hashC
     );
+    assert.equal(headHeight(path.join(rodneyDir, "mouth", "A.png")), heightA);
+    assert.equal(headHeight(path.join(rodneyDir, "mouth", "C.png")), heightC);
     const json = JSON.parse(fs.readFileSync(path.join(rodneyDir, "character.json"), "utf8"));
     assert.deepEqual(json.slots.mouth.drawings.A.align, { x: 0, y: 0, scale: 1 });
     assert.deepEqual(json.slots.mouth.drawings.C.align, { x: 0, y: 0, scale: 1 });

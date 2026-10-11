@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -137,8 +138,8 @@ def already_aligned(
     nudge_x: float = 0.0,
     nudge_y: float = 0.0,
     nudge_scale: float = 1.0,
-    scale_tol: float = 0.02,
-    shift_tol: float = 2.0,
+    scale_tol: float = 0.05,
+    shift_tol: float = 4.0,
 ) -> bool:
     """True when src already matches ref head height/anchor and nudge is identity."""
     if abs(float(nudge_x or 0.0)) > 0.5 or abs(float(nudge_y or 0.0)) > 0.5:
@@ -153,7 +154,7 @@ def already_aligned(
     rl = landmarks(ref)
     src_h = max(1.0, sl["chin"][1] - sl["hat"][1])
     ref_h = max(1.0, rl["chin"][1] - rl["hat"][1])
-    if abs(src_h - ref_h) > max(2.0, ref_h * scale_tol):
+    if abs(src_h - ref_h) > max(6.0, ref_h * scale_tol):
         return False
     if abs(sl["hat"][1] - rl["hat"][1]) > shift_tol:
         return False
@@ -216,13 +217,23 @@ def align_file(
         raise FileNotFoundError(f"Could not read source: {src_path}")
     if ref is None:
         raise FileNotFoundError(f"Could not read reference: {ref_path}")
-    aligned = align_to_reference(
-        src, ref, nudge_x=nudge_x, nudge_y=nudge_y, nudge_scale=nudge_scale, crop=crop, collar_y=collar_y
-    )
+    cropped = crop_to_head(src, ref, collar_y) if crop else src
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    ok = cv2.imwrite(str(out_path), aligned)
-    if not ok:
-        raise RuntimeError(f"failed to write aligned PNG: {out_path}")
+    if already_aligned(cropped, ref, nudge_x=nudge_x, nudge_y=nudge_y, nudge_scale=nudge_scale):
+        if cropped.shape == src.shape and np.array_equal(cropped, src) and src_path.resolve() != out_path.resolve():
+            shutil.copy2(src_path, out_path)
+        elif src_path.resolve() != out_path.resolve():
+            ok = cv2.imwrite(str(out_path), cropped)
+            if not ok:
+                raise RuntimeError(f"failed to write aligned PNG: {out_path}")
+        aligned = cropped
+    else:
+        aligned = align_to_reference(
+            src, ref, nudge_x=nudge_x, nudge_y=nudge_y, nudge_scale=nudge_scale, crop=crop, collar_y=collar_y
+        )
+        ok = cv2.imwrite(str(out_path), aligned)
+        if not ok:
+            raise RuntimeError(f"failed to write aligned PNG: {out_path}")
     return {
         "src": str(src_path),
         "ref": str(ref_path),
