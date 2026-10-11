@@ -238,20 +238,26 @@ def test_gap_grid_keeps_touching_heads_in_separate_cells():
     assert right_opaque[:, 0].mean() > 150  # blue
 
 
+def _solid_cell(h: int, w: int) -> np.ndarray:
+    cell = np.zeros((h, w, 4), dtype=np.uint8)
+    cell[1 : h - 1, 1 : w - 1] = (0, 0, 200, 255)
+    return cell
+
+
 def test_normalize_cells_same_canvas_and_analyze_flags_size():
-    small = np.zeros((20, 16, 4), dtype=np.uint8)
-    small[2:18, 2:14] = (0, 0, 200, 255)
-    large = np.zeros((80, 64, 4), dtype=np.uint8)
-    large[4:76, 4:60] = (0, 0, 200, 255)
+    normals = [_solid_cell(40, 32) for _ in range(3)]
+    small = _solid_cell(12, 10)
+    large = _solid_cell(120, 96)
     empty = np.zeros((40, 40, 4), dtype=np.uint8)
-    flags, warnings = analyze_cells([small, large, empty])
-    assert flags == ["small", "large", "empty"]
+    flags, warnings = analyze_cells([*normals, small, large, empty])
+    assert flags[-3:] == ["small", "large", "empty"]
+    assert flags[:3] == [None, None, None]
     assert any("empty" in item for item in warnings)
     assert any("smaller" in item for item in warnings)
     assert any("larger" in item for item in warnings)
 
-    out = normalize_cells([small, large, empty])
-    assert out[0].shape == out[1].shape == out[2].shape
+    out = normalize_cells([small, large, empty, normals[0]])
+    assert len({cell.shape[:2] for cell in out}) == 1
     assert out[0].shape[0] >= 8 and out[0].shape[1] >= 8
     assert is_empty(out[2])
     assert not is_empty(out[0])
