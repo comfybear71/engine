@@ -66,6 +66,18 @@ export function ingestNeedId(set: PromptPackSet): string {
 
 export const CUSTOM_NEED_ID = "custom";
 
+/** Keep Custom even though it is not a pack set (parent needId sync). */
+export function resolveImagineNeedId(
+  sets: { id: string; needId?: string }[],
+  initialNeedId?: string | null,
+  fallback = "mouth_sheet"
+): string {
+  if (initialNeedId === CUSTOM_NEED_ID) return CUSTOM_NEED_ID;
+  if (!initialNeedId) return sets[0]?.id || fallback;
+  const match = sets.find((set) => set.id === initialNeedId || set.needId === initialNeedId);
+  return match?.id || sets[0]?.id || fallback;
+}
+
 export const CUSTOM_MOUTH_NAMES = [
   "X",
   "A",

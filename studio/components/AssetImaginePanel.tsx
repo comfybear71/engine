@@ -18,6 +18,7 @@ import {
   fillPackPrompt,
   ingestNeedId,
   packForCharacter,
+  resolveImagineNeedId,
 } from "@/lib/promptPacks";
 import {
   cancelCharacterIngest,
@@ -139,11 +140,8 @@ export default function AssetImaginePanel({
     setPicked(null);
     setConfirmed([]);
     const nextPack = packForCharacter(character);
-    const first = nextPack?.sets[0]?.id || ASSET_NEEDS[0]?.id || "mouth_sheet";
-    const match = initialNeedId
-      ? (nextPack?.sets || ASSET_NEEDS).find((set) => set.id === initialNeedId || ("needId" in set && set.needId === initialNeedId))
-      : null;
-    setNeedId(match?.id || first);
+    const sets = nextPack?.sets || ASSET_NEEDS.filter((item) => item.id !== CUSTOM_NEED_ID);
+    setNeedId(resolveImagineNeedId(sets, initialNeedId));
   }, [character.id, character.style, initialNeedId]);
 
   useEffect(() => {

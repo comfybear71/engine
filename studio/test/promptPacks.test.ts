@@ -9,6 +9,7 @@ import {
   fillPackPrompt,
   ingestNeedId,
   packForCharacter,
+  resolveImagineNeedId,
   PROMPT_PACKS,
 } from "../lib/promptPacks.ts";
 
@@ -36,6 +37,11 @@ describe("prompt packs", () => {
     const slots = customSlotChoices({ slots: [{ name: "mic_arm", drawingsDir: "mic_arm" }] });
     assert.ok(slots.some((item) => item.drawings_dir === "mouth_left_34"));
     assert.ok(slots.some((item) => item.slot === "mic_arm"));
+    const rodneySets = pack.sets.map((set) => ({ id: set.id, needId: set.needId }));
+    assert.equal(resolveImagineNeedId(rodneySets, "custom"), "custom");
+    assert.equal(resolveImagineNeedId(rodneySets, "mouth_13_left_34"), "mouth_13_left_34");
+    assert.equal(resolveImagineNeedId(rodneySets, null), rodneySets[0].id);
+    assert.equal(resolveImagineNeedId(rodneySets, "not_a_set"), rodneySets[0].id);
   });
 
   test("generate errors and cost notes stay in plain words", () => {
