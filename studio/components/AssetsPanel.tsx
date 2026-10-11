@@ -125,7 +125,7 @@ function SlotBlock({
                 {group.isDefault ? (
                   <span
                     className="rounded bg-studio-raised px-1 text-[9px] uppercase tracking-wide text-neutral-400"
-                    data-testid="assets-slot-view-default"
+                    data-testid="assets-view-default-tag"
                   >
                     default
                   </span>
