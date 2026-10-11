@@ -32,7 +32,7 @@ from .blend import draw_image
 from .camera import apply_camera, scale_camera
 from .ffmpeg_writer import write_frames
 from .lipsync_natural import slot_head_bob
-from .slots import Slot, _find_active_clip, active_drawing, slot_is_visible
+from .slots import Slot, _find_active_clip, active_drawing, is_hide_drawing, slot_is_visible
 from .timeline_loader import Child, Layer, Scene, Timeline, child_rotation_at, transform_at
 from .transform import rotate_offset_clockwise
 
@@ -156,6 +156,8 @@ def _draw_slot(
     if not slot_is_visible(slot, drawings):
         return
     drawing = active_drawing(slot, owner_local_frame_idx, fps)
+    if drawing is None or is_hide_drawing(drawing):
+        return
     view = None
     if slot.dialogue is not None:
         clip = _find_active_clip(slot.dialogue, owner_local_frame_idx)

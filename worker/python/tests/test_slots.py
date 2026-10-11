@@ -5,8 +5,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 from compositor import lipsync
+from compositor.asset_cache import AssetCache
+from compositor.compositor import _Placed, _draw_layer, _draw_slot
 from compositor.slots import Slot, SlotKeyframe, active_drawing
+from compositor.timeline_loader import Layer, Transform
 
 
 def _slot_with_keyframes(keyframes):
@@ -16,11 +22,38 @@ def _slot_with_keyframes(keyframes):
     )
 
 
+def _write_bgra(path: Path, bgr: tuple[int, int, int], alpha: int = 255) -> Path:
+    img = np.zeros((8, 8, 4), dtype=np.uint8)
+    img[:, :, 0] = bgr[0]
+    img[:, :, 1] = bgr[1]
+    img[:, :, 2] = bgr[2]
+    img[:, :, 3] = alpha
+    cv2.imwrite(str(path), img)
+    return path
+
+
+def _owner(x: float = 40.0, y: float = 40.0) -> _Placed:
+    return _Placed(
+        z=0, x=x, y=y, scale=1.0, flip_x=False, rotation=0.0,
+        opacity=1.0, anchor="center", asset=Path("unused.png"), slots={},
+    )
+
+
+def _has_color(canvas: np.ndarray, bgr: tuple[int, int, int]) -> bool:
+    b, g, r = bgr
+    return bool(np.any(
+        (np.abs(canvas[:, :, 0].astype(int) - b) < 40)
+        & (np.abs(canvas[:, :, 1].astype(int) - g) < 40)
+        & (np.abs(canvas[:, :, 2].astype(int) - r) < 40)
+    ))
+
+
 class TestKeyframeDrivenSlot:
-    def test_before_first_keyframe_holds_first_drawing(self):
+    def test_before_first_keyframe_is_hidden(self):
         slot = _slot_with_keyframes([(10, "fist"), (30, "open")])
-        assert active_drawing(slot, 0, fps=24) == "fist"
-        assert active_drawing(slot, 9, fps=24) == "fist"
+        assert active_drawing(slot, 0, fps=24) == "none"
+        assert active_drawing(slot, 9, fps=24) == "none"
+        assert active_drawing(slot, 10, fps=24) == "fist"
 
     def test_exact_boundary_switches_immediately(self):
         slot = _slot_with_keyframes([(0, "open"), (10, "fist"), (30, "open")])
@@ -95,5 +128,72 @@ class TestSlotResolveImageFallback:
             images={"fist": Path("fist.png"), "X": Path("x.png")},
             keyframes=[SlotKeyframe(frame=0, drawing="none")],
         )
-        assert active_drawing(slot, 0, fps=24) is None
+        assert active_drawing(slot, 0, fps=24) == "none"
         assert slot.resolve_image("none") is None
+
+    def test_none_keyframe_returns_none_string(self):
+        hide = Slot(
+            images={"bloodshot": Path("bloodshot.png"), "open": Path("open.png")},
+            keyframes=[SlotKeyframe(frame=0, drawing="none")],
+        )
+        missing = Slot(
+            images={"bloodshot": Path("bloodshot.png"), "open": Path("open.png")},
+            keyframes=[SlotKeyframe(frame=0, drawing=None)],
+        )
+        assert active_drawing(hide, 0, fps=24) == "none"
+        assert active_drawing(missing, 0, fps=24) == "none"
+
+
+class TestDrawSlotHide:
+    def test_none_keyframe_draws_nothing(self, tmp_path):
+        first = _write_bgra(tmp_path / "bloodshot.png", (0, 0, 255))
+        other = _write_bgra(tmp_path / "open.png", (0, 255, 0))
+        for drawing in (None, "none"):
+            slot = Slot(
+                images={"bloodshot": first, "open": other},
+                keyframes=[SlotKeyframe(frame=0, drawing=drawing)],
+            )
+            assert active_drawing(slot, 0, fps=24) == "none"
+            canvas = np.zeros((80, 80, 3), dtype=np.uint8)
+            _draw_slot(canvas, AssetCache(), slot, _owner(), 0, 24, {"slot": "none"})
+            assert not canvas.any()
+
+    def test_future_first_keyframe_draws_nothing_until_it_arrives(self, tmp_path):
+        bent = _write_bgra(tmp_path / "bent.png", (255, 0, 0))
+        slot = Slot(
+            images={"bent": bent},
+            keyframes=[SlotKeyframe(frame=1306, drawing="bent")],
+        )
+        assert active_drawing(slot, 0, fps=24) == "none"
+        assert active_drawing(slot, 1305, fps=24) == "none"
+        assert active_drawing(slot, 1306, fps=24) == "bent"
+        canvas = np.zeros((80, 80, 3), dtype=np.uint8)
+        _draw_slot(canvas, AssetCache(), slot, _owner(), 0, 24, {"mic_arm": "none"})
+        assert not canvas.any()
+
+    def test_hidden_slot_draws_nothing_and_mouth_stays_visible_when_face_is_none(self, tmp_path):
+        body = _write_bgra(tmp_path / "body.png", (0, 0, 0), alpha=0)
+        grin = _write_bgra(tmp_path / "grin.png", (0, 0, 255))
+        mouth = _write_bgra(tmp_path / "mouth.png", (0, 255, 0))
+        layer = Layer(
+            id="char",
+            asset=body,
+            z=0,
+            transform=Transform(x=40, y=40, anchor="center"),
+            slots={
+                "face": Slot(
+                    images={"grin": grin},
+                    keyframes=[SlotKeyframe(frame=0, drawing="none")],
+                ),
+                "mouth": Slot(
+                    images={"open": mouth},
+                    keyframes=[SlotKeyframe(frame=0, drawing="open")],
+                    visible_when={"face": ["none"]},
+                ),
+            },
+        )
+        assert active_drawing(layer.slots["face"], 0, fps=24) == "none"
+        canvas = np.zeros((80, 80, 3), dtype=np.uint8)
+        _draw_layer(canvas, layer, AssetCache(), 0, fps=24)
+        assert not _has_color(canvas, (0, 0, 255))  # face/grin must stay hidden
+        assert _has_color(canvas, (0, 255, 0))  # mouth stays visible when face=none

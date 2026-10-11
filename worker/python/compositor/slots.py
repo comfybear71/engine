@@ -149,7 +149,9 @@ def active_drawing(slot: Slot, owner_local_frame_idx: int, fps: int) -> str | No
             else:
                 break
         if held_kf is None:
-            held_kf = slot.keyframes[0]
+            # No default_drawing was emitted as a frame-0 keyframe, so the
+            # slot stays hidden until its first real keyframe.
+            return NONE_DRAWING
         if held_kf.cycle:
             # Loop from this keyframe's frame until the next keyframe takes
             # over. The compositor only asks about recomputed frames, so a
@@ -159,8 +161,8 @@ def active_drawing(slot: Slot, owner_local_frame_idx: int, fps: int) -> str | No
             cycle_fps = held_kf.fps if held_kf.fps is not None else float(fps)
             index = int((elapsed / float(fps)) * cycle_fps) % len(held_kf.cycle)
             return held_kf.cycle[index]
-        if is_hide_drawing(held_kf.drawing):
-            return None
+        if is_hide_drawing(held_kf.drawing) or not held_kf.drawing:
+            return NONE_DRAWING
         return held_kf.drawing
 
     return None
