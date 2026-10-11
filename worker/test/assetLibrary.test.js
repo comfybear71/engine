@@ -163,4 +163,16 @@ describe("loadCharacter / listKnownCharacterIds", () => {
     const ids = assetLibrary.listKnownCharacterIds(fixture.projectDir, fixture.globalAssetsDir);
     assert.deepEqual(ids, ["alice", "bob"]);
   });
+
+  test("ignores stray folders that are not a safe character id", () => {
+    const backup = path.join(fixture.projectDir, "characters", "_backup_rodney_old");
+    fs.mkdirSync(backup, { recursive: true });
+    fs.writeFileSync(path.join(backup, "character.json"), "{}");
+    const empty = path.join(fixture.projectDir, "characters", "orphan_folder");
+    fs.mkdirSync(empty, { recursive: true });
+    const ids = assetLibrary.listKnownCharacterIds(fixture.projectDir, fixture.globalAssetsDir);
+    assert.equal(ids.includes("_backup_rodney_old"), false);
+    assert.equal(ids.includes("orphan_folder"), false);
+    assert.ok(ids.includes("alice"));
+  });
 });

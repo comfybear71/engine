@@ -5,8 +5,9 @@
  * project's characters/<id>/_library/, run the Python cut-out pipeline,
  * preview cells, then (on confirm) write drawings into slot folders and
  * merge slots/cycles into a project-local character.json without
- * clobbering unrelated entries. Overwritten local files are copied to
- * _backup/<timestamp>/ first. Never writes into _global_assets.
+ * clobbering unrelated entries. Confirm always ADDS cells: if a dest
+ * name already exists, the new file gets a suffix (_b, _c, …). Never
+ * overwrites drawings. Never writes into _global_assets.
  */
 
 const fs = require("fs");
@@ -17,9 +18,9 @@ const { loadCharacter, resolveAsset } = require("./parser/assetLibrary");
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 const { isSafeFolderName } = require("./studioProjects");
 const { getNeed, expandNeed } = require("./assetNeeds");
+const { flipPngHorizontal } = require("./pngFlip");
 const {
   characterDir,
-  backupIfExists,
   readWritableCharacter,
   writeCharacterJson,
   findSlotSpec,
@@ -99,11 +100,48 @@ function mergeCycles(slotSpec, cycles) {
   if (!slotSpec || !cycles) return;
   slotSpec.cycles = slotSpec.cycles || {};
   for (const [name, cycle] of Object.entries(cycles)) {
+    const existing = slotSpec.cycles[name];
+    const drawings = [...((existing && existing.drawings) || [])];
+    for (const drawing of cycle.drawings || []) {
+      if (!drawings.includes(drawing)) drawings.push(drawing);
+    }
     slotSpec.cycles[name] = {
-      drawings: [...(cycle.drawings || [])],
-      fps: cycle.fps,
+      drawings,
+      fps: cycle.fps || (existing && existing.fps) || 12,
     };
   }
+}
+
+const NAME_LETTERS = "bcdefghijklmnopqrstuvwxyz";
+
+function destExists(projectDir, globalAssetsDir, rel) {
+  if (!rel) return false;
+  return Boolean(resolveAsset(projectDir, globalAssetsDir, rel));
+}
+
+function suffixFileRel(characterId, destRel, suffix) {
+  const ext = path.posix.extname(destRel) || ".png";
+  const dir = path.posix.dirname(destRel);
+  const stem = path.posix.basename(destRel, ext);
+  const file = `${stem}${suffix}${ext}`;
+  return posixJoin("characters", characterId, dir === "." ? file : posixJoin(dir, file));
+}
+
+function uniqueWriteTarget(projectDir, globalAssetsDir, characterId, dest, name, takenRels) {
+  const taken = (rel) => Boolean(rel) && (takenRels.has(rel) || destExists(projectDir, globalAssetsDir, rel));
+  const first = destRelForCell(characterId, dest, name);
+  if (first && !taken(first)) return { name, rel: first };
+  for (let i = 0; i < NAME_LETTERS.length + 200; i += 1) {
+    const suffix = i < NAME_LETTERS.length ? `_${NAME_LETTERS[i]}` : `_b${i - NAME_LETTERS.length + 2}`;
+    const nextName = `${name}${suffix}`;
+    if (!DRAWING_NAME.test(nextName)) continue;
+    const rel =
+      dest && dest.kind === "file" && dest.rel
+        ? suffixFileRel(characterId, dest.rel, suffix)
+        : destRelForCell(characterId, dest, nextName);
+    if (rel && !taken(rel)) return { name: nextName, rel };
+  }
+  throw ingestError(`Could not find a free name for "${name}"`);
 }
 
 function runAlign(args, options = {}) {
@@ -244,6 +282,15 @@ function readManifest(projectDir, characterId, sid) {
   return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 }
 
+function inferMouthViewDest(needId, dest) {
+  const match = String(needId || "").match(/^mouth_13_(front|left_34|left_side|right_34|right_side|up|down)$/);
+  if (!match || !dest || dest.kind !== "slot") return dest;
+  const dir = match[1] === "front" ? "mouth_front" : `mouth_${match[1]}`;
+  const current = dest.drawings_dir || dest.slot;
+  if (current && current !== dest.slot && current !== "mouth") return dest;
+  return { ...dest, drawings_dir: dir };
+}
+
 function destRelForCell(characterId, dest, drawingName) {
   if (!dest) return null;
   if (dest.kind === "file" && dest.rel) {
@@ -262,12 +309,6 @@ function destRelForCell(characterId, dest, drawingName) {
   return null;
 }
 
-function relInsideCharacter(characterId, rel) {
-  const prefix = `characters/${characterId}/`;
-  if (rel.startsWith(prefix)) return rel.slice(prefix.length);
-  return rel;
-}
-
 function absFromProjectRel(projectDir, rel) {
   const resolved = path.resolve(projectDir, rel);
   const root = path.resolve(projectDir);
@@ -283,6 +324,77 @@ function pngDataUrl(absPath) {
   return `data:image/png;base64,${buf.toString("base64")}`;
 }
 
+function filledCellCount(expanded) {
+  return (expanded && expanded.cells ? expanded.cells : []).filter((cell) => cell && cell.dest).length;
+}
+
+function isMouth13Need(need, expanded) {
+  if (/^mouth_13_/.test(String((need && need.id) || ""))) return true;
+  return filledCellCount(expanded) === 13;
+}
+
+function parseGridBody(body) {
+  const raw = body && body.grid;
+  if (!raw) return null;
+  const cols = Math.floor(Number(raw.cols));
+  const rows = Math.floor(Number(raw.rows));
+  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols > 16 || rows > 16) {
+    throw ingestError("grid must be { cols, rows } with values 1–16");
+  }
+  return { cols, rows };
+}
+
+const CUSTOM_MOUTH_NAMES = ["X", "A", "B", "C", "D", "E", "F", "G", "H", "B_loud", "C_loud", "D_loud", "E_loud"];
+
+function parseDestBody(body) {
+  const raw = body && body.dest;
+  if (!raw || raw.kind !== "slot") return null;
+  const slot = String(raw.slot || "").trim();
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(slot)) throw ingestError("Invalid dest slot");
+  const dir = String(raw.drawings_dir || slot).trim();
+  if (!isSafeFolderName(dir)) throw ingestError("Invalid dest drawings_dir");
+  const dest = { kind: "slot", slot, drawings_dir: dir };
+  if (raw.child) dest.child = String(raw.child);
+  return dest;
+}
+
+function customCellName(index, slot) {
+  if (slot === "mouth" && CUSTOM_MOUTH_NAMES[index]) return CUSTOM_MOUTH_NAMES[index];
+  return `cell_${String(index).padStart(2, "0")}`;
+}
+
+function applyCustomLayout(need, expanded, body) {
+  if (!need || need.id !== "custom") return expanded;
+  const grid = parseGridBody(body) || (expanded && expanded.grid) || { cols: 5, rows: 3 };
+  const dest = parseDestBody(body) || (need.dest && need.dest.kind === "slot" ? need.dest : { kind: "slot", slot: "mouth", drawings_dir: "mouth" });
+  const count = grid.cols * grid.rows;
+  const cells = [];
+  for (let i = 0; i < count; i += 1) {
+    cells.push({ name: customCellName(i, dest.slot), dest });
+  }
+  return {
+    ...expanded,
+    split: "grid",
+    grid,
+    cells,
+    dest,
+  };
+}
+
+function resolveCutoutArgs(need, expanded, gridOverride) {
+  const mouth13 = isMouth13Need(need, expanded || {});
+  const grid = gridOverride || (expanded && expanded.grid) || (mouth13 ? { cols: 5, rows: 3 } : null);
+  const useComponents =
+    !gridOverride && !mouth13 && (!expanded || expanded.split === "components" || !expanded.grid || !grid);
+  if (useComponents || !grid) {
+    return { args: ["--components"], grid: null, detectGaps: false, normalize: false };
+  }
+  const args = ["--grid", `${grid.cols}x${grid.rows}`, "--detect-gaps"];
+  const normalize = Boolean(mouth13);
+  if (normalize) args.push("--normalize");
+  return { args, grid, detectGaps: true, normalize };
+}
+
 async function previewIngest(projectDir, globalAssetsDir, characterId, body, options = {}) {
   if (!isSafeFolderName(characterId)) throw ingestError("Invalid character id");
   const character = loadCharacter(projectDir, globalAssetsDir, characterId);
@@ -293,41 +405,65 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
   if (need.ingest === false || (need.dest && need.dest.kind === "reference")) {
     throw ingestError("This need stores the original as a full-body reference; POST .../reference instead");
   }
-  const expanded = expandNeed(need, body && body.frames);
-  const image = decodeImageBuffer(body);
+  const expanded = applyCustomLayout(need, expandNeed(need, body && body.frames), body);
+  const gridOverride = parseGridBody(body);
+  const recutSid = body && body.sessionId ? String(body.sessionId) : "";
 
-  const sid = sessionId();
-  const libDir = path.join(characterDir(projectDir, characterId), "_library");
-  fs.mkdirSync(libDir, { recursive: true });
-  const originalName = safeBasename(body.filename, `${need.id}.png`);
-  const originalRel = posixJoin("characters", characterId, "_library", `${stamp()}_${need.id}_${originalName}`);
-  const originalAbs = absFromProjectRel(projectDir, originalRel);
-  fs.mkdirSync(path.dirname(originalAbs), { recursive: true });
-  fs.writeFileSync(originalAbs, image);
+  let sid;
+  let originalRel;
+  let originalAbs;
+  if (recutSid) {
+    const existing = readManifest(projectDir, characterId, recutSid);
+    if (existing.needId && existing.needId !== need.id) {
+      throw ingestError("session need mismatch");
+    }
+    if (!existing.originalRel) throw ingestError("Ingest preview has no original sheet");
+    sid = recutSid;
+    originalRel = existing.originalRel;
+    originalAbs = absFromProjectRel(projectDir, originalRel);
+    if (!fs.existsSync(originalAbs)) throw ingestError("Original sheet missing");
+  } else {
+    const image = decodeImageBuffer(body);
+    sid = sessionId();
+    const libDir = path.join(characterDir(projectDir, characterId), "_library");
+    fs.mkdirSync(libDir, { recursive: true });
+    const originalName = safeBasename(body.filename, `${need.id}.png`);
+    originalRel = posixJoin("characters", characterId, "_library", `${stamp()}_${need.id}_${originalName}`);
+    originalAbs = absFromProjectRel(projectDir, originalRel);
+    fs.mkdirSync(path.dirname(originalAbs), { recursive: true });
+    fs.writeFileSync(originalAbs, image);
+  }
 
   const cellsDir = path.join(previewDir(projectDir, characterId, sid), "cells");
+  fs.rmSync(cellsDir, { recursive: true, force: true });
   fs.mkdirSync(cellsDir, { recursive: true });
 
-  const args = ["--input", originalAbs, "--out-dir", cellsDir];
-  if (expanded.split === "components" || !expanded.grid) {
-    args.push("--components");
-  } else {
-    args.push("--grid", `${expanded.grid.cols}x${expanded.grid.rows}`);
-  }
+  const resolved = resolveCutoutArgs(need, expanded, gridOverride);
+  const args = ["--input", originalAbs, "--out-dir", cellsDir, ...resolved.args];
   if (!expanded.key) args.push("--no-key");
 
   const result = await runCutout(args, options);
+  const expectedEmpty = new Set(
+    (expanded.cells || []).map((cell, index) => (cell && cell.dest ? -1 : index)).filter((index) => index >= 0)
+  );
+  const warnings = (Array.isArray(result.warnings) ? result.warnings : []).filter((line) => {
+    const match = String(line).match(/^Cell (\d+) is empty$/);
+    return !(match && expectedEmpty.has(Number(match[1])));
+  });
   const cells = [];
   for (const raw of result.cells) {
     const template = expanded.cells[raw.index] || {};
     const suggestedName = template.name || `cell_${String(raw.index).padStart(2, "0")}`;
+    const warning =
+      raw.warning === "empty" && expectedEmpty.has(raw.index) ? null : raw.warning || null;
     const cell = {
       index: raw.index,
       suggestedName,
       name: suggestedName,
-      dest: template.dest || null,
+      dest: inferMouthViewDest(need.id, template.dest || need.dest || null),
       cycle: template.cycle || null,
       empty: Boolean(raw.empty),
+      warning,
       width: raw.width,
       height: raw.height,
       path: raw.path,
@@ -346,9 +482,10 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
     needId: need.id,
     frames: body && body.frames,
     originalRel,
-    grid: expanded.grid,
+    grid: resolved.grid,
     key: expanded.key,
     cycles: expanded.cycles,
+    warnings,
     cells: cellsWithPng.map(({ pngBase64, ...rest }) => rest),
   };
   const manifestPath = path.join(previewDir(projectDir, characterId, sid), "manifest.json");
@@ -359,11 +496,13 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
     sessionId: sid,
     libraryRel: originalRel,
     needId: need.id,
-    grid: expanded.grid,
+    grid: resolved.grid,
+    warnings,
     cells: cellsWithPng.map((cell) => ({
       index: cell.index,
       suggestedName: cell.suggestedName,
       empty: cell.empty,
+      warning: cell.warning || null,
       width: cell.width,
       height: cell.height,
       pngBase64: cell.pngBase64,
@@ -387,6 +526,7 @@ function confirmIngest(projectDir, globalAssetsDir, characterId, body) {
   }
 
   const usedNames = new Map();
+  const takenRels = new Set();
   const writes = [];
   for (const cell of manifest.cells) {
     const name = byIndex.has(cell.index) ? byIndex.get(cell.index) : cell.suggestedName;
@@ -397,22 +537,28 @@ function confirmIngest(projectDir, globalAssetsDir, characterId, body) {
       throw ingestError(`Two cells assigned to "${name}"`);
     }
     usedNames.set(name, cell.index);
-    const rel = destRelForCell(characterId, cell.dest, name);
-    if (!rel) {
+    if (!destRelForCell(characterId, cell.dest, name)) {
       if (cell.empty || !cell.dest) continue;
       throw ingestError(`No destination for cell ${cell.index}`);
     }
-    writes.push({ cell, name, rel });
+    const unique = uniqueWriteTarget(projectDir, globalAssetsDir, characterId, cell.dest, name, takenRels);
+    takenRels.add(unique.rel);
+    writes.push({ cell, name: unique.name, rel: unique.rel });
   }
   if (writes.length === 0) throw ingestError("No cells to save");
 
+  const flipAll = Boolean(body && body.flipAll);
   const backupRoot = path.join(characterDir(projectDir, characterId), "_backup", stamp());
   const written = [];
   for (const item of writes) {
     const abs = absFromProjectRel(projectDir, item.rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
-    backupIfExists(abs, backupRoot, relInsideCharacter(characterId, item.rel));
-    fs.copyFileSync(item.cell.path, abs);
+    if (flipAll) {
+      const flipped = flipPngHorizontal(fs.readFileSync(item.cell.path));
+      fs.writeFileSync(abs, flipped);
+    } else {
+      fs.copyFileSync(item.cell.path, abs);
+    }
     written.push({ name: item.name, rel: item.rel, dest: item.cell.dest, cycle: item.cell.cycle });
   }
 
@@ -477,8 +623,16 @@ module.exports = {
   confirmIngest,
   cancelIngest,
   ensureSlot,
+  mergeCycles,
+  uniqueWriteTarget,
   readWritableCharacter,
   destRelForCell,
+  inferMouthViewDest,
+  isMouth13Need,
+  parseGridBody,
+  parseDestBody,
+  applyCustomLayout,
+  resolveCutoutArgs,
   runAlign,
   isHeadLikeDest,
   findAlignReferenceAbs,

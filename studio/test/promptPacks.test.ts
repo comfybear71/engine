@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { explainGenerateError, summarizeGenerateCost } from "../lib/generateImage.ts";
-import { fillPackPrompt, ingestNeedId, packForCharacter, PROMPT_PACKS } from "../lib/promptPacks.ts";
+import {
+  CUSTOM_NEED_ID,
+  composeCustomPrompt,
+  customCellName,
+  customSlotChoices,
+  fillPackPrompt,
+  ingestNeedId,
+  packForCharacter,
+  resolveImagineNeedId,
+  PROMPT_PACKS,
+} from "../lib/promptPacks.ts";
 
 describe("prompt packs", () => {
   test("Rodney pack fills a complete style-block prompt and maps ingest ids", () => {
@@ -18,6 +28,20 @@ describe("prompt packs", () => {
     assert.ok(thirteen);
     assert.match(fillPackPrompt(thirteen, { name: "Rodney", styleBlock: pack.styleBlock }), /B_loud/);
     assert.equal(packForCharacter({ id: "hicks", display_name: "Hicks" }), null);
+    assert.equal(CUSTOM_NEED_ID, "custom");
+    assert.equal(composeCustomPrompt("fedora and cape.", "A 3x3 mouth sheet."), "fedora and cape.\n\nA 3x3 mouth sheet.");
+    assert.equal(composeCustomPrompt("fedora.", ""), "fedora.");
+    assert.equal(customCellName(0, "mouth"), "X");
+    assert.equal(customCellName(12, "mouth"), "E_loud");
+    assert.equal(customCellName(0, "face"), "cell_00");
+    const slots = customSlotChoices({ slots: [{ name: "mic_arm", drawingsDir: "mic_arm" }] });
+    assert.ok(slots.some((item) => item.drawings_dir === "mouth_left_34"));
+    assert.ok(slots.some((item) => item.slot === "mic_arm"));
+    const rodneySets = pack.sets.map((set) => ({ id: set.id, needId: set.needId }));
+    assert.equal(resolveImagineNeedId(rodneySets, "custom"), "custom");
+    assert.equal(resolveImagineNeedId(rodneySets, "mouth_13_left_34"), "mouth_13_left_34");
+    assert.equal(resolveImagineNeedId(rodneySets, null), rodneySets[0].id);
+    assert.equal(resolveImagineNeedId(rodneySets, "not_a_set"), rodneySets[0].id);
   });
 
   test("generate errors and cost notes stay in plain words", () => {

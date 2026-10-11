@@ -8,6 +8,7 @@ import {
   cueAtTime,
   deleteEditorDrawing,
   fileToImageBase64,
+  flipEditorDrawing,
   formatUsage,
   imageFileFromClipboard,
   loadDrawingEditor,
@@ -23,6 +24,7 @@ import {
   remapLipSyncShape,
   excludedLipSyncShapes,
   renameEditorDrawing,
+  restoreEditorDrawing,
   saveDrawingFlags,
   type AssetFocus,
   type DrawingEditor,
@@ -32,7 +34,21 @@ import {
   type LipsyncPreview,
   type SlotEditor,
 } from "@/lib/assetEditor";
-import { clampHeadNudge, defaultHeadNudge } from "@/lib/headAlign";
+import {
+  alignProbeUrl,
+  applyCollar,
+  autoFitHeadNudge,
+  canvasLandmarks,
+  clampHeadNudge,
+  defaultHeadNudge,
+  headScaleToSlider,
+  landmarksFromRgba,
+  previewAlignLayout,
+  residualHeadNudge,
+  sliderToHeadScale,
+  type HeadLandmarks,
+  type HeadNudge,
+} from "@/lib/headAlign";
 import { packForCharacter } from "@/lib/promptPacks";
 import { assetUrl, loadCharacters, type Character } from "@/lib/worker";
 
@@ -89,6 +105,7 @@ export default function AssetEditorOverlay({
   const [playShape, setPlayShape] = useState<string | null>(null);
   const [nudge, setNudge] = useState(defaultHeadNudge());
   const [overlayDefault, setOverlayDefault] = useState(true);
+  const [flipUndo, setFlipUndo] = useState<{ drawing: string; replaced: string } | null>(null);
   const playRef = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const addFileRef = useRef<HTMLInputElement | null>(null);
@@ -324,14 +341,14 @@ export default function AssetEditorOverlay({
     }
   }
 
-  async function onRealign(drawing?: string, opts?: { collarY?: number; cropToHead?: boolean }) {
+  async function onRealign(drawing?: string, opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number }) {
     setBusy("Re-aligning…");
     setError(null);
     try {
       await realignSlotView(project, focus.characterId, focus.slot, {
         view,
         drawing,
-        nudge: clampHeadNudge(nudge),
+        nudge: residualHeadNudge(clampHeadNudge(nudge), opts?.autoScale ?? 1),
         cropToHead: opts?.cropToHead !== false,
         collarY: opts?.collarY,
       });
@@ -362,6 +379,60 @@ export default function AssetEditorOverlay({
       playRef.current = window.requestAnimationFrame(tick);
     };
     playRef.current = window.requestAnimationFrame(tick);
+  }
+
+  useEffect(() => {
+    setFlipUndo(null);
+  }, [drawingName]);
+
+  async function onFlip() {
+    if (focus.mode !== "drawing") return;
+    setBusy("Flipping…");
+    setError(null);
+    try {
+      const result = await flipEditorDrawing(project, focus.characterId, focus.slot, focus.drawing, { view });
+      setFlipUndo(result.replaced ? { drawing: focus.drawing, replaced: result.replaced } : null);
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not flip");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onUndoFlip() {
+    if (focus.mode !== "drawing" || !flipUndo || flipUndo.drawing !== focus.drawing) return;
+    setBusy("Undoing flip…");
+    setError(null);
+    try {
+      await restoreEditorDrawing(project, focus.characterId, focus.slot, focus.drawing, {
+        replaced: flipUndo.replaced,
+        view,
+      });
+      setFlipUndo(null);
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not undo flip");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onHand(hand: "L" | "R" | null) {
+    if (focus.mode !== "drawing") return;
+    setBusy("Saving…");
+    setError(null);
+    try {
+      await saveDrawingFlags(project, focus.characterId, focus.slot, focus.drawing, { hand, view });
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not set L/R");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function onExcludeFromLipSync(exclude: boolean) {
@@ -501,7 +572,11 @@ export default function AssetEditorOverlay({
           nudge={nudge}
           onNudge={(next) => setNudge(clampHeadNudge(next))}
           onRealign={(opts) => void onRealign(current.name, opts)}
+          onRealignAll={(opts) => void onRealign(undefined, opts)}
           onExcludeFromLipSync={slot?.mouth ? (value) => void onExcludeFromLipSync(value) : undefined}
+          onFlip={() => void onFlip()}
+          onUndoFlip={flipUndo && flipUndo.drawing === drawingName ? () => void onUndoFlip() : undefined}
+          onHand={(hand) => void onHand(hand)}
           defaultRel={
             slot?.canRealign && slot.defaultDrawingsDir
               ? `characters/${focus.characterId}/${slot.defaultDrawingsDir}/${current.name}.png`
@@ -625,7 +700,11 @@ function DrawingView({
   nudge,
   onNudge,
   onRealign,
+  onRealignAll,
   onExcludeFromLipSync,
+  onFlip,
+  onUndoFlip,
+  onHand,
   defaultRel,
 }: {
   slot: SlotEditor | null;
@@ -645,34 +724,71 @@ function DrawingView({
   onOverlayDefault: (value: boolean) => void;
   nudge: { x: number; y: number; scale: number };
   onNudge: (nudge: { x: number; y: number; scale: number }) => void;
-  onRealign: (opts?: { collarY?: number; cropToHead?: boolean }) => void;
+  onRealign: (opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number }) => void;
+  onRealignAll: (opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number }) => void;
   onExcludeFromLipSync?: (exclude: boolean) => void;
+  onFlip: () => void;
+  onUndoFlip?: () => void;
+  onHand: (hand: "L" | "R" | null) => void;
   defaultRel: string | null;
 }) {
   const defaultSrc = defaultRel ? assetUrl(project, defaultRel) : null;
   const [cropToHead, setCropToHead] = useState(true);
   const [collarY, setCollarY] = useState(0.72);
+  const [srcMarks, setSrcMarks] = useState<HeadLandmarks | null>(null);
+  const [refMarks, setRefMarks] = useState<HeadLandmarks | null>(null);
+  const croppedSrc = useMemo(
+    () => (srcMarks ? (cropToHead ? applyCollar(srcMarks, collarY) : srcMarks) : null),
+    [srcMarks, cropToHead, collarY]
+  );
+  const autoScale = croppedSrc && refMarks ? autoFitHeadNudge(croppedSrc, refMarks).scale : 1;
+  const realignOpts = { cropToHead, collarY: cropToHead ? collarY : undefined, autoScale };
+
+  function applyAutoFit() {
+    if (!croppedSrc || !refMarks) return;
+    onNudge(autoFitHeadNudge(croppedSrc, refMarks));
+  }
+
+  const fittedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!src || !croppedSrc || !refMarks) return;
+    if (fittedFor.current === src) return;
+    fittedFor.current = src;
+    onNudge(autoFitHeadNudge(croppedSrc, refMarks));
+  }, [src, croppedSrc, refMarks, onNudge]);
+
   return (
     <div className="flex min-h-0 flex-1">
-      <div className="relative min-h-0 min-w-0 flex-1">
-        <ZoomPane
-          src={src}
-          label={current.name}
-          bg={bg}
-          playShape={playShape}
-          cropToHead={canRealign && cropToHead}
-          collarY={collarY}
-          onCollarY={setCollarY}
-        />
+      <div className="relative flex min-h-0 min-w-0 flex-1">
         {canRealign && overlayDefault && defaultSrc ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={defaultSrc}
-            alt=""
-            className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-40 mix-blend-screen"
-            data-testid="asset-align-overlay"
+          <AlignPreview
+            src={src}
+            defaultSrc={defaultSrc}
+            label={current.name}
+            bg={bg}
+            playShape={playShape}
+            cropToHead={cropToHead}
+            collarY={collarY}
+            onCollarY={setCollarY}
+            nudge={nudge}
+            srcMarks={srcMarks}
+            refMarks={refMarks}
+            onSrcMarks={setSrcMarks}
+            onRefMarks={setRefMarks}
+            knownSrcW={current.width || 0}
+            knownSrcH={current.height || 0}
           />
-        ) : null}
+        ) : (
+          <ZoomPane
+            src={src}
+            label={current.name}
+            bg={bg}
+            playShape={playShape}
+            cropToHead={canRealign && cropToHead}
+            collarY={collarY}
+            onCollarY={setCollarY}
+          />
+        )}
       </div>
       <aside className="studio-asset-editor-meta">
         <MetaRow label="Name" value={current.name} />
@@ -698,6 +814,21 @@ function DrawingView({
             Exclude from lip sync
           </label>
         ) : null}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-neutral-500">L/R</span>
+          {(["L", "R"] as const).map((side) => (
+            <button
+              key={side}
+              type="button"
+              className="studio-header-textbtn"
+              data-active={current.hand === side}
+              data-testid={`asset-hand-${side}`}
+              onClick={() => onHand(current.hand === side ? null : side)}
+            >
+              {side}
+            </button>
+          ))}
+        </div>
         {current.duplicateOf ? (
           <p className="text-[10px] text-amber-300" data-testid="asset-duplicate">
             Duplicate of {current.duplicateOf}
@@ -768,8 +899,8 @@ function DrawingView({
               Nudge X
               <input
                 type="range"
-                min={-80}
-                max={80}
+                min={-200}
+                max={200}
                 value={nudge.x}
                 className="w-full"
                 onChange={(event) => onNudge({ ...nudge, x: Number(event.target.value) })}
@@ -779,35 +910,61 @@ function DrawingView({
               Nudge Y
               <input
                 type="range"
-                min={-80}
-                max={80}
+                min={-200}
+                max={200}
                 value={nudge.y}
                 className="w-full"
                 onChange={(event) => onNudge({ ...nudge, y: Number(event.target.value) })}
               />
             </label>
             <label className="block text-[10px] text-neutral-500">
-              Scale
+              Scale {nudge.scale.toFixed(2)}×
               <input
                 type="range"
-                min={50}
-                max={150}
-                value={Math.round(nudge.scale * 100)}
+                min={0}
+                max={1000}
+                value={Math.round(headScaleToSlider(nudge.scale) * 1000)}
                 className="w-full"
-                onChange={(event) => onNudge({ ...nudge, scale: Number(event.target.value) / 100 })}
+                data-testid="asset-nudge-scale"
+                onChange={(event) => onNudge({ ...nudge, scale: sliderToHeadScale(Number(event.target.value) / 1000) })}
               />
             </label>
             <button
               type="button"
               className="studio-header-textbtn"
+              data-testid="asset-autofit"
+              onClick={applyAutoFit}
+              disabled={!croppedSrc || !refMarks}
+            >
+              Auto-fit to default
+            </button>
+            <button
+              type="button"
+              className="studio-header-textbtn"
               data-testid="asset-realign-one"
-              onClick={() => onRealign({ cropToHead, collarY: cropToHead ? collarY : undefined })}
+              onClick={() => onRealign(realignOpts)}
             >
               Re-align this drawing
+            </button>
+            <button
+              type="button"
+              className="studio-header-textbtn"
+              data-testid="asset-realign-all"
+              onClick={() => onRealignAll(realignOpts)}
+            >
+              Apply to all in this slot
             </button>
           </div>
         ) : null}
         <div className="flex flex-wrap gap-1">
+          <button type="button" className="studio-header-textbtn" onClick={onFlip} data-testid="asset-flip">
+            Flip horizontally
+          </button>
+          {onUndoFlip ? (
+            <button type="button" className="studio-header-textbtn" onClick={onUndoFlip} data-testid="asset-flip-undo">
+              Undo flip
+            </button>
+          ) : null}
           <button type="button" className="studio-header-textbtn" onClick={onReplace} data-testid="asset-replace">
             Replace
           </button>
@@ -820,6 +977,279 @@ function DrawingView({
         </div>
         <p className="text-[10px] text-neutral-600">Drop or paste an image to replace. Old file goes to _replaced/.</p>
       </aside>
+    </div>
+  );
+}
+
+function readLandmarks(img: HTMLImageElement): HeadLandmarks {
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  if (w < 1 || h < 1) return canvasLandmarks(1, 1);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return canvasLandmarks(w, h);
+    ctx.drawImage(img, 0, 0);
+    const pixels = ctx.getImageData(0, 0, w, h);
+    return landmarksFromRgba(pixels.data, w, h);
+  } catch {
+    return canvasLandmarks(w, h);
+  }
+}
+
+function AlignPreview({
+  src,
+  defaultSrc,
+  label,
+  bg,
+  playShape,
+  cropToHead,
+  collarY,
+  onCollarY,
+  nudge,
+  srcMarks,
+  refMarks,
+  onSrcMarks,
+  onRefMarks,
+  knownSrcW = 0,
+  knownSrcH = 0,
+}: {
+  src: string | null;
+  defaultSrc: string;
+  label: string;
+  bg: BgKind;
+  playShape: string | null;
+  cropToHead: boolean;
+  collarY: number;
+  onCollarY?: (y: number) => void;
+  nudge: HeadNudge;
+  srcMarks: HeadLandmarks | null;
+  refMarks: HeadLandmarks | null;
+  onSrcMarks: (marks: HeadLandmarks) => void;
+  onRefMarks: (marks: HeadLandmarks) => void;
+  knownSrcW?: number;
+  knownSrcH?: number;
+}) {
+  const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
+  const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  const [srcSize, setSrcSize] = useState({ w: knownSrcW, h: knownSrcH });
+  const [refSize, setRefSize] = useState({ w: 0, h: 0 });
+  const displaySrc = alignProbeUrl(src);
+  const displayDefault = alignProbeUrl(defaultSrc) || defaultSrc;
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const measure = () => {
+      const r = stage.getBoundingClientRect();
+      setBox({ w: r.width, h: r.height });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+
+  const seededSrc = useRef<string | null>(null);
+  useEffect(() => {
+    if (knownSrcW < 1 || knownSrcH < 1) return;
+    const key = `${knownSrcW}x${knownSrcH}:${src || ""}`;
+    if (seededSrc.current === key) return;
+    seededSrc.current = key;
+    setSrcSize({ w: knownSrcW, h: knownSrcH });
+    onSrcMarks(canvasLandmarks(knownSrcW, knownSrcH));
+  }, [knownSrcW, knownSrcH, src, onSrcMarks]);
+
+  useEffect(() => {
+    let cancelled = false;
+    function load(url: string | null, dest: "src" | "ref") {
+      if (!url) return;
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        if (cancelled || img.naturalWidth < 1) return;
+        const marks = readLandmarks(img);
+        if (dest === "src") {
+          setSrcSize({ w: img.naturalWidth, h: img.naturalHeight });
+          onSrcMarks(marks);
+        } else {
+          setRefSize({ w: img.naturalWidth, h: img.naturalHeight });
+          onRefMarks(marks);
+        }
+      };
+      img.src = url;
+    }
+    load(displaySrc, "src");
+    load(displayDefault, "ref");
+    return () => {
+      cancelled = true;
+    };
+  }, [displaySrc, displayDefault, onSrcMarks, onRefMarks]);
+
+  const cropped = srcMarks && cropToHead ? applyCollar(srcMarks, collarY) : srcMarks;
+  const layout =
+    srcSize.w > 0 && refSize.w > 0 && cropped && refMarks && box.w > 0 && box.h > 0
+      ? previewAlignLayout({
+          boxW: box.w,
+          boxH: box.h,
+          srcW: srcSize.w,
+          srcH: srcSize.h,
+          refW: refSize.w,
+          refH: refSize.h,
+          src: cropped,
+          ref: refMarks,
+          nudge,
+        })
+      : null;
+
+  return (
+    <div
+      ref={stageRef}
+      className={`absolute inset-0 overflow-hidden ${bg === "checker" ? "studio-checker" : ""}`}
+      style={bg === "checker" ? undefined : { background: BG[bg] }}
+      data-testid="asset-viewer-stage"
+      onWheel={(event) => {
+        event.preventDefault();
+        const next = event.deltaY < 0 ? zoom.scale * 1.12 : zoom.scale / 1.12;
+        setZoom((current) => ({ ...current, scale: Math.min(8, Math.max(0.25, next)) }));
+      }}
+      onPointerDown={(event) => {
+        drag.current = { x: event.clientX, y: event.clientY, ox: zoom.x, oy: zoom.y };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (!drag.current) return;
+        setZoom({
+          scale: zoom.scale,
+          x: drag.current.ox + (event.clientX - drag.current.x),
+          y: drag.current.oy + (event.clientY - drag.current.y),
+        });
+      }}
+      onPointerUp={() => {
+        drag.current = null;
+      }}
+    >
+      <div
+        className="absolute inset-0"
+        style={{ transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`, transformOrigin: "0 0" }}
+      >
+        {layout ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={displayDefault}
+              alt=""
+              crossOrigin="anonymous"
+              data-testid="asset-align-overlay"
+              className="pointer-events-none absolute object-fill opacity-40 mix-blend-screen"
+              style={{
+                left: layout.ref.left,
+                top: layout.ref.top,
+                width: layout.ref.width,
+                height: layout.ref.height,
+              }}
+              onLoad={(event) => {
+                const img = event.currentTarget;
+                setRefSize({ w: img.naturalWidth, h: img.naturalHeight });
+                onRefMarks(readLandmarks(img));
+              }}
+            />
+            {src ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={displaySrc || src}
+                alt={label}
+                crossOrigin="anonymous"
+                className="pointer-events-none absolute object-fill"
+                style={{
+                  left: layout.src.left,
+                  top: layout.src.top,
+                  width: layout.src.width,
+                  height: layout.src.height,
+                  clipPath: cropToHead ? `inset(0 0 ${Math.max(0, (1 - collarY) * 100)}% 0)` : undefined,
+                }}
+                onLoad={(event) => {
+                  const img = event.currentTarget;
+                  setSrcSize({ w: img.naturalWidth, h: img.naturalHeight });
+                  onSrcMarks(readLandmarks(img));
+                }}
+              />
+            ) : null}
+          </>
+        ) : (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={displayDefault}
+              alt=""
+              crossOrigin="anonymous"
+              className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-40 mix-blend-screen"
+              onLoad={(event) => {
+                const img = event.currentTarget;
+                setRefSize({ w: img.naturalWidth, h: img.naturalHeight });
+                onRefMarks(readLandmarks(img));
+              }}
+            />
+            {src ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={displaySrc || src}
+                alt={label}
+                crossOrigin="anonymous"
+                className="pointer-events-none absolute inset-0 m-auto max-h-[70%] max-w-[70%] object-contain"
+                onLoad={(event) => {
+                  const img = event.currentTarget;
+                  setSrcSize({ w: img.naturalWidth, h: img.naturalHeight });
+                  onSrcMarks(readLandmarks(img));
+                }}
+              />
+            ) : null}
+          </>
+        )}
+      </div>
+      {layout && cropToHead ? (
+        <button
+          type="button"
+          data-testid="asset-collar-handle"
+          aria-label="Collar line"
+          className="absolute z-10 h-3 cursor-ns-resize border-0 bg-transparent p-0"
+          style={{
+            top: layout.src.top * zoom.scale + zoom.y + collarY * layout.src.height * zoom.scale - 6,
+            left: layout.src.left * zoom.scale + zoom.x,
+            width: layout.src.width * zoom.scale,
+          }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const startY = event.clientY;
+            const start = collarY;
+            const height = Math.max(1, layout.src.height * zoom.scale);
+            function move(ev: PointerEvent) {
+              onCollarY?.(Math.min(0.95, Math.max(0.2, start + (ev.clientY - startY) / height)));
+            }
+            function up() {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            }
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          }}
+        >
+          <span className="absolute left-0 right-0 top-1/2 border-t-2 border-studio-accent" />
+          <span className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-white bg-studio-accent" />
+        </button>
+      ) : null}
+      <div className="absolute bottom-1 left-1 flex items-center gap-1">
+        <button type="button" className="studio-header-textbtn" onClick={() => setZoom({ scale: 1, x: 0, y: 0 })}>
+          Reset
+        </button>
+        <span className="text-[10px] text-neutral-500">{Math.round(zoom.scale * 100)}%</span>
+        {playShape ? <span className="text-[10px] text-amber-200">{playShape}</span> : null}
+      </div>
     </div>
   );
 }
@@ -863,7 +1293,7 @@ function ZoomPane({
   return (
     <div
       ref={stageRef}
-      className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${bg === "checker" ? "studio-checker" : ""}`}
+      className={`absolute inset-0 overflow-hidden ${bg === "checker" ? "studio-checker" : ""}`}
       style={bg === "checker" ? undefined : { background: BG[bg] }}
       data-testid="asset-viewer-stage"
       onWheel={(event) => {
@@ -1096,6 +1526,11 @@ function SlotGrid({
                   manual only
                 </span>
               ) : null}
+              {cell.drawing?.hand ? (
+                <span className="text-[9px] text-neutral-400" data-testid="asset-hand-tag">
+                  {cell.drawing.hand}
+                </span>
+              ) : null}
             </button>
           ))}
           <button
@@ -1137,6 +1572,9 @@ function SlotGrid({
                 <span className="truncate text-[11px] text-neutral-200">{drawing.name}</span>
                 {drawing.excludeFromLipSync ? (
                   <span className="text-[9px] text-amber-200">manual only</span>
+                ) : null}
+                {drawing.hand ? (
+                  <span className="text-[9px] text-neutral-400">{drawing.hand}</span>
                 ) : null}
               </button>
             ))}

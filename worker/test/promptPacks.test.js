@@ -49,6 +49,10 @@ describe("Rodney prompt pack", () => {
       assert.match(filled, /B_loud/);
       assert.match(filled, /never slanted eyes/i);
       assert.equal(sheet.cells.filter((cell) => cell.name && cell.name !== "empty" && cell.name !== "empty2").length, 13);
+      const dir = view === "front" ? "mouth_front" : `mouth_${view}`;
+      const dest = sheet.cells.find((cell) => cell.dest && cell.dest.kind === "slot").dest;
+      assert.equal(dest.drawings_dir, dir);
+      assert.equal(destRelForCell("rodney", dest, "X"), `characters/rodney/${dir}/X.png`);
     }
   });
 

@@ -113,6 +113,15 @@
         { "name": "bg", "dest": { "kind": "background" } }
       ],
       "prompt": "A full establishing background plate in the world of {{name}}, {{style}}. 16:9 landscape, finished set, no characters, no watermark, no caption, no text, no logo. Even lighting, no letterbox bars. Do not crop architecture or furniture at the edges."
+    },
+    {
+      "id": "custom",
+      "label": "Custom",
+      "description": "Paste your own sheet prompt. The character style block is prepended. Choose a grid and target slot for the cut-out.",
+      "split": "grid",
+      "grid": { "cols": 5, "rows": 3 },
+      "dest": { "kind": "slot", "slot": "mouth", "drawings_dir": "mouth" },
+      "prompt": ""
     }
   ]
 }

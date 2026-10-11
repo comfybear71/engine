@@ -74,6 +74,7 @@ function collectSlots(character, projectDir, globalAssetsDir, characterId) {
         name,
         owner,
         default_drawing: spec.default_drawing || null,
+        drawingsDir,
         drawings,
         views,
         cycles: spec.cycles || {},

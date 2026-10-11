@@ -157,6 +157,23 @@ describe("POST /api/generate-image", () => {
     assert.equal(body.images, undefined);
   });
 
+  test("custom dry-run sends the edited prompt", async () => {
+    const res = await fetch(`${ctx.url}/api/generate-image`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: "project",
+        characterId: "alice",
+        needId: "custom",
+        prompt: "MY CUSTOM SHEET PROMPT of Alice on green.",
+        dryRun: true,
+      }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.match(body.prompt, /MY CUSTOM SHEET PROMPT/);
+  });
+
   test("generate saves the sheet into _library and uses edits when a body exists", async () => {
     lastRequest = null;
     const res = await fetch(`${ctx.url}/api/generate-image`, {

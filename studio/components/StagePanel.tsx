@@ -81,6 +81,7 @@ import {
   type StageLayer,
   type LaneBlock,
 } from "@/lib/worker";
+import { explainTimelineError } from "@/lib/timelineError";
 
 export default function StagePanel({
   project,
@@ -234,7 +235,7 @@ export default function StagePanel({
         }
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) setError(explainTimelineError(err.message));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -301,7 +302,7 @@ export default function StagePanel({
         })
         .catch((err: Error) => {
           if (err.name === "AbortError") return;
-          setError(err.message);
+          setError(explainTimelineError(err.message));
         });
     }, playing ? 0 : 80);
     return () => {
@@ -666,7 +667,7 @@ export default function StagePanel({
       setPreviewStatus("idle");
       previewStatusRef.current = "idle";
       setBufferHint(null);
-      setError(err instanceof Error ? err.message : "Preview segment failed");
+      setError(err instanceof Error ? explainTimelineError(err.message) : "Preview segment failed");
       return null;
     }
   }

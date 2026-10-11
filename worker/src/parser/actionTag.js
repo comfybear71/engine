@@ -16,7 +16,7 @@
 
 const { ScriptError } = require("./errors");
 
-const KEY_VALUE_RE = /^([A-Za-z_][\w]*)=(\S+)$/;
+const KEY_VALUE_RE = /^([A-Za-z_][\w]*)=(\S*)$/;
 const NUMBER_RE = /^[+-]?\d+(?:\.\d+)?$/;
 const XY_RE = /^([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?)$/;
 const SECONDS_RE = /^(\d+(?:\.\d+)?)s$/i;

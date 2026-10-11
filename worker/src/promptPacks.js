@@ -56,7 +56,7 @@ function getPack(packId) {
 
 function getPackSet(setId) {
   for (const pack of loadPacks()) {
-    const set = (pack.sets || []).find((item) => item.id === setId);
+    const set = (pack.sets || []).find((item) => item.id === setId || item.needId === setId);
     if (set) return { pack, set };
   }
   return null;

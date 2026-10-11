@@ -158,7 +158,13 @@ clobber the project's `timeline.json`.
   into a project-local `character.json`). On Stage, the left Assets tree
   opens the same viewer without leaving the Stage: click a **slot**
   (`mouth`, `face`, `eyes`, `right_hand`, `mic_arm`, `body`, …) for a
-  labelled grid, or click / double-click a drawing for a large preview on
+  labelled grid. The Assets right-hand panel lists every slot as one
+  horizontally scrolling thumbnail row (slot name + count on the header,
+  slim Resolve-style scrollbar, small labels under thumbs). Mouth views
+  are separate rows (`Front`, `Left 3/4`, `Left side`, …) with a count and a
+  **default** tag on the set `drawings_dir` points at. Confirming a Grok
+  Imagine mouth-view sheet writes `mouth_<view>/` (e.g. `mouth_left_34/`)
+  and the panel reloads without a refresh. Click / double-click a drawing for a large preview on
   a checkerboard (or a chosen background) with name, size, slot, offset,
   scale, and which script/cycle uses it. Prev/next arrows and the arrow
   keys step through that slot. Zoom/pan the preview. Mouth grids label
@@ -173,7 +179,12 @@ clobber the project's `timeline.json`.
   (above the collar / shoulder flare, or the old default's head bbox),
   then matches hat-top / chin / neck to the previous default canvas,
   with a before/after overlay and x/y/scale nudge. The drawing viewer
-  has **Crop to head** and a draggable collar-line handle. The Align
+  has **Crop to head** and a draggable collar-line handle. Scale is
+  0.25×–4× on a log slider and the faint default overlay live-updates
+  as you drag. **Auto-fit to default** fills the sliders so the cropped
+  head matches the default hat-top / chin / centre; **Apply to all in
+  this slot** runs that crop/fit across the open set (head, mouth,
+  face). The Align
   head tool fits the full body plus the head overlay so handles stay
   on-screen.   **Play sample** animates the head through a chosen sample
   sentence (or a project take that already has Rhubarb cues). **Exclude
@@ -184,6 +195,9 @@ clobber the project's `timeline.json`.
   paste an image onto a drawing/cell to replace it through the green-screen
   cut-out + trim pipeline (before/after, Accept/Cancel); the old file is
   copied to `characters/<id>/_replaced/<timestamp>/`, never deleted.
+  **Flip horizontally** writes a mirrored PNG the same way (undoable). A
+  small **L/R** tag can be set per drawing so mixed arm sheets can be
+  sorted.
   **+** adds a named drawing the same way. **Open Grok Imagine for this
   slot** opens the Generate dock preselected for that character and set.
   Rename updates `character.json` cycle lists. Delete asks once, then
@@ -383,7 +397,10 @@ clobber the project's `timeline.json`.
   couple of frames past the movie. Horizontal scroll (wheel / middle-drag
   / the pinned scrollbar) and lane-height controls are unchanged.
 - **Script** — full-page line-numbered editor for the selected `script*.txt` with
-  Save (Ctrl/Cmd+S) and Lint. Insert Action buttons drop real tag templates
+  Save (Ctrl/Cmd+S) and Lint. Lint names the script line for a missing
+  slot drawing (`right_hand=` or an unknown name) instead of a raw
+  `timeline.json` schema path. Stage preview uses the same wording.
+  Insert Action buttons drop real tag templates
   from [script-format.md](script-format.md) at the cursor, using character
   names from the project cast. **Import audio (mp3/wav)** (also **Import
   audio** on the Stage transport bar and Script drawer) is a drop zone / file picker: pick a character (defaults to
@@ -441,7 +458,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/trash/:id/restore` | Move that trash folder back to `projects/<originalName>`. 409 if that name exists. |
 | `POST` | `/api/trash/empty` | Permanently delete everything in `_trash`. JSON `{ "confirm": "empty" }`. |
 | `GET` | `/api/projects/:name/scripts` | `script*.txt` files in that folder. |
-| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`), drawings, cycles, thumbnail paths, `style`, and `reference` / `referenceRel`. |
+| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`, `drawingsDir`, and per-view `views[]`), drawings, cycles, thumbnail paths, `style`, and `reference` / `referenceRel`. |
 | `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. |
 | `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Appends to `library.json`; does not copy art. |
 | `PUT` | `/api/projects/:name/characters/:id` | JSON `{ "style": "painted semi-real" }`. Writes a project-local `character.json` (copied from global if needed) with that free-text style field. Does not touch `_global_assets`. |
@@ -449,7 +466,7 @@ other media durations are cached by path + mtime + size.
 | `PUT` | `/api/projects/:name/characters/:id/slots/:slot` | JSON `{ "offset"?: {x,y}, "scale"?: number, "rotation"?: number }`. Copy-on-write into project-local `character.json`. Used by **Align head**. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot` | Slot editor payload: drawings (size, hash, source), view folders (`?view=`), offset/scale, cycles, mouth-shape labels, duplicates, missing Rhubarb shapes. No `view=` resolves `mouth_front/` first when it exists. Resolves `characters/<id>/` episode → show → global (`?show=` for episodes). |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/promote-view` | JSON `{ "view" }`. Point the slot `drawings_dir` at that set; copy the previous default files to `_replaced/<timestamp>/`. |
-| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"?, "cropToHead"?, "collarY?" }`. Crop to the head-only region (default on; `collarY` is 0–1 of image height, or pixel Y), then align to the previous default canvas (hat / chin / neck). |
+| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"?, "cropToHead"?, "collarY?" }`. Crop to the head-only region (default on; `collarY` is 0–1 of image height, or pixel Y), then align to the previous default canvas (hat / chin / neck). Studio **Auto-fit** fills the nudge sliders first; omit `drawing` to apply the same crop/fit to the whole slot. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing` | Drawing viewer payload plus script/cycle usages and prev/next names in that view. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/lipsync-preview` | Builtin sample cue tracks plus project audio that already has `.rhubarb.json`. Mouth slots only. |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing/replace` | JSON `{ "imageBase64", "filename?", "view?" }`. Green-screen cut-out + trim preview (before/after). |
@@ -458,16 +475,18 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings` | Add-drawing preview. JSON `{ "imageBase64", "filename?", "name?", "view?" }`. |
 | `POST` | `…/drawings/confirm` | JSON `{ "sessionId", "name" }`. Writes `characters/<id>/<drawings_dir>/<name>.png`. |
 | `POST` | `…/drawings/cancel` | JSON `{ "sessionId" }`. |
-| `POST` | `…/drawings/:drawing/flags` | JSON `{ "excludeFromLipSync", "view?" }`. Persist a per-drawing lip-sync skip in project-local `character.json` (`slots.<slot>.drawings.<name>.excludeFromLipSync`). |
+| `POST` | `…/drawings/:drawing/flags` | JSON `{ "excludeFromLipSync"?, "hand"?: "L"\|"R"\|null, "view?" }`. Persist a per-drawing lip-sync skip and/or L/R tag in project-local `character.json` (`slots.<slot>.drawings.<name>.excludeFromLipSync` / `.hand`). |
+| `POST` | `…/drawings/:drawing/flip` | Mirror the PNG horizontally. Copies the previous file to `_replaced/<timestamp>/`. Returns `{ replaced }` for undo. |
+| `POST` | `…/drawings/:drawing/restore` | JSON `{ "replaced" }`. Copy that `_replaced/` file back over the drawing (undo flip). |
 | `POST` | `…/drawings/:drawing/rename` | JSON `{ "name", "view?" }`. Project-local files only; updates cycle lists and `default_drawing`. |
 | `POST` | `…/drawings/:drawing/delete` | JSON `{ "confirm": true, "force?", "view?" }`. Moves a project-local file to `_trash/<timestamp>/`. If a script uses it and `force` is not set, returns **409** with `{ used, usages }`. |
-| `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64", "filename?", "frames?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. |
-| `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }] }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames), backs up overwritten **local** files to `_backup/<timestamp>/`, merges new slots/cycles into project-local `character.json` without deleting other entries. |
+| `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64?", "filename?", "frames?", "sessionId?", "grid?", "dest?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. A 13-mouth set always splits as a regular grid (default 5×3) on the green gutters, not connected components, and normalises each head to the same canvas. Pass `sessionId` + `grid: { cols, rows }` to re-cut the saved sheet in place. `needId: "custom"` plus `grid` and `dest` (target slot) cut a pasted sheet into that folder. Response includes `warnings` when cells are empty or much larger/smaller than the others. |
+| `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }], "flipAll?" }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames). Never overwrites: a name that already exists gets `_b`, `_c`, …. `flipAll` mirrors every cell first. Merges new slots/cycles into project-local `character.json` without deleting other entries (cycle lists append). |
 | `POST` | `/api/projects/:name/characters/:id/ingest/cancel` | JSON `{ "sessionId" }`. Deletes the preview session dir. |
 | `GET` | `/api/engine/settings` | `{ "xaiKeyConfigured", "xaiImageModel" }`. Never returns the key. |
 | `PUT` | `/api/engine/settings` | JSON `{ "xaiApiKey" }`. Writes `XAI_API_KEY` into the repo-root `.env` and `process.env`. Never echoes the key. |
 | `GET` | `/api/prompt-packs` | Built-in Imagine packs. `?character=` returns the matching pack summary. |
-| `POST` | `/api/generate-image` | JSON `{ "project", "characterId", "needId", "n?", "prompt?", "frames?", "dryRun?" }`. Dry-run returns a credit note (published xAI prices when known, else “uses xAI credits”) and writes nothing. Otherwise calls `https://api.x.ai/v1/images/generations` or `/images/edits` (Bearer `XAI_API_KEY`, model `XAI_IMAGE_MODEL` / `grok-imagine-image-2.0`) with `n` variants, auto-attaches the character full-body reference and body when present, saves each raw sheet under `characters/<id>/_library/`, and returns image URLs/base64. Plain-language errors for a missing key, rate limits, and content refusals. Never logs the key. |
+| `POST` | `/api/generate-image` | JSON `{ "project", "characterId", "needId", "n?", "prompt?", "frames?", "dryRun?" }`. `prompt` is the edited Imagine textarea (required for `needId: "custom"`). Dry-run returns a credit note (published xAI prices when known, else “uses xAI credits”) and writes nothing. Otherwise calls `https://api.x.ai/v1/images/generations` or `/images/edits` (Bearer `XAI_API_KEY`, model `XAI_IMAGE_MODEL` / `grok-imagine-image-2.0`) with `n` variants, auto-attaches the character full-body reference and body when present, saves each raw sheet under `characters/<id>/_library/`, and returns image URLs/base64. Plain-language errors for a missing key, rate limits, and content refusals. Never logs the key. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks for locations this project uses. |
 | `GET` | `/api/projects/:name/audio` | WAV files under `audio/`: imported `audio/<label>/001_<character>.wav` and generated `audio/<scene>/<nnn>_<character>.wav`, with `kind`, `label`, `characterId`, `durationSeconds`. |
 | `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for Assets-list character / background / prop cards. Pass `?v=<mtime>` (Studio does this) for `Cache-Control: public, max-age=31536000, immutable`. |
@@ -553,7 +572,8 @@ you generate a PNG yourself.
    exist (`/v1/images/edits`, otherwise `/v1/images/generations`). Raw
    sheets land in `characters/<id>/_library/`. Thumbnails come back in
    the dock; pick one and it goes through the same green-screen cut-out
-   preview as a drop. **Copy prompt** and the drop zone stay for the
+   preview as a drop. Confirm adds that sheet; pick the other variant
+   and confirm again to keep both. **Copy prompt** and the drop zone stay for the
    manual path. **Attach reference to prompt** still applies to copied
    generic prompts.
 3. Style notes on characters without a pack come from `character.json`
@@ -565,18 +585,38 @@ you generate a PNG yourself.
    background, the same size/position in each cell, no watermark text,
    and no cropped body parts. Background plates skip the green screen
    (and skip chroma key) so the plate stays opaque. Rodney prompts never
-   ask for slanted eyes or a mocking ethnic eye gesture.
+   ask for slanted eyes or a mocking ethnic eye gesture. The Imagine
+   prompt box is a normal textarea: edit, paste, or clear it, then
+   **Generate** sends that text. **Reset to pack prompt** restores the
+   set’s filled prompt. **Custom** is an empty box that still prepends
+   the character style block; pick grid cols × rows and a target slot
+   for the cut-out.
 5. Drop, paste, or pick a generated PNG. The worker saves the original to
-   `projects/<name>/characters/<id>/_library/`, then
-   `python -m compositor.cutout` keys `#00FF00` with despill, trims, and
-   splits by the template grid (or connected components).
+  `projects/<name>/characters/<id>/_library/`, then
+  `python -m compositor.cutout` keys `#00FF00` with despill, trims, and
+  splits by the template grid (or connected components). A 13-mouth sheet
+  always uses the grid (5×3 unless you override), finds rows and columns
+  from the green gaps so touching heads stay in their own cells, and
+  normalises each head to the same size.
 6. The preview grid lets you rename / reassign a cell (mouth cells map in
-   order `X,A,B,…`) before **Confirm**. Confirm writes
-   `mouth/<shape>.png`, numbered cycle frames, `parts/`, `props/`, or
-   `backgrounds/<name>/bg.png`. Existing **project-local** files are copied
-   to `characters/<id>/_backup/<timestamp>/` first. Global library files
+   order `X,A,B,…`) before **Confirm**. Empty cells and cells much larger
+   or smaller than the others show a warning; **Re-cut as grid N cols × M
+   rows** runs the cutter again on the saved sheet. Confirm **adds** the
+   cut-out drawings to the slot folder (`mouth_<view>/` for a view set)
+   and never overwrites an existing file: if `X.png` is already there, the
+   new cell is written as `X_b.png` (then `_c`, …). The Assets side panel
+   refreshes the view groups without a page reload. You can confirm both
+   Generate variants one after the other; confirmed sheets stay marked in
+   the dock. **Flip all in this sheet** mirrors every cell before it is
+   written (arm sheets often mix left and right). Global library files
    are not overwritten; a local file at the same relative path is an
    override, same as [docs/assets.md](assets.md#overrides).
+7. In the Assets drawing viewer, **Flip horizontally** writes a mirrored
+   PNG and keeps the original in `characters/<id>/_replaced/<timestamp>/`
+   (Undo flip restores that copy). A small **L/R** tag on each drawing
+   (stored on project-local `character.json` as
+   `slots.<slot>.drawings.<name>.hand`) marks which side an arm/hand
+   belongs to so a `right_hand` slot can be cleaned of left arms.
 
 Walk-cycle ingest adds `slots.body.cycles` (`walk_side`, `walk_front`,
 `walk_back`) on the project-local `character.json`. That is the

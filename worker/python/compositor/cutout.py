@@ -273,6 +273,168 @@ def split_grid(bgra: np.ndarray, cols: int, rows: int) -> list[np.ndarray]:
     return cells
 
 
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Inclusive-start, exclusive-end runs where ``mask`` is true."""
+    runs: list[tuple[int, int]] = []
+    start: int | None = None
+    for i, value in enumerate(mask.tolist()):
+        if value and start is None:
+            start = i
+        elif not value and start is not None:
+            runs.append((start, i))
+            start = None
+    if start is not None:
+        runs.append((start, int(mask.size)))
+    return runs
+
+
+def _equal_bands(length: int, count: int, offset: int = 0) -> list[tuple[int, int]]:
+    length = max(int(length), 0)
+    count = max(int(count), 1)
+    return [
+        (offset + int(round(i * length / count)), offset + int(round((i + 1) * length / count)))
+        for i in range(count)
+    ]
+
+
+def _occupy_gap_midpoints(bands: list[tuple[int, int]], axis_len: int) -> list[tuple[int, int]]:
+    """Grow each content band to the midpoints of its neighbouring gutters."""
+    if not bands:
+        return [(0, max(axis_len, 1))]
+    out: list[tuple[int, int]] = []
+    last = len(bands) - 1
+    for i, (start, end) in enumerate(bands):
+        left = 0 if i == 0 else (bands[i - 1][1] + start) // 2
+        right = axis_len if i == last else (end + bands[i + 1][0]) // 2
+        out.append((left, max(right, left + 1)))
+    return out
+
+
+def _axis_bands(occupancy: np.ndarray, expected: int, *, min_run: int = 2) -> list[tuple[int, int]]:
+    """Split one axis into ``expected`` content bands using low-occupancy gutters.
+
+    Green / transparent gutters show up as valleys in the occupancy profile.
+    Extra speck bands are merged across the smallest gaps; missing gutters
+    (touching heads) split the widest remaining band equally.
+    """
+    n = int(occupancy.size)
+    expected = max(int(expected), 1)
+    if n <= 0:
+        return [(0, 1)]
+    if expected == 1:
+        return [(0, n)]
+
+    peak = float(np.percentile(occupancy, 90)) if n else 1.0
+    peak = max(peak, 1.0)
+    is_content = occupancy >= (peak * 0.12)
+    content = [(a, b) for a, b in _runs(is_content) if (b - a) >= min_run]
+    if not content:
+        return _equal_bands(n, expected)
+
+    # Too many bands: merge across the smallest gap (specks / JPEG crumbs).
+    while len(content) > expected:
+        gap_i = 0
+        gap_w = n
+        for i in range(len(content) - 1):
+            width = content[i + 1][0] - content[i][1]
+            if width < gap_w:
+                gap_w = width
+                gap_i = i
+        start = content[gap_i][0]
+        end = content[gap_i + 1][1]
+        content = content[:gap_i] + [(start, end)] + content[gap_i + 2 :]
+
+    # Too few bands: heads touched. Split the widest band until we have enough.
+    while len(content) < expected:
+        widths = [b - a for a, b in content]
+        i = int(np.argmax(np.asarray(widths)))
+        start, end = content[i]
+        if end - start < 2:
+            span0, span1 = content[0][0], content[-1][1]
+            return _occupy_gap_midpoints(_equal_bands(span1 - span0, expected, offset=span0), n)
+        mid = (start + end) // 2
+        content = content[:i] + [(start, mid), (mid, end)] + content[i + 1 :]
+
+    return _occupy_gap_midpoints(content[:expected], n)
+
+
+def detect_grid_boxes(bgra: np.ndarray, cols: int, rows: int) -> list[tuple[int, int, int, int]]:
+    """Return ``(x, y, w, h)`` boxes for a ``cols`` × ``rows`` sheet from green gaps."""
+    if cols < 1 or rows < 1:
+        raise ValueError("grid cols and rows must be >= 1")
+    alpha = bgra[:, :, 3]
+    col_occ = np.count_nonzero(alpha > 8, axis=0).astype(np.float32)
+    row_occ = np.count_nonzero(alpha > 8, axis=1).astype(np.float32)
+    x_bands = _axis_bands(col_occ, cols)
+    y_bands = _axis_bands(row_occ, rows)
+    boxes: list[tuple[int, int, int, int]] = []
+    for y0, y1 in y_bands:
+        for x0, x1 in x_bands:
+            boxes.append((int(x0), int(y0), int(max(x1 - x0, 1)), int(max(y1 - y0, 1))))
+    return boxes
+
+
+def split_grid_from_gaps(bgra: np.ndarray, cols: int, rows: int) -> list[np.ndarray]:
+    cells: list[np.ndarray] = []
+    for x, y, width, height in detect_grid_boxes(bgra, cols, rows):
+        cells.append(bgra[y : y + height, x : x + width].copy())
+    return cells
+
+
+def analyze_cells(
+    cells: list[np.ndarray],
+    *,
+    small_frac: float = 0.4,
+    large_frac: float = 2.5,
+) -> tuple[list[str | None], list[str]]:
+    """Flag empty cells and bbox sizes far from the median of filled cells."""
+    flags: list[str | None] = []
+    warnings: list[str] = []
+    areas = [int(cell.shape[0] * cell.shape[1]) for cell in cells]
+    filled_areas = [area for area, cell in zip(areas, cells) if not is_empty(cell)]
+    median = float(np.median(np.asarray(filled_areas, dtype=np.float32))) if filled_areas else 0.0
+    for index, cell in enumerate(cells):
+        if is_empty(cell):
+            flags.append("empty")
+            warnings.append(f"Cell {index} is empty")
+            continue
+        if median > 0 and areas[index] < median * small_frac:
+            flags.append("small")
+            warnings.append(f"Cell {index} is much smaller than the others")
+        elif median > 0 and areas[index] > median * large_frac:
+            flags.append("large")
+            warnings.append(f"Cell {index} is much larger than the others")
+        else:
+            flags.append(None)
+    return flags, warnings
+
+
+def normalize_cells(cells: list[np.ndarray]) -> list[np.ndarray]:
+    """Scale and pad every cell onto the median filled-head canvas."""
+    filled = [cell for cell in cells if not is_empty(cell)]
+    if len(filled) < 1:
+        return cells
+    target_w = max(int(np.median(np.asarray([cell.shape[1] for cell in filled], dtype=np.float32))), 8)
+    target_h = max(int(np.median(np.asarray([cell.shape[0] for cell in filled], dtype=np.float32))), 8)
+    out: list[np.ndarray] = []
+    for cell in cells:
+        if is_empty(cell):
+            out.append(np.zeros((target_h, target_w, 4), dtype=np.uint8))
+            continue
+        height, width = cell.shape[:2]
+        scale = min(target_w / max(width, 1), target_h / max(height, 1))
+        new_w = max(1, int(round(width * scale)))
+        new_h = max(1, int(round(height * scale)))
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        resized = cv2.resize(cell, (new_w, new_h), interpolation=interp)
+        canvas = np.zeros((target_h, target_w, 4), dtype=np.uint8)
+        y0 = (target_h - new_h) // 2
+        x0 = (target_w - new_w) // 2
+        canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
+        out.append(canvas)
+    return out
+
+
 def split_components(bgra: np.ndarray, min_area: int = 16) -> list[np.ndarray]:
     alpha = bgra[:, :, 3]
     binary = (alpha > 8).astype(np.uint8) * 255
@@ -300,10 +462,14 @@ def process_image(
     grid: tuple[int, int] | None = None,
     split: str = "grid",
     trim: bool = True,
+    detect_gaps: bool = False,
+    normalize: bool = False,
 ) -> list[np.ndarray]:
     """Key, despill, split, keep the main figure per grid cell, and trim.
 
-    ``grid`` is ``(cols, rows)``.
+    ``grid`` is ``(cols, rows)``. ``detect_gaps`` splits on green/transparent
+    gutters instead of equal-area slices. ``normalize`` pads/scales cells to
+    the median filled-head size.
     """
     img = bgr
     if img.ndim == 2:
@@ -322,13 +488,15 @@ def process_image(
             cells = [keyed]
     else:
         cols, rows = grid
-        cells = split_grid(keyed, cols, rows)
+        cells = split_grid_from_gaps(keyed, cols, rows) if detect_gaps else split_grid(keyed, cols, rows)
         if key:
             cells = [remove_watermark(cell) for cell in cells]
         cells = [keep_main_figure(cell) for cell in cells]
 
     if trim:
         cells = [trim_alpha(cell) for cell in cells]
+    if normalize:
+        cells = normalize_cells(cells)
     return cells
 
 
@@ -351,6 +519,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--grid", default=None, help="COLSxROWS, e.g. 3x3")
     parser.add_argument("--components", action="store_true", help="Split by connected components instead of a grid")
+    parser.add_argument(
+        "--detect-gaps",
+        action="store_true",
+        help="Split a grid on green/transparent gutters instead of equal-area slices",
+    )
+    parser.add_argument(
+        "--normalize",
+        action="store_true",
+        help="Pad/scale each cell to the median filled-head size",
+    )
     parser.add_argument("--no-key", action="store_true", help="Skip chroma key (background plates)")
     parser.add_argument("--no-trim", action="store_true")
     args = parser.parse_args(argv)
@@ -377,10 +555,16 @@ def main(argv: list[str] | None = None) -> int:
             grid=grid,
             split=split,
             trim=not args.no_trim,
+            detect_gaps=bool(args.detect_gaps and grid),
+            normalize=False,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    flags, warnings = analyze_cells(cells)
+    if args.normalize:
+        cells = normalize_cells(cells)
 
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -395,10 +579,14 @@ def main(argv: list[str] | None = None) -> int:
                 "width": int(cell.shape[1]),
                 "height": int(cell.shape[0]),
                 "empty": is_empty(cell),
+                "warning": flags[index] if index < len(flags) else None,
             }
         )
 
-    print(json.dumps({"ok": True, "cells": payload}))
+    report = {"ok": True, "cells": payload, "warnings": warnings}
+    if grid:
+        report["grid"] = {"cols": grid[0], "rows": grid[1]}
+    print(json.dumps(report))
     return 0
 
 

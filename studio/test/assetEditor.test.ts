@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { clampHeadNudge, defaultHeadNudge, fitBodyPlusHead } from "../lib/headAlign.ts";
+import {
+  alignProbeUrl,
+  applyCollar,
+  autoFitHeadNudge,
+  canvasLandmarks,
+  clampHeadNudge,
+  defaultHeadNudge,
+  fitBodyPlusHead,
+  headScaleToSlider,
+  landmarksFromRgba,
+  previewAlignLayout,
+  residualHeadNudge,
+  sliderToHeadScale,
+} from "../lib/headAlign.ts";
 import {
   cueAtTime,
   formatUsage,
@@ -9,6 +22,8 @@ import {
   neighborDrawing,
   remapLipSyncShape,
   RHUBARB_SHAPES,
+  slotViewGroups,
+  slotViewLabel,
 } from "../lib/assetEditor.ts";
 
 describe("asset editor helpers", () => {
@@ -30,6 +45,34 @@ describe("asset editor helpers", () => {
     assert.equal(neighborDrawing(["X", "A", "B"], "A", 1), "B");
     assert.equal(neighborDrawing(["X", "A", "B"], "B", 1), "X");
     assert.equal(neighborDrawing(["X", "A", "B"], "X", -1), "B");
+  });
+
+  test("mouth side panel groups view folders with counts and a default tag", () => {
+    assert.equal(slotViewLabel("left_34"), "Left 3/4");
+    assert.equal(slotViewLabel("front"), "Front");
+    const groups = slotViewGroups({
+      name: "mouth",
+      drawingsDir: "mouth",
+      drawings: [{ name: "X", rel: "characters/rodney/mouth/X.png" }],
+      views: [
+        { id: "front", drawingsDir: "mouth", drawings: [{ name: "X", rel: "characters/rodney/mouth/X.png" }] },
+        {
+          id: "left_34",
+          drawingsDir: "mouth_left_34",
+          drawings: [
+            { name: "X", rel: "characters/rodney/mouth_left_34/X.png" },
+            { name: "A", rel: "characters/rodney/mouth_left_34/A.png" },
+          ],
+        },
+      ],
+    });
+    assert.deepEqual(
+      groups.map((group) => [group.id, group.label, group.count, group.isDefault]),
+      [
+        ["front", "Front", 1, true],
+        ["left_34", "Left 3/4", 2, false],
+      ]
+    );
   });
 
   test("needIdForSlot maps a slot to the Imagine set, preferring a pack cell match", () => {
@@ -69,12 +112,64 @@ describe("asset editor helpers", () => {
     assert.equal(remapLipSyncShape("B", ["H"]), "B");
   });
 
-  test("head nudge clamps to a small usable range", () => {
+  test("align probe URLs stay distinct from the grid cache", () => {
+    assert.equal(alignProbeUrl(null), null);
+    assert.equal(alignProbeUrl("http://localhost:4100/a.png"), "http://localhost:4100/a.png?probe=align");
+    assert.equal(
+      alignProbeUrl("http://localhost:4100/a.png?rel=x&v=1"),
+      "http://localhost:4100/a.png?rel=x&v=1&probe=align"
+    );
+  });
+
+  test("head nudge clamps to a 0.25x–4x range and the scale slider is logarithmic", () => {
     assert.deepEqual(defaultHeadNudge(), { x: 0, y: 0, scale: 1 });
     const clamped = clampHeadNudge({ x: 999, y: -999, scale: 8 });
     assert.equal(clamped.x, 400);
     assert.equal(clamped.y, -400);
-    assert.equal(clamped.scale, 3);
+    assert.equal(clamped.scale, 4);
+    assert.equal(sliderToHeadScale(0), 0.25);
+    assert.equal(sliderToHeadScale(1), 4);
+    assert.ok(Math.abs(sliderToHeadScale(0.5) - 1) < 1e-9);
+    assert.ok(Math.abs(headScaleToSlider(1) - 0.5) < 1e-9);
+    const residual = residualHeadNudge({ x: 0, y: 0, scale: 3.2 }, 3.2);
+    assert.ok(Math.abs(residual.scale - 1) < 1e-9);
+  });
+
+  test("auto-fit scales a small cropped head to the default hat/chin height", () => {
+    const w = 8;
+    const h = 8;
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    for (let y = 2; y < 6; y += 1) {
+      for (let x = 2; x < 6; x += 1) {
+        const i = (y * w + x) * 4;
+        rgba[i] = 255;
+        rgba[i + 3] = 255;
+      }
+    }
+    const src = landmarksFromRgba(rgba, w, h);
+    assert.equal(src.hat.y, 2);
+    assert.equal(src.chin.y, 6);
+    const ref = canvasLandmarks(24, 24);
+    ref.hat = { x: 12, y: 0 };
+    ref.chin = { x: 12, y: 8 };
+    ref.neck = { x: 12, y: 8 };
+    const cropped = applyCollar(src, 0.5);
+    assert.equal(cropped.chin.y, 4);
+    const fit = autoFitHeadNudge(cropped, ref);
+    assert.equal(fit.scale, 4);
+    const layout = previewAlignLayout({
+      boxW: 240,
+      boxH: 240,
+      srcW: 8,
+      srcH: 8,
+      refW: 24,
+      refH: 24,
+      src: cropped,
+      ref,
+      nudge: fit,
+    });
+    assert.ok(layout.src.height > layout.ref.height * 0.4);
+    assert.ok(Math.abs(layout.src.width / layout.ref.width - (8 * fit.scale) / 24) < 1e-9);
   });
 
   test("align viewport fits a head that sits above the body", () => {

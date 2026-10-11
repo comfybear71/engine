@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import AlignHeadModal from "@/components/AlignHeadModal";
 import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import CharacterReferenceCard from "@/components/CharacterReferenceCard";
-import type { AssetFocus } from "@/lib/assetEditor";
+import { slotViewGroups, type AssetFocus } from "@/lib/assetEditor";
 import { alignableSlots } from "@/lib/headAlign";
 import {
   addLibraryCharacter,
@@ -24,6 +24,7 @@ function Thumb({
   onClick,
   badge,
   fit = "cover",
+  compact = false,
 }: {
   src: string | null;
   label: string;
@@ -31,17 +32,23 @@ function Thumb({
   onClick?: () => void;
   badge?: string;
   fit?: "cover" | "contain";
+  compact?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`group flex w-full flex-col gap-1.5 text-left ${onClick ? "cursor-pointer" : "cursor-default"}`}
+      title={label}
+      className={`group flex flex-col text-left ${
+        compact ? "w-11 shrink-0 gap-0.5" : "w-full gap-1.5"
+      } ${onClick ? "cursor-pointer" : "cursor-default"}`}
     >
       <div
-        className={`relative aspect-square overflow-hidden rounded-md border ${
-          fit === "contain" ? "studio-checker" : "bg-studio-raised"
-        } ${selected ? "border-studio-accent ring-2 ring-studio-accent/40" : "border-studio-border"}`}
+        className={`relative aspect-square overflow-hidden border ${
+          compact ? "rounded-sm" : "rounded-md"
+        } ${fit === "contain" ? "studio-checker" : "bg-studio-raised"} ${
+          selected ? "border-studio-accent ring-1 ring-studio-accent/50" : "border-studio-border"
+        }`}
       >
         {src ? (
           // Worker-served PNGs; next/image remote config is out of scope for localhost.
@@ -60,8 +67,22 @@ function Thumb({
           </span>
         ) : null}
       </div>
-      <span className="truncate text-xs text-neutral-300 group-hover:text-white">{label}</span>
+      <span
+        className={`truncate text-neutral-400 group-hover:text-white ${
+          compact ? "text-[9px] leading-tight" : "text-xs text-neutral-300"
+        }`}
+      >
+        {label}
+      </span>
     </button>
+  );
+}
+
+function DrawingRow({ children, testId }: { children: ReactNode; testId?: string }) {
+  return (
+    <div className="studio-hscroll" data-testid={testId}>
+      <div className="flex w-max items-start gap-1 py-0.5 pr-1">{children}</div>
+    </div>
   );
 }
 
@@ -77,10 +98,13 @@ function SlotBlock({
   onOpen?: (focus: AssetFocus) => void;
 }) {
   const cycleEntries = Object.entries(slot.cycles || {});
+  const viewGroups = slot.name === "mouth" ? slotViewGroups(slot) : [];
+  const totalCount =
+    viewGroups.length > 0 ? viewGroups.reduce((sum, group) => sum + group.count, 0) : slot.drawings.length;
   return (
-    <section className="space-y-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <h4 className="text-sm font-medium text-white">
+    <section className="space-y-0.5">
+      <div className="flex items-baseline gap-1.5">
+        <h4 className="min-w-0 text-[11px] font-medium leading-none text-white">
           <button
             type="button"
             className="hover:text-studio-accent"
@@ -89,39 +113,83 @@ function SlotBlock({
           >
             {slot.name}
           </button>
-          {slot.owner ? <span className="ml-2 text-xs font-normal text-studio-muted">on {slot.owner}</span> : null}
+          {slot.owner ? <span className="ml-1 font-normal text-studio-muted">on {slot.owner}</span> : null}
         </h4>
-        {slot.default_drawing ? (
-          <span className="text-[11px] text-studio-muted">default {slot.default_drawing}</span>
+        <span className="text-[10px] tabular-nums text-neutral-500">{totalCount}</span>
+        {slot.default_drawing && viewGroups.length === 0 ? (
+          <span className="truncate text-[9px] text-studio-muted">default {slot.default_drawing}</span>
         ) : null}
       </div>
       {cycleEntries.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1">
           {cycleEntries.map(([name, cycle]) => (
             <span
               key={name}
-              className="rounded-full border border-studio-border bg-studio-raised px-2 py-0.5 text-[11px] text-neutral-300"
+              className="text-[9px] leading-none text-neutral-500"
               title={cycle.drawings.join(" → ")}
             >
-              cycle {name} · {cycle.fps} fps · {cycle.drawings.length} drawings
+              {name} · {cycle.drawings.length}
             </span>
           ))}
         </div>
       ) : null}
-      <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
-        {slot.drawings.map((drawing) => (
-          <Thumb
-            key={drawing.name}
-            src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
-            label={drawing.name}
-            selected={drawing.name === slot.default_drawing}
-            fit="contain"
-            onClick={() =>
-              onOpen?.({ mode: "drawing", characterId, slot: slot.name, drawing: drawing.name })
-            }
-          />
-        ))}
-      </div>
+      {viewGroups.length > 0 ? (
+        <div className="space-y-1">
+          {viewGroups.map((group) => (
+            <div key={group.drawingsDir} className="space-y-0.5" data-testid={`assets-slot-view-${group.id}`}>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-[10px] font-medium leading-none text-neutral-300">{group.label}</span>
+                <span className="text-[10px] tabular-nums text-neutral-500">{group.count}</span>
+                {group.isDefault ? (
+                  <span
+                    className="text-[8px] uppercase tracking-wide text-neutral-500"
+                    data-testid="assets-view-default-tag"
+                  >
+                    default
+                  </span>
+                ) : null}
+              </div>
+              <DrawingRow testId={`assets-slot-row-${group.id}`}>
+                {group.drawings.map((drawing) => (
+                  <Thumb
+                    key={`${group.id}:${drawing.name}`}
+                    compact
+                    src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
+                    label={drawing.name}
+                    selected={group.isDefault && drawing.name === slot.default_drawing}
+                    fit="contain"
+                    onClick={() =>
+                      onOpen?.({
+                        mode: "drawing",
+                        characterId,
+                        slot: slot.name,
+                        drawing: drawing.name,
+                        view: group.id === "mouth" ? undefined : group.id,
+                      })
+                    }
+                  />
+                ))}
+              </DrawingRow>
+            </div>
+          ))}
+        </div>
+      ) : slot.drawings.length > 0 ? (
+        <DrawingRow testId={`assets-slot-row-${slot.name}`}>
+          {slot.drawings.map((drawing) => (
+            <Thumb
+              key={drawing.name}
+              compact
+              src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
+              label={drawing.name}
+              selected={drawing.name === slot.default_drawing}
+              fit="contain"
+              onClick={() =>
+                onOpen?.({ mode: "drawing", characterId, slot: slot.name, drawing: drawing.name })
+              }
+            />
+          ))}
+        </DrawingRow>
+      ) : null}
     </section>
   );
 }
@@ -335,9 +403,9 @@ export default function AssetsPanel({
       </div>
 
       {pool ? null : (
-      <aside className="w-[340px] shrink-0 overflow-y-auto border-l border-studio-border bg-studio-panel p-4">
+      <aside className="w-[340px] shrink-0 overflow-y-auto border-l border-studio-border bg-studio-panel p-3">
         {selected ? (
-          <div className="space-y-5">
+          <div className="space-y-3">
             <div>
               <p className="text-[11px] uppercase tracking-wider text-studio-muted">Character</p>
               <h2 className="text-lg font-semibold text-white">{selected.display_name}</h2>
@@ -474,7 +542,7 @@ export default function AssetsPanel({
   );
 }
 
-function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+function Section({ title, count, children }: { title: string; count: number; children: ReactNode }) {
   return (
     <section className="mb-8">
       <div className="mb-3 flex items-center gap-2">

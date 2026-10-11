@@ -2,9 +2,24 @@
 
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const path = require("path");
 
-const { destRelForCell, ensureSlot } = require("../src/assetIngest");
+const {
+  destRelForCell,
+  inferMouthViewDest,
+  applyCustomLayout,
+  ensureSlot,
+  uniqueWriteTarget,
+  mergeCycles,
+  confirmIngest,
+  previewDir,
+  resolveCutoutArgs,
+  isMouth13Need,
+} = require("../src/assetIngest");
 const { getNeed, expandNeed } = require("../src/assetNeeds");
+const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
+const { encodeRgbaPng, decodePng } = require("../src/pngFlip");
 
 describe("asset ingest helpers", () => {
   test("mouth sheet expands to X then A–H on a 3x3 grid", () => {
@@ -41,6 +56,55 @@ describe("asset ingest helpers", () => {
     assert.equal(character.slots.body.drawings_dir, "body");
   });
 
+  test("custom ingest uses the requested grid and target slot", () => {
+    const need = getNeed("custom");
+    assert.ok(need);
+    const next = applyCustomLayout(need, expandNeed(need), {
+      grid: { cols: 4, rows: 2 },
+      dest: { kind: "slot", slot: "mouth", drawings_dir: "mouth_left_34" },
+    });
+    assert.deepEqual(next.grid, { cols: 4, rows: 2 });
+    assert.equal(next.cells.length, 8);
+    assert.equal(next.cells[0].name, "X");
+    assert.equal(next.cells[0].dest.drawings_dir, "mouth_left_34");
+    assert.equal(next.cells[7].dest.slot, "mouth");
+  });
+
+  test("a 13-mouth pack always cuts as a 5x3 gap grid and normalises heads", () => {
+    const need = getNeed("mouth_13_left_34");
+    const expanded = expandNeed(need);
+    assert.equal(isMouth13Need(need, expanded), true);
+    const resolved = resolveCutoutArgs(need, expanded, null);
+    assert.deepEqual(resolved.grid, { cols: 5, rows: 3 });
+    assert.equal(resolved.detectGaps, true);
+    assert.equal(resolved.normalize, true);
+    assert.ok(resolved.args.includes("--grid"));
+    assert.ok(resolved.args.includes("5x3"));
+    assert.ok(resolved.args.includes("--detect-gaps"));
+    assert.ok(resolved.args.includes("--normalize"));
+    assert.ok(!resolved.args.includes("--components"));
+
+    const recut = resolveCutoutArgs(need, expanded, { cols: 4, rows: 4 });
+    assert.deepEqual(recut.grid, { cols: 4, rows: 4 });
+    assert.ok(recut.args.includes("4x4"));
+    assert.ok(recut.args.includes("--detect-gaps"));
+  });
+
+  test("a left_34 mouth pack writes mouth_left_34 and does not steal the default dir", () => {
+    const need = getNeed("mouth_13_left_34");
+    assert.ok(need);
+    const dest = inferMouthViewDest(need.id, { kind: "slot", slot: "mouth", drawings_dir: "mouth" });
+    assert.equal(dest.drawings_dir, "mouth_left_34");
+    assert.equal(destRelForCell("rodney", dest, "X"), "characters/rodney/mouth_left_34/X.png");
+    const character = {
+      id: "rodney",
+      slots: { mouth: { drawings_dir: "mouth" } },
+      children: [],
+    };
+    ensureSlot(character, dest);
+    assert.equal(character.slots.mouth.drawings_dir, "mouth");
+  });
+
   test("front head ingest writes mouth_front and points the existing mouth slot at it", () => {
     const need = getNeed("mouth_13_front");
     assert.ok(need);
@@ -53,5 +117,78 @@ describe("asset ingest helpers", () => {
     };
     ensureSlot(character, expanded.cells[0].dest);
     assert.equal(character.slots.mouth.drawings_dir, "mouth_front");
+  });
+
+  test("unique write target suffixes _b then _c when the dest already exists", () => {
+    const fixture = createFixtureLibrary();
+    const dest = { kind: "slot", slot: "mouth", drawings_dir: "mouth" };
+    const first = uniqueWriteTarget(fixture.projectDir, fixture.globalAssetsDir, "alice", dest, "X", new Set());
+    assert.equal(first.name, "X_b");
+    assert.equal(first.rel, "characters/alice/mouth/X_b.png");
+    const second = uniqueWriteTarget(
+      fixture.projectDir,
+      fixture.globalAssetsDir,
+      "alice",
+      dest,
+      "X",
+      new Set([first.rel])
+    );
+    assert.equal(second.name, "X_c");
+    assert.equal(second.rel, "characters/alice/mouth/X_c.png");
+    fixture.cleanup();
+  });
+
+  test("mergeCycles appends new drawings instead of replacing the list", () => {
+    const spec = { cycles: { walk_side: { drawings: ["walk_side_01"], fps: 12 } } };
+    mergeCycles(spec, { walk_side: { drawings: ["walk_side_01_b"], fps: 12 } });
+    assert.deepEqual(spec.cycles.walk_side.drawings, ["walk_side_01", "walk_side_01_b"]);
+  });
+
+  test("confirm ingest adds a second sheet without overwriting, and flipAll mirrors pixels", () => {
+    const fixture = createFixtureLibrary();
+    const dest = { kind: "slot", slot: "mouth", drawings_dir: "mouth" };
+    const redBlue = encodeRgbaPng(2, 1, Buffer.from([255, 0, 0, 255, 0, 0, 255, 255]));
+    const mouthDir = path.join(fixture.projectDir, "characters", "alice", "mouth");
+    fs.mkdirSync(mouthDir, { recursive: true });
+    fs.writeFileSync(path.join(mouthDir, "X.png"), redBlue);
+
+    function writeSession(sid, flipSource) {
+      const cellsDir = path.join(previewDir(fixture.projectDir, "alice", sid), "cells");
+      fs.mkdirSync(cellsDir, { recursive: true });
+      const cellPath = path.join(cellsDir, "00.png");
+      fs.writeFileSync(cellPath, flipSource);
+      fs.writeFileSync(
+        path.join(previewDir(fixture.projectDir, "alice", sid), "manifest.json"),
+        JSON.stringify({
+          sessionId: sid,
+          characterId: "alice",
+          needId: "mouth_sheet",
+          cells: [{ index: 0, suggestedName: "X", dest, empty: false, path: cellPath }],
+        })
+      );
+    }
+
+    writeSession("addsheet1", redBlue);
+    const first = confirmIngest(fixture.projectDir, fixture.globalAssetsDir, "alice", {
+      sessionId: "addsheet1",
+      assignments: [{ index: 0, name: "X" }],
+    });
+    assert.equal(first.written[0].name, "X_b");
+    assert.ok(fs.existsSync(path.join(mouthDir, "X.png")));
+    assert.ok(fs.existsSync(path.join(mouthDir, "X_b.png")));
+
+    writeSession("addsheet2", redBlue);
+    const second = confirmIngest(fixture.projectDir, fixture.globalAssetsDir, "alice", {
+      sessionId: "addsheet2",
+      assignments: [{ index: 0, name: "X" }],
+      flipAll: true,
+    });
+    assert.equal(second.written[0].name, "X_c");
+    const original = decodePng(fs.readFileSync(path.join(mouthDir, "X.png")));
+    assert.equal(original.pixels[0], 255);
+    const flipped = decodePng(fs.readFileSync(path.join(mouthDir, "X_c.png")));
+    assert.equal(flipped.pixels[0], 0);
+    assert.equal(flipped.pixels[4], 255);
+    fixture.cleanup();
   });
 });

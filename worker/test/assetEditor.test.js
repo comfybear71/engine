@@ -17,10 +17,13 @@ const {
   renameDrawing,
   deleteDrawing,
   saveDrawingFlags,
+  flipDrawing,
+  restoreReplacedDrawing,
   listLipsyncPreview,
   missingMouthShapes,
   rhubarbShapeOf,
 } = require("../src/assetEditor");
+const { encodeRgbaPng, decodePng } = require("../src/pngFlip");
 
 function writePng(filePath, buf = TRANSPARENT_PNG_1X1) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -173,6 +176,33 @@ describe("asset editor", { concurrency: 1 }, () => {
     const result = confirmAdd(fixture.projectDir, fixture.globalAssetsDir, "dee", { sessionId: sid, name: "C" });
     assert.equal(result.drawing, "C");
     assert.ok(fs.existsSync(path.join(deeDir, "mouth", "C.png")));
+  });
+
+  test("flip horizontally writes a mirror, keeps the original in _replaced, and restore undoes it", () => {
+    const redBlue = encodeRgbaPng(2, 1, Buffer.from([255, 0, 0, 255, 0, 0, 255, 255]));
+    writePng(path.join(deeDir, "mouth", "extra.png"), redBlue);
+    const flipped = flipDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "extra", {});
+    assert.ok(flipped.replaced && flipped.replaced.includes("_replaced/"));
+    assert.ok(fs.existsSync(path.join(fixture.projectDir, flipped.replaced)));
+    const after = decodePng(fs.readFileSync(path.join(deeDir, "mouth", "extra.png")));
+    assert.equal(after.pixels[0], 0);
+    assert.equal(after.pixels[4], 255);
+    const restored = restoreReplacedDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "extra", {
+      replaced: flipped.replaced,
+    });
+    assert.equal(restored.ok, true);
+    const back = decodePng(fs.readFileSync(path.join(deeDir, "mouth", "extra.png")));
+    assert.equal(back.pixels[0], 255);
+    assert.equal(back.pixels[4], 0);
+  });
+
+  test("L/R hand tag persists per drawing", () => {
+    const saved = saveDrawingFlags(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "extra", { hand: "L" });
+    assert.equal(saved.hand, "L");
+    const slot = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth");
+    assert.equal(slot.drawings.find((d) => d.name === "extra").hand, "L");
+    const cleared = saveDrawingFlags(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "extra", { hand: null });
+    assert.equal(cleared.hand, null);
   });
 
   test("exclude from lip sync persists per drawing and follows rename", () => {

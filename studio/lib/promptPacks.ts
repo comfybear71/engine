@@ -63,3 +63,84 @@ export function fillPackPrompt(
 export function ingestNeedId(set: PromptPackSet): string {
   return set.needId || set.id;
 }
+
+export const CUSTOM_NEED_ID = "custom";
+
+/** Keep Custom even though it is not a pack set (parent needId sync). */
+export function resolveImagineNeedId(
+  sets: { id: string; needId?: string }[],
+  initialNeedId?: string | null,
+  fallback = "mouth_sheet"
+): string {
+  if (initialNeedId === CUSTOM_NEED_ID) return CUSTOM_NEED_ID;
+  if (!initialNeedId) return sets[0]?.id || fallback;
+  const match = sets.find((set) => set.id === initialNeedId || set.needId === initialNeedId);
+  return match?.id || sets[0]?.id || fallback;
+}
+
+export const CUSTOM_MOUTH_NAMES = [
+  "X",
+  "A",
+  "B",
+  "C",
+  "D",
+  "E",
+  "F",
+  "G",
+  "H",
+  "B_loud",
+  "C_loud",
+  "D_loud",
+  "E_loud",
+] as const;
+
+export function composeCustomPrompt(styleBlock: string, userText: string): string {
+  const style = String(styleBlock || "").trim();
+  const user = String(userText || "").trim();
+  if (style && user) return `${style}\n\n${user}`;
+  return style || user;
+}
+
+export function customCellName(index: number, slot: string): string {
+  if (String(slot || "") === "mouth" && CUSTOM_MOUTH_NAMES[index]) return CUSTOM_MOUTH_NAMES[index];
+  return `cell_${String(index).padStart(2, "0")}`;
+}
+
+export type CustomSlotChoice = { slot: string; drawings_dir: string; label: string };
+
+const FALLBACK_SLOTS: CustomSlotChoice[] = [
+  { slot: "mouth", drawings_dir: "mouth", label: "mouth" },
+  { slot: "mouth", drawings_dir: "mouth_front", label: "mouth · front" },
+  { slot: "mouth", drawings_dir: "mouth_left_34", label: "mouth · left 3/4" },
+  { slot: "mouth", drawings_dir: "mouth_left_side", label: "mouth · left side" },
+  { slot: "mouth", drawings_dir: "mouth_right_34", label: "mouth · right 3/4" },
+  { slot: "mouth", drawings_dir: "mouth_right_side", label: "mouth · right side" },
+  { slot: "mouth", drawings_dir: "mouth_up", label: "mouth · up" },
+  { slot: "mouth", drawings_dir: "mouth_down", label: "mouth · down" },
+  { slot: "face", drawings_dir: "face", label: "face" },
+  { slot: "eyes", drawings_dir: "eyes", label: "eyes" },
+  { slot: "head", drawings_dir: "head", label: "head" },
+  { slot: "body", drawings_dir: "body", label: "body" },
+  { slot: "right_hand", drawings_dir: "right_hand", label: "right_hand" },
+  { slot: "mic_arm", drawings_dir: "mic_arm", label: "mic_arm" },
+];
+
+export function customSlotChoices(
+  character: { slots?: { name: string; drawingsDir?: string; owner?: string | null }[] } | null
+): CustomSlotChoice[] {
+  const seen = new Set<string>();
+  const out: CustomSlotChoice[] = [];
+  function add(slot: string, drawings_dir: string, label: string) {
+    const key = `${slot}:${drawings_dir}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ slot, drawings_dir, label });
+  }
+  for (const item of FALLBACK_SLOTS) add(item.slot, item.drawings_dir, item.label);
+  for (const slot of character?.slots || []) {
+    const dir = slot.drawingsDir || slot.name;
+    const label = slot.owner ? `${slot.name} on ${slot.owner}` : slot.name;
+    add(slot.name, dir, label);
+  }
+  return out;
+}
