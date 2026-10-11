@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ASSET_NEEDS,
   expandNeed,
@@ -9,7 +9,16 @@ import {
   type AssetNeed,
 } from "@/lib/assetNeeds";
 import { explainGenerateError, summarizeGenerateCost } from "@/lib/generateImage";
-import { fillPackPrompt, ingestNeedId, packForCharacter } from "@/lib/promptPacks";
+import {
+  CUSTOM_MOUTH_NAMES,
+  CUSTOM_NEED_ID,
+  composeCustomPrompt,
+  customCellName,
+  customSlotChoices,
+  fillPackPrompt,
+  ingestNeedId,
+  packForCharacter,
+} from "@/lib/promptPacks";
 import {
   cancelCharacterIngest,
   confirmCharacterIngest,
@@ -49,11 +58,43 @@ export default function AssetImaginePanel({
   onNeedId?: (id: string | null) => void;
 }) {
   const pack = useMemo(() => packForCharacter(character), [character]);
-  const setOptions = pack ? pack.sets : ASSET_NEEDS;
+  const setOptions = pack ? pack.sets : ASSET_NEEDS.filter((need) => need.id !== CUSTOM_NEED_ID);
   const [needId, setNeedId] = useState<string>(initialNeedId || setOptions[0]?.id || "mouth_sheet");
-  const packSet = useMemo(() => pack?.sets.find((set) => set.id === needId) || pack?.sets[0] || null, [pack, needId]);
-  const ingestId = packSet ? ingestNeedId(packSet) : needId;
+  const isCustom = needId === CUSTOM_NEED_ID;
+  const packSet = useMemo(
+    () => (isCustom ? null : pack?.sets.find((set) => set.id === needId) || (initialNeedId ? null : pack?.sets[0]) || null),
+    [pack, needId, isCustom, initialNeedId]
+  );
+  const slotChoices = useMemo(() => customSlotChoices(character), [character]);
+  const [customCols, setCustomCols] = useState(5);
+  const [customRows, setCustomRows] = useState(3);
+  const [customSlotKey, setCustomSlotKey] = useState("mouth:mouth");
+  const customDest = useMemo(() => {
+    const found = slotChoices.find((item) => `${item.slot}:${item.drawings_dir}` === customSlotKey) || slotChoices[0];
+    return { kind: "slot" as const, slot: found.slot, drawings_dir: found.drawings_dir };
+  }, [slotChoices, customSlotKey]);
+  const customGrid = useMemo(() => ({ cols: customCols, rows: customRows }), [customCols, customRows]);
+  const ingestId = isCustom ? CUSTOM_NEED_ID : packSet ? ingestNeedId(packSet) : needId;
   const need = useMemo(() => {
+    if (isCustom) {
+      const count = Math.max(1, customGrid.cols * customGrid.rows);
+      const cells = Array.from({ length: count }, (_, index) => ({
+        name: customCellName(index, customDest.slot),
+        dest: customDest,
+      }));
+      return {
+        id: CUSTOM_NEED_ID,
+        label: "Custom",
+        description:
+          "Paste your own sheet prompt. The character style block is prepended. Choose a grid and target slot for the cut-out.",
+        split: "grid" as const,
+        grid: customGrid,
+        cells,
+        assignChoices: customDest.slot === "mouth" ? [...CUSTOM_MOUTH_NAMES] : cells.map((cell) => cell.name),
+        dest: customDest,
+        prompt: "",
+      } as AssetNeed;
+    }
     const fromAssets = getAssetNeed(ingestId) || getAssetNeed(needId);
     if (fromAssets) return fromAssets;
     if (packSet) {
@@ -69,7 +110,7 @@ export default function AssetImaginePanel({
       } as AssetNeed;
     }
     return ASSET_NEEDS[0];
-  }, [ingestId, needId, packSet]);
+  }, [isCustom, ingestId, needId, packSet, customGrid, customDest]);
   const [frames, setFrames] = useState<number>(need?.frameParam?.default ?? 8);
   const [style, setStyle] = useState(character.style || "");
   const [styleSaved, setStyleSaved] = useState(false);
@@ -86,6 +127,8 @@ export default function AssetImaginePanel({
   const [results, setResults] = useState<GeneratedImage[]>([]);
   const [picked, setPicked] = useState<number | null>(null);
   const [confirmed, setConfirmed] = useState<number[]>([]);
+  const [promptDraft, setPromptDraft] = useState("");
+  const promptSeedKey = useRef("");
 
   useEffect(() => {
     setStyle(character.style || "");
@@ -110,7 +153,8 @@ export default function AssetImaginePanel({
   const expanded = useMemo(() => (need ? expandNeed(need, frames) : null), [need, frames]);
   const isReferenceNeed =
     ingestId === "full_body_reference" || need?.id === "full_body_reference" || need?.dest?.kind === "reference" || need?.ingest === false;
-  const prompt = useMemo(() => {
+  const promptSeed = useMemo(() => {
+    if (isCustom) return "";
     if (pack && packSet) {
       return fillPackPrompt(packSet, { name: character.display_name, styleBlock: pack.styleBlock });
     }
@@ -118,7 +162,17 @@ export default function AssetImaginePanel({
     const base = fillNeedPrompt(need, { name: character.display_name, style, frames });
     if (!attachReference) return base;
     return `${base} Match the attached full-body reference image for likeness, costume, proportions, pose, and crop.`;
-  }, [pack, packSet, need, character.display_name, style, frames, attachReference]);
+  }, [isCustom, pack, packSet, need, character.display_name, style, frames, attachReference]);
+
+  const stylePrefix = (pack?.styleBlock || character.style || "").trim();
+  const generatePrompt = isCustom ? composeCustomPrompt(stylePrefix, promptDraft) : promptDraft;
+
+  useEffect(() => {
+    const key = `${character.id}:${needId}`;
+    if (promptSeedKey.current === key) return;
+    promptSeedKey.current = key;
+    setPromptDraft(isCustom ? "" : promptSeed);
+  }, [character.id, needId, isCustom, promptSeed]);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,7 +195,7 @@ export default function AssetImaginePanel({
       characterId: character.id,
       needId: ingestId,
       n: variants,
-      prompt,
+      prompt: generatePrompt,
       frames: need?.frameParam ? frames : undefined,
       dryRun: true,
     })
@@ -157,11 +211,11 @@ export default function AssetImaginePanel({
     return () => {
       cancelled = true;
     };
-  }, [project, character.id, ingestId, variants, prompt, need?.frameParam, frames]);
+  }, [project, character.id, ingestId, variants, generatePrompt, need?.frameParam, frames]);
 
   async function copyPrompt() {
     try {
-      await navigator.clipboard.writeText(prompt);
+      await navigator.clipboard.writeText(generatePrompt);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -236,6 +290,7 @@ export default function AssetImaginePanel({
           imageBase64,
           filename,
           frames: need?.frameParam ? frames : undefined,
+          ...(isCustom ? { grid: customGrid, dest: customDest } : {}),
         });
         applyPreview(result);
       } catch (err) {
@@ -244,7 +299,7 @@ export default function AssetImaginePanel({
         setBusy(null);
       }
     },
-    [isReferenceNeed, project, character.id, onChanged, ingestId, need, frames]
+    [isReferenceNeed, project, character.id, onChanged, ingestId, need, frames, isCustom, customGrid, customDest]
   );
 
   const ingestFile = useCallback(
@@ -279,7 +334,7 @@ export default function AssetImaginePanel({
         characterId: character.id,
         needId: ingestId,
         n: variants,
-        prompt,
+        prompt: generatePrompt,
         frames: need?.frameParam ? frames : undefined,
       });
       setResults(result.images || []);
@@ -334,6 +389,7 @@ export default function AssetImaginePanel({
         sessionId: preview.sessionId,
         grid,
         frames: need?.frameParam ? frames : undefined,
+        ...(isCustom ? { dest: customDest } : {}),
       });
       applyPreview(result, true);
     } catch (err) {
@@ -396,17 +452,12 @@ export default function AssetImaginePanel({
             }}
             data-testid="asset-need"
           >
-            {pack
-              ? pack.sets.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label}
-                  </option>
-                ))
-              : ASSET_NEEDS.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label}
-                  </option>
-                ))}
+            {setOptions.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+            <option value={CUSTOM_NEED_ID}>Custom</option>
           </select>
         </label>
       </div>
@@ -451,13 +502,69 @@ export default function AssetImaginePanel({
         </div>
       </label>
 
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[11px] text-studio-muted">Prompt</span>
+        <button
+          type="button"
+          className="text-[11px] text-studio-muted underline-offset-2 hover:text-white hover:underline"
+          onClick={() => setPromptDraft(isCustom ? "" : promptSeed)}
+          data-testid="reset-prompt"
+        >
+          {isCustom ? "Clear" : "Reset to pack prompt"}
+        </button>
+      </div>
+      {isCustom && stylePrefix ? (
+        <p className="mb-1 text-[10px] leading-snug text-neutral-500" data-testid="custom-style-prepend">
+          Style block prepended on Generate.
+        </p>
+      ) : null}
       <textarea
-        readOnly
-        value={prompt}
+        value={promptDraft}
+        onChange={(event) => setPromptDraft(event.target.value)}
         rows={6}
+        placeholder={isCustom ? "Paste your sheet prompt…" : undefined}
         className="w-full resize-y rounded-md border border-studio-border bg-studio-raised px-3 py-2 font-mono text-[11px] leading-relaxed text-neutral-200"
         data-testid="asset-prompt"
       />
+      {isCustom ? (
+        <div className="mt-2 mb-3 flex flex-wrap items-center gap-2 text-[11px] text-studio-muted">
+          <span>Cut-out grid</span>
+          <input
+            type="number"
+            min={1}
+            max={16}
+            className="w-12 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[11px] text-neutral-200"
+            value={customCols}
+            onChange={(event) => setCustomCols(Math.max(1, Math.min(16, Number(event.target.value) || 1)))}
+            data-testid="custom-grid-cols"
+          />
+          <span>cols ×</span>
+          <input
+            type="number"
+            min={1}
+            max={16}
+            className="w-12 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[11px] text-neutral-200"
+            value={customRows}
+            onChange={(event) => setCustomRows(Math.max(1, Math.min(16, Number(event.target.value) || 1)))}
+            data-testid="custom-grid-rows"
+          />
+          <span>rows</span>
+          <span className="text-studio-border">·</span>
+          <span>Slot</span>
+          <select
+            className="rounded-md border border-studio-border bg-studio-raised px-1.5 py-0.5 text-[11px] text-neutral-200"
+            value={customSlotKey}
+            onChange={(event) => setCustomSlotKey(event.target.value)}
+            data-testid="custom-slot"
+          >
+            {slotChoices.map((item) => (
+              <option key={`${item.slot}:${item.drawings_dir}`} value={`${item.slot}:${item.drawings_dir}`}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       <label className="mb-3 flex items-start gap-2 text-[12px] text-neutral-300">
         <input
           type="checkbox"

@@ -477,13 +477,13 @@ other media durations are cached by path + mtime + size.
 | `POST` | `…/drawings/:drawing/restore` | JSON `{ "replaced" }`. Copy that `_replaced/` file back over the drawing (undo flip). |
 | `POST` | `…/drawings/:drawing/rename` | JSON `{ "name", "view?" }`. Project-local files only; updates cycle lists and `default_drawing`. |
 | `POST` | `…/drawings/:drawing/delete` | JSON `{ "confirm": true, "force?", "view?" }`. Moves a project-local file to `_trash/<timestamp>/`. If a script uses it and `force` is not set, returns **409** with `{ used, usages }`. |
-| `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64?", "filename?", "frames?", "sessionId?", "grid?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. A 13-mouth set always splits as a regular grid (default 5×3) on the green gutters, not connected components, and normalises each head to the same canvas. Pass `sessionId` + `grid: { cols, rows }` to re-cut the saved sheet in place. Response includes `warnings` when cells are empty or much larger/smaller than the others. |
+| `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64?", "filename?", "frames?", "sessionId?", "grid?", "dest?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. A 13-mouth set always splits as a regular grid (default 5×3) on the green gutters, not connected components, and normalises each head to the same canvas. Pass `sessionId` + `grid: { cols, rows }` to re-cut the saved sheet in place. `needId: "custom"` plus `grid` and `dest` (target slot) cut a pasted sheet into that folder. Response includes `warnings` when cells are empty or much larger/smaller than the others. |
 | `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }], "flipAll?" }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames). Never overwrites: a name that already exists gets `_b`, `_c`, …. `flipAll` mirrors every cell first. Merges new slots/cycles into project-local `character.json` without deleting other entries (cycle lists append). |
 | `POST` | `/api/projects/:name/characters/:id/ingest/cancel` | JSON `{ "sessionId" }`. Deletes the preview session dir. |
 | `GET` | `/api/engine/settings` | `{ "xaiKeyConfigured", "xaiImageModel" }`. Never returns the key. |
 | `PUT` | `/api/engine/settings` | JSON `{ "xaiApiKey" }`. Writes `XAI_API_KEY` into the repo-root `.env` and `process.env`. Never echoes the key. |
 | `GET` | `/api/prompt-packs` | Built-in Imagine packs. `?character=` returns the matching pack summary. |
-| `POST` | `/api/generate-image` | JSON `{ "project", "characterId", "needId", "n?", "prompt?", "frames?", "dryRun?" }`. Dry-run returns a credit note (published xAI prices when known, else “uses xAI credits”) and writes nothing. Otherwise calls `https://api.x.ai/v1/images/generations` or `/images/edits` (Bearer `XAI_API_KEY`, model `XAI_IMAGE_MODEL` / `grok-imagine-image-2.0`) with `n` variants, auto-attaches the character full-body reference and body when present, saves each raw sheet under `characters/<id>/_library/`, and returns image URLs/base64. Plain-language errors for a missing key, rate limits, and content refusals. Never logs the key. |
+| `POST` | `/api/generate-image` | JSON `{ "project", "characterId", "needId", "n?", "prompt?", "frames?", "dryRun?" }`. `prompt` is the edited Imagine textarea (required for `needId: "custom"`). Dry-run returns a credit note (published xAI prices when known, else “uses xAI credits”) and writes nothing. Otherwise calls `https://api.x.ai/v1/images/generations` or `/images/edits` (Bearer `XAI_API_KEY`, model `XAI_IMAGE_MODEL` / `grok-imagine-image-2.0`) with `n` variants, auto-attaches the character full-body reference and body when present, saves each raw sheet under `characters/<id>/_library/`, and returns image URLs/base64. Plain-language errors for a missing key, rate limits, and content refusals. Never logs the key. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks for locations this project uses. |
 | `GET` | `/api/projects/:name/audio` | WAV files under `audio/`: imported `audio/<label>/001_<character>.wav` and generated `audio/<scene>/<nnn>_<character>.wav`, with `kind`, `label`, `characterId`, `durationSeconds`. |
 | `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for Assets-list character / background / prop cards. Pass `?v=<mtime>` (Studio does this) for `Cache-Control: public, max-age=31536000, immutable`. |
@@ -582,7 +582,12 @@ you generate a PNG yourself.
    background, the same size/position in each cell, no watermark text,
    and no cropped body parts. Background plates skip the green screen
    (and skip chroma key) so the plate stays opaque. Rodney prompts never
-   ask for slanted eyes or a mocking ethnic eye gesture.
+   ask for slanted eyes or a mocking ethnic eye gesture. The Imagine
+   prompt box is a normal textarea: edit, paste, or clear it, then
+   **Generate** sends that text. **Reset to pack prompt** restores the
+   set’s filled prompt. **Custom** is an empty box that still prepends
+   the character style block; pick grid cols × rows and a target slot
+   for the cut-out.
 5. Drop, paste, or pick a generated PNG. The worker saves the original to
   `projects/<name>/characters/<id>/_library/`, then
   `python -m compositor.cutout` keys `#00FF00` with despill, trims, and

@@ -344,6 +344,43 @@ function parseGridBody(body) {
   return { cols, rows };
 }
 
+const CUSTOM_MOUTH_NAMES = ["X", "A", "B", "C", "D", "E", "F", "G", "H", "B_loud", "C_loud", "D_loud", "E_loud"];
+
+function parseDestBody(body) {
+  const raw = body && body.dest;
+  if (!raw || raw.kind !== "slot") return null;
+  const slot = String(raw.slot || "").trim();
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(slot)) throw ingestError("Invalid dest slot");
+  const dir = String(raw.drawings_dir || slot).trim();
+  if (!isSafeFolderName(dir)) throw ingestError("Invalid dest drawings_dir");
+  const dest = { kind: "slot", slot, drawings_dir: dir };
+  if (raw.child) dest.child = String(raw.child);
+  return dest;
+}
+
+function customCellName(index, slot) {
+  if (slot === "mouth" && CUSTOM_MOUTH_NAMES[index]) return CUSTOM_MOUTH_NAMES[index];
+  return `cell_${String(index).padStart(2, "0")}`;
+}
+
+function applyCustomLayout(need, expanded, body) {
+  if (!need || need.id !== "custom") return expanded;
+  const grid = parseGridBody(body) || (expanded && expanded.grid) || { cols: 5, rows: 3 };
+  const dest = parseDestBody(body) || (need.dest && need.dest.kind === "slot" ? need.dest : { kind: "slot", slot: "mouth", drawings_dir: "mouth" });
+  const count = grid.cols * grid.rows;
+  const cells = [];
+  for (let i = 0; i < count; i += 1) {
+    cells.push({ name: customCellName(i, dest.slot), dest });
+  }
+  return {
+    ...expanded,
+    split: "grid",
+    grid,
+    cells,
+    dest,
+  };
+}
+
 function resolveCutoutArgs(need, expanded, gridOverride) {
   const mouth13 = isMouth13Need(need, expanded || {});
   const grid = gridOverride || (expanded && expanded.grid) || (mouth13 ? { cols: 5, rows: 3 } : null);
@@ -368,7 +405,7 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
   if (need.ingest === false || (need.dest && need.dest.kind === "reference")) {
     throw ingestError("This need stores the original as a full-body reference; POST .../reference instead");
   }
-  const expanded = expandNeed(need, body && body.frames);
+  const expanded = applyCustomLayout(need, expandNeed(need, body && body.frames), body);
   const gridOverride = parseGridBody(body);
   const recutSid = body && body.sessionId ? String(body.sessionId) : "";
 
@@ -593,6 +630,8 @@ module.exports = {
   inferMouthViewDest,
   isMouth13Need,
   parseGridBody,
+  parseDestBody,
+  applyCustomLayout,
   resolveCutoutArgs,
   runAlign,
   isHeadLikeDest,

@@ -8,6 +8,7 @@ const path = require("path");
 const {
   destRelForCell,
   inferMouthViewDest,
+  applyCustomLayout,
   ensureSlot,
   uniqueWriteTarget,
   mergeCycles,
@@ -53,6 +54,20 @@ describe("asset ingest helpers", () => {
     ensureSlot(character, expanded.cells[0].dest);
     assert.ok(character.slots.mouth, "existing mouth slot stays");
     assert.equal(character.slots.body.drawings_dir, "body");
+  });
+
+  test("custom ingest uses the requested grid and target slot", () => {
+    const need = getNeed("custom");
+    assert.ok(need);
+    const next = applyCustomLayout(need, expandNeed(need), {
+      grid: { cols: 4, rows: 2 },
+      dest: { kind: "slot", slot: "mouth", drawings_dir: "mouth_left_34" },
+    });
+    assert.deepEqual(next.grid, { cols: 4, rows: 2 });
+    assert.equal(next.cells.length, 8);
+    assert.equal(next.cells[0].name, "X");
+    assert.equal(next.cells[0].dest.drawings_dir, "mouth_left_34");
+    assert.equal(next.cells[7].dest.slot, "mouth");
   });
 
   test("a 13-mouth pack always cuts as a 5x3 gap grid and normalises heads", () => {

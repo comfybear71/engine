@@ -364,6 +364,7 @@ export async function previewCharacterIngest(
     frames?: number;
     sessionId?: string;
     grid?: { cols: number; rows: number };
+    dest?: { kind: "slot"; slot: string; drawings_dir?: string };
   }
 ): Promise<IngestPreview> {
   const res = await workerFetch(
