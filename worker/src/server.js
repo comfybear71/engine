@@ -59,6 +59,8 @@ const {
   renameDrawing,
   deleteDrawing,
   saveDrawingFlags,
+  flipDrawing,
+  restoreReplacedDrawing,
   listLipsyncPreview,
   promoteSlotView,
   realignSlotView,
@@ -1194,6 +1196,40 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
       res.json(saveDrawingFlags(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/flip", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const drawingName = drawingNameFromRequest(req, res);
+    if (!drawingName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(flipDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/restore", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const drawingName = drawingNameFromRequest(req, res);
+    if (!drawingName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(restoreReplacedDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.body || {}));
     } catch (err) {
       sendIngestError(res, err);
     }

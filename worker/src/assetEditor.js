@@ -36,6 +36,7 @@ const {
   absFromProjectRel,
   posixJoin,
 } = require("./assetIngest");
+const { flipPngHorizontal } = require("./pngFlip");
 
 const RHUBARB_SHAPES = ["X", "A", "B", "C", "D", "E", "F", "G", "H"];
 const MOUTH_SOUNDS = {
@@ -260,21 +261,38 @@ function isExcludedFromLipSync(spec, drawingName) {
   return Boolean((meta[name] && meta[name].excludeFromLipSync) || (meta[base] && meta[base].excludeFromLipSync));
 }
 
+function drawingHand(spec, drawingName) {
+  const meta = slotDrawingMeta(spec);
+  const name = String(drawingName || "");
+  const raw = meta[name] && meta[name].hand;
+  return raw === "L" || raw === "R" ? raw : null;
+}
+
 function applyDrawingFlags(drawings, spec) {
   return drawings.map((drawing) => ({
     ...drawing,
     excludeFromLipSync: isExcludedFromLipSync(spec, drawing.name),
+    hand: drawingHand(spec, drawing.name),
   }));
 }
 
 function setDrawingFlag(spec, drawingName, key, value) {
   spec.drawings = spec.drawings && typeof spec.drawings === "object" ? spec.drawings : {};
   const current = spec.drawings[drawingName] && typeof spec.drawings[drawingName] === "object" ? { ...spec.drawings[drawingName] } : {};
-  if (value) current[key] = true;
-  else delete current[key];
+  if (value == null || value === false || value === "") delete current[key];
+  else if (value === true) current[key] = true;
+  else current[key] = value;
   if (Object.keys(current).length) spec.drawings[drawingName] = current;
   else delete spec.drawings[drawingName];
   if (Object.keys(spec.drawings).length === 0) delete spec.drawings;
+}
+
+function normalizeHand(value) {
+  if (value == null || value === false || value === "") return null;
+  const raw = String(value).trim().toUpperCase();
+  if (raw === "L" || raw === "LEFT") return "L";
+  if (raw === "R" || raw === "RIGHT") return "R";
+  throw editorError("hand must be L, R, or empty");
 }
 
 function markDuplicates(drawings) {
@@ -946,19 +964,65 @@ function saveDrawingFlags(projectDir, globalAssetsDir, characterId, slotName, dr
   const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
   const current = describeDrawingFile(projectDir, globalAssetsDir, characterId, view.drawingsDir, drawingName);
   if (!current) throw editorError(`Unknown drawing: ${drawingName}`, "ENOTFOUND");
-  if (body == null || typeof body !== "object" || !("excludeFromLipSync" in body)) {
-    throw editorError("excludeFromLipSync is required");
+  if (body == null || typeof body !== "object" || (!("excludeFromLipSync" in body) && !("hand" in body))) {
+    throw editorError("excludeFromLipSync or hand is required");
   }
   const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
   const live = findSlotSpec(character, slotName);
   if (!live) throw editorError(`Unknown slot: ${slotName}`, "ENOTFOUND");
-  setDrawingFlag(live, drawingName, "excludeFromLipSync", Boolean(body.excludeFromLipSync));
+  if ("excludeFromLipSync" in body) {
+    setDrawingFlag(live, drawingName, "excludeFromLipSync", Boolean(body.excludeFromLipSync));
+  }
+  if ("hand" in body) {
+    setDrawingFlag(live, drawingName, "hand", normalizeHand(body.hand));
+  }
   writeCharacterJson(projectDir, characterId, character, null);
   return {
     ok: true,
     drawing: drawingName,
     excludeFromLipSync: isExcludedFromLipSync(live, drawingName),
+    hand: drawingHand(live, drawingName),
   };
+}
+
+function flipDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, body) {
+  assertDrawingName(drawingName);
+  const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
+  const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
+  const current = describeDrawingFile(projectDir, globalAssetsDir, characterId, view.drawingsDir, drawingName);
+  if (!current) throw editorError(`Unknown drawing: ${drawingName}`, "ENOTFOUND");
+  const destRel = posixJoin("characters", characterId, view.drawingsDir, `${drawingName}.png`);
+  assertInsideCharacterAssets(projectDir, characterId, destRel);
+  const destAbs = absFromProjectRel(projectDir, destRel);
+  const existing = resolveAsset(projectDir, globalAssetsDir, current.rel);
+  const srcAbs = existing ? existing.absPath : destAbs;
+  if (!srcAbs || !fs.existsSync(srcAbs)) throw editorError(`Unknown drawing: ${drawingName}`, "ENOTFOUND");
+  const historyRel = writeHistoryCopy(projectDir, characterId, "replaced", destRel, srcAbs);
+  const flipped = flipPngHorizontal(fs.readFileSync(srcAbs));
+  fs.mkdirSync(path.dirname(destAbs), { recursive: true });
+  fs.writeFileSync(destAbs, flipped);
+  return { ok: true, rel: destRel, replaced: historyRel, drawing: drawingName };
+}
+
+function restoreReplacedDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, body) {
+  assertDrawingName(drawingName);
+  const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
+  const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
+  const destRel = posixJoin("characters", characterId, view.drawingsDir, `${drawingName}.png`);
+  assertInsideCharacterAssets(projectDir, characterId, destRel);
+  const replacedRel = String((body && body.replaced) || "").replace(/\\/g, "/");
+  const prefix = `characters/${characterId}/_replaced/`;
+  if (!replacedRel.startsWith(prefix) || replacedRel.includes("..")) {
+    throw editorError("Restore path is not a _replaced/ copy");
+  }
+  assertInsideCharacterAssets(projectDir, characterId, replacedRel);
+  const destAbs = absFromProjectRel(projectDir, destRel);
+  const replacedAbs = absFromProjectRel(projectDir, replacedRel);
+  if (!fs.existsSync(replacedAbs)) throw editorError("Replaced copy not found", "ENOENT");
+  const again = fs.existsSync(destAbs) ? writeHistoryCopy(projectDir, characterId, "replaced", destRel, destAbs) : null;
+  fs.mkdirSync(path.dirname(destAbs), { recursive: true });
+  fs.copyFileSync(replacedAbs, destAbs);
+  return { ok: true, rel: destRel, replaced: again, drawing: drawingName };
 }
 
 function readRhubarbCues(absPath) {
@@ -1035,6 +1099,8 @@ module.exports = {
   renameDrawing,
   deleteDrawing,
   saveDrawingFlags,
+  flipDrawing,
+  restoreReplacedDrawing,
   listLipsyncPreview,
   missingMouthShapes,
   rhubarbShapeOf,

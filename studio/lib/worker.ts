@@ -371,7 +371,7 @@ export async function previewCharacterIngest(
 export async function confirmCharacterIngest(
   name: string,
   characterId: string,
-  body: { sessionId: string; assignments: { index: number; name: string }[] }
+  body: { sessionId: string; assignments: { index: number; name: string }[]; flipAll?: boolean }
 ): Promise<IngestConfirmResult> {
   const res = await workerFetch(
     `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/ingest/confirm`,

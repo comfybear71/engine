@@ -85,6 +85,7 @@ export default function AssetImaginePanel({
   const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null);
   const [results, setResults] = useState<GeneratedImage[]>([]);
   const [picked, setPicked] = useState<number | null>(null);
+  const [confirmed, setConfirmed] = useState<number[]>([]);
 
   useEffect(() => {
     setStyle(character.style || "");
@@ -93,6 +94,7 @@ export default function AssetImaginePanel({
     setError(null);
     setResults([]);
     setPicked(null);
+    setConfirmed([]);
     const nextPack = packForCharacter(character);
     const first = nextPack?.sets[0]?.id || ASSET_NEEDS[0]?.id || "mouth_sheet";
     const match = initialNeedId
@@ -264,6 +266,7 @@ export default function AssetImaginePanel({
     setError(null);
     setResults([]);
     setPicked(null);
+    setConfirmed([]);
     try {
       const result: GenerateImageResponse = await generateProjectImage({
         project,
@@ -315,7 +318,7 @@ export default function AssetImaginePanel({
     setPreview(null);
   }
 
-  async function onConfirm() {
+  async function onConfirm(opts?: { flipAll?: boolean }) {
     if (!preview) return;
     setBusy("Saving drawings…");
     setError(null);
@@ -325,7 +328,11 @@ export default function AssetImaginePanel({
         assignments: preview.cells
           .filter((cell) => !cell.empty)
           .map((cell) => ({ index: cell.index, name: names[cell.index] || cell.suggestedName })),
+        flipAll: Boolean(opts?.flipAll),
       });
+      if (picked != null) {
+        setConfirmed((prev) => (prev.includes(picked) ? prev : [...prev, picked]));
+      }
       setPreview(null);
       onChanged();
     } catch (err) {
@@ -360,6 +367,7 @@ export default function AssetImaginePanel({
               onNeedId?.(event.target.value);
               setResults([]);
               setPicked(null);
+              setConfirmed([]);
             }}
             data-testid="asset-need"
           >
@@ -498,7 +506,9 @@ export default function AssetImaginePanel({
 
       {results.length > 0 ? (
         <div className="mt-3 space-y-2" data-testid="generate-results">
-          <p className="text-[11px] text-studio-muted">Pick one to cut out and preview. Confirm still saves into the slot folder.</p>
+          <p className="text-[11px] text-studio-muted">
+            Pick a sheet to cut out. Confirm adds its drawings (existing names get _b, _c). You can confirm more than one.
+          </p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {results.map((image) => (
               <button
@@ -506,13 +516,22 @@ export default function AssetImaginePanel({
                 type="button"
                 onClick={() => void onPickGenerated(image)}
                 disabled={busy != null}
-                className={`studio-checker overflow-hidden rounded-md border ${
+                className={`studio-checker relative overflow-hidden rounded-md border ${
                   picked === image.index ? "border-studio-accent ring-2 ring-studio-accent/40" : "border-studio-border"
                 }`}
                 data-testid={`generate-pick-${image.index}`}
+                data-confirmed={confirmed.includes(image.index) ? "true" : "false"}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={image.imageBase64} alt={`Variant ${image.index + 1}`} className="aspect-square w-full object-contain" />
+                {confirmed.includes(image.index) ? (
+                  <span
+                    className="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[10px] text-studio-accent"
+                    data-testid={`generate-confirmed-${image.index}`}
+                  >
+                    Confirmed
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -542,7 +561,7 @@ export default function AssetImaginePanel({
           setNames={setNames}
           busy={busy}
           onCancel={() => void closePreview(true)}
-          onConfirm={() => void onConfirm()}
+          onConfirm={(opts) => void onConfirm(opts)}
         />
       ) : null}
     </section>
@@ -610,10 +629,11 @@ function PreviewModal({
   setNames: (next: Record<number, string>) => void;
   busy: string | null;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (opts?: { flipAll?: boolean }) => void;
 }) {
   const cols = preview.grid?.cols || 3;
   const choices = need.assignChoices;
+  const [flipAll, setFlipAll] = useState(false);
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
       <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-md border border-studio-border bg-studio-panel p-4 shadow-2xl">
@@ -633,7 +653,12 @@ function PreviewModal({
             <div key={cell.index} className="space-y-1.5">
               <div className="studio-checker relative aspect-square overflow-hidden rounded-md border border-studio-border">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={cell.pngBase64} alt={cell.suggestedName} className="h-full w-full object-contain" />
+                <img
+                  src={cell.pngBase64}
+                  alt={cell.suggestedName}
+                  className="h-full w-full object-contain"
+                  style={flipAll ? { transform: "scaleX(-1)" } : undefined}
+                />
                 {cell.empty ? (
                   <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[10px] text-neutral-300">
                     empty
@@ -670,7 +695,16 @@ function PreviewModal({
             </div>
           ))}
         </div>
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+          <label className="mr-auto flex items-center gap-1.5 text-[11px] text-studio-muted">
+            <input
+              type="checkbox"
+              checked={flipAll}
+              onChange={(event) => setFlipAll(event.target.checked)}
+              data-testid="ingest-flip-all"
+            />
+            Flip all in this sheet
+          </label>
           <button
             type="button"
             className="rounded-md border border-studio-border px-3 py-1.5 text-xs text-neutral-200"
@@ -682,7 +716,7 @@ function PreviewModal({
             type="button"
             className="rounded-md bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
             disabled={busy != null}
-            onClick={onConfirm}
+            onClick={() => onConfirm({ flipAll })}
             data-testid="ingest-confirm"
           >
             {busy || "Confirm"}

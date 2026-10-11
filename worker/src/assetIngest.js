@@ -5,8 +5,9 @@
  * project's characters/<id>/_library/, run the Python cut-out pipeline,
  * preview cells, then (on confirm) write drawings into slot folders and
  * merge slots/cycles into a project-local character.json without
- * clobbering unrelated entries. Overwritten local files are copied to
- * _backup/<timestamp>/ first. Never writes into _global_assets.
+ * clobbering unrelated entries. Confirm always ADDS cells: if a dest
+ * name already exists, the new file gets a suffix (_b, _c, …). Never
+ * overwrites drawings. Never writes into _global_assets.
  */
 
 const fs = require("fs");
@@ -17,9 +18,9 @@ const { loadCharacter, resolveAsset } = require("./parser/assetLibrary");
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 const { isSafeFolderName } = require("./studioProjects");
 const { getNeed, expandNeed } = require("./assetNeeds");
+const { flipPngHorizontal } = require("./pngFlip");
 const {
   characterDir,
-  backupIfExists,
   readWritableCharacter,
   writeCharacterJson,
   findSlotSpec,
@@ -99,11 +100,48 @@ function mergeCycles(slotSpec, cycles) {
   if (!slotSpec || !cycles) return;
   slotSpec.cycles = slotSpec.cycles || {};
   for (const [name, cycle] of Object.entries(cycles)) {
+    const existing = slotSpec.cycles[name];
+    const drawings = [...((existing && existing.drawings) || [])];
+    for (const drawing of cycle.drawings || []) {
+      if (!drawings.includes(drawing)) drawings.push(drawing);
+    }
     slotSpec.cycles[name] = {
-      drawings: [...(cycle.drawings || [])],
-      fps: cycle.fps,
+      drawings,
+      fps: cycle.fps || (existing && existing.fps) || 12,
     };
   }
+}
+
+const NAME_LETTERS = "bcdefghijklmnopqrstuvwxyz";
+
+function destExists(projectDir, globalAssetsDir, rel) {
+  if (!rel) return false;
+  return Boolean(resolveAsset(projectDir, globalAssetsDir, rel));
+}
+
+function suffixFileRel(characterId, destRel, suffix) {
+  const ext = path.posix.extname(destRel) || ".png";
+  const dir = path.posix.dirname(destRel);
+  const stem = path.posix.basename(destRel, ext);
+  const file = `${stem}${suffix}${ext}`;
+  return posixJoin("characters", characterId, dir === "." ? file : posixJoin(dir, file));
+}
+
+function uniqueWriteTarget(projectDir, globalAssetsDir, characterId, dest, name, takenRels) {
+  const taken = (rel) => Boolean(rel) && (takenRels.has(rel) || destExists(projectDir, globalAssetsDir, rel));
+  const first = destRelForCell(characterId, dest, name);
+  if (first && !taken(first)) return { name, rel: first };
+  for (let i = 0; i < NAME_LETTERS.length + 200; i += 1) {
+    const suffix = i < NAME_LETTERS.length ? `_${NAME_LETTERS[i]}` : `_b${i - NAME_LETTERS.length + 2}`;
+    const nextName = `${name}${suffix}`;
+    if (!DRAWING_NAME.test(nextName)) continue;
+    const rel =
+      dest && dest.kind === "file" && dest.rel
+        ? suffixFileRel(characterId, dest.rel, suffix)
+        : destRelForCell(characterId, dest, nextName);
+    if (rel && !taken(rel)) return { name: nextName, rel };
+  }
+  throw ingestError(`Could not find a free name for "${name}"`);
 }
 
 function runAlign(args, options = {}) {
@@ -262,12 +300,6 @@ function destRelForCell(characterId, dest, drawingName) {
   return null;
 }
 
-function relInsideCharacter(characterId, rel) {
-  const prefix = `characters/${characterId}/`;
-  if (rel.startsWith(prefix)) return rel.slice(prefix.length);
-  return rel;
-}
-
 function absFromProjectRel(projectDir, rel) {
   const resolved = path.resolve(projectDir, rel);
   const root = path.resolve(projectDir);
@@ -387,6 +419,7 @@ function confirmIngest(projectDir, globalAssetsDir, characterId, body) {
   }
 
   const usedNames = new Map();
+  const takenRels = new Set();
   const writes = [];
   for (const cell of manifest.cells) {
     const name = byIndex.has(cell.index) ? byIndex.get(cell.index) : cell.suggestedName;
@@ -397,22 +430,28 @@ function confirmIngest(projectDir, globalAssetsDir, characterId, body) {
       throw ingestError(`Two cells assigned to "${name}"`);
     }
     usedNames.set(name, cell.index);
-    const rel = destRelForCell(characterId, cell.dest, name);
-    if (!rel) {
+    if (!destRelForCell(characterId, cell.dest, name)) {
       if (cell.empty || !cell.dest) continue;
       throw ingestError(`No destination for cell ${cell.index}`);
     }
-    writes.push({ cell, name, rel });
+    const unique = uniqueWriteTarget(projectDir, globalAssetsDir, characterId, cell.dest, name, takenRels);
+    takenRels.add(unique.rel);
+    writes.push({ cell, name: unique.name, rel: unique.rel });
   }
   if (writes.length === 0) throw ingestError("No cells to save");
 
+  const flipAll = Boolean(body && body.flipAll);
   const backupRoot = path.join(characterDir(projectDir, characterId), "_backup", stamp());
   const written = [];
   for (const item of writes) {
     const abs = absFromProjectRel(projectDir, item.rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
-    backupIfExists(abs, backupRoot, relInsideCharacter(characterId, item.rel));
-    fs.copyFileSync(item.cell.path, abs);
+    if (flipAll) {
+      const flipped = flipPngHorizontal(fs.readFileSync(item.cell.path));
+      fs.writeFileSync(abs, flipped);
+    } else {
+      fs.copyFileSync(item.cell.path, abs);
+    }
     written.push({ name: item.name, rel: item.rel, dest: item.cell.dest, cycle: item.cell.cycle });
   }
 
@@ -477,6 +516,8 @@ module.exports = {
   confirmIngest,
   cancelIngest,
   ensureSlot,
+  mergeCycles,
+  uniqueWriteTarget,
   readWritableCharacter,
   destRelForCell,
   runAlign,

@@ -184,6 +184,9 @@ clobber the project's `timeline.json`.
   paste an image onto a drawing/cell to replace it through the green-screen
   cut-out + trim pipeline (before/after, Accept/Cancel); the old file is
   copied to `characters/<id>/_replaced/<timestamp>/`, never deleted.
+  **Flip horizontally** writes a mirrored PNG the same way (undoable). A
+  small **L/R** tag can be set per drawing so mixed arm sheets can be
+  sorted.
   **+** adds a named drawing the same way. **Open Grok Imagine for this
   slot** opens the Generate dock preselected for that character and set.
   Rename updates `character.json` cycle lists. Delete asks once, then
@@ -458,11 +461,13 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings` | Add-drawing preview. JSON `{ "imageBase64", "filename?", "name?", "view?" }`. |
 | `POST` | `…/drawings/confirm` | JSON `{ "sessionId", "name" }`. Writes `characters/<id>/<drawings_dir>/<name>.png`. |
 | `POST` | `…/drawings/cancel` | JSON `{ "sessionId" }`. |
-| `POST` | `…/drawings/:drawing/flags` | JSON `{ "excludeFromLipSync", "view?" }`. Persist a per-drawing lip-sync skip in project-local `character.json` (`slots.<slot>.drawings.<name>.excludeFromLipSync`). |
+| `POST` | `…/drawings/:drawing/flags` | JSON `{ "excludeFromLipSync"?, "hand"?: "L"\|"R"\|null, "view?" }`. Persist a per-drawing lip-sync skip and/or L/R tag in project-local `character.json` (`slots.<slot>.drawings.<name>.excludeFromLipSync` / `.hand`). |
+| `POST` | `…/drawings/:drawing/flip` | Mirror the PNG horizontally. Copies the previous file to `_replaced/<timestamp>/`. Returns `{ replaced }` for undo. |
+| `POST` | `…/drawings/:drawing/restore` | JSON `{ "replaced" }`. Copy that `_replaced/` file back over the drawing (undo flip). |
 | `POST` | `…/drawings/:drawing/rename` | JSON `{ "name", "view?" }`. Project-local files only; updates cycle lists and `default_drawing`. |
 | `POST` | `…/drawings/:drawing/delete` | JSON `{ "confirm": true, "force?", "view?" }`. Moves a project-local file to `_trash/<timestamp>/`. If a script uses it and `force` is not set, returns **409** with `{ used, usages }`. |
 | `POST` | `/api/projects/:name/characters/:id/ingest` | Drop-zone preview. JSON `{ "needId", "imageBase64", "filename?", "frames?" }`. Saves the original under `characters/<id>/_library/`, runs the Python cut-out pipeline (key `#00FF00` + despill + trim + split), returns a session plus cell PNGs as data URLs. |
-| `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }] }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames), backs up overwritten **local** files to `_backup/<timestamp>/`, merges new slots/cycles into project-local `character.json` without deleting other entries. |
+| `POST` | `/api/projects/:name/characters/:id/ingest/confirm` | JSON `{ "sessionId", "assignments": [{ "index", "name" }], "flipAll?" }`. Writes cells to slot folders (mouth `X,A,B,…`; numbered walk frames). Never overwrites: a name that already exists gets `_b`, `_c`, …. `flipAll` mirrors every cell first. Merges new slots/cycles into project-local `character.json` without deleting other entries (cycle lists append). |
 | `POST` | `/api/projects/:name/characters/:id/ingest/cancel` | JSON `{ "sessionId" }`. Deletes the preview session dir. |
 | `GET` | `/api/engine/settings` | `{ "xaiKeyConfigured", "xaiImageModel" }`. Never returns the key. |
 | `PUT` | `/api/engine/settings` | JSON `{ "xaiApiKey" }`. Writes `XAI_API_KEY` into the repo-root `.env` and `process.env`. Never echoes the key. |
@@ -553,7 +558,8 @@ you generate a PNG yourself.
    exist (`/v1/images/edits`, otherwise `/v1/images/generations`). Raw
    sheets land in `characters/<id>/_library/`. Thumbnails come back in
    the dock; pick one and it goes through the same green-screen cut-out
-   preview as a drop. **Copy prompt** and the drop zone stay for the
+   preview as a drop. Confirm adds that sheet; pick the other variant
+   and confirm again to keep both. **Copy prompt** and the drop zone stay for the
    manual path. **Attach reference to prompt** still applies to copied
    generic prompts.
 3. Style notes on characters without a pack come from `character.json`
@@ -567,16 +573,25 @@ you generate a PNG yourself.
    (and skip chroma key) so the plate stays opaque. Rodney prompts never
    ask for slanted eyes or a mocking ethnic eye gesture.
 5. Drop, paste, or pick a generated PNG. The worker saves the original to
-   `projects/<name>/characters/<id>/_library/`, then
-   `python -m compositor.cutout` keys `#00FF00` with despill, trims, and
-   splits by the template grid (or connected components).
+  `projects/<name>/characters/<id>/_library/`, then
+  `python -m compositor.cutout` keys `#00FF00` with despill, trims, and
+  splits by the template grid (or connected components).
 6. The preview grid lets you rename / reassign a cell (mouth cells map in
-   order `X,A,B,…`) before **Confirm**. Confirm writes
-   `mouth/<shape>.png`, numbered cycle frames, `parts/`, `props/`, or
-   `backgrounds/<name>/bg.png`. Existing **project-local** files are copied
-   to `characters/<id>/_backup/<timestamp>/` first. Global library files
-   are not overwritten; a local file at the same relative path is an
-   override, same as [docs/assets.md](assets.md#overrides).
+   order `X,A,B,…`) before **Confirm**. Confirm **adds** the cut-out
+   drawings to the slot folder and never overwrites an existing file:
+   if `X.png` is already there, the new cell is written as `X_b.png`
+   (then `_c`, …). You can confirm both Generate variants one after the
+   other; confirmed sheets stay marked in the dock. **Flip all in this
+   sheet** mirrors every cell before it is written (arm sheets often mix
+   left and right). Global library files are not overwritten; a local
+   file at the same relative path is an override, same as
+   [docs/assets.md](assets.md#overrides).
+7. In the Assets drawing viewer, **Flip horizontally** writes a mirrored
+   PNG and keeps the original in `characters/<id>/_replaced/<timestamp>/`
+   (Undo flip restores that copy). A small **L/R** tag on each drawing
+   (stored on project-local `character.json` as
+   `slots.<slot>.drawings.<name>.hand`) marks which side an arm/hand
+   belongs to so a `right_hand` slot can be cleaned of left arms.
 
 Walk-cycle ingest adds `slots.body.cycles` (`walk_side`, `walk_front`,
 `walk_back`) on the project-local `character.json`. That is the

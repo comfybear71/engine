@@ -46,6 +46,7 @@ export type EditorDrawing = {
   duplicateOf?: string | null;
   duplicates?: string[];
   excludeFromLipSync?: boolean;
+  hand?: "L" | "R" | null;
 };
 
 export type SlotEditor = {
@@ -245,8 +246,8 @@ export async function saveDrawingFlags(
   characterId: string,
   slot: string,
   drawing: string,
-  body: { excludeFromLipSync: boolean; view?: string }
-): Promise<{ ok: boolean; drawing: string; excludeFromLipSync: boolean }> {
+  body: { excludeFromLipSync?: boolean; hand?: "L" | "R" | null; view?: string }
+): Promise<{ ok: boolean; drawing: string; excludeFromLipSync: boolean; hand: "L" | "R" | null }> {
   const res = await workerFetch(
     slotPath(project, characterId, slot, `/drawings/${encodeURIComponent(drawing)}/flags`, body.view),
     {
@@ -256,7 +257,45 @@ export async function saveDrawingFlags(
     }
   );
   if (!res.ok) throw new Error(await readError(res));
-  return res.json() as Promise<{ ok: boolean; drawing: string; excludeFromLipSync: boolean }>;
+  return res.json() as Promise<{ ok: boolean; drawing: string; excludeFromLipSync: boolean; hand: "L" | "R" | null }>;
+}
+
+export async function flipEditorDrawing(
+  project: string,
+  characterId: string,
+  slot: string,
+  drawing: string,
+  body?: { view?: string }
+): Promise<{ ok: boolean; rel: string; replaced: string | null; drawing: string }> {
+  const res = await workerFetch(
+    slotPath(project, characterId, slot, `/drawings/${encodeURIComponent(drawing)}/flip`, body?.view),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ ok: boolean; rel: string; replaced: string | null; drawing: string }>;
+}
+
+export async function restoreEditorDrawing(
+  project: string,
+  characterId: string,
+  slot: string,
+  drawing: string,
+  body: { replaced: string; view?: string }
+): Promise<{ ok: boolean; rel: string; replaced: string | null; drawing: string }> {
+  const res = await workerFetch(
+    slotPath(project, characterId, slot, `/drawings/${encodeURIComponent(drawing)}/restore`, body.view),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ ok: boolean; rel: string; replaced: string | null; drawing: string }>;
 }
 
 export async function renameEditorDrawing(

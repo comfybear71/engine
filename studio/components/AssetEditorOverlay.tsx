@@ -8,6 +8,7 @@ import {
   cueAtTime,
   deleteEditorDrawing,
   fileToImageBase64,
+  flipEditorDrawing,
   formatUsage,
   imageFileFromClipboard,
   loadDrawingEditor,
@@ -23,6 +24,7 @@ import {
   remapLipSyncShape,
   excludedLipSyncShapes,
   renameEditorDrawing,
+  restoreEditorDrawing,
   saveDrawingFlags,
   type AssetFocus,
   type DrawingEditor,
@@ -89,6 +91,7 @@ export default function AssetEditorOverlay({
   const [playShape, setPlayShape] = useState<string | null>(null);
   const [nudge, setNudge] = useState(defaultHeadNudge());
   const [overlayDefault, setOverlayDefault] = useState(true);
+  const [flipUndo, setFlipUndo] = useState<{ drawing: string; replaced: string } | null>(null);
   const playRef = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const addFileRef = useRef<HTMLInputElement | null>(null);
@@ -364,6 +367,60 @@ export default function AssetEditorOverlay({
     playRef.current = window.requestAnimationFrame(tick);
   }
 
+  useEffect(() => {
+    setFlipUndo(null);
+  }, [drawingName]);
+
+  async function onFlip() {
+    if (focus.mode !== "drawing") return;
+    setBusy("Flipping…");
+    setError(null);
+    try {
+      const result = await flipEditorDrawing(project, focus.characterId, focus.slot, focus.drawing, { view });
+      setFlipUndo(result.replaced ? { drawing: focus.drawing, replaced: result.replaced } : null);
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not flip");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onUndoFlip() {
+    if (focus.mode !== "drawing" || !flipUndo || flipUndo.drawing !== focus.drawing) return;
+    setBusy("Undoing flip…");
+    setError(null);
+    try {
+      await restoreEditorDrawing(project, focus.characterId, focus.slot, focus.drawing, {
+        replaced: flipUndo.replaced,
+        view,
+      });
+      setFlipUndo(null);
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not undo flip");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onHand(hand: "L" | "R" | null) {
+    if (focus.mode !== "drawing") return;
+    setBusy("Saving…");
+    setError(null);
+    try {
+      await saveDrawingFlags(project, focus.characterId, focus.slot, focus.drawing, { hand, view });
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not set L/R");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function onExcludeFromLipSync(exclude: boolean) {
     if (focus.mode !== "drawing") return;
     setBusy(exclude ? "Excluding…" : "Including…");
@@ -502,6 +559,9 @@ export default function AssetEditorOverlay({
           onNudge={(next) => setNudge(clampHeadNudge(next))}
           onRealign={(opts) => void onRealign(current.name, opts)}
           onExcludeFromLipSync={slot?.mouth ? (value) => void onExcludeFromLipSync(value) : undefined}
+          onFlip={() => void onFlip()}
+          onUndoFlip={flipUndo && flipUndo.drawing === drawingName ? () => void onUndoFlip() : undefined}
+          onHand={(hand) => void onHand(hand)}
           defaultRel={
             slot?.canRealign && slot.defaultDrawingsDir
               ? `characters/${focus.characterId}/${slot.defaultDrawingsDir}/${current.name}.png`
@@ -626,6 +686,9 @@ function DrawingView({
   onNudge,
   onRealign,
   onExcludeFromLipSync,
+  onFlip,
+  onUndoFlip,
+  onHand,
   defaultRel,
 }: {
   slot: SlotEditor | null;
@@ -647,6 +710,9 @@ function DrawingView({
   onNudge: (nudge: { x: number; y: number; scale: number }) => void;
   onRealign: (opts?: { collarY?: number; cropToHead?: boolean }) => void;
   onExcludeFromLipSync?: (exclude: boolean) => void;
+  onFlip: () => void;
+  onUndoFlip?: () => void;
+  onHand: (hand: "L" | "R" | null) => void;
   defaultRel: string | null;
 }) {
   const defaultSrc = defaultRel ? assetUrl(project, defaultRel) : null;
@@ -698,6 +764,21 @@ function DrawingView({
             Exclude from lip sync
           </label>
         ) : null}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-neutral-500">L/R</span>
+          {(["L", "R"] as const).map((side) => (
+            <button
+              key={side}
+              type="button"
+              className="studio-header-textbtn"
+              data-active={current.hand === side}
+              data-testid={`asset-hand-${side}`}
+              onClick={() => onHand(current.hand === side ? null : side)}
+            >
+              {side}
+            </button>
+          ))}
+        </div>
         {current.duplicateOf ? (
           <p className="text-[10px] text-amber-300" data-testid="asset-duplicate">
             Duplicate of {current.duplicateOf}
@@ -808,6 +889,14 @@ function DrawingView({
           </div>
         ) : null}
         <div className="flex flex-wrap gap-1">
+          <button type="button" className="studio-header-textbtn" onClick={onFlip} data-testid="asset-flip">
+            Flip horizontally
+          </button>
+          {onUndoFlip ? (
+            <button type="button" className="studio-header-textbtn" onClick={onUndoFlip} data-testid="asset-flip-undo">
+              Undo flip
+            </button>
+          ) : null}
           <button type="button" className="studio-header-textbtn" onClick={onReplace} data-testid="asset-replace">
             Replace
           </button>
@@ -1096,6 +1185,11 @@ function SlotGrid({
                   manual only
                 </span>
               ) : null}
+              {cell.drawing?.hand ? (
+                <span className="text-[9px] text-neutral-400" data-testid="asset-hand-tag">
+                  {cell.drawing.hand}
+                </span>
+              ) : null}
             </button>
           ))}
           <button
@@ -1137,6 +1231,9 @@ function SlotGrid({
                 <span className="truncate text-[11px] text-neutral-200">{drawing.name}</span>
                 {drawing.excludeFromLipSync ? (
                   <span className="text-[9px] text-amber-200">manual only</span>
+                ) : null}
+                {drawing.hand ? (
+                  <span className="text-[9px] text-neutral-400">{drawing.hand}</span>
                 ) : null}
               </button>
             ))}
