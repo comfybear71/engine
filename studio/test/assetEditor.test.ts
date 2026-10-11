@@ -12,6 +12,10 @@ import {
   landmarksFromRgba,
   previewAlignLayout,
   residualHeadNudge,
+  savedHeadNudge,
+  parseHeadScale,
+  normalizeAllHeadNudge,
+  nudgeEquals,
   sliderToHeadScale,
 } from "../lib/headAlign.ts";
 import {
@@ -133,6 +137,16 @@ describe("asset editor helpers", () => {
     assert.ok(Math.abs(headScaleToSlider(1) - 0.5) < 1e-9);
     const residual = residualHeadNudge({ x: 0, y: 0, scale: 3.2 }, 3.2);
     assert.ok(Math.abs(residual.scale - 1) < 1e-9);
+    assert.deepEqual(normalizeAllHeadNudge(), { x: 0, y: 0, scale: 1 });
+    assert.equal(nudgeEquals({ x: 0, y: 0, scale: 1.25 }, { x: 0, y: 0, scale: 1.25001 }), true);
+    assert.equal(nudgeEquals({ x: 0, y: 0, scale: 1.25 }, { x: 0, y: 0, scale: 1.5 }), false);
+    assert.deepEqual(savedHeadNudge({ x: 12, y: -4, scale: 1.5 }), { x: 12, y: -4, scale: 1.5 });
+    assert.equal(savedHeadNudge(null), null);
+    assert.equal(parseHeadScale("1.25"), 1.25);
+    assert.equal(parseHeadScale("0.1"), 0.25);
+    assert.equal(parseHeadScale("9"), 4);
+    assert.equal(parseHeadScale(""), null);
+    assert.equal(parseHeadScale("."), null);
   });
 
   test("auto-fit scales a small cropped head to the default hat/chin height", () => {

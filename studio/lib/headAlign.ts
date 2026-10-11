@@ -103,6 +103,33 @@ export function clampHeadNudge(nudge: HeadNudge): HeadNudge {
   };
 }
 
+export function nudgeEquals(a: HeadNudge, b: HeadNudge, eps = 1e-4): boolean {
+  return Math.abs(a.x - b.x) <= eps && Math.abs(a.y - b.y) <= eps && Math.abs(a.scale - b.scale) <= eps;
+}
+
+/** Apply-to-all sends identity: Python fits each drawing to the same default on its own. */
+export function normalizeAllHeadNudge(): HeadNudge {
+  return defaultHeadNudge();
+}
+
+export function savedHeadNudge(raw: unknown): HeadNudge | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as { x?: unknown; y?: unknown; scale?: unknown };
+  const x = Number(rec.x);
+  const y = Number(rec.y);
+  const scale = Number(rec.scale);
+  if (![x, y, scale].every(Number.isFinite)) return null;
+  return clampHeadNudge({ x, y, scale });
+}
+
+export function parseHeadScale(raw: string): number | null {
+  const text = String(raw || "").trim();
+  if (!text || text === "-" || text === "." || text === "-.") return null;
+  const value = Number(text);
+  if (!Number.isFinite(value)) return null;
+  return clampHeadNudge({ x: 0, y: 0, scale: value }).scale;
+}
+
 /** Residual passed to the worker: Python still does hat/chin auto-fit, then multiplies. */
 export function residualHeadNudge(nudge: HeadNudge, autoScale: number): HeadNudge {
   const base = Number(autoScale) > 1e-6 ? Number(autoScale) : 1;

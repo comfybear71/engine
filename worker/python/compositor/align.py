@@ -130,6 +130,38 @@ def crop_to_head(src: np.ndarray, ref: np.ndarray | None = None, collar_y: float
     return crop_below_collar(src, y)
 
 
+def already_aligned(
+    src: np.ndarray,
+    ref: np.ndarray,
+    *,
+    nudge_x: float = 0.0,
+    nudge_y: float = 0.0,
+    nudge_scale: float = 1.0,
+    scale_tol: float = 0.02,
+    shift_tol: float = 2.0,
+) -> bool:
+    """True when src already matches ref head height/anchor and nudge is identity."""
+    if abs(float(nudge_x or 0.0)) > 0.5 or abs(float(nudge_y or 0.0)) > 0.5:
+        return False
+    if abs((float(nudge_scale) if nudge_scale else 1.0) - 1.0) > 1e-6:
+        return False
+    src = _to_bgra(src)
+    ref = _to_bgra(ref)
+    if src.shape[0] != ref.shape[0] or src.shape[1] != ref.shape[1]:
+        return False
+    sl = landmarks(src)
+    rl = landmarks(ref)
+    src_h = max(1.0, sl["chin"][1] - sl["hat"][1])
+    ref_h = max(1.0, rl["chin"][1] - rl["hat"][1])
+    if abs(src_h - ref_h) > max(2.0, ref_h * scale_tol):
+        return False
+    if abs(sl["hat"][1] - rl["hat"][1]) > shift_tol:
+        return False
+    if abs(sl["neck"][0] - rl["neck"][0]) > shift_tol:
+        return False
+    return True
+
+
 def align_to_reference(
     src: np.ndarray,
     ref: np.ndarray,
@@ -143,6 +175,8 @@ def align_to_reference(
     ref = _to_bgra(ref)
     if crop:
         src = crop_to_head(src, ref, collar_y)
+    if already_aligned(src, ref, nudge_x=nudge_x, nudge_y=nudge_y, nudge_scale=nudge_scale):
+        return src
     sl = landmarks(src)
     rl = landmarks(ref)
     src_h = max(1.0, sl["chin"][1] - sl["hat"][1])

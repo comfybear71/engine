@@ -17,6 +17,8 @@ const {
   renameDrawing,
   deleteDrawing,
   saveDrawingFlags,
+  realignSlotView,
+  pickAlignReferenceName,
   flipDrawing,
   restoreReplacedDrawing,
   listLipsyncPreview,
@@ -196,6 +198,29 @@ describe("asset editor", { concurrency: 1 }, () => {
     assert.equal(back.pixels[4], 0);
   });
 
+  test("pickAlignReferenceName prefers default_drawing then X", () => {
+    const scan = new Map([
+      ["C", { absPath: "C.png" }],
+      ["X", { absPath: "X.png" }],
+      ["A", { absPath: "A.png" }],
+    ]);
+    assert.equal(pickAlignReferenceName({ default_drawing: "A" }, scan, scan), "A");
+    assert.equal(pickAlignReferenceName({}, scan, scan), "X");
+    assert.equal(pickAlignReferenceName({}, new Map([["C", {}]]), new Map()), "C");
+  });
+
+  test("per-drawing align persists on Save and reloads on the slot payload", () => {
+    const saved = saveDrawingFlags(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "A", {
+      align: { x: 6, y: -3, scale: 1.4 },
+    });
+    assert.deepEqual(saved.align, { x: 6, y: -3, scale: 1.4 });
+    const slot = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth");
+    assert.deepEqual(slot.drawings.find((d) => d.name === "A").align, { x: 6, y: -3, scale: 1.4 });
+    assert.equal(slot.alignReferenceDrawing, "X");
+    const json = JSON.parse(fs.readFileSync(path.join(deeDir, "character.json"), "utf8"));
+    assert.deepEqual(json.slots.mouth.drawings.A.align, { x: 6, y: -3, scale: 1.4 });
+  });
+
   test("L/R hand tag persists per drawing", () => {
     const saved = saveDrawingFlags(fixture.projectDir, fixture.globalAssetsDir, "dee", "mouth", "extra", { hand: "L" });
     assert.equal(saved.hand, "L");
@@ -248,6 +273,68 @@ describe("asset editor", { concurrency: 1 }, () => {
     assert.ok(result.trash.includes("_trash/"));
     assert.ok(fs.existsSync(path.join(fixture.projectDir, result.trash)));
     assert.equal(fs.existsSync(path.join(deeDir, "eyes", "spare.png")), false);
+  });
+
+  test("apply-all normalises every drawing to the default and does not compound", async () => {
+    const rodneyDir = path.join(fixture.projectDir, "characters", "rodney");
+    function headPng(w, h, x0, y0, x1, y1) {
+      const rgba = Buffer.alloc(w * h * 4);
+      for (let y = y0; y < y1; y += 1) {
+        for (let x = x0; x < x1; x += 1) {
+          const i = (y * w + x) * 4;
+          rgba[i] = 30;
+          rgba[i + 1] = 40;
+          rgba[i + 2] = 200;
+          rgba[i + 3] = 255;
+        }
+      }
+      return encodeRgbaPng(w, h, rgba);
+    }
+    fs.mkdirSync(path.join(rodneyDir, "mouth"), { recursive: true });
+    writePng(path.join(rodneyDir, "body.png"));
+    writePng(path.join(rodneyDir, "mouth", "X.png"), headPng(200, 220, 70, 20, 130, 180));
+    writePng(path.join(rodneyDir, "mouth", "A.png"), headPng(80, 90, 20, 10, 60, 70));
+    writePng(path.join(rodneyDir, "mouth", "C.png"), headPng(40, 50, 8, 6, 32, 36));
+    fixture.writeJson(path.join(rodneyDir, "character.json"), {
+      id: "rodney",
+      display_name: "Rodney",
+      aliases: ["Rodney"],
+      asset: "body.png",
+      z: 8,
+      slots: { mouth: { offset: { x: 0, y: -12 }, drawings_dir: "mouth" } },
+      children: [],
+    });
+    const first = await realignSlotView(fixture.projectDir, fixture.globalAssetsDir, "rodney", "mouth", {
+      normalize: true,
+    });
+    assert.equal(first.normalize, true);
+    assert.equal(first.referenceDrawing, "X");
+    assert.ok(first.written.some((item) => item.name === "A"));
+    assert.ok(first.written.some((item) => item.name === "C"));
+    const afterA = decodePng(fs.readFileSync(path.join(rodneyDir, "mouth", "A.png")));
+    const afterC = decodePng(fs.readFileSync(path.join(rodneyDir, "mouth", "C.png")));
+    const ref = decodePng(fs.readFileSync(path.join(rodneyDir, "mouth", "X.png")));
+    assert.equal(afterA.width, ref.width);
+    assert.equal(afterA.height, ref.height);
+    assert.equal(afterC.width, ref.width);
+    assert.equal(afterC.height, ref.height);
+    const hashA = require("crypto").createHash("sha256").update(fs.readFileSync(path.join(rodneyDir, "mouth", "A.png"))).digest("hex");
+    const hashC = require("crypto").createHash("sha256").update(fs.readFileSync(path.join(rodneyDir, "mouth", "C.png"))).digest("hex");
+    const second = await realignSlotView(fixture.projectDir, fixture.globalAssetsDir, "rodney", "mouth", {
+      normalize: true,
+    });
+    assert.equal(second.written.length, first.written.length);
+    assert.equal(
+      require("crypto").createHash("sha256").update(fs.readFileSync(path.join(rodneyDir, "mouth", "A.png"))).digest("hex"),
+      hashA
+    );
+    assert.equal(
+      require("crypto").createHash("sha256").update(fs.readFileSync(path.join(rodneyDir, "mouth", "C.png"))).digest("hex"),
+      hashC
+    );
+    const json = JSON.parse(fs.readFileSync(path.join(rodneyDir, "character.json"), "utf8"));
+    assert.deepEqual(json.slots.mouth.drawings.A.align, { x: 0, y: 0, scale: 1 });
+    assert.deepEqual(json.slots.mouth.drawings.C.align, { x: 0, y: 0, scale: 1 });
   });
 
   test("rejects path-unsafe slot, drawing, and view names", () => {

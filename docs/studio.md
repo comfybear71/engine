@@ -187,11 +187,17 @@ clobber the project's `timeline.json`.
   then matches hat-top / chin / neck to the previous default canvas,
   with a before/after overlay and x/y/scale nudge. The drawing viewer
   has **Crop to head** and a draggable collar-line handle. Scale is
-  0.25×–4× on a log slider and the faint default overlay live-updates
-  as you drag. **Auto-fit to default** fills the sliders so the cropped
-  head matches the default hat-top / chin / centre; **Apply to all in
-  this slot** runs that crop/fit across the open set (head, mouth,
-  face). The Align
+  0.25×–4× on a log slider with a number input beside it, and the faint
+  default overlay live-updates as you drag. **Save** / **Revert** persist
+  or restore that drawing's Scale/Nudge in project-local `character.json`
+  (`slots.<slot>.drawings.<name>.align`); an **unsaved** tag shows when
+  the sliders differ from the last save. Reopening the drawing reloads
+  the saved values. **Auto-fit to default** fills the sliders so the
+  cropped head matches the default hat-top / chin / centre. **Apply to
+  all in this slot** asks for confirmation (`Apply to N drawings`) with
+  a before/after preview, then normalises every drawing to the **same**
+  default drawing (same head height and anchor) without multiplying the
+  current sliders. Running it twice does not compound. The Align
   head tool fits the full body plus the head overlay so handles stay
   on-screen.   **Play sample** animates the head through a chosen sample
   sentence (or a project take that already has Rhubarb cues). **Exclude
@@ -474,7 +480,7 @@ other media durations are cached by path + mtime + size.
 | `PUT` | `/api/projects/:name/characters/:id/slots/:slot` | JSON `{ "offset"?: {x,y}, "scale"?: number, "rotation"?: number }`. Copy-on-write into project-local `character.json`. Used by **Align head**. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot` | Slot editor payload: **project-local** drawings only (size, hash, source), view folders (`?view=`), offset/scale, cycles, mouth-shape labels, duplicates, missing Rhubarb shapes. No `view=` resolves `mouth_front/` first when it exists. Parser lookup is episode → show, then global only if Independent is off (`?show=` for episodes). |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/promote-view` | JSON `{ "view" }`. Point the slot `drawings_dir` at that set; copy the previous default files to `_replaced/<timestamp>/`. |
-| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"?, "cropToHead"?, "collarY?" }`. Crop to the head-only region (default on; `collarY` is 0–1 of image height, or pixel Y), then align to the previous default canvas (hat / chin / neck). Studio **Auto-fit** fills the nudge sliders first; omit `drawing` to apply the same crop/fit to the whole slot. |
+| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"?, "cropToHead"?, "collarY?", "normalize?" }`. Crop to the head-only region (default on; `collarY` is 0–1 of image height, or pixel Y), then align to a reference canvas (hat / chin / neck). Omit `drawing` or pass `"normalize": true` to fit every drawing in the open set to the **same** default drawing (identity nudge — does not multiply the current sliders; a second run is a no-op). A single `drawing` still uses that drawing's residual nudge. Writes identity `align` on each written drawing so Studio reloads at 1×. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing` | Drawing viewer payload plus script/cycle usages and prev/next names in that view. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/lipsync-preview` | Builtin sample cue tracks plus project audio that already has `.rhubarb.json`. Mouth slots only. |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing/replace` | JSON `{ "imageBase64", "filename?", "view?" }`. Green-screen cut-out + trim preview (before/after). |
@@ -483,7 +489,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings` | Add-drawing preview. JSON `{ "imageBase64", "filename?", "name?", "view?" }`. |
 | `POST` | `…/drawings/confirm` | JSON `{ "sessionId", "name" }`. Writes `characters/<id>/<drawings_dir>/<name>.png`. |
 | `POST` | `…/drawings/cancel` | JSON `{ "sessionId" }`. |
-| `POST` | `…/drawings/:drawing/flags` | JSON `{ "excludeFromLipSync"?, "hand"?: "L"\|"R"\|null, "view?" }`. Persist a per-drawing lip-sync skip and/or L/R tag in project-local `character.json` (`slots.<slot>.drawings.<name>.excludeFromLipSync` / `.hand`). |
+| `POST` | `…/drawings/:drawing/flags` | JSON `{ "excludeFromLipSync"?, "hand"?: "L"\|"R"\|null, "align"?: {x,y,scale}\|null, "view?" }`. Persist a per-drawing lip-sync skip, L/R tag, and/or Scale/Nudge in project-local `character.json` (`slots.<slot>.drawings.<name>.excludeFromLipSync` / `.hand` / `.align`). |
 | `POST` | `…/drawings/:drawing/flip` | Mirror the PNG horizontally. Copies the previous file to `_replaced/<timestamp>/`. Returns `{ replaced }` for undo. |
 | `POST` | `…/drawings/:drawing/restore` | JSON `{ "replaced" }`. Copy that `_replaced/` file back over the drawing (undo flip). |
 | `POST` | `…/drawings/:drawing/rename` | JSON `{ "name", "view?" }`. Project-local files only; updates cycle lists and `default_drawing`. |
