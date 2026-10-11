@@ -165,10 +165,49 @@ function findMissingPropAssets(usedProps, projectDir, globalAssetsDir) {
   return errors;
 }
 
+/**
+ * Warns when the generated timeline still points at `_global_assets`.
+ * Independent projects never emit those paths; this fires when the
+ * shared-library fallback is on and a script used it.
+ *
+ * @param {object} timeline
+ * @returns {string[]}
+ */
+function findSharedLibraryWarnings(timeline) {
+  const paths = [];
+  const seen = new Set();
+
+  function walk(value) {
+    if (typeof value === "string") {
+      const posix = value.replace(/\\/g, "/");
+      if (posix.includes("_global_assets/") && !seen.has(posix)) {
+        seen.add(posix);
+        paths.push(posix);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item);
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const item of Object.values(value)) walk(item);
+    }
+  }
+
+  walk(timeline);
+  paths.sort();
+  return paths.map(
+    (rel) =>
+      `Shared library: "${rel}" resolves from _global_assets. Copy it into this project (Library / Make independent) or keep Independent on.`
+  );
+}
+
 module.exports = {
   findOverlapWarnings,
   findMouthSheetErrors,
   findMissingPropAssets,
+  findSharedLibraryWarnings,
   findMouthSlot,
   RHUBARB_MOUTH_SHAPES,
   REST_MOUTH_SHAPE,

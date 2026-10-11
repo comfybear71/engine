@@ -41,10 +41,16 @@ import {
   canvasLandmarks,
   clampHeadNudge,
   defaultHeadNudge,
+  HEAD_NUDGE_SCALE_MAX,
+  HEAD_NUDGE_SCALE_MIN,
   headScaleToSlider,
   landmarksFromRgba,
+  normalizeAllHeadNudge,
+  nudgeEquals,
+  parseHeadScale,
   previewAlignLayout,
   residualHeadNudge,
+  savedHeadNudge,
   sliderToHeadScale,
   type HeadLandmarks,
   type HeadNudge,
@@ -104,6 +110,8 @@ export default function AssetEditorOverlay({
   const [sampleId, setSampleId] = useState<string>("builtin:hello");
   const [playShape, setPlayShape] = useState<string | null>(null);
   const [nudge, setNudge] = useState(defaultHeadNudge());
+  const [savedAlign, setSavedAlign] = useState<HeadNudge | null>(null);
+  const [nudgeBaseline, setNudgeBaseline] = useState(defaultHeadNudge());
   const [overlayDefault, setOverlayDefault] = useState(true);
   const [flipUndo, setFlipUndo] = useState<{ drawing: string; replaced: string } | null>(null);
   const playRef = useRef<number | null>(null);
@@ -201,6 +209,16 @@ export default function AssetEditorOverlay({
   const previewSrc = playShape
     ? assetUrl(project, (slot?.drawings.find((item) => item.name === playShape) || slot?.drawings.find((item) => item.shape === playShape))?.rel)
     : assetUrl(project, current?.rel, { v: current?.mtime });
+  const persistedAlign = savedHeadNudge(current?.align);
+  const nudgeDirty = !nudgeEquals(nudge, savedAlign || nudgeBaseline);
+
+  useEffect(() => {
+    const persisted = savedHeadNudge(current?.align);
+    setSavedAlign(persisted);
+    const start = persisted || defaultHeadNudge();
+    setNudge(start);
+    setNudgeBaseline(start);
+  }, [drawingName, current?.align?.x, current?.align?.y, current?.align?.scale]);
 
   async function ingestFile(file: File, kind: "replace" | "add") {
     if (!file.type.startsWith("image/")) {
@@ -341,17 +359,28 @@ export default function AssetEditorOverlay({
     }
   }
 
-  async function onRealign(drawing?: string, opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number }) {
-    setBusy("Re-aligning…");
+  async function onRealign(
+    drawing?: string,
+    opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number; normalize?: boolean }
+  ) {
+    const normalize = Boolean(opts?.normalize) || !drawing;
+    setBusy(normalize ? "Normalising…" : "Re-aligning…");
     setError(null);
     try {
       await realignSlotView(project, focus.characterId, focus.slot, {
         view,
         drawing,
-        nudge: residualHeadNudge(clampHeadNudge(nudge), opts?.autoScale ?? 1),
+        normalize,
+        nudge: normalize
+          ? normalizeAllHeadNudge()
+          : residualHeadNudge(clampHeadNudge(nudge), opts?.autoScale ?? 1),
         cropToHead: opts?.cropToHead !== false,
         collarY: opts?.collarY,
       });
+      const identity = defaultHeadNudge();
+      setNudge(identity);
+      setSavedAlign(identity);
+      setNudgeBaseline(identity);
       onChanged();
       await reload();
     } catch (err) {
@@ -359,6 +388,33 @@ export default function AssetEditorOverlay({
     } finally {
       setBusy(null);
     }
+  }
+
+  async function onSaveNudge() {
+    if (focus.mode !== "drawing") return;
+    setBusy("Saving…");
+    setError(null);
+    try {
+      const next = clampHeadNudge(nudge);
+      const saved = await saveDrawingFlags(project, focus.characterId, focus.slot, focus.drawing, {
+        align: next,
+        view,
+      });
+      const persisted = savedHeadNudge(saved.align) || next;
+      setSavedAlign(persisted);
+      setNudgeBaseline(persisted);
+      setNudge(persisted);
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save alignment");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function onRevertNudge() {
+    setNudge(savedAlign || nudgeBaseline);
   }
 
   function playSample() {
@@ -571,16 +627,27 @@ export default function AssetEditorOverlay({
           onOverlayDefault={setOverlayDefault}
           nudge={nudge}
           onNudge={(next) => setNudge(clampHeadNudge(next))}
+          nudgeDirty={nudgeDirty}
+          hasSavedAlign={savedAlign != null || persistedAlign != null}
+          onSaveNudge={() => void onSaveNudge()}
+          onRevertNudge={onRevertNudge}
+          onAutofitBaseline={(fit) => {
+            if (persistedAlign) return;
+            setNudgeBaseline(fit);
+            setNudge(fit);
+          }}
           onRealign={(opts) => void onRealign(current.name, opts)}
-          onRealignAll={(opts) => void onRealign(undefined, opts)}
+          onRealignAll={(opts) => void onRealign(undefined, { ...opts, normalize: true })}
           onExcludeFromLipSync={slot?.mouth ? (value) => void onExcludeFromLipSync(value) : undefined}
           onFlip={() => void onFlip()}
           onUndoFlip={flipUndo && flipUndo.drawing === drawingName ? () => void onUndoFlip() : undefined}
           onHand={(hand) => void onHand(hand)}
           defaultRel={
-            slot?.canRealign && slot.defaultDrawingsDir
-              ? `characters/${focus.characterId}/${slot.defaultDrawingsDir}/${current.name}.png`
-              : null
+            slot?.canRealign && slot.alignReferenceDir && slot.alignReferenceDrawing
+              ? `characters/${focus.characterId}/${slot.alignReferenceDir}/${slot.alignReferenceDrawing}.png`
+              : slot?.canRealign && slot.defaultDrawingsDir
+                ? `characters/${focus.characterId}/${slot.defaultDrawingsDir}/${current.name}.png`
+                : null
           }
         />
       ) : slot ? (
@@ -610,7 +677,17 @@ export default function AssetEditorOverlay({
           }}
           onOpenImagine={openImagine}
           onPromote={() => void onPromoteView()}
-          onRealign={() => void onRealign()}
+          onRealign={() => {
+            const count = slot.drawings.length;
+            if (
+              !window.confirm(
+                `Apply to ${count} drawing${count === 1 ? "" : "s"}? This normalises every drawing to the default drawing's head height and anchor. Running it again will not change sizes.`
+              )
+            ) {
+              return;
+            }
+            void onRealign(undefined, { normalize: true });
+          }}
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-[11px] text-studio-muted">Loading…</div>
@@ -699,6 +776,11 @@ function DrawingView({
   onOverlayDefault,
   nudge,
   onNudge,
+  nudgeDirty,
+  hasSavedAlign,
+  onSaveNudge,
+  onRevertNudge,
+  onAutofitBaseline,
   onRealign,
   onRealignAll,
   onExcludeFromLipSync,
@@ -724,6 +806,11 @@ function DrawingView({
   onOverlayDefault: (value: boolean) => void;
   nudge: { x: number; y: number; scale: number };
   onNudge: (nudge: { x: number; y: number; scale: number }) => void;
+  nudgeDirty: boolean;
+  hasSavedAlign: boolean;
+  onSaveNudge: () => void;
+  onRevertNudge: () => void;
+  onAutofitBaseline: (nudge: { x: number; y: number; scale: number }) => void;
   onRealign: (opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number }) => void;
   onRealignAll: (opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number }) => void;
   onExcludeFromLipSync?: (exclude: boolean) => void;
@@ -744,6 +831,9 @@ function DrawingView({
   const autoScale = croppedSrc && refMarks ? autoFitHeadNudge(croppedSrc, refMarks).scale : 1;
   const realignOpts = { cropToHead, collarY: cropToHead ? collarY : undefined, autoScale };
 
+  const [confirmApplyAll, setConfirmApplyAll] = useState(false);
+  const applyCount = slot?.drawings.length || 0;
+
   function applyAutoFit() {
     if (!croppedSrc || !refMarks) return;
     onNudge(autoFitHeadNudge(croppedSrc, refMarks));
@@ -751,13 +841,19 @@ function DrawingView({
 
   const fittedFor = useRef<string | null>(null);
   useEffect(() => {
+    fittedFor.current = null;
+  }, [current.name]);
+  useEffect(() => {
     if (!src || !croppedSrc || !refMarks) return;
     if (fittedFor.current === src) return;
     fittedFor.current = src;
-    onNudge(autoFitHeadNudge(croppedSrc, refMarks));
-  }, [src, croppedSrc, refMarks, onNudge]);
+    if (hasSavedAlign) return;
+    const fit = autoFitHeadNudge(croppedSrc, refMarks);
+    onAutofitBaseline(fit);
+  }, [src, croppedSrc, refMarks, hasSavedAlign, onAutofitBaseline, current.name]);
 
   return (
+    <>
     <div className="flex min-h-0 flex-1">
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {canRealign && overlayDefault && defaultSrc ? (
@@ -918,17 +1014,45 @@ function DrawingView({
               />
             </label>
             <label className="block text-[10px] text-neutral-500">
-              Scale {nudge.scale.toFixed(2)}×
-              <input
-                type="range"
-                min={0}
-                max={1000}
-                value={Math.round(headScaleToSlider(nudge.scale) * 1000)}
-                className="w-full"
-                data-testid="asset-nudge-scale"
-                onChange={(event) => onNudge({ ...nudge, scale: sliderToHeadScale(Number(event.target.value) / 1000) })}
-              />
+              Scale
+              <span className="flex items-center gap-1">
+                <input
+                  type="range"
+                  min={0}
+                  max={1000}
+                  value={Math.round(headScaleToSlider(nudge.scale) * 1000)}
+                  className="min-w-0 flex-1"
+                  data-testid="asset-nudge-scale"
+                  onChange={(event) => onNudge({ ...nudge, scale: sliderToHeadScale(Number(event.target.value) / 1000) })}
+                />
+                <ScaleNumberInput scale={nudge.scale} onScale={(scale) => onNudge({ ...nudge, scale })} />
+              </span>
             </label>
+            <div className="flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                className="studio-header-textbtn"
+                data-testid="asset-nudge-save"
+                onClick={onSaveNudge}
+                disabled={!nudgeDirty}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                className="studio-header-textbtn"
+                data-testid="asset-nudge-revert"
+                onClick={onRevertNudge}
+                disabled={!nudgeDirty}
+              >
+                Revert
+              </button>
+              {nudgeDirty ? (
+                <span className="text-[10px] uppercase tracking-wider text-amber-300" data-testid="asset-nudge-unsaved">
+                  unsaved
+                </span>
+              ) : null}
+            </div>
             <button
               type="button"
               className="studio-header-textbtn"
@@ -950,7 +1074,7 @@ function DrawingView({
               type="button"
               className="studio-header-textbtn"
               data-testid="asset-realign-all"
-              onClick={() => onRealignAll(realignOpts)}
+              onClick={() => setConfirmApplyAll(true)}
             >
               Apply to all in this slot
             </button>
@@ -977,6 +1101,164 @@ function DrawingView({
         </div>
         <p className="text-[10px] text-neutral-600">Drop or paste an image to replace. Old file goes to _replaced/.</p>
       </aside>
+    </div>
+    {confirmApplyAll ? (
+      <ApplyAllConfirm
+        count={applyCount}
+        src={src}
+        defaultSrc={defaultSrc}
+        srcMarks={croppedSrc}
+        refMarks={refMarks}
+        srcW={srcMarks?.canvas.w || current.width || 0}
+        srcH={srcMarks?.canvas.h || current.height || 0}
+        onCancel={() => setConfirmApplyAll(false)}
+        onConfirm={() => {
+          setConfirmApplyAll(false);
+          onRealignAll(realignOpts);
+        }}
+      />
+    ) : null}
+    </>
+  );
+}
+
+function ScaleNumberInput({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
+  const [draft, setDraft] = useState(() => scale.toFixed(2));
+  useEffect(() => {
+    setDraft(scale.toFixed(2));
+  }, [scale]);
+  return (
+    <input
+      type="number"
+      min={HEAD_NUDGE_SCALE_MIN}
+      max={HEAD_NUDGE_SCALE_MAX}
+      step={0.01}
+      value={draft}
+      className="w-14 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+      data-testid="asset-nudge-scale-input"
+      aria-label="Scale"
+      onChange={(event) => {
+        setDraft(event.target.value);
+        const parsed = parseHeadScale(event.target.value);
+        if (parsed != null) onScale(parsed);
+      }}
+      onBlur={() => {
+        const parsed = parseHeadScale(draft);
+        if (parsed != null) {
+          onScale(parsed);
+          setDraft(parsed.toFixed(2));
+        } else {
+          setDraft(scale.toFixed(2));
+        }
+      }}
+    />
+  );
+}
+
+function ApplyAllConfirm({
+  count,
+  src,
+  defaultSrc,
+  srcMarks,
+  refMarks,
+  srcW,
+  srcH,
+  onCancel,
+  onConfirm,
+}: {
+  count: number;
+  src: string | null;
+  defaultSrc: string | null;
+  srcMarks: HeadLandmarks | null;
+  refMarks: HeadLandmarks | null;
+  srcW: number;
+  srcH: number;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const fit = srcMarks && refMarks ? autoFitHeadNudge(srcMarks, refMarks) : defaultHeadNudge();
+  const refW = refMarks?.canvas.w || 0;
+  const refH = refMarks?.canvas.h || 0;
+  const layout =
+    srcMarks && refMarks && refW > 0 && refH > 0 && srcW > 0 && srcH > 0
+      ? previewAlignLayout({
+          boxW: 180,
+          boxH: 180,
+          srcW,
+          srcH,
+          refW,
+          refH,
+          src: srcMarks,
+          ref: refMarks,
+          nudge: fit,
+        })
+      : null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" data-testid="asset-realign-all-dialog">
+      <div className="w-full max-w-lg rounded-md border border-studio-border bg-studio-panel p-3 shadow-2xl">
+        <p className="text-[12px] text-neutral-200">
+          Normalise every drawing in this slot to the default drawing&apos;s head height and anchor. Running this again
+          will not change sizes.
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <figure>
+            <figcaption className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">Before</figcaption>
+            <div className="relative h-44 overflow-hidden rounded border border-studio-border bg-black">
+              {src ? <img src={src} alt="Before" className="h-full w-full object-contain" /> : null}
+            </div>
+          </figure>
+          <figure>
+            <figcaption className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">After</figcaption>
+            <div className="relative h-44 overflow-hidden rounded border border-studio-border bg-black">
+              {layout && defaultSrc ? (
+                <>
+                  <img
+                    src={defaultSrc}
+                    alt=""
+                    className="absolute opacity-35"
+                    style={{
+                      left: layout.ref.left,
+                      top: layout.ref.top,
+                      width: layout.ref.width,
+                      height: layout.ref.height,
+                    }}
+                  />
+                  {src ? (
+                    <img
+                      src={src}
+                      alt="After"
+                      className="absolute"
+                      style={{
+                        left: layout.src.left,
+                        top: layout.src.top,
+                        width: layout.src.width,
+                        height: layout.src.height,
+                      }}
+                    />
+                  ) : null}
+                </>
+              ) : defaultSrc ? (
+                <img src={defaultSrc} alt="Reference" className="h-full w-full object-contain opacity-80" />
+              ) : src ? (
+                <img src={src} alt="After" className="h-full w-full object-contain" />
+              ) : null}
+            </div>
+          </figure>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" className="studio-header-textbtn" onClick={onCancel} data-testid="asset-realign-all-cancel">
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="studio-header-textbtn"
+            onClick={onConfirm}
+            data-testid="asset-realign-all-confirm"
+          >
+            Apply to {count} drawing{count === 1 ? "" : "s"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

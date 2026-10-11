@@ -2,8 +2,7 @@
 
 /**
  * Project folders for the Studio home screen: summaries, empty templates,
- * script*.txt picking, and library.json references (global characters
- * added to a project without copying their art).
+ * script*.txt picking, and library.json plus copied-in global characters.
  */
 
 const fs = require("fs");
@@ -22,6 +21,7 @@ const {
   resolveAsset,
   resolveShowAssetsDir,
 } = require("./parser/assetLibrary");
+const { writeStudioSettings } = require("./voices/lipSync");
 
 const DEFAULT_SCRIPT = "script.txt";
 const LIBRARY_FILENAME = "library.json";
@@ -113,10 +113,10 @@ function listLocalDirIds(projectDir, folder) {
     .sort();
 }
 
-function buildAliasIndex(projectDir, globalAssetsDir) {
+function buildAliasIndex(projectDir, globalAssetsDir, options) {
   const aliasToId = new Map();
-  for (const id of listKnownCharacterIds(projectDir, globalAssetsDir)) {
-    const config = loadCharacter(projectDir, globalAssetsDir, id);
+  for (const id of listKnownCharacterIds(projectDir, globalAssetsDir, options)) {
+    const config = loadCharacter(projectDir, globalAssetsDir, id, options);
     if (!config) continue;
     const names = [config.id, config.display_name, ...(config.aliases || [])].filter(Boolean);
     for (const name of names) aliasToId.set(String(name).toLowerCase(), config.id);
@@ -152,14 +152,15 @@ function scanScriptUsage(scriptText, aliasToId, knownLocations) {
 
 function collectUsedAssets(projectDir, globalAssetsDir, options = {}) {
   const scripts = options.scripts || listScriptFiles(projectDir);
+  const searchOpts = options.includeGlobal != null ? { includeGlobal: options.includeGlobal } : undefined;
   const library = readLibrary(projectDir);
   const characterIds = new Set(library.characters);
   const locationIds = new Set(library.backgrounds);
   for (const id of listLocalDirIds(projectDir, "characters")) characterIds.add(id);
   for (const id of listLocalDirIds(projectDir, "backgrounds")) locationIds.add(id);
 
-  const aliasToId = buildAliasIndex(projectDir, globalAssetsDir);
-  const knownLocations = new Set(listKnownLocations(projectDir, globalAssetsDir));
+  const aliasToId = buildAliasIndex(projectDir, globalAssetsDir, searchOpts);
+  const knownLocations = new Set(listKnownLocations(projectDir, globalAssetsDir, searchOpts));
   for (const scriptName of scripts) {
     const scriptPath = path.join(projectDir, scriptName);
     if (!fs.existsSync(scriptPath)) continue;
@@ -684,7 +685,86 @@ function createEmptyProject(projectsDir, name) {
   fs.mkdirSync(projectDir, { recursive: true });
   fs.writeFileSync(path.join(projectDir, DEFAULT_SCRIPT), EMPTY_SCRIPT_TEMPLATE);
   writeLibrary(projectDir, emptyLibrary());
+  writeStudioSettings(projectDir, { independent: true });
   return projectDir;
+}
+
+const SKIP_GLOBAL_COPY_DIRS = new Set(["_trash", "_replaced", "_preview", "_backup"]);
+
+function wasRemovedLocally(projectDir, libraryRel) {
+  const posix = String(libraryRel || "").replace(/\\/g, "/");
+  const match = posix.match(/^characters\/([^/]+)\/(.+)$/);
+  if (!match) return false;
+  const characterId = match[1];
+  const rest = match[2];
+  const charDir = path.join(projectDir, "characters", characterId);
+  for (const folder of ["_trash", "_replaced"]) {
+    const root = path.join(charDir, folder);
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) continue;
+    let stamps;
+    try {
+      stamps = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const stamp of stamps) {
+      if (!stamp.isDirectory()) continue;
+      if (fs.existsSync(path.join(root, stamp.name, rest))) return true;
+    }
+  }
+  return false;
+}
+
+function copyTreeFromGlobal(srcDir, destDir, options = {}) {
+  if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) return { files: 0 };
+  let files = 0;
+  const stack = [[srcDir, destDir, ""]];
+  while (stack.length) {
+    const [from, to, rel] = stack.pop();
+    fs.mkdirSync(to, { recursive: true });
+    let entries;
+    try {
+      entries = fs.readdirSync(from, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (SKIP_GLOBAL_COPY_DIRS.has(entry.name)) continue;
+      const childFrom = path.join(from, entry.name);
+      const childTo = path.join(to, entry.name);
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        stack.push([childFrom, childTo, childRel]);
+      } else if (entry.isFile()) {
+        if (fs.existsSync(childTo)) continue;
+        if (options.skipRel && options.skipRel(childRel)) continue;
+        fs.mkdirSync(path.dirname(childTo), { recursive: true });
+        fs.copyFileSync(childFrom, childTo);
+        files += 1;
+      }
+    }
+  }
+  return { files };
+}
+
+function copyCharacterFromGlobal(projectDir, globalAssetsDir, characterId, options = {}) {
+  const src = path.join(globalAssetsDir, "characters", characterId);
+  const dest = path.join(projectDir, "characters", characterId);
+  const copied = copyTreeFromGlobal(src, dest, {
+    skipRel: options.skipRemoved
+      ? (rel) => wasRemovedLocally(projectDir, `characters/${characterId}/${rel}`)
+      : null,
+  });
+  const localJson = path.join(dest, "character.json");
+  if (!fs.existsSync(localJson)) {
+    const loaded = loadCharacter(projectDir, globalAssetsDir, characterId, { includeGlobal: true });
+    if (loaded) {
+      fs.mkdirSync(dest, { recursive: true });
+      fs.writeFileSync(localJson, JSON.stringify(loaded, null, 2) + "\n");
+      copied.files += 1;
+    }
+  }
+  return copied;
 }
 
 function addLibraryCharacter(projectDir, globalAssetsDir, characterId) {
@@ -693,17 +773,60 @@ function addLibraryCharacter(projectDir, globalAssetsDir, characterId) {
     err.code = "EINVAL";
     throw err;
   }
-  const known = listKnownCharacterIds(projectDir, globalAssetsDir);
+  const known = listKnownCharacterIds(projectDir, globalAssetsDir, { includeGlobal: true });
   if (!known.includes(characterId)) {
     const err = new Error(`Unknown character: ${characterId}`);
     err.code = "ENOTFOUND";
     throw err;
   }
+  copyCharacterFromGlobal(projectDir, globalAssetsDir, characterId);
   const library = readLibrary(projectDir);
   if (!library.characters.includes(characterId)) {
     library.characters.push(characterId);
   }
   return writeLibrary(projectDir, library);
+}
+
+function makeProjectIndependent(projectDir, globalAssetsDir) {
+  const used = collectUsedAssets(projectDir, globalAssetsDir, { includeGlobal: true });
+  const copied = {
+    characters: [],
+    backgrounds: [],
+    stagingDefaults: false,
+    files: 0,
+  };
+
+  for (const id of used.characterIds) {
+    const src = path.join(globalAssetsDir, "characters", id);
+    if (!fs.existsSync(src)) continue;
+    const result = copyCharacterFromGlobal(projectDir, globalAssetsDir, id, { skipRemoved: true });
+    if (result.files > 0) copied.characters.push(id);
+    copied.files += result.files;
+  }
+
+  for (const id of used.locationIds) {
+    const src = path.join(globalAssetsDir, "backgrounds", id);
+    if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) continue;
+    const dest = path.join(projectDir, "backgrounds", id);
+    const result = copyTreeFromGlobal(src, dest);
+    if (result.files > 0) copied.backgrounds.push(id);
+    copied.files += result.files;
+  }
+
+  const stagingSrc = path.join(globalAssetsDir, "staging_defaults.json");
+  const stagingDest = path.join(projectDir, "staging_defaults.json");
+  if (fs.existsSync(stagingSrc) && !fs.existsSync(stagingDest)) {
+    fs.copyFileSync(stagingSrc, stagingDest);
+    copied.stagingDefaults = true;
+    copied.files += 1;
+  }
+
+  const settings = writeStudioSettings(projectDir, { independent: true });
+  return {
+    ok: true,
+    independent: settings.independent,
+    copied,
+  };
 }
 
 module.exports = {
@@ -741,5 +864,7 @@ module.exports = {
   duplicateProject,
   createEmptyProject,
   addLibraryCharacter,
+  makeProjectIndependent,
+  copyCharacterFromGlobal,
   listLocalDirIds,
 };

@@ -33,10 +33,26 @@ shows/
 ```
 
 Lookup order for every character / prop / background file is **episode →
-show → global**. `_global_assets` stays the library for every show.
-Show-level files override it; an episode file at the same relative path
-overrides the show. Flat projects under `projects/` have no show layer,
-so they still resolve as project → global.
+show**, then **global only if the project’s Independent setting is off**.
+`_global_assets` stays an optional shared library. It is never written
+by Studio or the parser.
+
+**Independent** (`studio.json` `"independent": true`) is **on by default**
+for new and existing projects: asset lookup uses only the project folder
+(and the show folder for an episode). The shared library is skipped, so
+a drawing you deleted in a project cannot come back from
+`projects/_global_assets`. Set `"independent": false` to turn the old
+fallback back on. The committed `projects/sample` demo does that so it
+can keep using the shared Hicks/Dana library. **Make independent** in
+Studio copies every global character, location, prop, and
+`staging_defaults.json` the project currently uses into the project
+folder, skips files already in `_trash/` / `_replaced/`, then turns
+Independent on.
+
+Show-level files still override the project’s missing files; an episode
+file at the same relative path overrides the show. Flat projects under
+`projects/` have no show layer, so with Independent on they resolve
+only inside their own folder.
 
 The sample project's library has two characters (`hicks`, `dana`) and two
 locations (`bedroom`, `corridor`) built this way -- see
@@ -87,7 +103,7 @@ beyond the generated PNGs/WAVs themselves).
 | `voice_id` | Optional identifier for `node src/cli.js voices`. **Never a secret** -- it's a voice *identifier* (e.g. `"EXAVITQu4vr4xnSDxMaL"`), not an API key. `null` means "not assigned yet"; the real API key lives in `.env` as `ELEVENLABS_API_KEY`, never here. See [docs/voices.md](voices.md). |
 | `style` | Optional free-text art direction for the Studio Grok Imagine prompt builder (e.g. `"painted semi-real"`, `"flat cartoon"`). Empty or omitted means the prompt falls back to "a consistent character style". See [docs/studio.md](studio.md#image-assets-grok-imagine). |
 | `reference` | Optional path, relative to the character folder, to a full-body likeness image (typically `_reference/full.png`). Studio stores the original file — no chroma key or cut-out. Used as a Grok Imagine attach reminder and as the background in **Align head**. |
-| `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing?, cycles?, visible_when?, scale?, rotation?, drawings? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). `cycles` is an optional map of cycle name -> `{ drawings: [drawing, ...], fps }` -- `[Action: Name slot=cycle_name]` emits a looping cycle keyframe; a plain drawing name still emits a held drawing. `visible_when` is copied onto the timeline slot as-is (e.g. hide a mouth unless `body` is showing `"front"`). `scale` (default `1.0`) multiplies the owner's scale around the slot center (the offset point). `rotation` (default `0`, clockwise degrees) is added to the owner's rotation around that same center. The parser copies both onto the timeline slot. `drawings` is an optional per-drawing map (name -> `{ excludeFromLipSync?: true }`). When `excludeFromLipSync` is set, automatic lip sync (Rhubarb cues and natural lipsync) skips that drawing and falls back to a neighbour — `H` becomes `C` or `D`, or the previous cue — but the file stays in the slot for a manual face/expression pin. Studio **Align head** writes `offset` / `scale` / `rotation` into a **project-local** `character.json` and never into `_global_assets`. |
+| `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing?, cycles?, visible_when?, scale?, rotation?, drawings? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). `cycles` is an optional map of cycle name -> `{ drawings: [drawing, ...], fps }` -- `[Action: Name slot=cycle_name]` emits a looping cycle keyframe; a plain drawing name still emits a held drawing. `visible_when` is copied onto the timeline slot as-is (e.g. hide a mouth unless `body` is showing `"front"`). `scale` (default `1.0`) multiplies the owner's scale around the slot center (the offset point). `rotation` (default `0`, clockwise degrees) is added to the owner's rotation around that same center. The parser copies both onto the timeline slot. `drawings` is an optional per-drawing map (name -> `{ excludeFromLipSync?: true, hand?: "L"\|"R", align?: { x, y, scale } }`). When `excludeFromLipSync` is set, automatic lip sync (Rhubarb cues and natural lipsync) skips that drawing and falls back to a neighbour — `H` becomes `C` or `D`, or the previous cue — but the file stays in the slot for a manual face/expression pin. `align` is the drawing viewer's saved Scale/Nudge (reloaded when that drawing is reopened). Studio **Align head** writes slot-level `offset` / `scale` / `rotation` into a **project-local** `character.json` and never into `_global_assets`. |
 | `children` | Rig parts, in the same shape as `schema/timeline.schema.json`'s `child` definition (`id`, `asset`, `z`, `offset`, `pivot`, `scale`, `flip_x`, `rotation`, `parent`), plus their own optional `slots` (same shape as above). `parent` and `pivot` are passed through to the generated timeline. `parent` names one other child on the same character (one nesting level, e.g. `forearm` under `upper_arm`). See [docs/timeline-schema.md#cut-out-rig-nesting](timeline-schema.md#cut-out-rig-nesting). |
 
 The `mouth` slot is special: it's always driven by the character's dialogue
@@ -324,9 +340,9 @@ above).
 An episode (or a flat experiment) can override **any individual file** in
 the library by placing a file at the exact same relative path inside its
 own folder. The parser checks the episode folder first, then the show
-(`shows/<id>/characters/…` and `backgrounds/…`), and only then
-`_global_assets`. For example, to give one episode a special one-off angry
-mouth drawing without touching the shared character:
+(`shows/<id>/characters/…` and `backgrounds/…`). `_global_assets` is
+consulted only when Independent is off. For example, to give one episode a
+special one-off angry mouth drawing without touching the shared character:
 
 ```
 projects/my_episode/
@@ -338,24 +354,28 @@ projects/my_episode/
 
 This works for anything: `character.json` itself, `body.png`, a single
 rig-part image, a single drawing inside a slot folder, a location's
-`bg.png`, its `staging.json`, or a single file in `props/`. Overriding a slot folder only replaces the
-specific filenames you provide; any other drawing names in that slot still
-come from the global version.
+`bg.png`, its `staging.json`, or a single file in `props/`. With
+Independent off, overriding a slot folder only replaces the specific
+filenames you provide; any other drawing names in that slot still come
+from the global version. With Independent on (the default), only files
+that exist in the project (or show) folder are used.
 
-Studio's Assets viewer/editor uses the same lookup: episode
-(`shows/<id>/episodes/<ep>/characters/…`) then show
-(`shows/<id>/characters/…`) then `_global_assets`. Writes stay under the
-episode (or flat project) `characters/<id>/` folder — never
-`_global_assets`. Replacing a drawing copies the previous file to
-`characters/<id>/_replaced/<timestamp>/`. Delete moves a **project-local**
-file to `characters/<id>/_trash/<timestamp>/` — it is never unlinked
-without that copy, and a show-level or shared-library drawing cannot be
-removed from here. Those history folders are ignored when scanning slot
-drawings.
+Studio's Assets viewer/editor lists **project-local drawings only** and
+lets you delete any of them. Writes stay under the episode (or flat
+project) `characters/<id>/` folder — never `_global_assets`. Adding a
+character from the shared Library **copies** the files into the project
+and writes a project-local `character.json`. Replacing a drawing copies
+the previous file to `characters/<id>/_replaced/<timestamp>/`. Delete
+moves a **project-local** file to `characters/<id>/_trash/<timestamp>/`
+— it is never unlinked without that copy. Those history folders are
+ignored when scanning slot drawings. The shared library folder is left
+untouched.
 
 Paths written into the generated `timeline.json` reflect wherever the file
 actually came from: `"characters/hicks/mouth/D.png"` for an episode-local
-override, `"../../characters/hicks/mouth/D.png"` for a show-level file, or
+file, `"../../characters/hicks/mouth/D.png"` for a show-level file, or
+(only when Independent is off)
 `"../_global_assets/characters/hicks/mouth/D.png"` for the global library
 from a flat project (paths are always relative to the project folder
 containing `timeline.json`, per [docs/timeline-schema.md](timeline-schema.md)).
+Lint warns when a script still resolves anything from `_global_assets`.

@@ -12,6 +12,9 @@ import {
   loadCharacters,
   loadLibrary,
   loadStaging,
+  loadStudioSettings,
+  makeProjectIndependent,
+  saveStudioSettings,
   type Character,
   type CharacterSlot,
   type Staging,
@@ -233,17 +236,22 @@ export default function AssetsPanel({
   const [reloadKey, setReloadKey] = useState(0);
   const [alignOpen, setAlignOpen] = useState(false);
   const [assetFocus, setAssetFocus] = useState<AssetFocus | null>(null);
+  const [independent, setIndependent] = useState(true);
+  const [independentBusy, setIndependentBusy] = useState(false);
+  const [makeIndepBusy, setMakeIndepBusy] = useState(false);
+  const [makeIndepNote, setMakeIndepNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (!project || !workerUp) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
-    Promise.all([loadCharacters(project), loadStaging(project)])
-      .then(([chars, nextStaging]) => {
+    Promise.all([loadCharacters(project), loadStaging(project), loadStudioSettings(project)])
+      .then(([chars, nextStaging, settings]) => {
         if (cancelled) return;
         setCharacters(chars);
         setStaging(nextStaging);
+        setIndependent(settings.independent !== false);
         const current = selectedId;
         setSelectedId(current && chars.some((c) => c.id === current) ? current : chars[0]?.id ?? null);
       })
@@ -291,6 +299,45 @@ export default function AssetsPanel({
     }
   }
 
+  async function onToggleIndependent(next: boolean) {
+    if (!project || independentBusy) return;
+    setIndependentBusy(true);
+    setError(null);
+    try {
+      const saved = await saveStudioSettings(project, { independent: next });
+      setIndependent(saved.independent !== false);
+      setReloadKey((n) => n + 1);
+      onLibraryChange?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save Independent setting");
+    } finally {
+      setIndependentBusy(false);
+    }
+  }
+
+  async function onMakeIndependent() {
+    if (!project || makeIndepBusy) return;
+    setMakeIndepBusy(true);
+    setError(null);
+    setMakeIndepNote(null);
+    try {
+      const result = await makeProjectIndependent(project);
+      setIndependent(result.independent !== false);
+      const n = result.copied?.files || 0;
+      setMakeIndepNote(
+        n > 0
+          ? `Copied ${n} shared-library file${n === 1 ? "" : "s"} into this project.`
+          : "This project is independent. Shared-library files it already had stay local."
+      );
+      setReloadKey((n) => n + 1);
+      onLibraryChange?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not make this project independent");
+    } finally {
+      setMakeIndepBusy(false);
+    }
+  }
+
   const selected = useMemo(
     () => characters.find((c) => c.id === selectedId) || null,
     [characters, selectedId]
@@ -317,7 +364,7 @@ export default function AssetsPanel({
         {error ? <p className="mb-4 text-sm text-red-400">{error}</p> : null}
         {loading ? <p className="mb-4 text-sm text-studio-muted">Loading library…</p> : null}
 
-        <div className={`mb-4 flex items-center justify-between ${pool ? "gap-2" : "mb-6"}`}>
+        <div className={`mb-4 flex flex-wrap items-center justify-between gap-2 ${pool ? "" : "mb-6"}`}>
           <p className="text-sm text-studio-muted">
             {pool
               ? poolSection === "assets"
@@ -325,10 +372,28 @@ export default function AssetsPanel({
                 : poolSection === "media"
                   ? "Backgrounds"
                   : "Props"
-              : "Characters, backgrounds, and props this project uses."}
+              : "Characters, backgrounds, and props this project uses. Only this project's drawings are listed."}
           </p>
           {showCharacters ? (
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <label className="flex items-center gap-1.5 text-[11px] text-neutral-300" data-testid="independent-toggle">
+                <input
+                  type="checkbox"
+                  checked={independent}
+                  disabled={independentBusy}
+                  onChange={(event) => void onToggleIndependent(event.target.checked)}
+                />
+                Independent: never read shared library
+              </label>
+              <button
+                type="button"
+                data-testid="make-independent"
+                disabled={makeIndepBusy}
+                onClick={() => void onMakeIndependent()}
+                className="rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white disabled:opacity-40"
+              >
+                {makeIndepBusy ? "Copying…" : "Make independent"}
+              </button>
               {onOpenImagine ? (
                 <button
                   type="button"
@@ -350,6 +415,7 @@ export default function AssetsPanel({
             </div>
           ) : null}
         </div>
+        {makeIndepNote ? <p className="mb-3 text-[12px] text-emerald-300">{makeIndepNote}</p> : null}
 
         {showCharacters ? (
         <Section title="Characters" count={characters.length}>
@@ -494,7 +560,7 @@ export default function AssetsPanel({
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold text-white">Library</h2>
                 <p className="text-[11px] text-studio-muted">
-                  Global characters from _global_assets. Adding records a reference — art is not copied.
+                  Shared library at _global_assets. Add copies the character into this project (the shared folder is not changed).
                 </p>
               </div>
               <button
@@ -514,7 +580,7 @@ export default function AssetsPanel({
                   return (
                     <div key={character.id} className="space-y-1.5">
                       <Thumb
-                        src={assetUrl(project, character.thumbRel, { thumb: true, v: character.mtime })}
+                        src={assetUrl(project, character.thumbRel, { thumb: true, v: character.mtime, library: true })}
                         label={character.display_name}
                         fit="contain"
                       />

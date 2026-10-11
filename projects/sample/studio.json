@@ -1,0 +1,10 @@
+{
+  "lipSync": "auto",
+  "independent": false,
+  "lipsync": {
+    "smoothing": "light",
+    "head_bob": "subtle",
+    "blinks": true,
+    "loud_threshold": 0.75
+  }
+}

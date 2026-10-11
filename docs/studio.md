@@ -149,8 +149,15 @@ clobber the project's `timeline.json`.
   sitting in a project-local `characters/` folder or listed in
   `library.json`; backgrounds from `[Location:]` / local `backgrounds/`;
   props from those locations' `staging.json`. **Library** opens a drawer of
-  global characters from `projects/_global_assets` and **Add** records a
-  reference in `library.json` without copying art.   Click a character to see
+  global characters from `projects/_global_assets` and **Add copies** the
+  character folder into this project (and writes `character.json`) so the
+  shared library is never referenced. The Assets header has
+  **Independent: never read shared library** (on by default for new and
+  existing projects) and **Make independent**, which copies every global
+  asset the project currently uses (characters, locations/backgrounds,
+  props, `staging_defaults.json`) into the project and turns the fallback
+  off. Studio lists only project-local drawings and lets you delete any
+  of them.   Click a character to see
   its slots (mouth, eyes, hands, …), drawings, named cycles, an optional
   **full-body reference** (drop/paste, stored as-is under
   `characters/<id>/_reference/`), and **Align head** (overlay the current
@@ -180,11 +187,17 @@ clobber the project's `timeline.json`.
   then matches hat-top / chin / neck to the previous default canvas,
   with a before/after overlay and x/y/scale nudge. The drawing viewer
   has **Crop to head** and a draggable collar-line handle. Scale is
-  0.25×–4× on a log slider and the faint default overlay live-updates
-  as you drag. **Auto-fit to default** fills the sliders so the cropped
-  head matches the default hat-top / chin / centre; **Apply to all in
-  this slot** runs that crop/fit across the open set (head, mouth,
-  face). The Align
+  0.25×–4× on a log slider with a number input beside it, and the faint
+  default overlay live-updates as you drag. **Save** / **Revert** persist
+  or restore that drawing's Scale/Nudge in project-local `character.json`
+  (`slots.<slot>.drawings.<name>.align`); an **unsaved** tag shows when
+  the sliders differ from the last save. Reopening the drawing reloads
+  the saved values. **Auto-fit to default** fills the sliders so the
+  cropped head matches the default hat-top / chin / centre. **Apply to
+  all in this slot** asks for confirmation (`Apply to N drawings`) with
+  a before/after preview, then normalises every drawing to the **same**
+  default drawing (same head height and anchor) without multiplying the
+  current sliders. Running it twice does not compound. The Align
   head tool fits the full body plus the head overlay so handles stay
   on-screen.   **Play sample** animates the head through a chosen sample
   sentence (or a project take that already has Rhubarb cues). **Exclude
@@ -203,8 +216,8 @@ clobber the project's `timeline.json`.
   Rename updates `character.json` cycle lists. Delete asks once, then
   moves the file to `characters/<id>/_trash/<timestamp>/`; if a script
   uses the drawing, Studio lists those lines and refuses until you
-  confirm. Shared-library drawings cannot be renamed or deleted from a
-  project (replace still writes a local override). Character thumbnails use
+  confirm. Only project-local drawings are shown, and any of them can be
+  deleted. Character thumbnails use
   `object-fit: contain` so the whole figure is visible. Character body and
   prop cards in the Assets lists use the same cached ~480px JPEG as
   background cards (`?thumb=1&v=<mtime>`).
@@ -458,15 +471,16 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/trash/:id/restore` | Move that trash folder back to `projects/<originalName>`. 409 if that name exists. |
 | `POST` | `/api/trash/empty` | Permanently delete everything in `_trash`. JSON `{ "confirm": "empty" }`. |
 | `GET` | `/api/projects/:name/scripts` | `script*.txt` files in that folder. |
-| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`, `drawingsDir`, and per-view `views[]`), drawings, cycles, thumbnail paths, `style`, and `reference` / `referenceRel`. |
-| `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. |
-| `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Appends to `library.json`; does not copy art. |
+| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`, `drawingsDir`, and per-view `views[]`), **project-local** drawings, cycles, thumbnail paths, `style`, and `reference` / `referenceRel`. |
+| `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. Library thumbs may use `?library=1` on `/asset` so the catalog still previews while Independent is on. |
+| `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Copies the character folder from `_global_assets` into the project, writes project-local `character.json`, and appends to `library.json`. Does not touch `_global_assets`. |
+| `POST` | `/api/projects/:name/make-independent` | Copies every global character, location/background, prop, and `staging_defaults.json` the project currently uses into the project (skips files already in `_trash/` / `_replaced/`), then sets `studio.json` `independent: true`. |
 | `PUT` | `/api/projects/:name/characters/:id` | JSON `{ "style": "painted semi-real" }`. Writes a project-local `character.json` (copied from global if needed) with that free-text style field. Does not touch `_global_assets`. |
 | `POST` | `/api/projects/:name/characters/:id/reference` | JSON `{ "imageBase64", "filename?" }`. Stores the original image under `characters/<id>/_reference/full.<ext>` (no cut-out) and sets `reference` on a project-local `character.json`. |
 | `PUT` | `/api/projects/:name/characters/:id/slots/:slot` | JSON `{ "offset"?: {x,y}, "scale"?: number, "rotation"?: number }`. Copy-on-write into project-local `character.json`. Used by **Align head**. |
-| `GET` | `/api/projects/:name/characters/:id/slots/:slot` | Slot editor payload: drawings (size, hash, source), view folders (`?view=`), offset/scale, cycles, mouth-shape labels, duplicates, missing Rhubarb shapes. No `view=` resolves `mouth_front/` first when it exists. Resolves `characters/<id>/` episode → show → global (`?show=` for episodes). |
+| `GET` | `/api/projects/:name/characters/:id/slots/:slot` | Slot editor payload: **project-local** drawings only (size, hash, source), view folders (`?view=`), offset/scale, cycles, mouth-shape labels, duplicates, missing Rhubarb shapes. No `view=` resolves `mouth_front/` first when it exists. Parser lookup is episode → show, then global only if Independent is off (`?show=` for episodes). |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/promote-view` | JSON `{ "view" }`. Point the slot `drawings_dir` at that set; copy the previous default files to `_replaced/<timestamp>/`. |
-| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"?, "cropToHead"?, "collarY?" }`. Crop to the head-only region (default on; `collarY` is 0–1 of image height, or pixel Y), then align to the previous default canvas (hat / chin / neck). Studio **Auto-fit** fills the nudge sliders first; omit `drawing` to apply the same crop/fit to the whole slot. |
+| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"?, "cropToHead"?, "collarY?", "normalize?" }`. Crop to the head-only region (default on; `collarY` is 0–1 of image height, or pixel Y), then align to a reference canvas (hat / chin / neck). Omit `drawing` or pass `"normalize": true` to fit every drawing in the open set to the **same** default drawing (identity nudge — does not multiply the current sliders; a second run is a no-op). A single `drawing` still uses that drawing's residual nudge. Writes identity `align` on each written drawing so Studio reloads at 1×. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing` | Drawing viewer payload plus script/cycle usages and prev/next names in that view. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/lipsync-preview` | Builtin sample cue tracks plus project audio that already has `.rhubarb.json`. Mouth slots only. |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing/replace` | JSON `{ "imageBase64", "filename?", "view?" }`. Green-screen cut-out + trim preview (before/after). |
@@ -475,7 +489,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings` | Add-drawing preview. JSON `{ "imageBase64", "filename?", "name?", "view?" }`. |
 | `POST` | `…/drawings/confirm` | JSON `{ "sessionId", "name" }`. Writes `characters/<id>/<drawings_dir>/<name>.png`. |
 | `POST` | `…/drawings/cancel` | JSON `{ "sessionId" }`. |
-| `POST` | `…/drawings/:drawing/flags` | JSON `{ "excludeFromLipSync"?, "hand"?: "L"\|"R"\|null, "view?" }`. Persist a per-drawing lip-sync skip and/or L/R tag in project-local `character.json` (`slots.<slot>.drawings.<name>.excludeFromLipSync` / `.hand`). |
+| `POST` | `…/drawings/:drawing/flags` | JSON `{ "excludeFromLipSync"?, "hand"?: "L"\|"R"\|null, "align"?: {x,y,scale}\|null, "view?" }`. Persist a per-drawing lip-sync skip, L/R tag, and/or Scale/Nudge in project-local `character.json` (`slots.<slot>.drawings.<name>.excludeFromLipSync` / `.hand` / `.align`). |
 | `POST` | `…/drawings/:drawing/flip` | Mirror the PNG horizontally. Copies the previous file to `_replaced/<timestamp>/`. Returns `{ replaced }` for undo. |
 | `POST` | `…/drawings/:drawing/restore` | JSON `{ "replaced" }`. Copy that `_replaced/` file back over the drawing (undo flip). |
 | `POST` | `…/drawings/:drawing/rename` | JSON `{ "name", "view?" }`. Project-local files only; updates cycle lists and `default_drawing`. |
@@ -489,16 +503,16 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/generate-image` | JSON `{ "project", "characterId", "needId", "n?", "prompt?", "frames?", "dryRun?" }`. `prompt` is the edited Imagine textarea (required for `needId: "custom"`). Dry-run returns a credit note (published xAI prices when known, else “uses xAI credits”) and writes nothing. Otherwise calls `https://api.x.ai/v1/images/generations` or `/images/edits` (Bearer `XAI_API_KEY`, model `XAI_IMAGE_MODEL` / `grok-imagine-image-2.0`) with `n` variants, auto-attaches the character full-body reference and body when present, saves each raw sheet under `characters/<id>/_library/`, and returns image URLs/base64. Plain-language errors for a missing key, rate limits, and content refusals. Never logs the key. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks for locations this project uses. |
 | `GET` | `/api/projects/:name/audio` | WAV files under `audio/`: imported `audio/<label>/001_<character>.wav` and generated `audio/<scene>/<nnn>_<character>.wav`, with `kind`, `label`, `characterId`, `durationSeconds`. |
-| `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`). `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for Assets-list character / background / prop cards. Pass `?v=<mtime>` (Studio does this) for `Cache-Control: public, max-age=31536000, immutable`. |
+| `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`) using the project's Independent setting (episode → show; global skipped when Independent is on). `?library=1` still serves a shared-library preview for the Library drawer. `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for Assets-list character / background / prop cards. Pass `?v=<mtime>` (Studio does this) for `Cache-Control: public, max-age=31536000, immutable`. |
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Snapshot the previous file into `.history/<script>/`, write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |
 | `GET` | `/api/projects/:name/script-history?script=` | List on-disk snapshots `{ id, createdAt, bytes, preview }` newest first. |
 | `POST` | `/api/projects/:name/script-history/restore?script=` | JSON `{ "id" }`. Snapshots the current file first, writes the chosen snapshot, then lints. Returns `{ ok, saved, restored, id, text, lint }`. |
-| `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. |
+| `POST` | `/api/projects/:name/lint?script=` | Parse + lint without writing project files. JSON `{ "text": "..." }` lints the buffer; omit `text` to lint the file on disk. Warns when a script resolves any path from `_global_assets`. |
 | `GET` | `/api/projects/:name/lanes?script=` | Temp-parse the selected script; return lane blocks (`startFrame`, `endFrame`, `label`, `lane`, `scriptLine`, `rel`, `row`, `tag`, `sourceStartFrame`, `timing`, `movable`, `cues`, `view`, `marriedId`, `trim`, `sourceDurationFrames`, `words`, `sync`, `audioRel`, `cuesRel`, `role`, `implicitHold`, `faceOverridesMouth`). `timing` says which attribute holds the event (`over=`, `for=`, `hold=`, `at_time=` / `start=`, or a pin / `[Audio:]` / dialogue placement). `sync` on Dialogue is `not_synced` / `synced` / `stale`. Synced Dialogue also emits one Mouth `role=mouth` block of the same start/end (duplicates collapsed). Face pins with no `hold=` / `over=` set `implicitHold` and cap at 2 s (or the next pin/dialogue). `face=yap`-style talking cycles set `faceOverridesMouth`. `trim` is `{ inFrames, outFrames }` in the source file (0 / source length when untrimmed). Audio blocks include `rel` (`audio/<scene>/<file>.wav`). Overlapping blocks in one lane get distinct `row` indexes (Mouth stays a single slim row). Does **not** write `timeline.json`. |
 | `PUT` | `/api/projects/:name/cues` | Patch one mouth cue in an existing `audio/<scene>/<file>.wav.rhubarb.json`. JSON `{ "rel", "start", "end", "value"?, "pinned"? }`. `start`/`end` are seconds in the source file. |
-| `GET` | `/api/projects/:name/settings` | Project `studio.json`. `{ "lipSync": "auto" \| "manual", "lipsync": { "smoothing", "head_bob", "blinks", "loud_threshold" } }`. Defaults: auto, light, subtle, blinks on, loud 0.75. |
-| `PUT` | `/api/projects/:name/settings` | JSON `{ "lipSync"?, "lipsync"? }`. Writes `studio.json`. `lipsync.smoothing` is `off`/`light`/`medium`; `head_bob` is `off`/`subtle`/`strong`; `blinks` is a boolean; `loud_threshold` is a 0–1 percentile. |
+| `GET` | `/api/projects/:name/settings` | Project `studio.json`. `{ "lipSync": "auto" \| "manual", "independent": true, "lipsync": { "smoothing", "head_bob", "blinks", "loud_threshold" } }`. Defaults: auto, Independent on, light, subtle, blinks on, loud 0.75. Missing `independent` is treated as `true`. |
+| `PUT` | `/api/projects/:name/settings` | JSON `{ "lipSync"?, "lipsync"?, "independent"? }`. Writes `studio.json`. `independent: true` means never read `_global_assets` (episode → show still allowed). `lipsync.smoothing` is `off`/`light`/`medium`; `head_bob` is `off`/`subtle`/`strong`; `blinks` is a boolean; `loud_threshold` is a 0–1 percentile. |
 | `POST` | `/api/projects/:name/lipsync?script=` | Run Rhubarb for Dialogue lines. JSON `{ "scriptLine": N }`, `{ "scriptLines": [N] }`, or `{ "all": true }`. `{ "force": true }` redoes a synced line. `{ "clear": true }` deletes that line's `<wav>.rhubarb.json` so sync returns to `not_synced` (Dialogue and Audio stay). Writes `<wav>.rhubarb.json` plus an `engine` text fingerprint when syncing. Returns `{ ok, results }`. |
 | `GET` | `/api/projects/:name/stage?script=` | Parse the selected script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
 | `GET` | `/api/projects/:name/playback?script=` | Render/proxy freshness (`renders/<stem>.mp4` or `output.mp4`, plus `<stem>_preview.mp4`) vs the script mtime, and audio-lane clips with `exists` and RIFF `durationSeconds`. Temp parse only. |

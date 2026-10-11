@@ -47,6 +47,7 @@ export type EditorDrawing = {
   duplicates?: string[];
   excludeFromLipSync?: boolean;
   hand?: "L" | "R" | null;
+  align?: { x: number; y: number; scale: number } | null;
 };
 
 export type SlotEditor = {
@@ -63,6 +64,8 @@ export type SlotEditor = {
   rotation: number;
   defaultDrawing: string | null;
   defaultDrawingsDir?: string;
+  alignReferenceDir?: string | null;
+  alignReferenceDrawing?: string | null;
   isDefaultView?: boolean;
   canRealign?: boolean;
   cycles: Record<string, { drawings: string[]; fps: number }>;
@@ -246,8 +249,19 @@ export async function saveDrawingFlags(
   characterId: string,
   slot: string,
   drawing: string,
-  body: { excludeFromLipSync?: boolean; hand?: "L" | "R" | null; view?: string }
-): Promise<{ ok: boolean; drawing: string; excludeFromLipSync: boolean; hand: "L" | "R" | null }> {
+  body: {
+    excludeFromLipSync?: boolean;
+    hand?: "L" | "R" | null;
+    align?: { x: number; y: number; scale: number } | null;
+    view?: string;
+  }
+): Promise<{
+  ok: boolean;
+  drawing: string;
+  excludeFromLipSync: boolean;
+  hand: "L" | "R" | null;
+  align: { x: number; y: number; scale: number } | null;
+}> {
   const res = await workerFetch(
     slotPath(project, characterId, slot, `/drawings/${encodeURIComponent(drawing)}/flags`, body.view),
     {
@@ -257,7 +271,13 @@ export async function saveDrawingFlags(
     }
   );
   if (!res.ok) throw new Error(await readError(res));
-  return res.json() as Promise<{ ok: boolean; drawing: string; excludeFromLipSync: boolean; hand: "L" | "R" | null }>;
+  return res.json() as Promise<{
+    ok: boolean;
+    drawing: string;
+    excludeFromLipSync: boolean;
+    hand: "L" | "R" | null;
+    align: { x: number; y: number; scale: number } | null;
+  }>;
 }
 
 export async function flipEditorDrawing(
@@ -363,6 +383,7 @@ export async function realignSlotView(
     nudge?: { x: number; y: number; scale: number };
     cropToHead?: boolean;
     collarY?: number;
+    normalize?: boolean;
   }
 ): Promise<{ ok: boolean; written: { name: string; rel: string }[]; overlay?: { afterRel: string; beforeRel: string } | null }> {
   const res = await workerFetch(slotPath(project, characterId, slot, "/realign"), {

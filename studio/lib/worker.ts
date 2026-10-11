@@ -448,13 +448,35 @@ export async function loadStage(name: string, script?: string | null): Promise<S
 export function assetUrl(
   project: string,
   rel: string | null | undefined,
-  opts?: { thumb?: boolean; v?: number | string | null }
+  opts?: { thumb?: boolean; v?: number | string | null; library?: boolean }
 ): string | null {
   if (!rel) return null;
   const params = new URLSearchParams({ rel });
   if (opts?.thumb) params.set("thumb", "1");
+  if (opts?.library) params.set("library", "1");
   if (opts?.v != null && opts.v !== "") params.set("v", String(opts.v));
   return `${WORKER_URL}${withShow(`/api/projects/${encodeURIComponent(project)}/asset?${params.toString()}`)}`;
+}
+
+export type MakeIndependentResult = {
+  ok: boolean;
+  independent: boolean;
+  copied: {
+    characters: string[];
+    backgrounds: string[];
+    stagingDefaults: boolean;
+    files: number;
+  };
+};
+
+export async function makeProjectIndependent(name: string): Promise<MakeIndependentResult> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/make-independent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<MakeIndependentResult>;
 }
 
 function showQuery(showId?: string | null): string {
@@ -645,6 +667,7 @@ export type LipSyncNaturalSettings = {
 export type StudioSettings = {
   lipSync: "auto" | "manual";
   lipsync?: LipSyncNaturalSettings;
+  independent?: boolean;
 };
 
 export const DEFAULT_LIPSYNC_SETTINGS: LipSyncNaturalSettings = {

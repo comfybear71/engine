@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from compositor.align import align_to_reference, crop_to_head, detect_collar_y, landmarks
+from compositor.align import already_aligned, align_to_reference, crop_to_head, detect_collar_y, landmarks
 
 
 def _head(width: int, height: int, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
@@ -56,3 +56,16 @@ def test_head_only_source_is_not_cropped_by_reference_aspect():
     src = _head(80, 90, 20, 10, 60, 70)
     cropped = crop_to_head(src, ref)
     assert (cropped[:, :, 3] > 16).sum() == (src[:, :, 3] > 16).sum()
+
+
+def test_align_is_idempotent_when_already_matched():
+    ref = _head(200, 220, 70, 20, 130, 180)
+    src = _head(80, 90, 20, 10, 60, 70)
+    once = align_to_reference(src, ref)
+    assert already_aligned(once, ref)
+    twice = align_to_reference(once, ref)
+    assert twice.shape == once.shape
+    assert abs(int((twice[:, :, 3] > 16).sum()) - int((once[:, :, 3] > 16).sum())) <= 4
+    sl = landmarks(twice)
+    rl = landmarks(ref)
+    assert abs((sl["chin"][1] - sl["hat"][1]) - (rl["chin"][1] - rl["hat"][1])) <= 2

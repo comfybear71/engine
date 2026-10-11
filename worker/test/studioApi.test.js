@@ -126,7 +126,8 @@ describe("studio worker API", () => {
     assert.ok(eyes);
     assert.deepEqual(
       eyes.drawings.map((d) => d.name).sort(),
-      ["closed", "open"]
+      [],
+      "Studio lists only project-local drawings, not shared-library ones"
     );
     assert.equal(eyes.cycles.blink_loop.fps, 6);
     assert.ok(alice.slots.some((s) => s.name === "right_hand" && s.owner === "right_arm"));
@@ -134,28 +135,38 @@ describe("studio worker API", () => {
     const carol = body.characters.find((c) => c.id === "carol");
     assert.equal(carol.source, "project");
     assert.equal(carol.thumbRel, "characters/carol/body.png");
+    const carolMouth = carol.slots.find((s) => s.name === "mouth");
+    assert.deepEqual(
+      carolMouth.drawings.map((d) => d.name),
+      ["X"]
+    );
   });
 
   test("GET slot/drawing editor endpoints are path-safe and include mouth metadata", async () => {
-    const slot = await fetch(`${ctx.url}/api/projects/project/characters/alice/slots/mouth`);
+    const hidden = await fetch(`${ctx.url}/api/projects/project/characters/alice/slots/mouth`);
+    assert.equal(hidden.status, 200);
+    const hiddenBody = await hidden.json();
+    assert.equal(hiddenBody.mouth, true);
+    assert.equal(hiddenBody.drawings.length, 0, "shared-library drawings stay off the Studio grid");
+
+    const slot = await fetch(`${ctx.url}/api/projects/project/characters/carol/slots/mouth`);
     assert.equal(slot.status, 200);
     const body = await slot.json();
     assert.equal(body.mouth, true);
-    assert.ok(body.drawings.some((d) => d.name === "A"));
-    assert.deepEqual(body.missingShapes, []);
+    assert.ok(body.drawings.some((d) => d.name === "X"));
 
-    const drawing = await fetch(`${ctx.url}/api/projects/project/characters/alice/slots/mouth/drawings/A`);
+    const drawing = await fetch(`${ctx.url}/api/projects/project/characters/carol/slots/mouth/drawings/X`);
     assert.equal(drawing.status, 200);
     const detail = await drawing.json();
-    assert.equal(detail.drawing.name, "A");
+    assert.equal(detail.drawing.name, "X");
     assert.equal(detail.drawing.width, 1);
 
     const badSlot = await fetch(
-      `${ctx.url}/api/projects/project/characters/alice/slots/${encodeURIComponent("../mouth")}`
+      `${ctx.url}/api/projects/project/characters/carol/slots/${encodeURIComponent("../mouth")}`
     );
     assert.equal(badSlot.status, 400);
     const badDrawing = await fetch(
-      `${ctx.url}/api/projects/project/characters/alice/slots/mouth/drawings/${encodeURIComponent("..hidden")}`
+      `${ctx.url}/api/projects/project/characters/carol/slots/mouth/drawings/${encodeURIComponent("..hidden")}`
     );
     assert.equal(badDrawing.status, 400);
   });
@@ -348,7 +359,7 @@ describe("studio worker API", () => {
     assert.equal(typeof restoreBody.text, "string");
   });
 
-  test("Assets filter to script cast plus local, Library records a reference without copying art", async () => {
+  test("Assets filter to script cast plus local, Library copies the character in", async () => {
     fixture.writeScript(
       ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice, Bob]", "Alice: Hi."].join("\n")
     );
@@ -377,12 +388,42 @@ describe("studio worker API", () => {
     const added = await add.json();
     assert.equal(add.status, 200, JSON.stringify(added));
     assert.deepEqual(added.library.characters, ["alice"]);
-    assert.equal(fs.existsSync(path.join(emptyDir, "characters", "alice")), false);
+    assert.equal(fs.existsSync(path.join(emptyDir, "characters", "alice", "character.json")), true);
+    assert.equal(fs.existsSync(path.join(emptyDir, "characters", "alice", "body.png")), true);
     const libJson = JSON.parse(fs.readFileSync(path.join(emptyDir, "library.json"), "utf8"));
     assert.deepEqual(libJson.characters, ["alice"]);
+    const globalBody = fs.readFileSync(path.join(fixture.globalAssetsDir, "characters", "alice", "character.json"), "utf8");
+    const localBody = fs.readFileSync(path.join(emptyDir, "characters", "alice", "character.json"), "utf8");
+    assert.ok(localBody.includes("alice"));
+    assert.ok(globalBody.includes("alice"), "shared library stays in place");
 
     const after = await fetch(`${ctx.url}/api/projects/other_show/characters`);
     assert.deepEqual((await after.json()).characters.map((c) => c.id), ["alice"]);
+  });
+
+  test("Make independent copies used global assets and turns the fallback off", async () => {
+    const name = "needs_copy";
+    const dir = path.join(fixture.root, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "script.txt"),
+      ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi."].join("\n")
+    );
+    fs.writeFileSync(path.join(dir, "studio.json"), JSON.stringify({ independent: false }));
+    const res = await fetch(`${ctx.url}/api/projects/${name}/make-independent`, { method: "POST" });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.independent, true);
+    assert.ok(body.copied.characters.includes("alice"));
+    assert.ok(body.copied.backgrounds.includes("room_a"));
+    assert.equal(fs.existsSync(path.join(dir, "characters", "alice", "character.json")), true);
+    assert.equal(fs.existsSync(path.join(dir, "backgrounds", "room_a", "bg.png")), true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "studio.json"), "utf8")).independent, true);
+    assert.equal(
+      fs.readFileSync(path.join(fixture.globalAssetsDir, "characters", "alice", "body.png")).length > 0,
+      true,
+      "shared library stays untouched"
+    );
   });
 
   test("POST /api/projects creates an empty folder from the template", async () => {
@@ -397,6 +438,16 @@ describe("studio worker API", () => {
     const created = path.join(fixture.root, "new_ep");
     assert.equal(fs.existsSync(path.join(created, "script.txt")), true);
     assert.equal(fs.existsSync(path.join(created, "library.json")), true);
+    const createdSettings = JSON.parse(fs.readFileSync(path.join(created, "studio.json"), "utf8"));
+    assert.equal(createdSettings.independent, true);
+    const hidden = await fetch(
+      `${ctx.url}/api/projects/new_ep/asset?rel=${encodeURIComponent("characters/alice/body.png")}`
+    );
+    assert.equal(hidden.status, 404);
+    const catalog = await fetch(
+      `${ctx.url}/api/projects/new_ep/asset?rel=${encodeURIComponent("characters/alice/body.png")}&library=1`
+    );
+    assert.equal(catalog.status, 200);
     const dup = await fetch(`${ctx.url}/api/projects`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -763,6 +814,7 @@ describe("studio worker API", () => {
     assert.equal(getSettings.status, 200);
     const before = await getSettings.json();
     assert.equal(before.lipSync, "auto");
+    assert.equal(before.independent, false);
 
     const put = await fetch(`${ctx.url}/api/projects/project/settings`, {
       method: "PUT",
@@ -779,6 +831,7 @@ describe("studio worker API", () => {
     assert.equal(saved.lipsync.head_bob, "strong");
     assert.equal(saved.lipsync.blinks, false);
     assert.equal(saved.lipsync.loud_threshold, 0.8);
+    assert.equal(saved.independent, false, "lip-sync save must keep Independent");
     await fetch(`${ctx.url}/api/projects/project/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

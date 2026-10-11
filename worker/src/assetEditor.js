@@ -140,14 +140,12 @@ function isMouthSlot(slotName, drawingsDir) {
 
 function listCharacterSubdirs(projectDir, globalAssetsDir, characterId) {
   const names = new Set();
-  for (const root of assetSearchRoots(projectDir, globalAssetsDir)) {
-    const dir = path.join(root.dir, "characters", characterId);
-    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      if (HISTORY_DIRS.has(entry.name) || entry.name.startsWith("_")) continue;
-      names.add(entry.name);
-    }
+  const dir = path.join(projectDir, "characters", characterId);
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return names;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (HISTORY_DIRS.has(entry.name) || entry.name.startsWith("_")) continue;
+    names.add(entry.name);
   }
   return names;
 }
@@ -268,11 +266,48 @@ function drawingHand(spec, drawingName) {
   return raw === "L" || raw === "R" ? raw : null;
 }
 
+function normalizeAlign(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const x = Number(raw.x);
+  const y = Number(raw.y);
+  const scale = Number(raw.scale);
+  if (![x, y, scale].every(Number.isFinite)) return null;
+  return {
+    x: Math.max(-400, Math.min(400, x)),
+    y: Math.max(-400, Math.min(400, y)),
+    scale: Math.max(0.25, Math.min(4, scale)),
+  };
+}
+
+function drawingAlign(spec, drawingName) {
+  const meta = slotDrawingMeta(spec);
+  const name = String(drawingName || "");
+  return normalizeAlign(meta[name] && meta[name].align);
+}
+
+function pickAlignReferenceName(spec, refScan, srcScan) {
+  const scans = [refScan, srcScan].filter((scan) => scan && typeof scan.has === "function");
+  const preferred = [];
+  if (spec && spec.default_drawing) preferred.push(String(spec.default_drawing));
+  preferred.push("X");
+  for (const name of preferred) {
+    for (const scan of scans) {
+      if (scan.has(name)) return name;
+    }
+  }
+  for (const scan of scans) {
+    const first = [...scan.keys()].sort()[0];
+    if (first) return first;
+  }
+  return null;
+}
+
 function applyDrawingFlags(drawings, spec) {
   return drawings.map((drawing) => ({
     ...drawing,
     excludeFromLipSync: isExcludedFromLipSync(spec, drawing.name),
     hand: drawingHand(spec, drawing.name),
+    align: drawingAlign(spec, drawing.name),
   }));
 }
 
@@ -430,7 +465,8 @@ function drawingsForView(projectDir, globalAssetsDir, characterId, view) {
   const drawings = [];
   for (const [name] of scanned) {
     const described = describeDrawingFile(projectDir, globalAssetsDir, characterId, view.drawingsDir, name);
-    if (described) drawings.push({ ...described, view: view.id });
+    if (!described || described.source !== "project") continue;
+    drawings.push({ ...described, view: view.id });
   }
   drawings.sort((a, b) => a.name.localeCompare(b.name));
   return markDuplicates(drawings);
@@ -446,6 +482,17 @@ function describeSlot(projectDir, globalAssetsDir, characterId, slotName, viewId
   const drawings = applyDrawingFlags(drawingsForView(projectDir, globalAssetsDir, characterId, view), spec);
   const mouth = isMouthSlot(slotName, spec.drawings_dir);
   const offset = spec.offset || { x: 0, y: 0 };
+  const alignReferenceDir = findAlignReferenceDir(projectDir, globalAssetsDir, characterId, slotName, spec, view);
+  const alignRefScan = scanDrawingsDir(
+    projectDir,
+    globalAssetsDir,
+    `characters/${characterId}/${alignReferenceDir || view.drawingsDir}`
+  );
+  const alignReferenceDrawing = pickAlignReferenceName(
+    spec,
+    alignRefScan,
+    scanDrawingsDir(projectDir, globalAssetsDir, view.relDir)
+  );
   return {
     ok: true,
     characterId,
@@ -457,14 +504,18 @@ function describeSlot(projectDir, globalAssetsDir, characterId, slotName, viewId
     views: views.map((item) => ({
       id: item.id,
       drawingsDir: item.drawingsDir,
-      count: scanDrawingsDir(projectDir, globalAssetsDir, item.relDir).size,
+      count: [...scanDrawingsDir(projectDir, globalAssetsDir, item.relDir).values()].filter(
+        (file) => file.source === "project"
+      ).length,
     })),
     offset: { x: offset.x == null ? 0 : offset.x, y: offset.y == null ? 0 : offset.y },
     scale: spec.scale == null ? 1 : spec.scale,
     rotation: spec.rotation == null ? 0 : spec.rotation,
     defaultDrawingsDir: spec.drawings_dir || slotName,
     isDefaultView: view.drawingsDir === ((spec && spec.drawings_dir) || slotName),
-    canRealign: Boolean(findAlignReferenceDir(projectDir, globalAssetsDir, characterId, slotName, spec, view)),
+    alignReferenceDir,
+    alignReferenceDrawing,
+    canRealign: Boolean(alignReferenceDir && alignReferenceDrawing),
     defaultDrawing: spec.default_drawing || null,
     cycles: spec.cycles || {},
     mouth,
@@ -512,9 +563,11 @@ function findAlignReferenceDir(projectDir, globalAssetsDir, characterId, slotNam
   const defaultDir = (spec && spec.drawings_dir) || slotName;
   if (view && view.drawingsDir !== "mouth") candidates.push("mouth");
   if (view && view.drawingsDir !== defaultDir) candidates.push(defaultDir);
+  if (view && view.drawingsDir) candidates.push(view.drawingsDir);
+  if (defaultDir) candidates.push(defaultDir);
   const seen = new Set();
   for (const dir of candidates) {
-    if (!dir || seen.has(dir) || (view && dir === view.drawingsDir)) continue;
+    if (!dir || seen.has(dir)) continue;
     seen.add(dir);
     const scanned = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${dir}`);
     if (scanned.size > 0) return dir;
@@ -556,13 +609,15 @@ async function realignSlotView(projectDir, globalAssetsDir, characterId, slotNam
   const refDir = findAlignReferenceDir(projectDir, globalAssetsDir, characterId, slotName, spec, view);
   if (!refDir) throw editorError("No default set to align to", "ENOTFOUND");
   const srcAbs = path.join(characterDir(projectDir, characterId), view.drawingsDir);
-  const refAbs = path.join(characterDir(projectDir, characterId), refDir);
   if (!fs.existsSync(srcAbs)) throw editorError("View folder not found", "ENOTFOUND");
-  // Reference may live in global assets; copy names from scan.
   const refScan = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${refDir}`);
   const srcScan = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${view.drawingsDir}`);
-  const nudge = (body && body.nudge) || {};
+  const refName = pickAlignReferenceName(spec, refScan, srcScan);
+  const refFile = (refName && (refScan.get(refName) || srcScan.get(refName))) || null;
+  if (!refFile) throw editorError("No default drawing to align to", "ENOTFOUND");
+  const normalizeAll = Boolean(body && body.normalize) || !(body && body.drawing);
   const names = body && body.drawing ? [body.drawing] : null;
+  const nudge = normalizeAll ? {} : (body && body.nudge) || {};
   const sid = sessionId();
   const sessionRoot = previewDir(projectDir, characterId, sid);
   const outDir = path.join(sessionRoot, "aligned");
@@ -571,14 +626,13 @@ async function realignSlotView(projectDir, globalAssetsDir, characterId, slotNam
   const tmpSrc = path.join(outDir, "_src");
   fs.mkdirSync(tmpRef, { recursive: true });
   fs.mkdirSync(tmpSrc, { recursive: true });
-  for (const [name, file] of refScan) {
-    if (names && !names.includes(name)) continue;
-    fs.copyFileSync(file.absPath, path.join(tmpRef, `${name}${path.extname(file.absPath) || ".png"}`));
-  }
+  const refExt = path.extname(refFile.absPath) || ".png";
   for (const [name, file] of srcScan) {
     if (names && !names.includes(name)) continue;
-    if (!refScan.has(name)) continue;
-    fs.copyFileSync(file.absPath, path.join(tmpSrc, `${name}${path.extname(file.absPath) || ".png"}`));
+    const ext = path.extname(file.absPath) || ".png";
+    fs.copyFileSync(file.absPath, path.join(tmpSrc, `${name}${ext}`));
+    const pair = !normalizeAll && refScan.has(name) ? refScan.get(name) : refFile;
+    fs.copyFileSync(pair.absPath, path.join(tmpRef, `${name}${path.extname(pair.absPath) || refExt}`));
   }
   const args = ["--src-dir", tmpSrc, "--ref-dir", tmpRef, "--out-dir", outDir];
   if (body && body.cropToHead === false) args.push("--no-crop-to-head");
@@ -599,19 +653,44 @@ async function realignSlotView(projectDir, globalAssetsDir, characterId, slotNam
     const destRel = posixJoin("characters", characterId, view.drawingsDir, destName);
     const destAbs = absFromProjectRel(projectDir, destRel);
     const prev = srcScan.get(path.basename(destName, path.extname(destName)));
-    if (prev) writeHistoryCopy(projectDir, characterId, "replaced", destRel, prev.absPath);
-    fs.mkdirSync(path.dirname(destAbs), { recursive: true });
-    fs.copyFileSync(item.out, destAbs);
-    written.push({ name: path.basename(destName, path.extname(destName)), rel: destRel });
+    const outBuf = fs.readFileSync(item.out);
+    const unchanged = Boolean(prev && fs.existsSync(prev.absPath) && fs.readFileSync(prev.absPath).equals(outBuf));
+    if (!unchanged) {
+      if (prev) writeHistoryCopy(projectDir, characterId, "replaced", destRel, prev.absPath);
+      fs.mkdirSync(path.dirname(destAbs), { recursive: true });
+      fs.copyFileSync(item.out, destAbs);
+    }
+    written.push({
+      name: path.basename(destName, path.extname(destName)),
+      rel: destRel,
+      unchanged,
+    });
   }
   fs.rmSync(sessionRoot, { recursive: true, force: true });
+  if (written.length) {
+    const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+    const live = findSlotSpec(character, slotName);
+    if (live) {
+      const identity = { x: 0, y: 0, scale: 1 };
+      for (const item of written) setDrawingFlag(live, item.name, "align", identity);
+      writeCharacterJson(projectDir, characterId, character, null);
+    }
+  }
   const overlay = written[0]
     ? {
         afterRel: written[0].rel,
-        beforeRel: posixJoin("characters", characterId, refDir, `${written[0].name}.png`),
+        beforeRel: posixJoin("characters", characterId, refDir, `${refName}.png`),
       }
     : null;
-  return { ok: true, view: view.id, referenceDir: refDir, written, overlay };
+  return {
+    ok: true,
+    view: view.id,
+    referenceDir: refDir,
+    referenceDrawing: refName,
+    normalize: normalizeAll,
+    written,
+    overlay,
+  };
 }
 
 function resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, viewId) {
@@ -964,8 +1043,12 @@ function saveDrawingFlags(projectDir, globalAssetsDir, characterId, slotName, dr
   const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
   const current = describeDrawingFile(projectDir, globalAssetsDir, characterId, view.drawingsDir, drawingName);
   if (!current) throw editorError(`Unknown drawing: ${drawingName}`, "ENOTFOUND");
-  if (body == null || typeof body !== "object" || (!("excludeFromLipSync" in body) && !("hand" in body))) {
-    throw editorError("excludeFromLipSync or hand is required");
+  if (
+    body == null ||
+    typeof body !== "object" ||
+    (!("excludeFromLipSync" in body) && !("hand" in body) && !("align" in body))
+  ) {
+    throw editorError("excludeFromLipSync, hand, or align is required");
   }
   const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
   const live = findSlotSpec(character, slotName);
@@ -976,12 +1059,16 @@ function saveDrawingFlags(projectDir, globalAssetsDir, characterId, slotName, dr
   if ("hand" in body) {
     setDrawingFlag(live, drawingName, "hand", normalizeHand(body.hand));
   }
+  if ("align" in body) {
+    setDrawingFlag(live, drawingName, "align", normalizeAlign(body.align));
+  }
   writeCharacterJson(projectDir, characterId, character, null);
   return {
     ok: true,
     drawing: drawingName,
     excludeFromLipSync: isExcludedFromLipSync(live, drawingName),
     hand: drawingHand(live, drawingName),
+    align: drawingAlign(live, drawingName),
   };
 }
 
@@ -1106,6 +1193,9 @@ module.exports = {
   rhubarbShapeOf,
   promoteSlotView,
   realignSlotView,
+  pickAlignReferenceName,
+  normalizeAlign,
+  drawingAlign,
   findAlignReferenceDir,
   pngSize,
 };

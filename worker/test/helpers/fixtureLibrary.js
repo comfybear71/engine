@@ -37,6 +37,9 @@ function createFixtureLibrary() {
   const globalAssetsDir = path.join(root, "_global_assets");
   const projectDir = path.join(root, "project");
   fs.mkdirSync(projectDir, { recursive: true });
+  // Parser tests exercise the shared-library merge. Real projects default to
+  // Independent ON; this fixture opts back into the fallback.
+  writeJson(path.join(projectDir, "studio.json"), { independent: false });
 
   // -- characters: alice (with a right_hand rig child) and bob (simple) --
   for (const id of ["alice", "bob"]) {

@@ -63,7 +63,7 @@ function resolveVoiceId(projectDir, globalAssetsDir, characterId) {
   const resolved = resolveAsset(projectDir, globalAssetsDir, relPath);
   if (!resolved) {
     return {
-      error: `Character "${characterId}" has no character.json (looked in project override, then _global_assets).`,
+      error: `Character "${characterId}" has no character.json (looked in this project, then the show, then _global_assets if Independent is off).`,
     };
   }
   let config;
