@@ -20,7 +20,7 @@ from .camera import Camera, CameraKeyframe, Shake
 from .interpolate import interpolate_scalar
 from .media_probe import probe_duration_seconds
 from .schema_validate import validate_timeline
-from .slots import Slot, SlotKeyframe
+from .slots import DrawingAlign, Slot, SlotKeyframe
 
 DEFAULT_CANVAS_WIDTH = 1920
 DEFAULT_CANVAS_HEIGHT = 1080
@@ -460,12 +460,34 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
         visible_when=visible_when,
         images_by_view=images_by_view,
         exclude_from_lipsync=excluded,
+        align=_build_drawing_align(raw.get("align")),
         z=z,
         canvas_w=canvas_w,
         canvas_h=canvas_h,
         pivot_x=pivot_x,
         pivot_y=pivot_y,
     )
+
+
+def _build_drawing_align(raw: dict | None) -> dict[str, DrawingAlign]:
+    """Per-drawing Scale/Nudge: ``{ name: {x, y, scale} }``. Missing/invalid → omit."""
+
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, DrawingAlign] = {}
+    for name, item in raw.items():
+        if not name or not isinstance(item, dict):
+            continue
+        try:
+            x = float(item.get("x", 0.0))
+            y = float(item.get("y", 0.0))
+            scale = float(item.get("scale", 1.0))
+        except (TypeError, ValueError):
+            continue
+        if scale <= 0:
+            continue
+        out[str(name)] = DrawingAlign(x=x, y=y, scale=scale)
+    return out
 
 
 def _build_slot_keyframe(raw: dict) -> SlotKeyframe:

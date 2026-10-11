@@ -2332,6 +2332,7 @@ class ScriptParser {
 
   _applySlotMeta(slot, slotConfig) {
     this._applySlotTransform(slot, slotConfig);
+    this._applyDrawingAlign(slot, slotConfig);
     if (slotConfig && slotConfig.z != null && Number.isFinite(Number(slotConfig.z))) {
       slot.z = Number(slotConfig.z);
     }
@@ -2381,6 +2382,28 @@ class ScriptParser {
     return Object.entries(drawings)
       .filter(([, meta]) => meta && meta.excludeFromLipSync)
       .map(([name]) => name);
+  }
+
+  _drawingAlign(slotConfig) {
+    const drawings = slotConfig && slotConfig.drawings;
+    if (!drawings || typeof drawings !== "object") return null;
+    const align = {};
+    for (const [name, meta] of Object.entries(drawings)) {
+      const raw = meta && meta.align;
+      if (!raw || typeof raw !== "object") continue;
+      const x = Number(raw.x);
+      const y = Number(raw.y);
+      const scale = Number(raw.scale);
+      if (![x, y, scale].every(Number.isFinite) || scale <= 0) continue;
+      align[name] = { x, y, scale };
+    }
+    return Object.keys(align).length ? align : null;
+  }
+
+  _applyDrawingAlign(slot, slotConfig) {
+    const align = this._drawingAlign(slotConfig);
+    if (align) slot.align = align;
+    return slot;
   }
 
   _buildSlotJson(characterId, slotName, slotConfig, keyframes) {
