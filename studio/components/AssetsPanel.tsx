@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import AlignHeadModal from "@/components/AlignHeadModal";
 import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import CharacterReferenceCard from "@/components/CharacterReferenceCard";
-import type { AssetFocus } from "@/lib/assetEditor";
+import { slotViewGroups, type AssetFocus } from "@/lib/assetEditor";
 import { alignableSlots } from "@/lib/headAlign";
 import {
   addLibraryCharacter,
@@ -77,6 +77,7 @@ function SlotBlock({
   onOpen?: (focus: AssetFocus) => void;
 }) {
   const cycleEntries = Object.entries(slot.cycles || {});
+  const viewGroups = slot.name === "mouth" ? slotViewGroups(slot) : [];
   return (
     <section className="space-y-2">
       <div className="flex items-baseline justify-between gap-2">
@@ -108,20 +109,67 @@ function SlotBlock({
           ))}
         </div>
       ) : null}
-      <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
-        {slot.drawings.map((drawing) => (
-          <Thumb
-            key={drawing.name}
-            src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
-            label={drawing.name}
-            selected={drawing.name === slot.default_drawing}
-            fit="contain"
-            onClick={() =>
-              onOpen?.({ mode: "drawing", characterId, slot: slot.name, drawing: drawing.name })
-            }
-          />
-        ))}
-      </div>
+      {viewGroups.length > 0 ? (
+        <div className="space-y-1.5">
+          {viewGroups.map((group) => (
+            <details
+              key={group.drawingsDir}
+              className="group/view rounded-sm border border-studio-border/70"
+              open
+              data-testid={`assets-slot-view-${group.id}`}
+            >
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 px-1 py-0.5 text-[11px] text-neutral-400 [&::-webkit-details-marker]:hidden">
+                <span className="text-[9px] text-neutral-600 group-open/view:rotate-90">▸</span>
+                <span className="font-medium text-neutral-200">{group.label}</span>
+                <span className="text-neutral-500">{group.count}</span>
+                {group.isDefault ? (
+                  <span
+                    className="rounded bg-studio-raised px-1 text-[9px] uppercase tracking-wide text-neutral-400"
+                    data-testid="assets-slot-view-default"
+                  >
+                    default
+                  </span>
+                ) : null}
+              </summary>
+              <div className="grid grid-cols-4 gap-2 px-1 pb-1.5 sm:grid-cols-5">
+                {group.drawings.map((drawing) => (
+                  <Thumb
+                    key={`${group.id}:${drawing.name}`}
+                    src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
+                    label={drawing.name}
+                    selected={group.isDefault && drawing.name === slot.default_drawing}
+                    fit="contain"
+                    onClick={() =>
+                      onOpen?.({
+                        mode: "drawing",
+                        characterId,
+                        slot: slot.name,
+                        drawing: drawing.name,
+                        view: group.id === "mouth" ? undefined : group.id,
+                      })
+                    }
+                  />
+                ))}
+              </div>
+            </details>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
+          {slot.drawings.map((drawing) => (
+            <Thumb
+              key={drawing.name}
+              src={assetUrl(project, drawing.rel, { v: drawing.mtime })}
+              label={drawing.name}
+              selected={drawing.name === slot.default_drawing}
+              fit="contain"
+              onClick={() =>
+                onOpen?.({ mode: "drawing", characterId, slot: slot.name, drawing: drawing.name })
+              }
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }

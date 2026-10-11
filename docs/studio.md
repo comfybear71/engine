@@ -158,7 +158,11 @@ clobber the project's `timeline.json`.
   into a project-local `character.json`). On Stage, the left Assets tree
   opens the same viewer without leaving the Stage: click a **slot**
   (`mouth`, `face`, `eyes`, `right_hand`, `mic_arm`, `body`, …) for a
-  labelled grid, or click / double-click a drawing for a large preview on
+  labelled grid. The Assets right-hand panel groups a mouth slot by view
+  (`Front`, `Left 3/4`, `Left side`, …) with a drawing count and a
+  **default** tag on the set `drawings_dir` points at. Confirming a Grok
+  Imagine mouth-view sheet writes `mouth_<view>/` (e.g. `mouth_left_34/`)
+  and the panel reloads without a refresh. Click / double-click a drawing for a large preview on
   a checkerboard (or a chosen background) with name, size, slot, offset,
   scale, and which script/cycle uses it. Prev/next arrows and the arrow
   keys step through that slot. Zoom/pan the preview. Mouth grids label
@@ -449,7 +453,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/trash/:id/restore` | Move that trash folder back to `projects/<originalName>`. 409 if that name exists. |
 | `POST` | `/api/trash/empty` | Permanently delete everything in `_trash`. JSON `{ "confirm": "empty" }`. |
 | `GET` | `/api/projects/:name/scripts` | `script*.txt` files in that folder. |
-| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`), drawings, cycles, thumbnail paths, `style`, and `reference` / `referenceRel`. |
+| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`, `drawingsDir`, and per-view `views[]`), drawings, cycles, thumbnail paths, `style`, and `reference` / `referenceRel`. |
 | `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. |
 | `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Appends to `library.json`; does not copy art. |
 | `PUT` | `/api/projects/:name/characters/:id` | JSON `{ "style": "painted semi-real" }`. Writes a project-local `character.json` (copied from global if needed) with that free-text style field. Does not touch `_global_assets`. |

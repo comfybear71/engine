@@ -282,6 +282,15 @@ function readManifest(projectDir, characterId, sid) {
   return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 }
 
+function inferMouthViewDest(needId, dest) {
+  const match = String(needId || "").match(/^mouth_13_(front|left_34|left_side|right_34|right_side|up|down)$/);
+  if (!match || !dest || dest.kind !== "slot") return dest;
+  const dir = match[1] === "front" ? "mouth_front" : `mouth_${match[1]}`;
+  const current = dest.drawings_dir || dest.slot;
+  if (current && current !== dest.slot && current !== "mouth") return dest;
+  return { ...dest, drawings_dir: dir };
+}
+
 function destRelForCell(characterId, dest, drawingName) {
   if (!dest) return null;
   if (dest.kind === "file" && dest.rel) {
@@ -357,7 +366,7 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
       index: raw.index,
       suggestedName,
       name: suggestedName,
-      dest: template.dest || null,
+      dest: inferMouthViewDest(need.id, template.dest || need.dest || null),
       cycle: template.cycle || null,
       empty: Boolean(raw.empty),
       width: raw.width,
@@ -520,6 +529,7 @@ module.exports = {
   uniqueWriteTarget,
   readWritableCharacter,
   destRelForCell,
+  inferMouthViewDest,
   runAlign,
   isHeadLikeDest,
   findAlignReferenceAbs,

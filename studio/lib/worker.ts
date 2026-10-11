@@ -17,6 +17,7 @@ export type CharacterSlot = {
   name: string;
   owner: string | null;
   default_drawing: string | null;
+  drawingsDir?: string;
   drawings: Drawing[];
   views?: SlotView[];
   cycles: Record<string, SlotCycle>;

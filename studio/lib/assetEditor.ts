@@ -443,6 +443,83 @@ export function neighborDrawing(names: string[], current: string, dir: -1 | 1): 
   return names[(index + dir + names.length) % names.length];
 }
 
+export const MOUTH_VIEW_ORDER = [
+  "front",
+  "left_34",
+  "left_side",
+  "right_34",
+  "right_side",
+  "up",
+  "down",
+  "loud",
+  "mouth",
+] as const;
+
+export const MOUTH_VIEW_LABELS: Record<string, string> = {
+  front: "Front",
+  left_34: "Left 3/4",
+  left_side: "Left side",
+  right_34: "Right 3/4",
+  right_side: "Right side",
+  up: "Up",
+  down: "Down",
+  loud: "Loud",
+  mouth: "Mouth",
+};
+
+export function slotViewLabel(id: string): string {
+  return MOUTH_VIEW_LABELS[id] || String(id || "").replace(/_/g, " ");
+}
+
+export type SlotViewGroup = {
+  id: string;
+  drawingsDir: string;
+  label: string;
+  count: number;
+  isDefault: boolean;
+  drawings: { name: string; rel: string; mtime?: number | null; view?: string }[];
+};
+
+export function slotViewGroups(slot: {
+  name: string;
+  drawingsDir?: string;
+  drawings: SlotViewGroup["drawings"];
+  views?: { id: string; drawingsDir: string; drawings: SlotViewGroup["drawings"] }[];
+}): SlotViewGroup[] {
+  const defaultDir = slot.drawingsDir || slot.name;
+  const groups: SlotViewGroup[] = [];
+  const seen = new Set<string>();
+  for (const view of slot.views || []) {
+    if (!view || seen.has(view.drawingsDir)) continue;
+    seen.add(view.drawingsDir);
+    groups.push({
+      id: view.id,
+      drawingsDir: view.drawingsDir,
+      label: slotViewLabel(view.id),
+      count: view.drawings.length,
+      isDefault: view.drawingsDir === defaultDir,
+      drawings: view.drawings,
+    });
+  }
+  if (!seen.has(defaultDir) && slot.drawings.length > 0) {
+    const id = defaultDir === "mouth" ? "mouth" : defaultDir.replace(/^mouth_/, "") || "front";
+    groups.push({
+      id,
+      drawingsDir: defaultDir,
+      label: slotViewLabel(id),
+      count: slot.drawings.length,
+      isDefault: true,
+      drawings: slot.drawings,
+    });
+  }
+  groups.sort((a, b) => {
+    const ai = MOUTH_VIEW_ORDER.indexOf(a.id as (typeof MOUTH_VIEW_ORDER)[number]);
+    const bi = MOUTH_VIEW_ORDER.indexOf(b.id as (typeof MOUTH_VIEW_ORDER)[number]);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+  });
+  return groups;
+}
+
 export function needIdForSlot(
   slot: string,
   packSets?: readonly { id: string; needId?: string; cells?: readonly { dest?: unknown }[] }[]

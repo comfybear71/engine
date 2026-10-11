@@ -22,6 +22,8 @@ import {
   neighborDrawing,
   remapLipSyncShape,
   RHUBARB_SHAPES,
+  slotViewGroups,
+  slotViewLabel,
 } from "../lib/assetEditor.ts";
 
 describe("asset editor helpers", () => {
@@ -43,6 +45,34 @@ describe("asset editor helpers", () => {
     assert.equal(neighborDrawing(["X", "A", "B"], "A", 1), "B");
     assert.equal(neighborDrawing(["X", "A", "B"], "B", 1), "X");
     assert.equal(neighborDrawing(["X", "A", "B"], "X", -1), "B");
+  });
+
+  test("mouth side panel groups view folders with counts and a default tag", () => {
+    assert.equal(slotViewLabel("left_34"), "Left 3/4");
+    assert.equal(slotViewLabel("front"), "Front");
+    const groups = slotViewGroups({
+      name: "mouth",
+      drawingsDir: "mouth",
+      drawings: [{ name: "X", rel: "characters/rodney/mouth/X.png" }],
+      views: [
+        { id: "front", drawingsDir: "mouth", drawings: [{ name: "X", rel: "characters/rodney/mouth/X.png" }] },
+        {
+          id: "left_34",
+          drawingsDir: "mouth_left_34",
+          drawings: [
+            { name: "X", rel: "characters/rodney/mouth_left_34/X.png" },
+            { name: "A", rel: "characters/rodney/mouth_left_34/A.png" },
+          ],
+        },
+      ],
+    });
+    assert.deepEqual(
+      groups.map((group) => [group.id, group.label, group.count, group.isDefault]),
+      [
+        ["front", "Front", 1, true],
+        ["left_34", "Left 3/4", 2, false],
+      ]
+    );
   });
 
   test("needIdForSlot maps a slot to the Imagine set, preferring a pack cell match", () => {

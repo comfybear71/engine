@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const { destRelForCell, ensureSlot, uniqueWriteTarget, mergeCycles, confirmIngest, previewDir } = require("../src/assetIngest");
+const { destRelForCell, inferMouthViewDest, ensureSlot, uniqueWriteTarget, mergeCycles, confirmIngest, previewDir } = require("../src/assetIngest");
 const { getNeed, expandNeed } = require("../src/assetNeeds");
 const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
 const { encodeRgbaPng, decodePng } = require("../src/pngFlip");
@@ -43,6 +43,21 @@ describe("asset ingest helpers", () => {
     ensureSlot(character, expanded.cells[0].dest);
     assert.ok(character.slots.mouth, "existing mouth slot stays");
     assert.equal(character.slots.body.drawings_dir, "body");
+  });
+
+  test("a left_34 mouth pack writes mouth_left_34 and does not steal the default dir", () => {
+    const need = getNeed("mouth_13_left_34");
+    assert.ok(need);
+    const dest = inferMouthViewDest(need.id, { kind: "slot", slot: "mouth", drawings_dir: "mouth" });
+    assert.equal(dest.drawings_dir, "mouth_left_34");
+    assert.equal(destRelForCell("rodney", dest, "X"), "characters/rodney/mouth_left_34/X.png");
+    const character = {
+      id: "rodney",
+      slots: { mouth: { drawings_dir: "mouth" } },
+      children: [],
+    };
+    ensureSlot(character, dest);
+    assert.equal(character.slots.mouth.drawings_dir, "mouth");
   });
 
   test("front head ingest writes mouth_front and points the existing mouth slot at it", () => {
