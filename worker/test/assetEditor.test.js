@@ -328,6 +328,18 @@ describe("asset editor episode/show/global paths", { concurrency: 1 }, () => {
   writePng(path.join(showDir, "characters", "alice", "mouth", "B.png"));
   writePng(path.join(showDir, "characters", "alice", "mouth_left_side", "X.png"));
   writePng(path.join(episodeDir, "characters", "alice", "mouth", "A.png"));
+  fs.writeFileSync(
+    path.join(episodeDir, "characters", "alice", "character.json"),
+    JSON.stringify({
+      id: "alice",
+      display_name: "Alice",
+      aliases: ["Alice"],
+      asset: "body.png",
+      z: 10,
+      slots: { mouth: { offset: { x: 0, y: -10 }, drawings_dir: "mouth" } },
+      children: [],
+    })
+  );
   fs.writeFileSync(path.join(episodeDir, "script.txt"), "[Scene: Intro]\n[Cast: Alice]\n");
 
   test("Studio lists only project-local drawings", () => {

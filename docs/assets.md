@@ -42,10 +42,12 @@ for new and existing projects: asset lookup uses only the project folder
 (and the show folder for an episode). The shared library is skipped, so
 a drawing you deleted in a project cannot come back from
 `projects/_global_assets`. Set `"independent": false` to turn the old
-fallback back on. **Make independent** in Studio copies every global
-character, location, prop, and `staging_defaults.json` the project
-currently uses into the project folder, skips files already in
-`_trash/` / `_replaced/`, then turns Independent on.
+fallback back on. The committed `projects/sample` demo does that so it
+can keep using the shared Hicks/Dana library. **Make independent** in
+Studio copies every global character, location, prop, and
+`staging_defaults.json` the project currently uses into the project
+folder, skips files already in `_trash/` / `_replaced/`, then turns
+Independent on.
 
 Show-level files still override the project’s missing files; an episode
 file at the same relative path overrides the show. Flat projects under
