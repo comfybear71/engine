@@ -204,6 +204,15 @@ export default function AssetImaginePanel({
     [project, character.id, onChanged]
   );
 
+  function applyPreview(result: IngestPreview, keepNames = false) {
+    const next: Record<number, string> = keepNames ? { ...names } : {};
+    for (const cell of result.cells) {
+      if (!keepNames || !next[cell.index]) next[cell.index] = cell.suggestedName;
+    }
+    setNames(next);
+    setPreview(result);
+  }
+
   const ingestBase64 = useCallback(
     async (imageBase64: string, filename: string) => {
       if (isReferenceNeed) {
@@ -228,10 +237,7 @@ export default function AssetImaginePanel({
           filename,
           frames: need?.frameParam ? frames : undefined,
         });
-        const initial: Record<number, string> = {};
-        for (const cell of result.cells) initial[cell.index] = cell.suggestedName;
-        setNames(initial);
-        setPreview(result);
+        applyPreview(result);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Ingest failed");
       } finally {
@@ -316,6 +322,25 @@ export default function AssetImaginePanel({
       }
     }
     setPreview(null);
+  }
+
+  async function recutPreview(grid: { cols: number; rows: number }) {
+    if (!preview) return;
+    setBusy("Re-cutting…");
+    setError(null);
+    try {
+      const result = await previewCharacterIngest(project, character.id, {
+        needId: ingestId,
+        sessionId: preview.sessionId,
+        grid,
+        frames: need?.frameParam ? frames : undefined,
+      });
+      applyPreview(result, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Re-cut failed");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function onConfirm(opts?: { flipAll?: boolean }) {
@@ -562,6 +587,7 @@ export default function AssetImaginePanel({
           busy={busy}
           onCancel={() => void closePreview(true)}
           onConfirm={(opts) => void onConfirm(opts)}
+          onRecut={(grid) => void recutPreview(grid)}
         />
       ) : null}
     </section>
@@ -622,6 +648,7 @@ function PreviewModal({
   busy,
   onCancel,
   onConfirm,
+  onRecut,
 }: {
   need: AssetNeed;
   preview: IngestPreview;
@@ -630,10 +657,28 @@ function PreviewModal({
   busy: string | null;
   onCancel: () => void;
   onConfirm: (opts?: { flipAll?: boolean }) => void;
+  onRecut: (grid: { cols: number; rows: number }) => void;
 }) {
   const cols = preview.grid?.cols || 3;
   const choices = need.assignChoices;
   const [flipAll, setFlipAll] = useState(false);
+  const [recutCols, setRecutCols] = useState(preview.grid?.cols || 5);
+  const [recutRows, setRecutRows] = useState(preview.grid?.rows || 3);
+  useEffect(() => {
+    setRecutCols(preview.grid?.cols || 5);
+    setRecutRows(preview.grid?.rows || 3);
+  }, [preview.sessionId, preview.grid?.cols, preview.grid?.rows]);
+  const emptyCount = preview.cells.filter(
+    (cell) => (cell.empty || cell.warning === "empty") && !/^empty\d*$/i.test(cell.suggestedName)
+  ).length;
+  const sizeCount = preview.cells.filter((cell) => cell.warning === "small" || cell.warning === "large").length;
+  const warningLines =
+    preview.warnings && preview.warnings.length > 0
+      ? preview.warnings
+      : [
+          emptyCount ? `${emptyCount} empty cell${emptyCount === 1 ? "" : "s"}` : "",
+          sizeCount ? `${sizeCount} cell${sizeCount === 1 ? "" : "s"} much larger or smaller than the others` : "",
+        ].filter(Boolean);
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
       <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-md border border-studio-border bg-studio-panel p-4 shadow-2xl">
@@ -648,20 +693,38 @@ function PreviewModal({
             Cancel
           </button>
         </div>
+        {warningLines.length > 0 ? (
+          <div
+            className="mb-3 rounded-md border border-amber-700/60 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-100"
+            data-testid="ingest-cutout-warnings"
+          >
+            <p className="font-semibold">Cut-out looks uneven — reassign cells or re-cut as a grid.</p>
+            <ul className="mt-1 list-disc pl-4">
+              {warningLines.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
           {preview.cells.map((cell) => (
             <div key={cell.index} className="space-y-1.5">
               <div className="studio-checker relative aspect-square overflow-hidden rounded-md border border-studio-border">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={cell.pngBase64}
+                  src={cell.pngBase64 || undefined}
                   alt={cell.suggestedName}
                   className="h-full w-full object-contain"
                   style={flipAll ? { transform: "scaleX(-1)" } : undefined}
                 />
-                {cell.empty ? (
+                {cell.empty || cell.warning === "empty" ? (
                   <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[10px] text-neutral-300">
                     empty
+                  </span>
+                ) : null}
+                {cell.warning === "small" || cell.warning === "large" ? (
+                  <span className="absolute top-1 left-1 rounded bg-amber-800/90 px-1 py-0.5 text-[10px] text-amber-50">
+                    {cell.warning === "small" ? "tiny crop" : "huge crop"}
                   </span>
                 ) : null}
               </div>
@@ -696,15 +759,48 @@ function PreviewModal({
           ))}
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
-          <label className="mr-auto flex items-center gap-1.5 text-[11px] text-studio-muted">
+          <div className="mr-auto flex flex-wrap items-center gap-1.5 text-[11px] text-studio-muted">
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={flipAll}
+                onChange={(event) => setFlipAll(event.target.checked)}
+                data-testid="ingest-flip-all"
+              />
+              Flip all in this sheet
+            </label>
+            <span className="text-studio-border">·</span>
+            <span>Re-cut as grid</span>
             <input
-              type="checkbox"
-              checked={flipAll}
-              onChange={(event) => setFlipAll(event.target.checked)}
-              data-testid="ingest-flip-all"
+              type="number"
+              min={1}
+              max={16}
+              className="w-12 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[11px] text-neutral-200"
+              value={recutCols}
+              onChange={(event) => setRecutCols(Math.max(1, Math.min(16, Number(event.target.value) || 1)))}
+              data-testid="ingest-recut-cols"
             />
-            Flip all in this sheet
-          </label>
+            <span>cols ×</span>
+            <input
+              type="number"
+              min={1}
+              max={16}
+              className="w-12 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[11px] text-neutral-200"
+              value={recutRows}
+              onChange={(event) => setRecutRows(Math.max(1, Math.min(16, Number(event.target.value) || 1)))}
+              data-testid="ingest-recut-rows"
+            />
+            <span>rows</span>
+            <button
+              type="button"
+              className="rounded-md border border-studio-border px-2 py-0.5 text-[11px] text-neutral-200 hover:text-white disabled:opacity-40"
+              disabled={busy != null}
+              onClick={() => onRecut({ cols: recutCols, rows: recutRows })}
+              data-testid="ingest-recut"
+            >
+              Re-cut
+            </button>
+          </div>
           <button
             type="button"
             className="rounded-md border border-studio-border px-3 py-1.5 text-xs text-neutral-200"

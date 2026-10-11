@@ -7,7 +7,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from compositor.cutout import estimate_screen_bgr, is_empty, key_green, process_image
+from compositor.cutout import (
+    analyze_cells,
+    estimate_screen_bgr,
+    is_empty,
+    key_green,
+    normalize_cells,
+    process_image,
+)
 
 # Grok Imagine green is RGB(16, 221, 31) ≈ 49 away from exact #00FF00.
 GROK_GREEN_BGR = (31, 221, 16)  # OpenCV BGR of RGB(16, 221, 31)
@@ -161,3 +168,103 @@ def test_grid_cell_drops_intruding_blob_from_next_row():
     # Detached sunglasses (dark, sitting just above the head) stay.
     darkish = opaque & (red_ch < 80) & (blue_ch < 80)
     assert int(np.count_nonzero(darkish)) >= 8
+
+
+def _paint_head(img: np.ndarray, x0: int, y0: int, w: int, h: int, bgr: tuple[int, int, int]) -> None:
+    img[y0 : y0 + h, x0 : x0 + w] = bgr
+
+
+def _uneven_mouth13_sheet() -> np.ndarray:
+    """5×3 sheet with a fat left margin, uneven gutters, 13 heads, last two empty.
+
+    Equal-area slices of the full image miss the first column and cut through
+    later faces — the failure the gap detector is meant to fix.
+    """
+    cell, gutter, left, right, top, bottom = 30, 6, 80, 4, 10, 8
+    cols, rows = 5, 3
+    width = left + cols * cell + (cols - 1) * gutter + right
+    height = top + rows * cell + (rows - 1) * gutter + bottom
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+    img[:] = GROK_GREEN_BGR
+    red = (0, 0, 220)
+    for row in range(rows):
+        for col in range(cols):
+            index = row * cols + col
+            if index >= 13:
+                continue
+            x0 = left + col * (cell + gutter) + 3
+            y0 = top + row * (cell + gutter) + 3
+            _paint_head(img, x0, y0, cell - 6, cell - 6, red)
+    return img
+
+
+def test_gap_grid_finds_13_heads_on_uneven_5x3_sheet():
+    sheet = _uneven_mouth13_sheet()
+    equal = process_image(sheet, key=True, grid=(5, 3), split="grid", trim=True, detect_gaps=False)
+    # Equal-area of the full sheet drifts: first cell is empty green margin.
+    assert is_empty(equal[0])
+
+    cells = process_image(sheet, key=True, grid=(5, 3), split="grid", trim=True, detect_gaps=True)
+    assert len(cells) == 15
+    filled = [cell for cell in cells if not is_empty(cell)]
+    assert len(filled) == 13
+    assert is_empty(cells[13])
+    assert is_empty(cells[14])
+    # Each filled cell is a head, not a sliver of beard / a huge close-up.
+    for cell in filled:
+        assert 16 <= cell.shape[0] <= 36
+        assert 16 <= cell.shape[1] <= 36
+
+
+def test_gap_grid_keeps_touching_heads_in_separate_cells():
+    """Two heads that share a 1px contact must not become one component."""
+    img = np.zeros((40, 80, 3), dtype=np.uint8)
+    img[:] = GROK_GREEN_BGR
+    img[8:32, 8:40] = (0, 0, 220)  # left head reaches the midline
+    img[8:32, 40:72] = (220, 40, 20)  # right head starts on the same column
+    keyed = process_image(img, key=True, grid=None, split="components", trim=False)
+    # Components merge the touching pair (or produce a single blob + specks).
+    assert len([cell for cell in keyed if not is_empty(cell)]) <= 1 or any(
+        cell.shape[1] > 50 for cell in keyed if not is_empty(cell)
+    )
+
+    cells = process_image(img, key=True, grid=(2, 1), split="grid", trim=True, detect_gaps=True)
+    assert len(cells) == 2
+    assert not is_empty(cells[0])
+    assert not is_empty(cells[1])
+    left_opaque = cells[0][cells[0][:, :, 3] > 128]
+    right_opaque = cells[1][cells[1][:, :, 3] > 128]
+    assert left_opaque[:, 2].mean() > 150  # red
+    assert right_opaque[:, 0].mean() > 150  # blue
+
+
+def test_normalize_cells_same_canvas_and_analyze_flags_size():
+    small = np.zeros((20, 16, 4), dtype=np.uint8)
+    small[2:18, 2:14] = (0, 0, 200, 255)
+    large = np.zeros((80, 64, 4), dtype=np.uint8)
+    large[4:76, 4:60] = (0, 0, 200, 255)
+    empty = np.zeros((40, 40, 4), dtype=np.uint8)
+    flags, warnings = analyze_cells([small, large, empty])
+    assert flags == ["small", "large", "empty"]
+    assert any("empty" in item for item in warnings)
+    assert any("smaller" in item for item in warnings)
+    assert any("larger" in item for item in warnings)
+
+    out = normalize_cells([small, large, empty])
+    assert out[0].shape == out[1].shape == out[2].shape
+    assert out[0].shape[0] >= 8 and out[0].shape[1] >= 8
+    assert is_empty(out[2])
+    assert not is_empty(out[0])
+    assert not is_empty(out[1])
+
+
+def test_process_image_normalize_matches_median_head():
+    sheet = _uneven_mouth13_sheet()
+    # Paint one filled cell much larger by expanding the first head before key.
+    cells = process_image(
+        sheet, key=True, grid=(5, 3), split="grid", trim=True, detect_gaps=True, normalize=True
+    )
+    filled = [cell for cell in cells if not is_empty(cell)]
+    assert len(filled) == 13
+    shapes = {cell.shape[:2] for cell in cells}
+    assert len(shapes) == 1

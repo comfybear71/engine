@@ -324,6 +324,40 @@ function pngDataUrl(absPath) {
   return `data:image/png;base64,${buf.toString("base64")}`;
 }
 
+function filledCellCount(expanded) {
+  return (expanded && expanded.cells ? expanded.cells : []).filter((cell) => cell && cell.dest).length;
+}
+
+function isMouth13Need(need, expanded) {
+  if (/^mouth_13_/.test(String((need && need.id) || ""))) return true;
+  return filledCellCount(expanded) === 13;
+}
+
+function parseGridBody(body) {
+  const raw = body && body.grid;
+  if (!raw) return null;
+  const cols = Math.floor(Number(raw.cols));
+  const rows = Math.floor(Number(raw.rows));
+  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols > 16 || rows > 16) {
+    throw ingestError("grid must be { cols, rows } with values 1–16");
+  }
+  return { cols, rows };
+}
+
+function resolveCutoutArgs(need, expanded, gridOverride) {
+  const mouth13 = isMouth13Need(need, expanded || {});
+  const grid = gridOverride || (expanded && expanded.grid) || (mouth13 ? { cols: 5, rows: 3 } : null);
+  const useComponents =
+    !gridOverride && !mouth13 && (!expanded || expanded.split === "components" || !expanded.grid || !grid);
+  if (useComponents || !grid) {
+    return { args: ["--components"], grid: null, detectGaps: false, normalize: false };
+  }
+  const args = ["--grid", `${grid.cols}x${grid.rows}`, "--detect-gaps"];
+  const normalize = Boolean(mouth13);
+  if (normalize) args.push("--normalize");
+  return { args, grid, detectGaps: true, normalize };
+}
+
 async function previewIngest(projectDir, globalAssetsDir, characterId, body, options = {}) {
   if (!isSafeFolderName(characterId)) throw ingestError("Invalid character id");
   const character = loadCharacter(projectDir, globalAssetsDir, characterId);
@@ -335,33 +369,56 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
     throw ingestError("This need stores the original as a full-body reference; POST .../reference instead");
   }
   const expanded = expandNeed(need, body && body.frames);
-  const image = decodeImageBuffer(body);
+  const gridOverride = parseGridBody(body);
+  const recutSid = body && body.sessionId ? String(body.sessionId) : "";
 
-  const sid = sessionId();
-  const libDir = path.join(characterDir(projectDir, characterId), "_library");
-  fs.mkdirSync(libDir, { recursive: true });
-  const originalName = safeBasename(body.filename, `${need.id}.png`);
-  const originalRel = posixJoin("characters", characterId, "_library", `${stamp()}_${need.id}_${originalName}`);
-  const originalAbs = absFromProjectRel(projectDir, originalRel);
-  fs.mkdirSync(path.dirname(originalAbs), { recursive: true });
-  fs.writeFileSync(originalAbs, image);
+  let sid;
+  let originalRel;
+  let originalAbs;
+  if (recutSid) {
+    const existing = readManifest(projectDir, characterId, recutSid);
+    if (existing.needId && existing.needId !== need.id) {
+      throw ingestError("session need mismatch");
+    }
+    if (!existing.originalRel) throw ingestError("Ingest preview has no original sheet");
+    sid = recutSid;
+    originalRel = existing.originalRel;
+    originalAbs = absFromProjectRel(projectDir, originalRel);
+    if (!fs.existsSync(originalAbs)) throw ingestError("Original sheet missing");
+  } else {
+    const image = decodeImageBuffer(body);
+    sid = sessionId();
+    const libDir = path.join(characterDir(projectDir, characterId), "_library");
+    fs.mkdirSync(libDir, { recursive: true });
+    const originalName = safeBasename(body.filename, `${need.id}.png`);
+    originalRel = posixJoin("characters", characterId, "_library", `${stamp()}_${need.id}_${originalName}`);
+    originalAbs = absFromProjectRel(projectDir, originalRel);
+    fs.mkdirSync(path.dirname(originalAbs), { recursive: true });
+    fs.writeFileSync(originalAbs, image);
+  }
 
   const cellsDir = path.join(previewDir(projectDir, characterId, sid), "cells");
+  fs.rmSync(cellsDir, { recursive: true, force: true });
   fs.mkdirSync(cellsDir, { recursive: true });
 
-  const args = ["--input", originalAbs, "--out-dir", cellsDir];
-  if (expanded.split === "components" || !expanded.grid) {
-    args.push("--components");
-  } else {
-    args.push("--grid", `${expanded.grid.cols}x${expanded.grid.rows}`);
-  }
+  const resolved = resolveCutoutArgs(need, expanded, gridOverride);
+  const args = ["--input", originalAbs, "--out-dir", cellsDir, ...resolved.args];
   if (!expanded.key) args.push("--no-key");
 
   const result = await runCutout(args, options);
+  const expectedEmpty = new Set(
+    (expanded.cells || []).map((cell, index) => (cell && cell.dest ? -1 : index)).filter((index) => index >= 0)
+  );
+  const warnings = (Array.isArray(result.warnings) ? result.warnings : []).filter((line) => {
+    const match = String(line).match(/^Cell (\d+) is empty$/);
+    return !(match && expectedEmpty.has(Number(match[1])));
+  });
   const cells = [];
   for (const raw of result.cells) {
     const template = expanded.cells[raw.index] || {};
     const suggestedName = template.name || `cell_${String(raw.index).padStart(2, "0")}`;
+    const warning =
+      raw.warning === "empty" && expectedEmpty.has(raw.index) ? null : raw.warning || null;
     const cell = {
       index: raw.index,
       suggestedName,
@@ -369,6 +426,7 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
       dest: inferMouthViewDest(need.id, template.dest || need.dest || null),
       cycle: template.cycle || null,
       empty: Boolean(raw.empty),
+      warning,
       width: raw.width,
       height: raw.height,
       path: raw.path,
@@ -387,9 +445,10 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
     needId: need.id,
     frames: body && body.frames,
     originalRel,
-    grid: expanded.grid,
+    grid: resolved.grid,
     key: expanded.key,
     cycles: expanded.cycles,
+    warnings,
     cells: cellsWithPng.map(({ pngBase64, ...rest }) => rest),
   };
   const manifestPath = path.join(previewDir(projectDir, characterId, sid), "manifest.json");
@@ -400,11 +459,13 @@ async function previewIngest(projectDir, globalAssetsDir, characterId, body, opt
     sessionId: sid,
     libraryRel: originalRel,
     needId: need.id,
-    grid: expanded.grid,
+    grid: resolved.grid,
+    warnings,
     cells: cellsWithPng.map((cell) => ({
       index: cell.index,
       suggestedName: cell.suggestedName,
       empty: cell.empty,
+      warning: cell.warning || null,
       width: cell.width,
       height: cell.height,
       pngBase64: cell.pngBase64,
@@ -530,6 +591,9 @@ module.exports = {
   readWritableCharacter,
   destRelForCell,
   inferMouthViewDest,
+  isMouth13Need,
+  parseGridBody,
+  resolveCutoutArgs,
   runAlign,
   isHeadLikeDest,
   findAlignReferenceAbs,

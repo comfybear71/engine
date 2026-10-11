@@ -5,7 +5,17 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const { destRelForCell, inferMouthViewDest, ensureSlot, uniqueWriteTarget, mergeCycles, confirmIngest, previewDir } = require("../src/assetIngest");
+const {
+  destRelForCell,
+  inferMouthViewDest,
+  ensureSlot,
+  uniqueWriteTarget,
+  mergeCycles,
+  confirmIngest,
+  previewDir,
+  resolveCutoutArgs,
+  isMouth13Need,
+} = require("../src/assetIngest");
 const { getNeed, expandNeed } = require("../src/assetNeeds");
 const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
 const { encodeRgbaPng, decodePng } = require("../src/pngFlip");
@@ -43,6 +53,26 @@ describe("asset ingest helpers", () => {
     ensureSlot(character, expanded.cells[0].dest);
     assert.ok(character.slots.mouth, "existing mouth slot stays");
     assert.equal(character.slots.body.drawings_dir, "body");
+  });
+
+  test("a 13-mouth pack always cuts as a 5x3 gap grid and normalises heads", () => {
+    const need = getNeed("mouth_13_left_34");
+    const expanded = expandNeed(need);
+    assert.equal(isMouth13Need(need, expanded), true);
+    const resolved = resolveCutoutArgs(need, expanded, null);
+    assert.deepEqual(resolved.grid, { cols: 5, rows: 3 });
+    assert.equal(resolved.detectGaps, true);
+    assert.equal(resolved.normalize, true);
+    assert.ok(resolved.args.includes("--grid"));
+    assert.ok(resolved.args.includes("5x3"));
+    assert.ok(resolved.args.includes("--detect-gaps"));
+    assert.ok(resolved.args.includes("--normalize"));
+    assert.ok(!resolved.args.includes("--components"));
+
+    const recut = resolveCutoutArgs(need, expanded, { cols: 4, rows: 4 });
+    assert.deepEqual(recut.grid, { cols: 4, rows: 4 });
+    assert.ok(recut.args.includes("4x4"));
+    assert.ok(recut.args.includes("--detect-gaps"));
   });
 
   test("a left_34 mouth pack writes mouth_left_34 and does not steal the default dir", () => {

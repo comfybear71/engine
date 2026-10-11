@@ -268,9 +268,10 @@ export type IngestCell = {
   index: number;
   suggestedName: string;
   empty: boolean;
+  warning?: "empty" | "small" | "large" | null;
   width: number;
   height: number;
-  pngBase64: string;
+  pngBase64: string | null;
 };
 
 export type IngestPreview = {
@@ -279,6 +280,7 @@ export type IngestPreview = {
   libraryRel: string;
   needId: string;
   grid: { cols: number; rows: number } | null;
+  warnings?: string[];
   cells: IngestCell[];
 };
 
@@ -355,7 +357,14 @@ export async function saveSlotAlignment(
 export async function previewCharacterIngest(
   name: string,
   characterId: string,
-  body: { needId: string; imageBase64: string; filename?: string; frames?: number }
+  body: {
+    needId: string;
+    imageBase64?: string;
+    filename?: string;
+    frames?: number;
+    sessionId?: string;
+    grid?: { cols: number; rows: number };
+  }
 ): Promise<IngestPreview> {
   const res = await workerFetch(
     `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/ingest`,
