@@ -359,6 +359,75 @@ describe("asset editor", { concurrency: 1 }, () => {
     assert.deepEqual(json.slots.mouth.drawings.C.align, { x: 0, y: 0, scale: 1 });
   });
 
+  test("fitToHeadCanvas writes 1024 canvases and keeps originals in _replaced", async () => {
+    function patch(w, h, x0, y0, x1, y1) {
+      const rgba = Buffer.alloc(w * h * 4);
+      for (let y = y0; y < y1; y += 1) {
+        for (let x = x0; x < x1; x += 1) {
+          const i = (y * w + x) * 4;
+          rgba[i] = 30;
+          rgba[i + 1] = 40;
+          rgba[i + 2] = 200;
+          rgba[i + 3] = 255;
+        }
+      }
+      return encodeRgbaPng(w, h, rgba);
+    }
+    const billDir = path.join(fixture.projectDir, "characters", "bill");
+    writePng(path.join(billDir, "body.png"));
+    writePng(path.join(billDir, "head_base", "neutral.png"), patch(1024, 1024, 300, 200, 700, 800));
+    writePng(path.join(billDir, "eyes", "open.png"), patch(80, 60, 10, 10, 50, 30));
+    writePng(path.join(billDir, "eyes", "closed.png"), patch(80, 60, 10, 40, 50, 60));
+    fixture.writeJson(path.join(billDir, "character.json"), {
+      id: "bill",
+      display_name: "Bill",
+      aliases: ["Bill"],
+      asset: "body.png",
+      z: 8,
+      groups: { head: ["head_base", "eyes"] },
+      slots: {
+        head_base: {
+          offset: { x: 0, y: -20 },
+          drawings_dir: "head_base",
+          default_drawing: "neutral",
+          canvas: { w: 1024, h: 1024, pivot: { x: 512, y: 800 } },
+        },
+        eyes: {
+          offset: { x: 0, y: -20 },
+          drawings_dir: "eyes",
+          default_drawing: "open",
+          canvas: { w: 1024, h: 1024, pivot: { x: 512, y: 800 } },
+        },
+      },
+      children: [],
+    });
+    const result = await realignSlotView(fixture.projectDir, fixture.globalAssetsDir, "bill", "eyes", {
+      fitToHeadCanvas: true,
+    });
+    assert.equal(result.fitToHeadCanvas, true);
+    assert.ok(result.written.some((item) => item.name === "open"));
+    assert.ok(result.written.some((item) => item.name === "closed"));
+    const open = decodePng(fs.readFileSync(path.join(billDir, "eyes", "open.png")));
+    const closed = decodePng(fs.readFileSync(path.join(billDir, "eyes", "closed.png")));
+    assert.equal(open.width, 1024);
+    assert.equal(open.height, 1024);
+    assert.equal(closed.width, 1024);
+    assert.equal(closed.height, 1024);
+    const replaced = path.join(billDir, "_replaced");
+    assert.equal(fs.existsSync(replaced), true);
+    const dumped = [];
+    function walk(dir) {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else dumped.push(entry.name);
+      }
+    }
+    walk(replaced);
+    assert.ok(dumped.includes("open.png"));
+    assert.ok(dumped.includes("closed.png"));
+  });
+
   test("rejects path-unsafe slot, drawing, and view names", () => {
     assert.throws(() => describeSlot(fixture.projectDir, fixture.globalAssetsDir, "dee", "../mouth"), /Invalid slot/);
     assert.throws(

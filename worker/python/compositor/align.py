@@ -245,6 +245,137 @@ def align_file(
     }
 
 
+HEAD_CANVAS = 1024
+OVERLAY_WIDTH_RATIO = 0.55
+OVERLAY_NECK_T = 0.42
+
+
+def shared_overlay_transform(
+    base: np.ndarray,
+    default: np.ndarray,
+    canvas_w: int = HEAD_CANVAS,
+    canvas_h: int = HEAD_CANVAS,
+    pivot: tuple[float, float] | None = None,
+) -> tuple[float, float, float]:
+    """One (scale, tx, ty) mapping default-image space onto the head canvas.
+
+    Derived from the head_base landmarks (neck / bbox) and the default
+    overlay's alpha bbox. Sibling drawings in the same set share this matrix.
+    """
+
+    base = _to_bgra(base)
+    default = _to_bgra(default)
+    bl = landmarks(base)
+    neck = pivot if pivot is not None else bl["neck"]
+    default_box = alpha_bbox(default)
+    if default_box is None:
+        return 1.0, 0.0, 0.0
+    dx0, dy0, dx1, dy1 = default_box
+    dw = max(1.0, float(dx1 - dx0))
+    bx0, by0, bx1, by1 = bl["bbox"]
+    head_w = max(1.0, float(bx1 - bx0))
+    scale = (head_w * OVERLAY_WIDTH_RATIO) / dw
+    hat_y = float(bl["hat"][1])
+    neck_y = float(neck[1])
+    target_x = (bx0 + bx1) / 2.0
+    target_y = hat_y + (neck_y - hat_y) * OVERLAY_NECK_T
+    src_cx = (dx0 + dx1) / 2.0
+    src_cy = (dy0 + dy1) / 2.0
+    tx = target_x - src_cx * scale
+    ty = target_y - src_cy * scale
+    _ = canvas_w, canvas_h
+    return float(scale), float(tx), float(ty)
+
+
+def apply_shared_transform(
+    src: np.ndarray,
+    scale: float,
+    tx: float,
+    ty: float,
+    canvas_w: int = HEAD_CANVAS,
+    canvas_h: int = HEAD_CANVAS,
+) -> np.ndarray:
+    src = _to_bgra(src)
+    matrix = np.array([[scale, 0.0, tx], [0.0, scale, ty]], dtype=np.float32)
+    return cv2.warpAffine(
+        src,
+        matrix,
+        (int(canvas_w), int(canvas_h)),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0, 0),
+    )
+
+
+def fit_set_to_head_canvas(
+    src_dir: Path,
+    base_path: Path,
+    out_dir: Path,
+    default_name: str | None = None,
+    names: list[str] | None = None,
+    canvas_w: int = HEAD_CANVAS,
+    canvas_h: int = HEAD_CANVAS,
+    pivot: tuple[float, float] | None = None,
+) -> list[dict]:
+    """Fit a folder of overlay drawings onto the head_base canvas.
+
+    One shared transform, taken from ``base_path`` + the default drawing
+    (``default_name`` or the first PNG). Writes ``canvas_w``×``canvas_h``
+    outputs. Callers keep originals in ``_replaced/``.
+    """
+
+    base = cv2.imread(str(base_path), cv2.IMREAD_UNCHANGED)
+    if base is None:
+        raise FileNotFoundError(f"Could not read head_base: {base_path}")
+    wanted = {n.lower() for n in names} if names else None
+    src_paths = [
+        p
+        for p in sorted(src_dir.iterdir())
+        if p.suffix.lower() == ".png" and (wanted is None or p.stem.lower() in wanted)
+    ]
+    if not src_paths:
+        return []
+    default_path = None
+    if default_name:
+        for path in src_paths:
+            if path.stem.lower() == default_name.lower():
+                default_path = path
+                break
+    if default_path is None:
+        default_path = src_paths[0]
+    default_img = cv2.imread(str(default_path), cv2.IMREAD_UNCHANGED)
+    if default_img is None:
+        raise FileNotFoundError(f"Could not read default overlay: {default_path}")
+    scale, tx, ty = shared_overlay_transform(
+        base, default_img, canvas_w=canvas_w, canvas_h=canvas_h, pivot=pivot
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    for src_path in src_paths:
+        src = cv2.imread(str(src_path), cv2.IMREAD_UNCHANGED)
+        if src is None:
+            raise FileNotFoundError(f"Could not read source: {src_path}")
+        fitted = apply_shared_transform(src, scale, tx, ty, canvas_w=canvas_w, canvas_h=canvas_h)
+        out_path = out_dir / src_path.name
+        ok = cv2.imwrite(str(out_path), fitted)
+        if not ok:
+            raise RuntimeError(f"failed to write fitted PNG: {out_path}")
+        results.append(
+            {
+                "src": str(src_path),
+                "ref": str(base_path),
+                "out": str(out_path),
+                "width": int(fitted.shape[1]),
+                "height": int(fitted.shape[0]),
+                "scale": scale,
+                "tx": tx,
+                "ty": ty,
+                "default": src_path.name == default_path.name,
+            }
+        )
+    return results
+
+
 def align_dirs(
     src_dir: Path,
     ref_dir: Path,
@@ -297,9 +428,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--crop-to-head", dest="crop", action="store_true", default=True)
     parser.add_argument("--no-crop-to-head", dest="crop", action="store_false")
     parser.add_argument("--collar-y", type=float, default=None, help="Collar line: 0-1 of image height, or pixel Y")
+    parser.add_argument("--fit-to-head", action="store_true", help="Fit overlay set onto a head_base canvas")
+    parser.add_argument("--base", type=Path, help="head_base PNG (with --fit-to-head)")
+    parser.add_argument("--default-name", dest="default_name", help="Default overlay name for the shared transform")
+    parser.add_argument("--canvas-w", type=int, default=HEAD_CANVAS)
+    parser.add_argument("--canvas-h", type=int, default=HEAD_CANVAS)
+    parser.add_argument("--pivot-x", type=float, default=None)
+    parser.add_argument("--pivot-y", type=float, default=None)
     args = parser.parse_args(argv)
 
     try:
+        if args.fit_to_head:
+            if not (args.src_dir and args.out_dir and args.base):
+                print(json.dumps({"ok": False, "error": "fit-to-head needs --src-dir, --out-dir, and --base"}))
+                return 2
+            pivot = None
+            if args.pivot_x is not None and args.pivot_y is not None:
+                pivot = (args.pivot_x, args.pivot_y)
+            written = fit_set_to_head_canvas(
+                args.src_dir,
+                args.base,
+                args.out_dir,
+                default_name=args.default_name,
+                names=args.names,
+                canvas_w=args.canvas_w,
+                canvas_h=args.canvas_h,
+                pivot=pivot,
+            )
+            print(json.dumps({"ok": True, "written": written}))
+            return 0
         if args.src_dir and args.ref_dir and args.out_dir:
             written = align_dirs(
                 args.src_dir,

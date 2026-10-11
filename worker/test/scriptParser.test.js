@@ -8,7 +8,7 @@ const wav = require("./helpers/wav");
 
 const { parseScript } = require("../src/parser/scriptParser");
 const { ScriptError } = require("../src/parser/errors");
-const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
+const { createFixtureLibrary, TRANSPARENT_PNG_1X1 } = require("./helpers/fixtureLibrary");
 
 const fixture = createFixtureLibrary();
 after(() => fixture.cleanup());
@@ -1198,6 +1198,49 @@ describe("rodney_test slots without default_drawing", () => {
         assert.ok(kf.drawing || kf.cycle, `${name} keyframe must have drawing or cycle: ${JSON.stringify(kf)}`);
       }
     }
+  });
+});
+
+describe("one-head rig emit", () => {
+  test("parser emits slot z, canvas, groups, and view folders", async () => {
+    const aliceDir = path.join(fixture.projectDir, "characters", "alice");
+    const globalJson = path.join(fixture.globalAssetsDir, "characters", "alice", "character.json");
+    const character = JSON.parse(fs.readFileSync(globalJson, "utf8"));
+    const canvas = { w: 8, h: 8, pivot: { x: 4, y: 7 } };
+    character.groups = { head: ["head_base", "eyes", "mouth"] };
+    character.slots.head_base = {
+      offset: { x: 0, y: -20 },
+      drawings_dir: "head_base",
+      default_drawing: "neutral",
+      z: 0,
+      canvas,
+    };
+    character.slots.eyes.z = 1;
+    character.slots.eyes.canvas = canvas;
+    character.slots.mouth.z = 2;
+    character.slots.mouth.canvas = canvas;
+    fs.mkdirSync(path.join(aliceDir, "head_base"), { recursive: true });
+    fs.mkdirSync(path.join(aliceDir, "head_base_left_34"), { recursive: true });
+    fs.mkdirSync(path.join(aliceDir, "eyes_left_34"), { recursive: true });
+    fs.writeFileSync(path.join(aliceDir, "character.json"), JSON.stringify(character, null, 2));
+    fs.writeFileSync(path.join(aliceDir, "head_base", "neutral.png"), TRANSPARENT_PNG_1X1);
+    fs.writeFileSync(path.join(aliceDir, "head_base_left_34", "neutral.png"), TRANSPARENT_PNG_1X1);
+    fs.writeFileSync(path.join(aliceDir, "eyes_left_34", "open.png"), TRANSPARENT_PNG_1X1);
+
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice view=left_34: Hello."].join("\n");
+    const { timeline, errors } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const layer = timeline.scenes[0].layers[0];
+    assert.deepEqual(layer.groups.head, ["head_base", "eyes", "mouth"]);
+    assert.equal(layer.slots.head_base.z, 0);
+    assert.deepEqual(layer.slots.head_base.canvas, canvas);
+    assert.match(String(layer.slots.head_base.images_by_view.left_34.neutral), /head_base_left_34/);
+    assert.match(String(layer.slots.eyes.images_by_view.left_34.open), /eyes_left_34/);
+    assert.equal(layer.slots.mouth.z, 2);
+    assert.deepEqual(layer.slots.mouth.canvas, canvas);
+    assert.ok(
+      errors.some((line) => /expected 8x8|blank PNG|touches the canvas edge|RGBA|could not read PNG/.test(line)),
+      `expected rig-head lint lines, got: ${JSON.stringify(errors)}`
+    );
   });
 });
 

@@ -1,8 +1,18 @@
 from pathlib import Path
 
+import cv2
 import numpy as np
 
-from compositor.align import already_aligned, align_to_reference, crop_to_head, detect_collar_y, landmarks
+from compositor.align import (
+    already_aligned,
+    align_to_reference,
+    apply_shared_transform,
+    crop_to_head,
+    detect_collar_y,
+    fit_set_to_head_canvas,
+    landmarks,
+    shared_overlay_transform,
+)
 
 
 def _head(width: int, height: int, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
@@ -56,6 +66,46 @@ def test_head_only_source_is_not_cropped_by_reference_aspect():
     src = _head(80, 90, 20, 10, 60, 70)
     cropped = crop_to_head(src, ref)
     assert (cropped[:, :, 3] > 16).sum() == (src[:, :, 3] > 16).sum()
+
+
+def test_shared_transform_is_one_matrix_for_the_set(tmp_path: Path):
+    base = np.zeros((1024, 1024, 4), dtype=np.uint8)
+    base[200:800, 300:700] = (30, 40, 200, 255)
+    default = np.zeros((80, 60, 4), dtype=np.uint8)
+    default[10:30, 10:50] = (0, 0, 255, 255)
+    sibling = np.zeros((80, 60, 4), dtype=np.uint8)
+    sibling[40:60, 10:50] = (0, 255, 0, 255)
+
+    scale, tx, ty = shared_overlay_transform(base, default, pivot=(512.0, 800.0))
+    fitted_default = apply_shared_transform(default, scale, tx, ty)
+    fitted_sibling = apply_shared_transform(sibling, scale, tx, ty)
+    assert fitted_default.shape[1] == 1024
+    assert fitted_default.shape[0] == 1024
+    assert fitted_sibling.shape == fitted_default.shape
+
+    dbox = landmarks(fitted_default)["bbox"]
+    sbox = landmarks(fitted_sibling)["bbox"]
+    # Same scale + translation: sibling stays the same offset below default.
+    assert abs((sbox[1] - dbox[1]) - (40 - 10) * scale) <= 3
+    assert abs((sbox[0] - dbox[0])) <= 3
+
+    src_dir = tmp_path / "eyes"
+    src_dir.mkdir()
+    cv2.imwrite(str(src_dir / "open.png"), default)
+    cv2.imwrite(str(src_dir / "closed.png"), sibling)
+    cv2.imwrite(str(tmp_path / "base.png"), base)
+    out_dir = tmp_path / "out"
+    written = fit_set_to_head_canvas(
+        src_dir,
+        tmp_path / "base.png",
+        out_dir,
+        default_name="open",
+        pivot=(512.0, 800.0),
+    )
+    assert len(written) == 2
+    assert {item["width"] for item in written} == {1024}
+    assert {item["height"] for item in written} == {1024}
+    assert {round(item["scale"], 6) for item in written} == {round(scale, 6)}
 
 
 def test_align_is_idempotent_when_already_matched():

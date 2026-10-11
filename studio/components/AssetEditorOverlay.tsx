@@ -359,6 +359,23 @@ export default function AssetEditorOverlay({
     }
   }
 
+  async function onFitToHeadCanvas() {
+    setBusy("Fitting to head canvas…");
+    setError(null);
+    try {
+      await realignSlotView(project, focus.characterId, focus.slot, {
+        view,
+        fitToHeadCanvas: true,
+      });
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not fit to head canvas");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function onRealign(
     drawing?: string,
     opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number; normalize?: boolean }
@@ -638,6 +655,7 @@ export default function AssetEditorOverlay({
           }}
           onRealign={(opts) => void onRealign(current.name, opts)}
           onRealignAll={(opts) => void onRealign(undefined, { ...opts, normalize: true })}
+          onFitToHeadCanvas={() => void onFitToHeadCanvas()}
           onExcludeFromLipSync={slot?.mouth ? (value) => void onExcludeFromLipSync(value) : undefined}
           onFlip={() => void onFlip()}
           onUndoFlip={flipUndo && flipUndo.drawing === drawingName ? () => void onUndoFlip() : undefined}
@@ -677,6 +695,7 @@ export default function AssetEditorOverlay({
           }}
           onOpenImagine={openImagine}
           onPromote={() => void onPromoteView()}
+          onFitToHeadCanvas={() => void onFitToHeadCanvas()}
           onRealign={() => {
             const count = slot.drawings.length;
             if (
@@ -783,6 +802,7 @@ function DrawingView({
   onAutofitBaseline,
   onRealign,
   onRealignAll,
+  onFitToHeadCanvas,
   onExcludeFromLipSync,
   onFlip,
   onUndoFlip,
@@ -813,6 +833,7 @@ function DrawingView({
   onAutofitBaseline: (nudge: { x: number; y: number; scale: number }) => void;
   onRealign: (opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number }) => void;
   onRealignAll: (opts?: { collarY?: number; cropToHead?: boolean; autoScale?: number }) => void;
+  onFitToHeadCanvas: () => void;
   onExcludeFromLipSync?: (exclude: boolean) => void;
   onFlip: () => void;
   onUndoFlip?: () => void;
@@ -1077,6 +1098,14 @@ function DrawingView({
               onClick={() => setConfirmApplyAll(true)}
             >
               Apply to all in this slot
+            </button>
+            <button
+              type="button"
+              className="studio-header-textbtn"
+              data-testid="asset-fit-head-canvas"
+              onClick={onFitToHeadCanvas}
+            >
+              Fit to head canvas
             </button>
           </div>
         ) : null}
@@ -1675,6 +1704,7 @@ function SlotGrid({
   onDropReplace,
   onOpenImagine,
   onPromote,
+  onFitToHeadCanvas,
   onRealign,
 }: {
   project: string;
@@ -1691,6 +1721,7 @@ function SlotGrid({
   onDropReplace: (drawing: string, file: File) => void;
   onOpenImagine: () => void;
   onPromote: () => void;
+  onFitToHeadCanvas: () => void;
   onRealign: () => void;
 }) {
   const cells = slot.mouth
@@ -1755,6 +1786,9 @@ function SlotGrid({
             Re-align to default
           </button>
         ) : null}
+        <button type="button" className="studio-header-textbtn" data-testid="asset-fit-head-canvas" onClick={onFitToHeadCanvas}>
+          Fit to head canvas
+        </button>
         <button type="button" className="studio-header-textbtn" data-testid="asset-imagine" onClick={onOpenImagine}>
           Open Grok Imagine for this slot
         </button>

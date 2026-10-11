@@ -603,7 +603,117 @@ function promoteSlotView(projectDir, globalAssetsDir, characterId, slotName, bod
   };
 }
 
+function findHeadBaseContext(projectDir, globalAssetsDir, characterId) {
+  const character = loadCharacter(projectDir, globalAssetsDir, characterId);
+  if (!character) return null;
+  const group = character.groups && Array.isArray(character.groups.head) ? character.groups.head : [];
+  const candidates = [...group.filter((name) => /base/i.test(String(name))), "head_base"];
+  let spec = null;
+  let name = null;
+  for (const id of candidates) {
+    const found = findSlotSpec(character, id);
+    if (found) {
+      spec = found;
+      name = id;
+      break;
+    }
+  }
+  if (!spec) return null;
+  const drawingsDir = spec.drawings_dir || name;
+  const scan = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${drawingsDir}`);
+  const drawingName = pickAlignReferenceName(spec, scan, scan);
+  const file = drawingName ? scan.get(drawingName) : null;
+  if (!file) return null;
+  const canvas = spec.canvas || {};
+  const pivot = canvas.pivot || {};
+  return {
+    name,
+    spec,
+    drawingsDir,
+    drawingName,
+    absPath: file.absPath,
+    canvasW: Number(canvas.w) || 1024,
+    canvasH: Number(canvas.h) || 1024,
+    pivotX: Number.isFinite(Number(pivot.x)) ? Number(pivot.x) : null,
+    pivotY: Number.isFinite(Number(pivot.y)) ? Number(pivot.y) : null,
+  };
+}
+
+async function fitSlotToHeadCanvas(projectDir, globalAssetsDir, characterId, slotName, body, options = {}) {
+  const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
+  const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
+  const base = findHeadBaseContext(projectDir, globalAssetsDir, characterId);
+  if (!base) throw editorError("No head_base drawing to fit onto", "ENOTFOUND");
+  const srcAbs = path.join(characterDir(projectDir, characterId), view.drawingsDir);
+  if (!fs.existsSync(srcAbs)) throw editorError("View folder not found", "ENOTFOUND");
+  const srcScan = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${view.drawingsDir}`);
+  const names = body && body.drawing ? [body.drawing] : null;
+  const sid = sessionId();
+  const sessionRoot = previewDir(projectDir, characterId, sid);
+  const outDir = path.join(sessionRoot, "fitted");
+  fs.mkdirSync(outDir, { recursive: true });
+  const tmpSrc = path.join(outDir, "_src");
+  fs.mkdirSync(tmpSrc, { recursive: true });
+  for (const [name, file] of srcScan) {
+    if (names && !names.includes(name)) continue;
+    const ext = path.extname(file.absPath) || ".png";
+    fs.copyFileSync(file.absPath, path.join(tmpSrc, `${name}${ext}`));
+  }
+  const args = [
+    "--fit-to-head",
+    "--src-dir",
+    tmpSrc,
+    "--out-dir",
+    outDir,
+    "--base",
+    base.absPath,
+    "--canvas-w",
+    String(base.canvasW),
+    "--canvas-h",
+    String(base.canvasH),
+  ];
+  if (base.pivotX != null && base.pivotY != null) {
+    args.push("--pivot-x", String(base.pivotX), "--pivot-y", String(base.pivotY));
+  }
+  const defaultName = (spec && spec.default_drawing) || (slotName === "mouth" ? "X" : null);
+  if (defaultName) args.push("--default-name", defaultName);
+  if (names) {
+    for (const name of names) args.push("--name", name);
+  }
+  const result = await runAlign(args, options);
+  const written = [];
+  for (const item of result.written || []) {
+    const destName = path.basename(item.out);
+    const destRel = posixJoin("characters", characterId, view.drawingsDir, destName);
+    const destAbs = absFromProjectRel(projectDir, destRel);
+    const prev = srcScan.get(path.basename(destName, path.extname(destName)));
+    const outBuf = fs.readFileSync(item.out);
+    const unchanged = Boolean(prev && fs.existsSync(prev.absPath) && fs.readFileSync(prev.absPath).equals(outBuf));
+    if (!unchanged) {
+      if (prev) writeHistoryCopy(projectDir, characterId, "replaced", destRel, prev.absPath);
+      fs.mkdirSync(path.dirname(destAbs), { recursive: true });
+      fs.copyFileSync(item.out, destAbs);
+    }
+    written.push({
+      name: path.basename(destName, path.extname(destName)),
+      rel: destRel,
+      unchanged,
+    });
+  }
+  fs.rmSync(sessionRoot, { recursive: true, force: true });
+  return {
+    ok: true,
+    fitToHeadCanvas: true,
+    view: view.id,
+    baseDrawing: base.drawingName,
+    written,
+  };
+}
+
 async function realignSlotView(projectDir, globalAssetsDir, characterId, slotName, body, options = {}) {
+  if (body && body.fitToHeadCanvas) {
+    return fitSlotToHeadCanvas(projectDir, globalAssetsDir, characterId, slotName, body, options);
+  }
   const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
   const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
   const refDir = findAlignReferenceDir(projectDir, globalAssetsDir, characterId, slotName, spec, view);
@@ -1193,6 +1303,7 @@ module.exports = {
   rhubarbShapeOf,
   promoteSlotView,
   realignSlotView,
+  fitSlotToHeadCanvas,
   pickAlignReferenceName,
   normalizeAlign,
   drawingAlign,

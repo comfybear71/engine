@@ -384,6 +384,7 @@ export async function realignSlotView(
     cropToHead?: boolean;
     collarY?: number;
     normalize?: boolean;
+    fitToHeadCanvas?: boolean;
   }
 ): Promise<{ ok: boolean; written: { name: string; rel: string }[]; overlay?: { afterRel: string; beforeRel: string } | null }> {
   const res = await workerFetch(slotPath(project, characterId, slot, "/realign"), {

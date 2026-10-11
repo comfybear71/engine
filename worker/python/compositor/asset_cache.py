@@ -149,6 +149,17 @@ def map_affine_point(x: float, y: float, matrix: np.ndarray) -> tuple[float, flo
     )
 
 
+def point_after_rotation(
+    width: float, height: float, x: float, y: float, degrees_clockwise: float
+) -> tuple[float, float]:
+    """Where image-space ``(x, y)`` lands after centre-rotate + canvas-expand."""
+
+    if abs(degrees_clockwise) < 1e-9:
+        return float(x), float(y)
+    matrix, _new_w, _new_h = rotation_expand_matrix(width, height, degrees_clockwise)
+    return map_affine_point(x, y, matrix)
+
+
 def anchor_after_rotation(
     width: float, height: float, anchor: str, degrees_clockwise: float
 ) -> tuple[float, float]:
@@ -156,10 +167,7 @@ def anchor_after_rotation(
     after the centre-rotate + canvas-expand that ``_rotate_bgra`` does."""
 
     ax, ay = anchor_offset(anchor, width, height)
-    if abs(degrees_clockwise) < 1e-9:
-        return ax, ay
-    matrix, _new_w, _new_h = rotation_expand_matrix(width, height, degrees_clockwise)
-    return map_affine_point(ax, ay, matrix)
+    return point_after_rotation(width, height, ax, ay, degrees_clockwise)
 
 
 def _rotate_bgra(img: np.ndarray, degrees: float) -> np.ndarray:
