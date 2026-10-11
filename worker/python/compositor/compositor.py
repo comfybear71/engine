@@ -32,7 +32,7 @@ from .blend import draw_image
 from .camera import apply_camera, scale_camera
 from .ffmpeg_writer import write_frames
 from .lipsync_natural import slot_head_bob
-from .slots import Slot, _find_active_clip, active_drawing, is_hide_drawing, slot_is_visible
+from .slots import Slot, _find_active_clip, active_drawing, drawing_align, is_hide_drawing, slot_is_visible
 from .timeline_loader import Child, Layer, Scene, Timeline, child_rotation_at, transform_at
 from .transform import rotate_offset_clockwise
 
@@ -166,14 +166,20 @@ def _draw_slot(
     if image_path is None:
         return
 
-    mirrored_x = -slot.offset_x if owner.flip_x else slot.offset_x
-    rotated_x, rotated_y = rotate_offset_clockwise(mirrored_x, slot.offset_y, owner.rotation)
+    # Per-drawing align (Studio Save) sits on top of the slot offset/scale.
+    # Same units as the panel: x/y in local pixels, scale as a multiplier.
+    # Drawings stay centre-anchored at the (nudged) slot offset.
+    align = drawing_align(slot, drawing)
+    local_x = slot.offset_x + align.x
+    local_y = slot.offset_y + align.y
+    mirrored_x = -local_x if owner.flip_x else local_x
+    rotated_x, rotated_y = rotate_offset_clockwise(mirrored_x, local_y, owner.rotation)
     bob_dy, bob_rot = slot_head_bob(slot, owner_local_frame_idx)
     slot_x = owner.x + rotated_x * owner.scale
     slot_y = owner.y + rotated_y * owner.scale + bob_dy
     # Slot scale/rotation are around the attachment point (center anchor),
     # so the offset stays put when the drawing is resized.
-    slot_scale = owner.scale * (slot.scale if slot.scale else 1.0)
+    slot_scale = owner.scale * (slot.scale if slot.scale else 1.0) * (align.scale if align.scale else 1.0)
     slot_rotation = owner.rotation + slot.rotation + bob_rot
 
     _draw_transformed(

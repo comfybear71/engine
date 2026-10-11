@@ -47,6 +47,20 @@ class SlotKeyframe:
 
 
 @dataclass(frozen=True)
+class DrawingAlign:
+    """Per-drawing Scale/Nudge from Studio Assets Save.
+
+    ``x`` / ``y`` are local pixels added to the slot offset (same space as
+    ``Slot.offset_*``). ``scale`` multiplies the slot's own scale. The
+    drawing stays centre-anchored at the resulting attachment point.
+    """
+
+    x: float = 0.0
+    y: float = 0.0
+    scale: float = 1.0
+
+
+@dataclass(frozen=True)
 class Slot:
     images: dict[str, Path]
     offset_x: float = 0.0
@@ -71,6 +85,8 @@ class Slot:
     head_bob_rotation: float = 0.0
     # Drawing names skipped by automatic lip sync (still valid as pins).
     exclude_from_lipsync: frozenset[str] = field(default_factory=frozenset)
+    # Per-drawing Scale/Nudge (Studio ``slots.<slot>.drawings.<name>.align``).
+    align: dict[str, DrawingAlign] = field(default_factory=dict)
 
     def resolve_image(self, drawing: str | None, view: str | None = None) -> Path | None:
         if is_hide_drawing(drawing):
@@ -166,6 +182,15 @@ def active_drawing(slot: Slot, owner_local_frame_idx: int, fps: int) -> str | No
         return held_kf.drawing
 
     return None
+
+
+def drawing_align(slot: Slot, drawing: str | None) -> DrawingAlign:
+    """Identity ``(0, 0, 1)`` when this drawing has no saved align."""
+
+    if not drawing:
+        return DrawingAlign()
+    found = slot.align.get(drawing)
+    return found if found is not None else DrawingAlign()
 
 
 def slot_is_visible(slot: Slot, active_drawings: dict[str, str | None]) -> bool:

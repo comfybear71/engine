@@ -190,7 +190,9 @@ clobber the project's `timeline.json`.
   0.25×–4× on a log slider with a number input beside it, and the faint
   default overlay live-updates as you drag. **Save** / **Revert** persist
   or restore that drawing's Scale/Nudge in project-local `character.json`
-  (`slots.<slot>.drawings.<name>.align`); an **unsaved** tag shows when
+  (`slots.<slot>.drawings.<name>.align`); the compositor applies that
+  Scale/Nudge on top of the slot offset/scale (centre-anchored) so a
+  Save shows in Stage preview and renders. An **unsaved** tag shows when
   the sliders differ from the last save. Reopening the drawing reloads
   the saved values. **Auto-fit to default** fills the sliders so the
   cropped head matches the default hat-top / chin / centre. **Apply to
