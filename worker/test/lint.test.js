@@ -202,3 +202,49 @@ describe("mouth sheet check", () => {
     assert.match(errors[0], /Available: \(none\)/);
   });
 });
+
+describe("shared library lint", () => {
+  test("warns when a script resolves anything from _global_assets", async () => {
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi."].join("\n");
+    const { warnings, errors } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    assert.equal(errors.length, 0);
+    assert.ok(
+      warnings.some((w) => /Shared library/.test(w) && w.includes("_global_assets")),
+      `expected a shared-library warning, got: ${JSON.stringify(warnings)}`
+    );
+  });
+
+  test("Independent ON does not emit shared-library paths", async () => {
+    const isolated = createFixtureLibrary();
+    fs.cpSync(
+      path.join(isolated.globalAssetsDir, "characters", "alice"),
+      path.join(isolated.projectDir, "characters", "alice"),
+      { recursive: true }
+    );
+    fs.cpSync(
+      path.join(isolated.globalAssetsDir, "backgrounds", "room_a"),
+      path.join(isolated.projectDir, "backgrounds", "room_a"),
+      { recursive: true }
+    );
+    fs.copyFileSync(
+      path.join(isolated.globalAssetsDir, "staging_defaults.json"),
+      path.join(isolated.projectDir, "staging_defaults.json")
+    );
+    fs.writeFileSync(path.join(isolated.projectDir, "studio.json"), JSON.stringify({ independent: true }));
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi."].join("\n");
+    const { warnings, errors, timeline } = await parseScript(
+      isolated.projectDir,
+      isolated.globalAssetsDir,
+      script
+    );
+    isolated.cleanup();
+    assert.equal(errors.length, 0);
+    assert.equal(
+      warnings.filter((w) => /Shared library/.test(w)).length,
+      0,
+      `unexpected shared-library warning: ${JSON.stringify(warnings)}`
+    );
+    const json = JSON.stringify(timeline);
+    assert.equal(json.includes("_global_assets"), false);
+  });
+});

@@ -1,13 +1,18 @@
 "use strict";
 
 /**
- * Resolves assets against the shared library (`projects/_global_assets/`)
- * with optional show-level files and per-file, per-project/episode overrides.
- * Lookup order is episode (project folder) -> show -> global. Every lookup
- * (character.json, body.png, a single drawing inside a slot folder, a
- * location's bg.png/staging.json, ...) is resolved independently, so a
- * project or show can override just one file without forking the whole
- * character or location.
+ * Resolves assets against the project folder, optional show-level files,
+ * and (only when the project allows it) the shared library
+ * (`projects/_global_assets/`). Lookup order is episode (project folder)
+ * -> show -> global. Every lookup (character.json, body.png, a single
+ * drawing inside a slot folder, a location's bg.png/staging.json, ...) is
+ * resolved independently, so a project or show can override just one file
+ * without forking the whole character or location.
+ *
+ * Projects default to Independent (`studio.json` `independent: true`,
+ * including when the field is missing): global is skipped. Episode -> show
+ * is still allowed. Pass `{ includeGlobal: true }` to force a shared-library
+ * read (Library drawer, Add, Make independent).
  *
  * `relPath` is always relative to the *library root* convention, e.g.
  * "characters/hicks/body.png" or "backgrounds/corridor/staging.json" --
@@ -56,12 +61,39 @@ function resolveShowAssetsDir(projectDir) {
   return showDir;
 }
 
-function assetSearchRoots(projectDir, globalAssetsDir) {
+const STUDIO_SETTINGS_FILENAME = "studio.json";
+
+/**
+ * Per-project Independent setting. Default ON (never read `_global_assets`)
+ * for new and existing projects. Only an explicit `independent: false` in
+ * `studio.json` re-enables the shared-library fallback.
+ */
+function isProjectIndependent(projectDir) {
+  if (!projectDir) return true;
+  const filePath = path.join(projectDir, STUDIO_SETTINGS_FILENAME);
+  if (!fs.existsSync(filePath)) return true;
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8")) || {};
+    return data.independent !== false;
+  } catch {
+    return true;
+  }
+}
+
+function shouldIncludeGlobal(projectDir, options) {
+  if (options && options.includeGlobal === true) return true;
+  if (options && options.includeGlobal === false) return false;
+  return !isProjectIndependent(projectDir);
+}
+
+function assetSearchRoots(projectDir, globalAssetsDir, options) {
   const roots = [];
   if (projectDir) roots.push({ dir: path.resolve(projectDir), source: "project" });
   const showDir = resolveShowAssetsDir(projectDir);
   if (showDir) roots.push({ dir: showDir, source: "show" });
-  if (globalAssetsDir) roots.push({ dir: path.resolve(globalAssetsDir), source: "global" });
+  if (globalAssetsDir && shouldIncludeGlobal(projectDir, options)) {
+    roots.push({ dir: path.resolve(globalAssetsDir), source: "global" });
+  }
   return roots;
 }
 
@@ -73,9 +105,9 @@ function assetSearchRoots(projectDir, globalAssetsDir) {
  *   `timelinePath` is relative to `projectDir`, suitable for embedding
  *   directly in timeline.json (using ".." to reach a show or global asset).
  */
-function resolveAsset(projectDir, globalAssetsDir, relPath) {
+function resolveAsset(projectDir, globalAssetsDir, relPath, options) {
   if (!relPath) return null;
-  for (const root of assetSearchRoots(projectDir, globalAssetsDir)) {
+  for (const root of assetSearchRoots(projectDir, globalAssetsDir, options)) {
     const candidate = path.join(root.dir, relPath);
     if (!fs.existsSync(candidate)) continue;
     const timelinePath =
@@ -90,8 +122,8 @@ function toPosix(p) {
 }
 
 /** Reads and JSON.parses a resolved asset, or returns null if not found. */
-function readJsonAsset(projectDir, globalAssetsDir, relPath) {
-  const resolved = resolveAsset(projectDir, globalAssetsDir, relPath);
+function readJsonAsset(projectDir, globalAssetsDir, relPath, options) {
+  const resolved = resolveAsset(projectDir, globalAssetsDir, relPath, options);
   if (!resolved) return null;
   return JSON.parse(fs.readFileSync(resolved.absPath, "utf8"));
 }
@@ -104,13 +136,14 @@ function readJsonAsset(projectDir, globalAssetsDir, relPath) {
  *
  * @returns {Map<string, {absPath: string, timelinePath: string}>} drawing name -> resolved file
  */
-function scanDrawingsDir(projectDir, globalAssetsDir, relDirPath) {
+function scanDrawingsDir(projectDir, globalAssetsDir, relDirPath, options) {
   const drawings = new Map();
 
-  const addFrom = (baseDir, isProject) => {
+  const addFrom = (baseDir, source) => {
     if (!baseDir) return;
     const absDir = path.join(baseDir, relDirPath);
     if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) return;
+    const isProject = source === "project";
     for (const entry of fs.readdirSync(absDir)) {
       const ext = path.extname(entry).toLowerCase();
       if (!IMAGE_EXTENSIONS.includes(ext)) continue;
@@ -119,21 +152,21 @@ function scanDrawingsDir(projectDir, globalAssetsDir, relDirPath) {
       const timelinePath = isProject
         ? toPosix(path.join(relDirPath, entry))
         : toPosix(path.relative(projectDir, absPath));
-      drawings.set(name, { absPath, timelinePath });
+      drawings.set(name, { absPath, timelinePath, source });
     }
   };
 
-  // Global first, then show, then episode/project — later entries win.
-  addFrom(globalAssetsDir, false);
-  addFrom(resolveShowAssetsDir(projectDir), false);
-  addFrom(projectDir, true);
+  // Global first (when allowed), then show, then episode/project — later entries win.
+  if (shouldIncludeGlobal(projectDir, options)) addFrom(globalAssetsDir, "global");
+  addFrom(resolveShowAssetsDir(projectDir), "show");
+  addFrom(projectDir, "project");
 
   return drawings;
 }
 
 /** Loads characters/<id>/character.json, or null if the character doesn't exist in any location. */
-function loadCharacter(projectDir, globalAssetsDir, characterId) {
-  return readJsonAsset(projectDir, globalAssetsDir, `characters/${characterId}/character.json`);
+function loadCharacter(projectDir, globalAssetsDir, characterId, options) {
+  return readJsonAsset(projectDir, globalAssetsDir, `characters/${characterId}/character.json`, options);
 }
 
 const SAFE_FOLDER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -157,17 +190,17 @@ function listIdsInFolder(baseDir, folder, isCharacter) {
   return ids;
 }
 
-function listKnownCharacterIds(projectDir, globalAssetsDir) {
+function listKnownCharacterIds(projectDir, globalAssetsDir, options) {
   const ids = new Set();
-  for (const root of assetSearchRoots(projectDir, globalAssetsDir).reverse()) {
+  for (const root of assetSearchRoots(projectDir, globalAssetsDir, options).reverse()) {
     for (const id of listIdsInFolder(root.dir, "characters", true)) ids.add(id);
   }
   return [...ids].sort();
 }
 
-function listKnownLocations(projectDir, globalAssetsDir) {
+function listKnownLocations(projectDir, globalAssetsDir, options) {
   const ids = new Set();
-  for (const root of assetSearchRoots(projectDir, globalAssetsDir).reverse()) {
+  for (const root of assetSearchRoots(projectDir, globalAssetsDir, options).reverse()) {
     for (const id of listIdsInFolder(root.dir, "backgrounds")) ids.add(id);
   }
   return [...ids].sort();
@@ -201,9 +234,14 @@ function normalizeAnchor(value) {
  * default marks" in the brief). Falls back to an empty mark set (plus the
  * global defaults) if the location has no staging.json of its own.
  */
-function loadStaging(projectDir, globalAssetsDir, location) {
-  const globalDefaults = readJsonAsset(projectDir, globalAssetsDir, "staging_defaults.json") || { marks: {} };
-  const locationStaging = readJsonAsset(projectDir, globalAssetsDir, `backgrounds/${location}/staging.json`);
+function loadStaging(projectDir, globalAssetsDir, location, options) {
+  const globalDefaults = readJsonAsset(projectDir, globalAssetsDir, "staging_defaults.json", options) || { marks: {} };
+  const locationStaging = readJsonAsset(
+    projectDir,
+    globalAssetsDir,
+    `backgrounds/${location}/staging.json`,
+    options
+  );
 
   const marks = { ...(globalDefaults.marks || {}), ...((locationStaging && locationStaging.marks) || {}) };
   const autoOrder = (locationStaging && locationStaging.auto_order) || globalDefaults.auto_order || DEFAULT_AUTO_ORDER;
@@ -223,7 +261,10 @@ module.exports = {
   resolveShowAssetsDir,
   resolveGlobalAssetsDir,
   assetSearchRoots,
+  isProjectIndependent,
+  shouldIncludeGlobal,
   normalizeAnchor,
   ANCHOR_NAMES,
   DEFAULT_AUTO_ORDER,
+  STUDIO_SETTINGS_FILENAME,
 };

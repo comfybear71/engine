@@ -65,6 +65,7 @@ function readStudioSettings(projectDir) {
   return {
     lipSync: data.lipSync === "manual" ? "manual" : "auto",
     lipsync: normalizeLipsync(data.lipsync),
+    independent: data.independent !== false,
   };
 }
 
@@ -77,8 +78,13 @@ function writeStudioSettings(projectDir, patch) {
       ...current.lipsync,
       ...(incoming.lipsync && typeof incoming.lipsync === "object" ? incoming.lipsync : {}),
     }),
+    independent:
+      incoming.independent === true || incoming.independent === false
+        ? incoming.independent
+        : current.independent,
   };
   next.lipSync = next.lipSync === "manual" ? "manual" : "auto";
+  next.independent = next.independent !== false;
   fs.writeFileSync(studioSettingsPath(projectDir), `${JSON.stringify(next, null, 2)}\n`);
   return next;
 }

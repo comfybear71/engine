@@ -1,8 +1,9 @@
 "use strict";
 
 /**
- * Read-only views of the shared asset library for the Studio: characters
- * (global + project-local), backgrounds, props, and marks from staging.json.
+ * Read-only views of project assets for the Studio: characters this project
+ * uses (project-local drawings only), plus a catalog of global characters
+ * for the Library drawer. Backgrounds, props, and marks come from staging.
  */
 
 const fs = require("fs");
@@ -22,9 +23,9 @@ function toPosix(p) {
   return String(p).split(path.sep).join("/");
 }
 
-function resolvedMtime(projectDir, globalAssetsDir, rel) {
+function resolvedMtime(projectDir, globalAssetsDir, rel, options) {
   if (!rel) return null;
-  const resolved = resolveAsset(projectDir, globalAssetsDir, rel);
+  const resolved = resolveAsset(projectDir, globalAssetsDir, rel, options);
   if (!resolved) return null;
   try {
     return Math.round(fs.statSync(resolved.absPath).mtimeMs);
@@ -38,32 +39,35 @@ function locationFromBackgroundAsset(asset) {
   return match ? match[1] : null;
 }
 
-function collectSlots(character, projectDir, globalAssetsDir, characterId) {
+function collectSlots(character, projectDir, globalAssetsDir, characterId, options) {
   const slots = [];
+  const projectOnly = !options || options.includeGlobal !== true;
 
   function addSlots(rawSlots, owner) {
     for (const [name, spec] of Object.entries(rawSlots || {})) {
       const drawingsDir = spec.drawings_dir || name;
       const relDir = `characters/${characterId}/${drawingsDir}`;
       const drawings = [];
-      for (const [drawingName, file] of scanDrawingsDir(projectDir, globalAssetsDir, relDir)) {
+      for (const [drawingName, file] of scanDrawingsDir(projectDir, globalAssetsDir, relDir, options)) {
+        if (projectOnly && file.source !== "project") continue;
         const rel = `${relDir}/${path.basename(file.absPath)}`;
         drawings.push({
           name: drawingName,
           rel,
-          mtime: resolvedMtime(projectDir, globalAssetsDir, rel),
+          mtime: resolvedMtime(projectDir, globalAssetsDir, rel, options),
         });
       }
       drawings.sort((a, b) => a.name.localeCompare(b.name));
       const offset = spec.offset || {};
       const views = discoverSlotViews(projectDir, globalAssetsDir, characterId, name, spec).map((view) => {
         const viewDrawings = [];
-        for (const [drawingName, file] of scanDrawingsDir(projectDir, globalAssetsDir, view.relDir)) {
+        for (const [drawingName, file] of scanDrawingsDir(projectDir, globalAssetsDir, view.relDir, options)) {
+          if (projectOnly && file.source !== "project") continue;
           const rel = `${view.relDir}/${path.basename(file.absPath)}`;
           viewDrawings.push({
             name: drawingName,
             rel,
-            mtime: resolvedMtime(projectDir, globalAssetsDir, rel),
+            mtime: resolvedMtime(projectDir, globalAssetsDir, rel, options),
             view: view.id,
           });
         }
@@ -95,38 +99,38 @@ function collectSlots(character, projectDir, globalAssetsDir, characterId) {
   return slots;
 }
 
-function characterReferenceRel(character, projectDir, globalAssetsDir, characterId) {
+function characterReferenceRel(character, projectDir, globalAssetsDir, characterId, options) {
   const raw = character && character.reference;
   if (typeof raw !== "string" || !raw.trim()) return null;
   const trimmed = raw.trim().replace(/\\/g, "/");
   if (trimmed.includes("..") || trimmed.startsWith("/")) return null;
   const rel = trimmed.startsWith("characters/") ? trimmed : `characters/${characterId}/${trimmed}`;
-  if (!resolveAsset(projectDir, globalAssetsDir, rel)) return null;
+  if (!resolveAsset(projectDir, globalAssetsDir, rel, options)) return null;
   return rel;
 }
 
-function characterThumbRel(character, projectDir, globalAssetsDir, characterId) {
+function characterThumbRel(character, projectDir, globalAssetsDir, characterId, options) {
   const bodySlot = character.slots && character.slots.body;
   if (bodySlot && bodySlot.default_drawing) {
     const dir = bodySlot.drawings_dir || "body";
-    const drawings = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${dir}`);
+    const drawings = scanDrawingsDir(projectDir, globalAssetsDir, `characters/${characterId}/${dir}`, options);
     const hit = drawings.get(bodySlot.default_drawing);
     if (hit) return `characters/${characterId}/${dir}/${path.basename(hit.absPath)}`;
   }
   if (character.asset) {
     const rel = `characters/${characterId}/${character.asset}`;
-    if (resolveAsset(projectDir, globalAssetsDir, rel)) return rel;
+    if (resolveAsset(projectDir, globalAssetsDir, rel, options)) return rel;
   }
   return null;
 }
 
-function describeCharacter(projectDir, globalAssetsDir, id) {
+function describeCharacter(projectDir, globalAssetsDir, id, options) {
   const jsonRel = `characters/${id}/character.json`;
-  const resolved = resolveAsset(projectDir, globalAssetsDir, jsonRel);
-  const character = loadCharacter(projectDir, globalAssetsDir, id);
+  const resolved = resolveAsset(projectDir, globalAssetsDir, jsonRel, options);
+  const character = loadCharacter(projectDir, globalAssetsDir, id, options);
   if (!resolved || !character) return null;
-  const thumbRel = characterThumbRel(character, projectDir, globalAssetsDir, id);
-  const referenceRel = characterReferenceRel(character, projectDir, globalAssetsDir, id);
+  const thumbRel = characterThumbRel(character, projectDir, globalAssetsDir, id, options);
+  const referenceRel = characterReferenceRel(character, projectDir, globalAssetsDir, id, options);
   return {
     id,
     display_name: character.display_name || id,
@@ -137,11 +141,11 @@ function describeCharacter(projectDir, globalAssetsDir, id) {
     asset: character.asset || null,
     thumbRel,
     bodyRel: thumbRel,
-    mtime: resolvedMtime(projectDir, globalAssetsDir, thumbRel),
+    mtime: resolvedMtime(projectDir, globalAssetsDir, thumbRel, options),
     reference: typeof character.reference === "string" ? character.reference : null,
     referenceRel,
-    referenceMtime: resolvedMtime(projectDir, globalAssetsDir, referenceRel),
-    slots: collectSlots(character, projectDir, globalAssetsDir, id),
+    referenceMtime: resolvedMtime(projectDir, globalAssetsDir, referenceRel, options),
+    slots: collectSlots(character, projectDir, globalAssetsDir, id, options),
   };
 }
 
@@ -160,9 +164,10 @@ function listGlobalCharacters(projectDir, globalAssetsDir) {
   const characters = [];
   const dir = path.join(globalAssetsDir, "characters");
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return characters;
+  const forceGlobal = { includeGlobal: true };
   for (const id of fs.readdirSync(dir).sort()) {
     if (!fs.statSync(path.join(dir, id)).isDirectory()) continue;
-    const described = describeCharacter(projectDir, globalAssetsDir, id);
+    const described = describeCharacter(projectDir, globalAssetsDir, id, forceGlobal);
     if (described) characters.push({ ...described, source: "global" });
   }
   return characters;

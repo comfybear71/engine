@@ -140,14 +140,12 @@ function isMouthSlot(slotName, drawingsDir) {
 
 function listCharacterSubdirs(projectDir, globalAssetsDir, characterId) {
   const names = new Set();
-  for (const root of assetSearchRoots(projectDir, globalAssetsDir)) {
-    const dir = path.join(root.dir, "characters", characterId);
-    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      if (HISTORY_DIRS.has(entry.name) || entry.name.startsWith("_")) continue;
-      names.add(entry.name);
-    }
+  const dir = path.join(projectDir, "characters", characterId);
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return names;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (HISTORY_DIRS.has(entry.name) || entry.name.startsWith("_")) continue;
+    names.add(entry.name);
   }
   return names;
 }
@@ -430,7 +428,8 @@ function drawingsForView(projectDir, globalAssetsDir, characterId, view) {
   const drawings = [];
   for (const [name] of scanned) {
     const described = describeDrawingFile(projectDir, globalAssetsDir, characterId, view.drawingsDir, name);
-    if (described) drawings.push({ ...described, view: view.id });
+    if (!described || described.source !== "project") continue;
+    drawings.push({ ...described, view: view.id });
   }
   drawings.sort((a, b) => a.name.localeCompare(b.name));
   return markDuplicates(drawings);
@@ -457,7 +456,9 @@ function describeSlot(projectDir, globalAssetsDir, characterId, slotName, viewId
     views: views.map((item) => ({
       id: item.id,
       drawingsDir: item.drawingsDir,
-      count: scanDrawingsDir(projectDir, globalAssetsDir, item.relDir).size,
+      count: [...scanDrawingsDir(projectDir, globalAssetsDir, item.relDir).values()].filter(
+        (file) => file.source === "project"
+      ).length,
     })),
     offset: { x: offset.x == null ? 0 : offset.x, y: offset.y == null ? 0 : offset.y },
     scale: spec.scale == null ? 1 : spec.scale,

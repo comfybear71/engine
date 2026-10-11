@@ -188,3 +188,14 @@ def test_character_config_resolves_episode_then_show_then_global(tmp_path):
         '{"id":"rodney","lipsync":{"head_bob":"subtle"}}'
     )
     assert load_character_config(episode, "rodney")["lipsync"]["head_bob"] == "subtle"
+
+
+def test_character_config_skips_global_when_independent(tmp_path):
+    global_dir = tmp_path / "_global_assets" / "characters" / "rodney"
+    project = tmp_path / "episode"
+    global_dir.mkdir(parents=True)
+    project.mkdir(parents=True)
+    (global_dir / "character.json").write_text('{"id":"rodney","lipsync":{"head_bob":"off"}}')
+    assert load_character_config(project, "rodney") == {}
+    (project / "studio.json").write_text('{"independent": false}')
+    assert load_character_config(project, "rodney")["lipsync"]["head_bob"] == "off"

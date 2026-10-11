@@ -325,8 +325,11 @@ export default function ShowScreen({ showId }: { showId: string }) {
       {libraryOpen ? (
         <div className="fixed inset-0 z-20 flex justify-end bg-black/50">
           <div className="flex h-full w-full max-w-md flex-col border-l border-studio-border bg-studio-panel">
-            <div className="flex items-center justify-between border-b border-studio-border px-4 py-3">
-              <h2 className="text-sm font-semibold text-white">Global library</h2>
+            <div className="flex items-start justify-between gap-3 border-b border-studio-border px-4 py-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-white">Global library</h2>
+                <p className="text-[11px] text-studio-muted">Add copies the character into this show. The shared folder is not changed.</p>
+              </div>
               <button type="button" className="text-xs text-studio-muted hover:text-white" onClick={() => setLibraryOpen(false)}>
                 Close
               </button>

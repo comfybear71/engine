@@ -67,7 +67,7 @@ const {
 const { ScriptError } = require("./errors");
 const assetLibrary = require("./assetLibrary");
 const { probeDurationSeconds } = require("./ffprobeDuration");
-const { findOverlapWarnings, findMouthSheetErrors, findMissingPropAssets } = require("./lint");
+const { findOverlapWarnings, findMouthSheetErrors, findMissingPropAssets, findSharedLibraryWarnings } = require("./lint");
 const { resolveImportedTrack, wordsToSentences, transcriptFromWords } = require("../importAudio");
 const { computeSyncState } = require("../voices/lipSync");
 
@@ -535,6 +535,7 @@ class ScriptParser {
       fps: this.fps,
       scenes: this.scenes,
     };
+    this.warnings.push(...findSharedLibraryWarnings(timeline));
     return {
       timeline,
       lines: this.lines,

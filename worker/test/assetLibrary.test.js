@@ -103,6 +103,7 @@ describe("episode -> show -> global resolution", () => {
   fs.writeFileSync(path.join(showDir, "characters", "alice", "mouth", "B.png"), "show-B");
   fs.writeFileSync(path.join(globalAssetsDir, "characters", "alice", "mouth", "C.png"), "global-C");
   fs.writeFileSync(path.join(showDir, "characters", "rodney", "character.json"), JSON.stringify({ id: "rodney" }));
+  fs.writeFileSync(path.join(episodeDir, "studio.json"), JSON.stringify({ independent: false }));
 
   test("episode file wins over show and global", () => {
     const resolved = assetLibrary.resolveAsset(episodeDir, globalAssetsDir, "characters/alice/body.png");
@@ -143,9 +144,41 @@ describe("episode -> show -> global resolution", () => {
   test("flat projects still ignore a sibling shows folder", () => {
     const flat = path.join(tmp, "experiment");
     fs.mkdirSync(flat, { recursive: true });
+    fs.writeFileSync(path.join(flat, "studio.json"), JSON.stringify({ independent: false }));
     const resolved = assetLibrary.resolveAsset(flat, globalAssetsDir, "characters/alice/body.png");
     assert.equal(resolved.source, "global");
     assert.equal(assetLibrary.resolveShowAssetsDir(flat), null);
+  });
+
+  test("Independent ON skips global and still allows episode -> show", () => {
+    fs.writeFileSync(path.join(episodeDir, "studio.json"), JSON.stringify({ independent: true }));
+    const showHit = assetLibrary.resolveAsset(episodeDir, globalAssetsDir, "characters/alice/mouth/B.png");
+    assert.equal(showHit.source, "show");
+    const globalMiss = assetLibrary.resolveAsset(episodeDir, globalAssetsDir, "characters/alice/mouth/C.png");
+    assert.equal(globalMiss, null);
+    const drawings = assetLibrary.scanDrawingsDir(episodeDir, globalAssetsDir, "characters/alice/mouth");
+    assert.equal(drawings.has("C"), false);
+    assert.ok(drawings.has("B"));
+    fs.writeFileSync(path.join(episodeDir, "studio.json"), JSON.stringify({ independent: false }));
+  });
+});
+
+describe("Independent default skips the shared library", () => {
+  test("missing studio.json does not fall back to _global_assets", () => {
+    const tmp = fs.mkdtempSync(path.join(require("os").tmpdir(), "engine-independent-"));
+    const globalAssetsDir = path.join(tmp, "_global_assets");
+    const projectDir = path.join(tmp, "fresh");
+    fs.mkdirSync(path.join(globalAssetsDir, "characters", "alice"), { recursive: true });
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(globalAssetsDir, "characters", "alice", "body.png"), "global-body");
+    const resolved = assetLibrary.resolveAsset(projectDir, globalAssetsDir, "characters/alice/body.png");
+    assert.equal(resolved, null);
+    assert.equal(assetLibrary.isProjectIndependent(projectDir), true);
+    const forced = assetLibrary.resolveAsset(projectDir, globalAssetsDir, "characters/alice/body.png", {
+      includeGlobal: true,
+    });
+    assert.equal(forced.source, "global");
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });
 

@@ -42,6 +42,7 @@ const {
   duplicateProject,
   createEmptyProject,
   addLibraryCharacter,
+  makeProjectIndependent,
   readLibrary,
   isSafeFolderName,
 } = require("./studioProjects");
@@ -749,7 +750,8 @@ function createApp(options = {}) {
       return res.status(400).json({ error: "Invalid asset path" });
     }
     const globalAssetsDir = resolveGlobalAssetsDir(found.showDir);
-    const resolved = resolveAsset(found.showDir, globalAssetsDir, rel);
+    const libraryPreview = req.query.library === "1" || req.query.library === "true";
+    const resolved = resolveAsset(found.showDir, globalAssetsDir, rel, libraryPreview ? { includeGlobal: true } : undefined);
     if (!resolved) {
       return res.status(404).json({ error: `Asset not found: ${rel}` });
     }
@@ -1349,7 +1351,13 @@ function createApp(options = {}) {
       return res.status(400).json({ error: "Invalid asset path" });
     }
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
-    const resolved = resolveAsset(projectDir, globalAssetsDir, rel);
+    const libraryPreview = req.query.library === "1" || req.query.library === "true";
+    const resolved = resolveAsset(
+      projectDir,
+      globalAssetsDir,
+      rel,
+      libraryPreview ? { includeGlobal: true } : undefined
+    );
     if (!resolved) {
       return res.status(404).json({ error: `Asset not found: ${rel}` });
     }
@@ -1506,7 +1514,19 @@ function createApp(options = {}) {
     const patch = {};
     if (body.lipSync === "auto" || body.lipSync === "manual") patch.lipSync = body.lipSync;
     if (body.lipsync && typeof body.lipsync === "object") patch.lipsync = body.lipsync;
+    if (body.independent === true || body.independent === false) patch.independent = body.independent;
     res.json(writeStudioSettings(projectDir, patch));
+  });
+
+  app.post("/api/projects/:name/make-independent", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+      res.json(makeProjectIndependent(projectDir, globalAssetsDir));
+    } catch (err) {
+      sendLifecycleError(res, err);
+    }
   });
 
   app.post("/api/projects/:name/lipsync", async (req, res) => {

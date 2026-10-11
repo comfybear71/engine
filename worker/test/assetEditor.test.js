@@ -284,6 +284,20 @@ describe("asset editor", { concurrency: 1 }, () => {
       /shared library/
     );
   });
+
+  test("deleted local drawing does not reappear from the shared library", () => {
+    const localA = path.join(fixture.projectDir, "characters", "alice", "mouth", "A.png");
+    writePng(localA);
+    const before = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "alice", "mouth");
+    assert.ok(before.drawings.some((d) => d.name === "A" && d.source === "project"));
+    deleteDrawing(fixture.projectDir, fixture.globalAssetsDir, "alice", "mouth", "A", {
+      confirm: true,
+      force: true,
+    });
+    const after = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "alice", "mouth");
+    assert.equal(after.drawings.some((d) => d.name === "A"), false);
+    assert.equal(fs.existsSync(path.join(fixture.globalAssetsDir, "characters", "alice", "mouth", "A.png")), true);
+  });
 });
 
 describe("asset editor episode/show/global paths", { concurrency: 1 }, () => {
@@ -316,17 +330,20 @@ describe("asset editor episode/show/global paths", { concurrency: 1 }, () => {
   writePng(path.join(episodeDir, "characters", "alice", "mouth", "A.png"));
   fs.writeFileSync(path.join(episodeDir, "script.txt"), "[Scene: Intro]\n[Cast: Alice]\n");
 
-  test("lists episode, show, and global drawings and show view folders", () => {
+  test("Studio lists only project-local drawings", () => {
     const slot = describeSlot(episodeDir, globalAssetsDir, "alice", "mouth");
     const byName = Object.fromEntries(slot.drawings.map((drawing) => [drawing.name, drawing]));
     assert.equal(byName.A.source, "project");
-    assert.equal(byName.B.source, "show");
-    assert.equal(byName.C.source, "global");
-    assert.ok(slot.views.some((view) => view.id === "left_side"));
-    const side = describeSlot(episodeDir, globalAssetsDir, "alice", "mouth", "left_side");
-    assert.equal(side.view, "left_side");
-    assert.equal(side.drawings[0].source, "show");
-    const drawing = describeDrawing(episodeDir, globalAssetsDir, "alice", "mouth", "B");
-    assert.equal(drawing.drawing.source, "show");
+    assert.equal(byName.B, undefined);
+    assert.equal(byName.C, undefined);
+    assert.equal(
+      slot.views.some((view) => view.id === "left_side"),
+      false,
+      "show-only view folders stay off the Studio grid"
+    );
+    assert.throws(
+      () => describeDrawing(episodeDir, globalAssetsDir, "alice", "mouth", "B"),
+      /Unknown drawing/
+    );
   });
 });

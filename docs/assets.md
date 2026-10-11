@@ -33,10 +33,24 @@ shows/
 ```
 
 Lookup order for every character / prop / background file is **episode →
-show → global**. `_global_assets` stays the library for every show.
-Show-level files override it; an episode file at the same relative path
-overrides the show. Flat projects under `projects/` have no show layer,
-so they still resolve as project → global.
+show**, then **global only if the project’s Independent setting is off**.
+`_global_assets` stays an optional shared library. It is never written
+by Studio or the parser.
+
+**Independent** (`studio.json` `"independent": true`) is **on by default**
+for new and existing projects: asset lookup uses only the project folder
+(and the show folder for an episode). The shared library is skipped, so
+a drawing you deleted in a project cannot come back from
+`projects/_global_assets`. Set `"independent": false` to turn the old
+fallback back on. **Make independent** in Studio copies every global
+character, location, prop, and `staging_defaults.json` the project
+currently uses into the project folder, skips files already in
+`_trash/` / `_replaced/`, then turns Independent on.
+
+Show-level files still override the project’s missing files; an episode
+file at the same relative path overrides the show. Flat projects under
+`projects/` have no show layer, so with Independent on they resolve
+only inside their own folder.
 
 The sample project's library has two characters (`hicks`, `dana`) and two
 locations (`bedroom`, `corridor`) built this way -- see
@@ -324,9 +338,9 @@ above).
 An episode (or a flat experiment) can override **any individual file** in
 the library by placing a file at the exact same relative path inside its
 own folder. The parser checks the episode folder first, then the show
-(`shows/<id>/characters/…` and `backgrounds/…`), and only then
-`_global_assets`. For example, to give one episode a special one-off angry
-mouth drawing without touching the shared character:
+(`shows/<id>/characters/…` and `backgrounds/…`). `_global_assets` is
+consulted only when Independent is off. For example, to give one episode a
+special one-off angry mouth drawing without touching the shared character:
 
 ```
 projects/my_episode/
@@ -338,24 +352,28 @@ projects/my_episode/
 
 This works for anything: `character.json` itself, `body.png`, a single
 rig-part image, a single drawing inside a slot folder, a location's
-`bg.png`, its `staging.json`, or a single file in `props/`. Overriding a slot folder only replaces the
-specific filenames you provide; any other drawing names in that slot still
-come from the global version.
+`bg.png`, its `staging.json`, or a single file in `props/`. With
+Independent off, overriding a slot folder only replaces the specific
+filenames you provide; any other drawing names in that slot still come
+from the global version. With Independent on (the default), only files
+that exist in the project (or show) folder are used.
 
-Studio's Assets viewer/editor uses the same lookup: episode
-(`shows/<id>/episodes/<ep>/characters/…`) then show
-(`shows/<id>/characters/…`) then `_global_assets`. Writes stay under the
-episode (or flat project) `characters/<id>/` folder — never
-`_global_assets`. Replacing a drawing copies the previous file to
-`characters/<id>/_replaced/<timestamp>/`. Delete moves a **project-local**
-file to `characters/<id>/_trash/<timestamp>/` — it is never unlinked
-without that copy, and a show-level or shared-library drawing cannot be
-removed from here. Those history folders are ignored when scanning slot
-drawings.
+Studio's Assets viewer/editor lists **project-local drawings only** and
+lets you delete any of them. Writes stay under the episode (or flat
+project) `characters/<id>/` folder — never `_global_assets`. Adding a
+character from the shared Library **copies** the files into the project
+and writes a project-local `character.json`. Replacing a drawing copies
+the previous file to `characters/<id>/_replaced/<timestamp>/`. Delete
+moves a **project-local** file to `characters/<id>/_trash/<timestamp>/`
+— it is never unlinked without that copy. Those history folders are
+ignored when scanning slot drawings. The shared library folder is left
+untouched.
 
 Paths written into the generated `timeline.json` reflect wherever the file
 actually came from: `"characters/hicks/mouth/D.png"` for an episode-local
-override, `"../../characters/hicks/mouth/D.png"` for a show-level file, or
+file, `"../../characters/hicks/mouth/D.png"` for a show-level file, or
+(only when Independent is off)
 `"../_global_assets/characters/hicks/mouth/D.png"` for the global library
 from a flat project (paths are always relative to the project folder
 containing `timeline.json`, per [docs/timeline-schema.md](timeline-schema.md)).
+Lint warns when a script still resolves anything from `_global_assets`.

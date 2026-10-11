@@ -105,6 +105,13 @@ def _show_assets_dir(project_dir: Path) -> Path | None:
     return show_dir
 
 
+def _project_independent(project_dir: Path) -> bool:
+    """Match worker assetLibrary: missing studio.json or independent !== false is ON."""
+
+    data = load_json_object(project_dir / "studio.json")
+    return data.get("independent", True) is not False
+
+
 def _global_assets_dir(project_dir: Path) -> Path:
     sibling = project_dir.parent / "_global_assets"
     if sibling.is_dir():
@@ -125,7 +132,7 @@ def _global_assets_dir(project_dir: Path) -> Path:
 
 
 def load_character_config(project_dir: Path, character_id: str | None) -> dict:
-    """episode → show → global, same order as the parser asset library."""
+    """episode → show → global (global skipped when Independent is on)."""
 
     if not character_id:
         return {}
@@ -134,7 +141,8 @@ def load_character_config(project_dir: Path, character_id: str | None) -> dict:
     show_dir = _show_assets_dir(project_dir)
     if show_dir is not None:
         candidates.append(show_dir / rel)
-    candidates.append(_global_assets_dir(project_dir) / rel)
+    if not _project_independent(project_dir):
+        candidates.append(_global_assets_dir(project_dir) / rel)
     for path in candidates:
         data = load_json_object(path)
         if data:
