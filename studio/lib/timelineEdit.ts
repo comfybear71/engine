@@ -233,6 +233,7 @@ export type MovableLaneBlock = {
   scriptLine?: number | null;
   sourceStartFrame?: number;
   sceneId?: string;
+  marriedId?: string | null;
   rel?: string | null;
   trim?: { inFrames: number; outFrames: number } | null;
   sourceDurationFrames?: number | null;

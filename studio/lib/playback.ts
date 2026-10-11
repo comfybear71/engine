@@ -113,7 +113,7 @@ export function isLiveAudioStart(
 
 export function audioClipsFromBlocks(
   blocks: {
-    lane: string;
+    lane?: string;
     rel?: string | null;
     startFrame: number;
     endFrame: number;
