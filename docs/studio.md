@@ -173,7 +173,12 @@ clobber the project's `timeline.json`.
   (above the collar / shoulder flare, or the old default's head bbox),
   then matches hat-top / chin / neck to the previous default canvas,
   with a before/after overlay and x/y/scale nudge. The drawing viewer
-  has **Crop to head** and a draggable collar-line handle. The Align
+  has **Crop to head** and a draggable collar-line handle. Scale is
+  0.25×–4× on a log slider and the faint default overlay live-updates
+  as you drag. **Auto-fit to default** fills the sliders so the cropped
+  head matches the default hat-top / chin / centre; **Apply to all in
+  this slot** runs that crop/fit across the open set (head, mouth,
+  face). The Align
   head tool fits the full body plus the head overlay so handles stay
   on-screen.   **Play sample** animates the head through a chosen sample
   sentence (or a project take that already has Rhubarb cues). **Exclude
@@ -452,7 +457,7 @@ other media durations are cached by path + mtime + size.
 | `PUT` | `/api/projects/:name/characters/:id/slots/:slot` | JSON `{ "offset"?: {x,y}, "scale"?: number, "rotation"?: number }`. Copy-on-write into project-local `character.json`. Used by **Align head**. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot` | Slot editor payload: drawings (size, hash, source), view folders (`?view=`), offset/scale, cycles, mouth-shape labels, duplicates, missing Rhubarb shapes. No `view=` resolves `mouth_front/` first when it exists. Resolves `characters/<id>/` episode → show → global (`?show=` for episodes). |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/promote-view` | JSON `{ "view" }`. Point the slot `drawings_dir` at that set; copy the previous default files to `_replaced/<timestamp>/`. |
-| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"?, "cropToHead"?, "collarY?" }`. Crop to the head-only region (default on; `collarY` is 0–1 of image height, or pixel Y), then align to the previous default canvas (hat / chin / neck). |
+| `POST` | `/api/projects/:name/characters/:id/slots/:slot/realign` | JSON `{ "view"?, "drawing"?, "nudge"?, "cropToHead"?, "collarY?" }`. Crop to the head-only region (default on; `collarY` is 0–1 of image height, or pixel Y), then align to the previous default canvas (hat / chin / neck). Studio **Auto-fit** fills the nudge sliders first; omit `drawing` to apply the same crop/fit to the whole slot. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing` | Drawing viewer payload plus script/cycle usages and prev/next names in that view. |
 | `GET` | `/api/projects/:name/characters/:id/slots/:slot/lipsync-preview` | Builtin sample cue tracks plus project audio that already has `.rhubarb.json`. Mouth slots only. |
 | `POST` | `/api/projects/:name/characters/:id/slots/:slot/drawings/:drawing/replace` | JSON `{ "imageBase64", "filename?", "view?" }`. Green-screen cut-out + trim preview (before/after). |

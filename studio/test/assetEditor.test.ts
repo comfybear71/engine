@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { clampHeadNudge, defaultHeadNudge, fitBodyPlusHead } from "../lib/headAlign.ts";
+import {
+  applyCollar,
+  autoFitHeadNudge,
+  canvasLandmarks,
+  clampHeadNudge,
+  defaultHeadNudge,
+  fitBodyPlusHead,
+  headScaleToSlider,
+  landmarksFromRgba,
+  previewAlignLayout,
+  residualHeadNudge,
+  sliderToHeadScale,
+} from "../lib/headAlign.ts";
 import {
   cueAtTime,
   formatUsage,
@@ -69,12 +81,55 @@ describe("asset editor helpers", () => {
     assert.equal(remapLipSyncShape("B", ["H"]), "B");
   });
 
-  test("head nudge clamps to a small usable range", () => {
+  test("head nudge clamps to a 0.25x–4x range and the scale slider is logarithmic", () => {
     assert.deepEqual(defaultHeadNudge(), { x: 0, y: 0, scale: 1 });
     const clamped = clampHeadNudge({ x: 999, y: -999, scale: 8 });
     assert.equal(clamped.x, 400);
     assert.equal(clamped.y, -400);
-    assert.equal(clamped.scale, 3);
+    assert.equal(clamped.scale, 4);
+    assert.equal(sliderToHeadScale(0), 0.25);
+    assert.equal(sliderToHeadScale(1), 4);
+    assert.ok(Math.abs(sliderToHeadScale(0.5) - 1) < 1e-9);
+    assert.ok(Math.abs(headScaleToSlider(1) - 0.5) < 1e-9);
+    const residual = residualHeadNudge({ x: 0, y: 0, scale: 3.2 }, 3.2);
+    assert.ok(Math.abs(residual.scale - 1) < 1e-9);
+  });
+
+  test("auto-fit scales a small cropped head to the default hat/chin height", () => {
+    const w = 8;
+    const h = 8;
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    for (let y = 2; y < 6; y += 1) {
+      for (let x = 2; x < 6; x += 1) {
+        const i = (y * w + x) * 4;
+        rgba[i] = 255;
+        rgba[i + 3] = 255;
+      }
+    }
+    const src = landmarksFromRgba(rgba, w, h);
+    assert.equal(src.hat.y, 2);
+    assert.equal(src.chin.y, 6);
+    const ref = canvasLandmarks(24, 24);
+    ref.hat = { x: 12, y: 0 };
+    ref.chin = { x: 12, y: 8 };
+    ref.neck = { x: 12, y: 8 };
+    const cropped = applyCollar(src, 0.5);
+    assert.equal(cropped.chin.y, 4);
+    const fit = autoFitHeadNudge(cropped, ref);
+    assert.equal(fit.scale, 4);
+    const layout = previewAlignLayout({
+      boxW: 240,
+      boxH: 240,
+      srcW: 8,
+      srcH: 8,
+      refW: 24,
+      refH: 24,
+      src: cropped,
+      ref,
+      nudge: fit,
+    });
+    assert.ok(layout.src.height > layout.ref.height * 0.4);
+    assert.ok(Math.abs(layout.src.width / layout.ref.width - (8 * fit.scale) / 24) < 1e-9);
   });
 
   test("align viewport fits a head that sits above the body", () => {

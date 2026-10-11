@@ -282,6 +282,7 @@ function setAssetCacheControl(req, res, absPath) {
   } else {
     res.setHeader("Cache-Control", "public, max-age=86400");
   }
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
 }
 
 function createApp(options = {}) {
