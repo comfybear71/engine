@@ -374,6 +374,9 @@ def drawing_names(slot: Slot | None, view: str | None = None) -> set[str]:
     names = set(slot.images)
     if view and view in slot.images_by_view:
         names.update(slot.images_by_view[view])
+    elif view == "back" and slot.images_by_view:
+        # No <slot>_back/ folder: hide (do not advertise front drawings).
+        return set()
     if "front" in slot.images_by_view:
         names.update(slot.images_by_view["front"])
     return names

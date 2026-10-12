@@ -20,7 +20,7 @@ const KEY_VALUE_RE = /^([A-Za-z_][\w]*)=(\S*)$/;
 const NUMBER_RE = /^[+-]?\d+(?:\.\d+)?$/;
 const XY_RE = /^([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?)$/;
 const SECONDS_RE = /^(\d+(?:\.\d+)?)s$/i;
-const HEAD_VIEWS = ["front", "left_34", "left_side", "right_34", "right_side", "up", "down"];
+const HEAD_VIEWS = ["front", "left_34", "left_side", "right_34", "right_side", "up", "down", "back"];
 
 function parseActionTag(body, options = {}) {
   const words = body.trim().split(/\s+/).filter(Boolean);

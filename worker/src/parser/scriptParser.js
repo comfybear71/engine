@@ -1649,6 +1649,50 @@ class ScriptParser {
     this._applyCharacterFlipX(scene, state, !flipX, lineNumber);
   }
 
+  _collectActionSlotRestores(state, action) {
+    const names = new Set([
+      ...Object.keys((action && action.set_slots) || {}),
+      ...Object.keys((action && action.slot_frames) || {}),
+    ]);
+    const restores = [];
+    for (const slotName of names) {
+      const owner = this._findSlotOwner(state.config, slotName);
+      if (!owner) continue;
+      restores.push({
+        owner,
+        slotName,
+        prev: this._snapshotActiveSlot(state, owner, slotName),
+      });
+    }
+    return restores;
+  }
+
+  _emitActionSlotFrame(state, action, index, relFrame, lastWritten) {
+    const slotFrames = action && action.slot_frames;
+    if (!slotFrames || typeof slotFrames !== "object") return;
+    for (const [slotName, drawings] of Object.entries(slotFrames)) {
+      if (!Array.isArray(drawings) || index < 0 || index >= drawings.length) continue;
+      const drawing = String(drawings[index] == null ? "" : drawings[index]).trim();
+      if (!drawing || lastWritten.get(slotName) === drawing) continue;
+      lastWritten.set(slotName, drawing);
+      this._writeActionSlotDrawing(state, slotName, drawing, relFrame);
+    }
+  }
+
+  _writeActionSlotDrawing(state, slotName, drawing, relFrame) {
+    const owner = this._findSlotOwner(state.config, slotName);
+    if (!owner) return;
+    const name = String(drawing == null ? "" : drawing).trim() || HIDE_DRAWING;
+    this._writeSlotKeyframe(state.current, owner, slotName, { frame: relFrame, drawing: name });
+    state.activeSlots.set(slotStateKey(owner, slotName), {
+      ownerType: owner.ownerType,
+      childId: owner.childId,
+      slotName,
+      drawing: name,
+      startedAtSceneFrame: undefined,
+    });
+  }
+
   _snapshotActiveSlot(state, owner, slotName) {
     const active = state.activeSlots.get(slotStateKey(owner, slotName));
     if (active) {
@@ -1693,6 +1737,7 @@ class ScriptParser {
       durationSeconds > 0 && naturalSeconds > 0
         ? action.fps * (naturalSeconds / durationSeconds)
         : action.fps;
+    const lastSlotDrawing = new Map();
 
     for (let f = 0; f <= durationFrames; f++) {
       const t = durationFrames === 0 ? 1 : f / durationFrames;
@@ -1721,6 +1766,10 @@ class ScriptParser {
           rotation,
           ease: "linear",
         });
+      }
+
+      if (f < durationFrames) {
+        this._emitActionSlotFrame(state, action, index, startRel + f, lastSlotDrawing);
       }
     }
 
@@ -1850,16 +1899,9 @@ class ScriptParser {
         this._addViewKeyframe(live, { frame: endRel, view: prevView || "front" });
       }
 
-      const slotRestores = [];
+      const slotRestores = action ? this._collectActionSlotRestores(state, action) : [];
       if (action && action.set_slots) {
         for (const [slotName, drawing] of Object.entries(action.set_slots)) {
-          const owner = this._findSlotOwner(state.config, slotName);
-          if (!owner) continue;
-          slotRestores.push({
-            owner,
-            slotName,
-            prev: this._snapshotActiveSlot(state, owner, slotName),
-          });
           this._applySlotKeyframe(scene, state, state.characterId, slotName, drawing, token.lineNumber);
         }
       }
@@ -2196,24 +2238,21 @@ class ScriptParser {
         this._addViewKeyframe(live, { frame: endRel, view: prevView || "front" });
       }
 
-      const slotRestores = [];
+      const slotRestores = this._collectActionSlotRestores(state, action);
       if (action.set_slots) {
         for (const [slotName, drawing] of Object.entries(action.set_slots)) {
-          const owner = this._findSlotOwner(state.config, slotName);
-          if (!owner) continue;
-          slotRestores.push({
-            owner,
-            slotName,
-            prev: this._snapshotActiveSlot(state, owner, slotName),
-          });
           this._applySlotKeyframe(scene, state, state.characterId, slotName, drawing, token.lineNumber);
         }
       }
 
       const scale = from.scale || 1;
+      const lastSlotDrawing = new Map();
       for (let f = 0; f <= durationFrames; f++) {
         const index = this._actionCycleIndex(action, f);
         const atEnd = f === durationFrames;
+        if (!atEnd) {
+          this._emitActionSlotFrame(state, action, index, startRel + f, lastSlotDrawing);
+        }
 
         if (action.bob) {
           const bob = atEnd ? 0 : Number(action.bob[index]) || 0;

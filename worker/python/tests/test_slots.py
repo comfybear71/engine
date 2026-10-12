@@ -197,3 +197,33 @@ class TestDrawSlotHide:
         _draw_layer(canvas, layer, AssetCache(), 0, fps=24)
         assert not _has_color(canvas, (0, 0, 255))  # face/grin must stay hidden
         assert _has_color(canvas, (0, 255, 0))  # mouth stays visible when face=none
+
+
+def test_resolve_image_hides_view_aware_slot_when_back_folder_is_missing(tmp_path: Path):
+    front = _write_bgra(tmp_path / "open.png", (0, 0, 255))
+    slot = Slot(
+        images={"open": front},
+        images_by_view={"front": {"open": front}},
+        keyframes=[SlotKeyframe(frame=0, drawing="open")],
+    )
+    assert slot.resolve_image("open", view="front") == front
+    assert slot.resolve_image("open", view="left_34") == front  # other views still fall back
+    assert slot.resolve_image("open", view="back") is None
+
+
+def test_resolve_image_uses_back_folder_when_present(tmp_path: Path):
+    front = _write_bgra(tmp_path / "front.png", (0, 0, 255))
+    back = _write_bgra(tmp_path / "back.png", (0, 255, 0))
+    slot = Slot(
+        images={"neutral": front},
+        images_by_view={"front": {"neutral": front}, "back": {"neutral": back}},
+        keyframes=[SlotKeyframe(frame=0, drawing="neutral")],
+    )
+    assert slot.resolve_image("neutral", view="back") == back
+    assert slot.resolve_image("neutral", view="front") == front
+
+
+def test_resolve_image_back_does_not_hide_non_view_slots(tmp_path: Path):
+    hand = _write_bgra(tmp_path / "fist.png", (255, 0, 0))
+    slot = Slot(images={"fist": hand}, keyframes=[SlotKeyframe(frame=0, drawing="fist")])
+    assert slot.resolve_image("fist", view="back") == hand

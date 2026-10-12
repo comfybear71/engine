@@ -197,7 +197,7 @@
         },
         "view": {
           "type": "string",
-          "enum": ["front", "left_34", "left_side", "right_34", "right_side", "up", "down"],
+          "enum": ["front", "left_34", "left_side", "right_34", "right_side", "up", "down", "back"],
           "description": "Head/mouth/eyes drawing set from this frame until the next view_keyframe. An active dialogue clip's own view still wins while that line is playing."
         }
       }
@@ -502,8 +502,8 @@
         },
         "view": {
           "type": "string",
-          "enum": ["front", "left_34", "left_side", "right_34", "right_side", "up", "down"],
-          "description": "Head/mouth drawing set for this line's lip-sync. The compositor looks up slot.images_by_view[view], then front, then slot.images. Omitted or unknown views use front."
+          "enum": ["front", "left_34", "left_side", "right_34", "right_side", "up", "down", "back"],
+          "description": "Head/mouth drawing set for this line's lip-sync. The compositor looks up slot.images_by_view[view], then front, then slot.images. The back view does not fall back to front when <slot>_back/ is missing (eyes/mouth stay hidden). Omitted or unknown views use front."
         },
         "trim_in": {
           "type": "number",

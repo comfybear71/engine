@@ -205,7 +205,9 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     }
   }
 
-  const setSlots = action.set_slots && typeof action.set_slots === "object" ? action.set_slots : {};
+  const setSlots = action.set_slots && typeof action.set_slots === "object" && !Array.isArray(action.set_slots)
+    ? action.set_slots
+    : {};
   for (const [slotName, drawing] of Object.entries(setSlots)) {
     const slotConfig = _findSlot(config, slotName);
     if (!slotConfig) {
@@ -224,6 +226,44 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     }
   }
 
+  let slotFrames = {};
+  if (action.slot_frames != null) {
+    if (typeof action.slot_frames !== "object" || Array.isArray(action.slot_frames)) {
+      throw new ScriptError(
+        lineNumber,
+        `Action "${id}" slot_frames must be an object of slot name -> drawings array.`
+      );
+    }
+    for (const [slotName, items] of Object.entries(action.slot_frames)) {
+      const slotConfig = _findSlot(config, slotName);
+      if (!slotConfig) {
+        throw new ScriptError(
+          lineNumber,
+          `Action "${id}" slot_frames "${slotName}" is not a slot on ${name}.`
+        );
+      }
+      if (!Array.isArray(items) || items.length !== frames) {
+        throw new ScriptError(
+          lineNumber,
+          `Action "${id}" slot_frames "${slotName}" length ${Array.isArray(items) ? items.length : 0} != frames ${frames}.`
+        );
+      }
+      const drawings = slotDrawingNames(projectDir, globalAssetsDir, characterId, slotName, slotConfig);
+      const available = [...drawings].join(", ") || "(none)";
+      slotFrames[slotName] = items.map((item, i) => {
+        const drawingName = String(item == null ? "" : item).trim();
+        if (drawingName.toLowerCase() === "none") return "none";
+        if (!drawingName || !drawings.has(drawingName)) {
+          throw new ScriptError(
+            lineNumber,
+            `Action "${id}" slot_frames ${slotName}[${i}]="${drawingName || ""}" is not a drawing. Available: ${available}`
+          );
+        }
+        return drawingName;
+      });
+    }
+  }
+
   const groups = {};
   for (const [groupName, angles] of Object.entries(groupAngles)) {
     groups[groupName] = angles.map(Number);
@@ -238,6 +278,7 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     frames,
     distance_per_cycle: distance,
     set_slots: setSlots,
+    slot_frames: slotFrames,
     joints,
     groups,
     bob: Array.isArray(bob) ? bob.map(Number) : null,

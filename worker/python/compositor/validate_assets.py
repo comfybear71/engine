@@ -23,7 +23,7 @@ import numpy as np
 
 from .align import ALPHA_MIN, alpha_bbox
 
-HEAD_VIEWS = ("front", "left_34", "left_side", "right_34", "right_side", "up", "down")
+HEAD_VIEWS = ("front", "left_34", "left_side", "right_34", "right_side", "up", "down", "back")
 SKIP_DIRS = {"_trash", "_replaced", "_reference", "_library"}
 
 

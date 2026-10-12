@@ -400,3 +400,68 @@ def test_active_dialogue_view_overrides_walk_view_keyframes(tmp_path: Path):
     _draw_layer(during_walk, layer, AssetCache(), 6, fps=24)
     assert _has_color(during_walk, (0, 255, 0)), "walk view resumes after the line"
     assert not _has_color(during_walk, (255, 0, 0))
+
+
+def test_back_view_uses_torso_back_and_head_base_back_and_hides_eyes_mouth(tmp_path: Path):
+    body = _write_bgra(tmp_path / "body.png", 8, 8, (0, 0, 0), alpha=0)
+    torso_front = _write_bgra(tmp_path / "torso_front.png", 8, 8, (255, 0, 0))  # blue
+    torso_back = _write_bgra(tmp_path / "torso_back.png", 8, 8, (0, 255, 0))  # green
+    head_front = _write_bgra(tmp_path / "head_front.png", 8, 8, (0, 0, 255))  # red
+    head_back = _write_bgra(tmp_path / "head_back.png", 8, 8, (255, 0, 255))  # magenta
+    eyes = _write_bgra(tmp_path / "eyes.png", 8, 8, (0, 255, 255))  # yellow
+    mouth = _write_bgra(tmp_path / "mouth.png", 8, 8, (255, 255, 0))  # cyan
+    dialogue = [
+        DialogueClip(
+            audio=tmp_path / "missing.wav",
+            start_frame=0,
+            duration_frames=10,
+            cues=[],
+            estimated=True,
+            view="back",
+        )
+    ]
+    layer = Layer(
+        id="char",
+        asset=body,
+        z=0,
+        transform=Transform(x=20, y=20, anchor="center"),
+        groups={"head": ["head_base", "eyes", "mouth"]},
+        view_keyframes=[ViewKeyframe(frame=0, view="back")],
+        dialogue=dialogue,
+        slots={
+            "torso": Slot(
+                images={"front": torso_front},
+                images_by_view={"front": {"front": torso_front}, "back": {"front": torso_back}},
+                keyframes=[SlotKeyframe(frame=0, drawing="front")],
+                offset_x=-12,
+            ),
+            "head_base": Slot(
+                images={"neutral": head_front},
+                images_by_view={"front": {"neutral": head_front}, "back": {"neutral": head_back}},
+                keyframes=[SlotKeyframe(frame=0, drawing="neutral")],
+                offset_x=12,
+            ),
+            "eyes": Slot(
+                images={"open": eyes},
+                images_by_view={"front": {"open": eyes}},
+                keyframes=[SlotKeyframe(frame=0, drawing="open")],
+                offset_x=12,
+                offset_y=-8,
+            ),
+            "mouth": Slot(
+                images={"X": mouth, "B": mouth},
+                images_by_view={"front": {"X": mouth, "B": mouth}},
+                dialogue=dialogue,
+                offset_x=12,
+                offset_y=8,
+            ),
+        },
+    )
+    canvas = np.zeros((40, 40, 3), dtype=np.uint8)
+    _draw_layer(canvas, layer, AssetCache(), 0, fps=24)
+    assert _has_color(canvas, (0, 255, 0)), "torso should use torso_back"
+    assert _has_color(canvas, (255, 0, 255)), "head_base should use head_base_back"
+    assert not _has_color(canvas, (255, 0, 0)), "front torso must not draw"
+    assert not _has_color(canvas, (0, 0, 255)), "front head must not draw"
+    assert not _has_color(canvas, (0, 255, 255)), "eyes must hide in back"
+    assert not _has_color(canvas, (255, 255, 0)), "mouth must hide in back (including lip-sync)"

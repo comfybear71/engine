@@ -15,7 +15,7 @@ const EXISTING_FOR_RE = /\s*\bfor=\S+/gi;
 const EXISTING_TRIM_IN_RE = /\s*\btrim_in=\S+/gi;
 const EXISTING_TRIM_OUT_RE = /\s*\btrim_out=\S+/gi;
 
-export const HEAD_VIEWS = ["front", "left_34", "left_side", "right_34", "right_side", "up", "down"] as const;
+export const HEAD_VIEWS = ["front", "left_34", "left_side", "right_34", "right_side", "up", "down", "back"] as const;
 export type HeadView = (typeof HEAD_VIEWS)[number];
 
 export type BlockMove = {
