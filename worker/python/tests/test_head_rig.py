@@ -9,8 +9,9 @@ import numpy as np
 
 from compositor.asset_cache import AssetCache
 from compositor.compositor import _Placed, _draw_layer, _draw_slot, _sorted_slots, _suppressed_head_slots
+from compositor.lipsync_natural import LipSyncSettings
 from compositor.slots import Slot, SlotKeyframe
-from compositor.timeline_loader import DialogueClip, Layer, Transform
+from compositor.timeline_loader import DialogueClip, Layer, Transform, apply_natural_lipsync
 
 
 def _write_bgra(path: Path, w: int, h: int, bgr: tuple[int, int, int], alpha: int = 255) -> Path:
@@ -164,3 +165,78 @@ def test_without_groups_legacy_face_still_draws(tmp_path: Path):
     canvas = np.zeros((40, 40, 3), dtype=np.uint8)
     _draw_layer(canvas, layer, AssetCache(), 0, fps=24)
     assert _has_color(canvas, (0, 255, 255))
+
+
+def test_views_slot_swaps_with_view_and_is_not_legacy_hidden(tmp_path: Path):
+    body = _write_bgra(tmp_path / "body.png", 8, 8, (0, 0, 0), alpha=0)
+    front = _write_bgra(tmp_path / "torso_front.png", 8, 8, (255, 0, 0))  # blue
+    side = _write_bgra(tmp_path / "torso_side.png", 8, 8, (0, 255, 0))  # green
+    base = _write_bgra(tmp_path / "head.png", 8, 8, (0, 0, 255))  # red
+    layer = Layer(
+        id="char",
+        asset=body,
+        z=0,
+        transform=Transform(x=20, y=20, anchor="center"),
+        groups={"head": ["head_base", "eyes", "mouth"]},
+        dialogue=[
+            DialogueClip(
+                audio=tmp_path / "missing.wav",
+                start_frame=0,
+                duration_frames=10,
+                cues=[],
+                estimated=True,
+                view="left_34",
+            )
+        ],
+        slots={
+            "torso": Slot(
+                images={"front": front},
+                images_by_view={"front": {"front": front}, "left_34": {"front": side}},
+                keyframes=[SlotKeyframe(frame=0, drawing="front")],
+                offset_x=-12,
+                z=0,
+            ),
+            "head_base": Slot(
+                images={"neutral": base},
+                keyframes=[SlotKeyframe(frame=0, drawing="neutral")],
+                offset_x=12,
+                z=1,
+            ),
+        },
+    )
+    assert "torso" not in _suppressed_head_slots(layer)
+    canvas = np.zeros((40, 40, 3), dtype=np.uint8)
+    _draw_layer(canvas, layer, AssetCache(), 0, fps=24)
+    assert _has_color(canvas, (0, 255, 0))  # left_34 torso
+    assert not _has_color(canvas, (255, 0, 0))  # front torso must not draw
+
+
+def test_views_slot_does_not_get_head_bob(tmp_path: Path):
+    body = tmp_path / "body.png"
+    layer = Layer(
+        id="char",
+        asset=body,
+        z=0,
+        transform=Transform(x=20, y=20, anchor="center"),
+        groups={"head": ["head_base", "eyes", "mouth"]},
+        slots={
+            "torso": Slot(images={"front": body}, keyframes=[SlotKeyframe(frame=0, drawing="front")]),
+            "head_base": Slot(images={"neutral": body}, keyframes=[SlotKeyframe(frame=0, drawing="neutral")]),
+            "eyes": Slot(
+                images={"open": body, "closed": body},
+                keyframes=[SlotKeyframe(frame=0, drawing="open")],
+            ),
+            "mouth": Slot(images={"X": body}),
+        },
+    )
+    out = apply_natural_lipsync(
+        layer,
+        fps=24,
+        scene_frames=48,
+        settings=LipSyncSettings(head_bob="subtle", blinks=False),
+        seed=1,
+    )
+    assert out.slots["torso"].head_bob_amp == 0.0
+    assert out.slots["torso"].head_bob_starts == []
+    assert out.slots["head_base"].head_bob_amp == 4.0
+    assert out.slots["eyes"].head_bob_amp == 4.0

@@ -12,13 +12,14 @@ from compositor.lipsync_natural import (
     frames_to_cues,
     head_bob_at,
     head_bob_starts,
+    insert_auto_blinks,
     load_character_config,
     process_mouth_cues,
     project_seed,
     schedule_blinks,
     select_loud_variants,
 )
-from compositor.slots import Slot
+from compositor.slots import Slot, SlotKeyframe, active_drawing
 
 
 def _cue(start, end, shape):
@@ -119,6 +120,40 @@ class TestBlinkSchedule:
             assert not (start < 72 and end > 48)
         assert project_seed(Path("/tmp/ep1"), "hicks") == project_seed(Path("/tmp/ep1"), "hicks")
         assert project_seed(Path("/tmp/ep1"), "hicks") != project_seed(Path("/tmp/ep1"), "dana")
+
+    def test_half_drawing_is_an_inbetween_with_the_same_blink_length(self):
+        kwargs = dict(duration_frames=24 * 20, fps=24, seed=42, every=(3.0, 6.0), blink_frames=5)
+        blinks = schedule_blinks(**kwargs)
+        assert blinks
+        start, end = blinks[0]
+        assert end - start == 5
+
+        with_half = insert_auto_blinks(
+            [SlotKeyframe(frame=0, drawing="open")],
+            {"open": Path("open.png"), "half": Path("half.png"), "closed": Path("closed.png")},
+            **kwargs,
+        )
+        slot_half = Slot(
+            images={"open": Path("open.png"), "half": Path("half.png"), "closed": Path("closed.png")},
+            keyframes=with_half,
+        )
+        assert active_drawing(slot_half, start - 1, 24) == "open"
+        assert active_drawing(slot_half, start, 24) == "half"
+        assert active_drawing(slot_half, start + 1, 24) == "closed"
+        assert active_drawing(slot_half, end - 2, 24) == "closed"
+        assert active_drawing(slot_half, end - 1, 24) == "half"
+        assert active_drawing(slot_half, end, 24) == "open"
+
+        no_half = insert_auto_blinks(
+            [SlotKeyframe(frame=0, drawing="open")],
+            {"open": Path("open.png"), "closed": Path("closed.png")},
+            **kwargs,
+        )
+        slot = Slot(images={"open": Path("open.png"), "closed": Path("closed.png")}, keyframes=no_half)
+        assert active_drawing(slot, start - 1, 24) == "open"
+        assert active_drawing(slot, start, 24) == "closed"
+        assert active_drawing(slot, end - 1, 24) == "closed"
+        assert active_drawing(slot, end, 24) == "open"
 
 
 class TestHeadBob:

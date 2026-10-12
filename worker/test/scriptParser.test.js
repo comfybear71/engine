@@ -1242,6 +1242,32 @@ describe("one-head rig emit", () => {
       `expected rig-head lint lines, got: ${JSON.stringify(errors)}`
     );
   });
+
+  test("views:true slot scans view folders without joining groups.head", async () => {
+    const aliceDir = path.join(fixture.projectDir, "characters", "alice");
+    const globalJson = path.join(fixture.globalAssetsDir, "characters", "alice", "character.json");
+    const character = JSON.parse(fs.readFileSync(globalJson, "utf8"));
+    character.slots.torso = {
+      offset: { x: 0, y: 0 },
+      drawings_dir: "torso",
+      default_drawing: "front",
+      views: true,
+    };
+    fs.mkdirSync(path.join(aliceDir, "torso"), { recursive: true });
+    fs.mkdirSync(path.join(aliceDir, "torso_left_34"), { recursive: true });
+    fs.mkdirSync(aliceDir, { recursive: true });
+    fs.writeFileSync(path.join(aliceDir, "character.json"), JSON.stringify(character, null, 2));
+    fs.writeFileSync(path.join(aliceDir, "torso", "front.png"), TRANSPARENT_PNG_1X1);
+    fs.writeFileSync(path.join(aliceDir, "torso_left_34", "front.png"), TRANSPARENT_PNG_1X1);
+
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice view=left_34: Hello."].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const layer = timeline.scenes[0].layers[0];
+    assert.equal(layer.groups, undefined);
+    assert.match(String(layer.slots.torso.images.front || ""), /torso/);
+    assert.match(String(layer.slots.torso.images_by_view.left_34.front), /torso_left_34/);
+    assert.match(String(layer.slots.torso.images_by_view.front.front), /torso/);
+  });
 });
 
 describe("imported audio errors", () => {

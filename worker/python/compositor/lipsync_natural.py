@@ -710,6 +710,14 @@ def pin_ranges(
     return ranges
 
 
+def _blink_tie(drawing: str | None) -> int:
+    if drawing == "closed":
+        return 2
+    if drawing == "half":
+        return 1
+    return 0
+
+
 def insert_auto_blinks(
     keyframes: list[SlotKeyframe] | None,
     images: dict,
@@ -743,9 +751,17 @@ def insert_auto_blinks(
     if not blinks:
         return kfs
 
+    n = int(blink_frames)
+    use_half = "half" in images and rest != "half" and n >= 3
     extras = []
     for start, end in blinks:
-        extras.append(SlotKeyframe(frame=start, drawing="closed"))
-        extras.append(SlotKeyframe(frame=end, drawing=rest))
-    merged = sorted(kfs + extras, key=lambda kf: (kf.frame, 0 if kf.drawing != "closed" else 1))
+        if use_half:
+            extras.append(SlotKeyframe(frame=start, drawing="half"))
+            extras.append(SlotKeyframe(frame=start + 1, drawing="closed"))
+            extras.append(SlotKeyframe(frame=end - 1, drawing="half"))
+            extras.append(SlotKeyframe(frame=end, drawing=rest))
+        else:
+            extras.append(SlotKeyframe(frame=start, drawing="closed"))
+            extras.append(SlotKeyframe(frame=end, drawing=rest))
+    merged = sorted(kfs + extras, key=lambda kf: (kf.frame, _blink_tie(kf.drawing)))
     return merged
