@@ -1286,7 +1286,7 @@ describe("imported audio errors", () => {
 
 function writeRodney(overrides = {}) {
   const { MOUTH_SHAPES } = require("./helpers/fixtureLibrary");
-  const charDir = path.join(fixture.globalAssetsDir, "characters", "rodney");
+  const charDir = path.join(fixture.projectDir, "characters", "rodney");
   fixture.writePng(path.join(charDir, "body.png"));
   fixture.writePng(path.join(charDir, "parts", "arm.png"));
   fixture.writePng(path.join(charDir, "torso", "stand.png"));
@@ -1334,7 +1334,8 @@ function writeRodney(overrides = {}) {
   });
 }
 
-describe("[Move] action=walk_side", () => {
+describe("[Move] action=walk_side", { concurrency: false }, () => {
+  writeRodney();
   beforeEach(() => writeRodney());
 
   test("duration comes from distance_per_cycle", async () => {
