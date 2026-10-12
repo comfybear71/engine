@@ -167,6 +167,39 @@ def test_without_groups_legacy_face_still_draws(tmp_path: Path):
     assert _has_color(canvas, (0, 255, 255))
 
 
+def test_views_slot_swaps_without_head_group(tmp_path: Path):
+    body = _write_bgra(tmp_path / "body.png", 8, 8, (0, 0, 0), alpha=0)
+    front = _write_bgra(tmp_path / "torso_front.png", 8, 8, (255, 0, 0))  # blue
+    side = _write_bgra(tmp_path / "torso_side.png", 8, 8, (0, 255, 0))  # green
+    layer = Layer(
+        id="char",
+        asset=body,
+        z=0,
+        transform=Transform(x=20, y=20, anchor="center"),
+        dialogue=[
+            DialogueClip(
+                audio=tmp_path / "missing.wav",
+                start_frame=0,
+                duration_frames=10,
+                cues=[],
+                estimated=True,
+                view="left_34",
+            )
+        ],
+        slots={
+            "torso": Slot(
+                images={"front": front},
+                images_by_view={"front": {"front": front}, "left_34": {"front": side}},
+                keyframes=[SlotKeyframe(frame=0, drawing="front")],
+            ),
+        },
+    )
+    canvas = np.zeros((40, 40, 3), dtype=np.uint8)
+    _draw_layer(canvas, layer, AssetCache(), 0, fps=24)
+    assert _has_color(canvas, (0, 255, 0))
+    assert not _has_color(canvas, (255, 0, 0))
+
+
 def test_views_slot_swaps_with_view_and_is_not_legacy_hidden(tmp_path: Path):
     body = _write_bgra(tmp_path / "body.png", 8, 8, (0, 0, 0), alpha=0)
     front = _write_bgra(tmp_path / "torso_front.png", 8, 8, (255, 0, 0))  # blue
