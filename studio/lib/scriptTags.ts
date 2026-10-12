@@ -14,12 +14,15 @@ export type InsertActionDef = {
   template: (name: string) => string;
 };
 
+/** Known keys on `[Move: Name ...]` (including `action=` walk cycles). */
+export const MOVE_KEYS = ["to", "over", "ease", "wait", "at_time", "start", "scale", "action"] as const;
+
 /** Real tag syntax from docs/script-format.md. `{Name}` is a cast display name. */
 export const INSERT_ACTIONS: InsertActionDef[] = [
   {
     id: "walk",
     label: "Walk",
-    template: (name) => `[Action: ${name} body=walk_side]\n[Move: ${name} to=mark over=2s]`,
+    template: (name) => `[Move: ${name} to=right action=walk_side]`,
   },
   {
     id: "swing",

@@ -182,6 +182,60 @@ describe("Independent default skips the shared library", () => {
   });
 });
 
+describe("loadAction", () => {
+  test("loads walk_side.json; project-local overrides global", () => {
+    const globalAction = path.join(
+      fixture.globalAssetsDir,
+      "characters",
+      "alice",
+      "actions",
+      "walk_side.json"
+    );
+    fs.mkdirSync(path.dirname(globalAction), { recursive: true });
+    fs.writeFileSync(
+      globalAction,
+      JSON.stringify({
+        id: "walk_side",
+        view: "right_side",
+        faces: "right",
+        fps: 12,
+        frames: 12,
+        distance_per_cycle: 80,
+        set_slots: { eyes: "open" },
+        joints: { right_arm: Array(12).fill(0) },
+        bob: Array(12).fill(1),
+      })
+    );
+
+    const loaded = assetLibrary.loadAction(fixture.projectDir, fixture.globalAssetsDir, "alice", "walk_side");
+    assert.equal(loaded.id, "walk_side");
+    assert.equal(loaded.view, "right_side");
+    assert.equal(loaded.distance_per_cycle, 80);
+    assert.deepEqual(assetLibrary.listActionIds(fixture.projectDir, fixture.globalAssetsDir, "alice"), ["walk_side"]);
+
+    const projectAction = path.join(fixture.projectDir, "characters", "alice", "actions", "walk_side.json");
+    fs.mkdirSync(path.dirname(projectAction), { recursive: true });
+    fs.writeFileSync(
+      projectAction,
+      JSON.stringify({
+        id: "walk_side",
+        view: "right_side",
+        faces: "right",
+        fps: 12,
+        frames: 12,
+        distance_per_cycle: 120,
+        set_slots: { eyes: "open" },
+        joints: { right_arm: Array(12).fill(5) },
+        bob: Array(12).fill(0),
+      })
+    );
+    const override = assetLibrary.loadAction(fixture.projectDir, fixture.globalAssetsDir, "alice", "walk_side");
+    assert.equal(override.distance_per_cycle, 120);
+    fs.rmSync(projectAction);
+    fs.rmSync(path.dirname(globalAction), { recursive: true, force: true });
+  });
+});
+
 describe("loadCharacter / listKnownCharacterIds", () => {
   test("loads a character.json by id", () => {
     const alice = assetLibrary.loadCharacter(fixture.projectDir, fixture.globalAssetsDir, "alice");

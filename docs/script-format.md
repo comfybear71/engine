@@ -167,26 +167,31 @@ Advances the scene's timeline by `N` frames, or `N` seconds (converted to
 frames at the document's fps), without creating a dialogue clip -- for a
 dramatic beat of silence.
 
-### `[Move: Name to=<mark | x,y> over=<secs>s ease=linear|inout wait=true|false scale=<n>?]`
+### `[Move: Name to=<mark | x,y> over=<secs>s ease=linear|inout wait=true|false scale=<n>? action=<id>?]`
 
 Tweens the character's **current layer** from wherever they are now to a
 target. Does **not** start a new layer (`flip_x` is still not keyframed --
 turn them around with `[Action: Name flip]`, which *does* fork a layer).
+`action=<id>` plays a looping side-view walk from
+`characters/<id>/actions/<id>.json` (see [docs/assets.md#actions](assets.md#actions)).
 
 | Key | Meaning |
 |---|---|
 | `to=<mark>` | Target is that staging mark's `x`/`y` (and its `scale` if the mark defines one). |
 | `to=<x,y>` | Explicit canvas coordinates (no spaces). Keeps the current scale unless `scale=` is also given. |
-| `over=<secs>s` | Duration in seconds (e.g. `1s`, `0.5s`), converted to frames at the document fps. |
-| `ease=linear` or `ease=inout` | How to interpolate from the start keyframe. Default `linear`. |
+| `over=<secs>s` | Duration in seconds (e.g. `1s`, `0.5s`), converted to frames at the document fps. Required unless `action=` is set. |
+| `action=<id>` | Play that character action (usually `walk_side`) while travelling. With no `over=`, duration is `|dx| / (distance_per_cycle × layer scale × fps / frames)` seconds so leg speed matches travel. With `over=`, the same distance is covered in that time and the cycle rate is stretched to match. Auto-faces the direction of travel (a flipped layer, same as `[Action: flip]`) when it does not match `faces`. Head/eyes/mouth stay on top. |
+| `ease=linear` or `ease=inout` | How to interpolate from the start keyframe. Default `linear`. `ease=inout` with `action=` warns (feet slide). |
 | `wait=true` (default) | Advance the scene clock by the duration, like `[Pause]`. |
 | `wait=false` | Leave the clock where it is so following lines/tags run *during* the move. |
 | `scale=<n>` | Override the target scale. |
 
-The layer gets two `transform_keyframes` (from the current pose to the
-target, layer-local frames). After the move, the character's current
-position *is* the target -- the next `[Move]` or a later `[Action: flip]`
-continues from there.
+Without `action=`, the layer gets two `transform_keyframes` (from the
+current pose to the target, layer-local frames). With `action=`, it gets
+per-scene-frame position keyframes (bob merged into `y`) and per-joint
+`rotation_keyframes` sampled from the cycle, then joints keyed back to 0.
+After the move, the character's current position *is* the target -- the
+next `[Move]` or a later `[Action: flip]` continues from there.
 
 ### `[Pose: Name part=deg part2=deg over=<secs>s ease=linear|inout wait=true|false]`
 
@@ -616,31 +621,27 @@ Rhubarb shape A–H (listing what's there).
 
 ## Walk + talk example
 
-Walking a rectangle of marks with a body cycle and a flip on each corner,
-while the arms flail over a line (`wait=false` so the swing and the
-dialogue share the clock):
+A side-view limb walk between marks. Leg speed matches the distance
+(no `over=`), the character auto-faces the direction of travel, and a
+line can play during the walk (`wait=false`). Head / eyes / mouth /
+blinks / lip-sync keep working on top of the rig.
 
 ```text
 [Scene: Walkabout]
 [Location: bedroom]
-[Cast: Hicks]
+[Cast: Rodney]
 
-[Action: Hicks at=left body=walk_side]
-[Move: Hicks to=right over=2s ease=inout]
-[Action: Hicks flip]
-[Move: Hicks to=far_right over=2s]
-[Action: Hicks flip]
-[Move: Hicks to=far_left over=2s]
-[Action: Hicks flip]
-[Move: Hicks to=left over=2s]
-[Action: Hicks body=front]
-
-[Swing: Hicks right_arm=25 period=0.4s for=2s wait=false]
-Hicks: I'm fine, this is fine.
+[Action: Rodney at=left]
+[Move: Rodney to=right action=walk_side wait=false]
+Rodney: I'm fine, this is fine.
+[Move: Rodney to=left action=walk_side]
 ```
 
-`body=walk_side` only works if that name is a cycle (or a drawing) on
-`slots.body` in `character.json` -- see
-[docs/assets.md#the-body-as-a-slot](assets.md#the-body-as-a-slot). The
-sample Hicks character does not ship a body slot; the tags above are the
-syntax, not a runnable sample-project script.
+`action=walk_side` loads `characters/rodney/actions/walk_side.json` --
+see [docs/assets.md#actions](assets.md#actions). Duration is
+`|dx| / (distance_per_cycle × layer scale × fps / frames)` seconds so
+one cycle covers `distance_per_cycle` character-local pixels after mark
+scale. The walk facing right uses `view=right_side`; walking left flips
+the layer and keeps that same side view. `ease=inout` with `action=`
+warns because the feet slide. The sample Hicks/Dana characters do not
+ship a walk action; the tags above are the syntax.

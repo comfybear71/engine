@@ -7,6 +7,7 @@ from compositor.transform import (
     anchor_offset,
     compute_placement,
     mouth_center,
+    rotate_offset_clockwise,
     top_left_for_anchor,
 )
 
@@ -124,3 +125,14 @@ class TestAnchorAndFlipMath:
     def test_mouth_center_scales_offset(self):
         x, y = mouth_center(parent_x=0, parent_y=0, offset_x=10, offset_y=20, scale=2.0, flip_x=False)
         assert (x, y) == (20.0, 40.0)
+
+    def test_flipped_parent_uses_negated_rotation_for_offset(self):
+        """Deliberate flip fix: mirrored x plus -parent.rotation (see compositor).
+
+        Swing on a flipped character rotates the other way; this is the
+        offset half of that contract.
+        """
+        x, y = rotate_offset_clockwise(10, 40, 30)
+        xf, yf = rotate_offset_clockwise(-10, 40, -30)
+        assert xf == pytest.approx(-x)
+        assert yf == pytest.approx(y)
