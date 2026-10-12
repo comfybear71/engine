@@ -1870,17 +1870,16 @@ describe("[Move] action=walk_side", { concurrency: false }, () => {
     ].join("\n");
     const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
     const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const endFrame = rodney.transform_keyframes[rodney.transform_keyframes.length - 1].frame;
     const kfs = (rodney.slots.legs.keyframes || []).slice().sort((a, b) => a.frame - b.frame);
-    assert.equal(kfs[0].frame, 0);
-    assert.equal(kfs[0].drawing, "L_forward");
-    const changed = kfs.filter((k) => k.drawing && k.drawing !== "L_forward" && k.frame < 24);
-    assert.ok(changed.length >= 1, "expected a later drawing change during the walk");
-    const end = kfs.find((k) => k.frame === 24);
-    assert.ok(end);
-    assert.equal(end.drawing, "passing");
+    const byFrame = Object.fromEntries(kfs.map((k) => [k.frame, k.drawing]));
+    assert.equal(byFrame[0], "L_forward");
+    assert.equal(byFrame[4], "passing");
+    assert.equal(byFrame[6], "R_forward");
+    assert.equal(byFrame[endFrame], "passing");
     const torso = rodney.slots.torso.keyframes;
     assert.equal(torso.find((k) => k.frame === 0).drawing, "rig");
-    assert.equal(torso.find((k) => k.frame === 24).drawing, "stand");
+    assert.equal(torso.find((k) => k.frame === endFrame).drawing, "stand");
   });
 
   test("slot_frames unknown slot cites the line", async () => {
