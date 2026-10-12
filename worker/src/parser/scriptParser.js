@@ -1265,8 +1265,23 @@ class ScriptParser {
       }
     }
 
+    if (kv.view !== undefined) {
+      const view = parseViewValue(kv.view, token.lineNumber);
+      state.currentView = view || "front";
+      const startRel = Math.max(0, scene.cursorFrames - state.current.startFrame);
+      this._addViewKeyframe(state.current, { frame: startRel, view: state.currentView });
+    }
+
     for (const [key, value] of Object.entries(kv)) {
-      if (positionKeys.includes(key) || TIMING_KEYS.has(key) || HOLD_KEYS.has(key) || TRIM_KEYS.has(key)) continue;
+      if (
+        positionKeys.includes(key) ||
+        TIMING_KEYS.has(key) ||
+        HOLD_KEYS.has(key) ||
+        TRIM_KEYS.has(key) ||
+        key === "view"
+      ) {
+        continue;
+      }
       this._applySlotKeyframe(scene, state, characterId, key, value, token.lineNumber);
     }
 
@@ -1275,8 +1290,17 @@ class ScriptParser {
     if (kv.z) bits.push(`z=${kv.z}`);
     if (kv.scale) bits.push(`scale=${kv.scale}`);
     if (kv.flip) bits.push("flip");
+    if (kv.view) bits.push(`view=${kv.view}`);
     for (const [key, value] of Object.entries(kv)) {
-      if (positionKeys.includes(key) || TIMING_KEYS.has(key) || HOLD_KEYS.has(key) || TRIM_KEYS.has(key)) continue;
+      if (
+        positionKeys.includes(key) ||
+        TIMING_KEYS.has(key) ||
+        HOLD_KEYS.has(key) ||
+        TRIM_KEYS.has(key) ||
+        key === "view"
+      ) {
+        continue;
+      }
       bits.push(`${key}=${value}`);
     }
     if (kv.hold) bits.push(`hold=${kv.hold}`);

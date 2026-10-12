@@ -1318,6 +1318,32 @@ describe("one-head rig emit", () => {
     assert.equal(layer.view_keyframes[0].view, "back");
     assert.equal(layer.dialogue[0].view, "back");
   });
+
+  test("[Action: Name view=back] writes view_keyframes and is not a slot", async () => {
+    const aliceDir = path.join(fixture.projectDir, "characters", "alice");
+    const globalJson = path.join(fixture.globalAssetsDir, "characters", "alice", "character.json");
+    const character = JSON.parse(fs.readFileSync(globalJson, "utf8"));
+    character.slots.torso = {
+      offset: { x: 0, y: 0 },
+      drawings_dir: "torso",
+      default_drawing: "front",
+      views: true,
+    };
+    fs.mkdirSync(path.join(aliceDir, "torso_back"), { recursive: true });
+    fs.writeFileSync(path.join(aliceDir, "character.json"), JSON.stringify(character, null, 2));
+    fs.writeFileSync(path.join(aliceDir, "torso", "front.png"), TRANSPARENT_PNG_1X1);
+    fs.writeFileSync(path.join(aliceDir, "torso_back", "front.png"), TRANSPARENT_PNG_1X1);
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Action: Alice view=back]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const layer = timeline.scenes[0].layers[0];
+    assert.equal(layer.view_keyframes[0].view, "back");
+    assert.equal(layer.slots.view, undefined);
+  });
 });
 
 describe("imported audio errors", () => {

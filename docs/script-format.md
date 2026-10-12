@@ -108,6 +108,7 @@ in the scene's timeline onward (held until the next change):
 | `z=<integer>` | Overrides this character's draw order from here on. |
 | `hold=<secs>s` | Optional hold length for this pin (Studio move / trim). When set, the lane block lasts that long instead of stretching to the next pin. Does not advance the scene clock. Studio writes `hold=` when you drag a pin so the block never silently lengthens. |
 | `over=<secs>s` | Same as `hold=` on a pin (older alias). On `[Move:]` / `[Pose:]` / `[Camera:]`, `over=` is the timed duration and may advance the clock. |
+| `view=<head view>` | Same as `[View: Name view=…]`: sets the default head/mouth view from this point and writes `view_keyframes`. Accepted views include `back`. |
 | *(anything else)* | Treated as a **slot name** on that character (e.g. `eyes=furious`, `right_hand=point`, `body=walk_side`): the value is either a **named cycle** declared on that slot in `character.json` (emits a `{ frame, cycle, fps }` keyframe), a drawing that must exist in that slot's folder (see [docs/assets.md](assets.md)), or `none` to hide the slot. A drawing becomes a held-until-changed keyframe at the current frame. An empty value (`right_hand=`) is a lint error that names the line and the missing drawing. The reserved `mouth` slot can't be set this way -- it's always driven by dialogue. |
 
 Any `at=`/`scale=`/`flip`/`z` change **that actually differs** from the
