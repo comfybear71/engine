@@ -858,4 +858,52 @@ describe("studio worker API", () => {
     const body = await res.json();
     assert.match(body.error, /imageBase64/);
   });
+
+  test("GET/PUT character status.json ticks a drawing and stores a redo note", async () => {
+    const get = await fetch(`${ctx.url}/api/projects/project/characters/carol/status?view=front`);
+    assert.equal(get.status, 200);
+    const factory = await get.json();
+    assert.equal(factory.characterId, "carol");
+    assert.ok(Array.isArray(factory.rows));
+    const mouth = factory.rows.find((row) => row.slot === "mouth");
+    assert.ok(mouth);
+    const x = mouth.drawings.find((d) => d.name === "X");
+    assert.ok(x && x.rel);
+    assert.ok(mouth.drawings.some((d) => d.name === "B" && d.missing));
+
+    const approve = await fetch(`${ctx.url}/api/projects/project/characters/carol/status`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: x.key, state: "ticked", view: "front" }),
+    });
+    assert.equal(approve.status, 200);
+    const approved = await approve.json();
+    assert.equal(approved.status[x.key], "ticked");
+    const raw = JSON.parse(
+      fs.readFileSync(path.join(fixture.projectDir, "characters", "carol", "status.json"), "utf8")
+    );
+    assert.equal(raw[x.key], "ticked");
+
+    const redo = await fetch(`${ctx.url}/api/projects/project/characters/carol/status`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: x.key, redo: "cleaner rest mouth", view: "front" }),
+    });
+    assert.equal(redo.status, 200);
+    const redone = await redo.json();
+    assert.equal(redone.status[x.key], "draft");
+    assert.equal(redone.redos[x.key], "cleaner rest mouth");
+  });
+
+  test("GET /api/projects/:name/actions lists character action files", async () => {
+    fixture.writeJson(path.join(fixture.projectDir, "characters", "carol", "actions", "nod.json"), {
+      id: "nod",
+      fps: 12,
+      frames: 4,
+    });
+    const res = await fetch(`${ctx.url}/api/projects/project/actions`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok((body.actions || []).some((item) => item.label === "carol/nod"));
+  });
 });

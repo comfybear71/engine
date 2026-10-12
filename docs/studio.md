@@ -144,8 +144,17 @@ Studio Render passes the same `--script` choice through the parser, then
 feeds the compositor a **temp** timeline plus `--output` so it does not
 clobber the project's `timeline.json`.
 
-- **Assets** — thumbnail grids of Characters, Backgrounds, and Props **this
-  project uses**: characters named in `[Cast:]` (any of its scripts) or
+- **Assets** — Resolve-style factory page: a left library tree
+  (Characters, Props, Backgrounds, Actions, Sounds), each with a slim
+  **+ New** (Imagine / ingest for image types; Import audio for Sounds;
+  Library if there is no character yet), a main view of the selected
+  character with **Front / L 3/4 / R 3/4 / Side L / Side R / Back** tabs
+  and slot rows of real thumbnails, and a right inspector (checkerboard,
+  pivot, canvas, path, **Approve** / **Redo**). Badges
+  (`ticked` / `locked` / `draft` / `missing`) come from
+  `characters/<id>/status.json` plus the standard rig (missing = expected,
+  no file). Thumbnail grids of Characters, Backgrounds, and Props **this
+  project uses** still load from the same sources: characters named in `[Cast:]` (any of its scripts) or
   sitting in a project-local `characters/` folder or listed in
   `library.json`; backgrounds from `[Location:]` / local `backgrounds/`;
   props from those locations' `staging.json`. **Library** opens a drawer of
@@ -162,7 +171,8 @@ clobber the project's `timeline.json`.
   **full-body reference** (drop/paste, stored as-is under
   `characters/<id>/_reference/`), and **Align head** (overlay the current
   head/mouth on the body or reference, then save slot offset/scale/rotation
-  into a project-local `character.json`). On Stage, the left Assets tree
+  into a project-local `character.json`). Double-click a factory drawing to
+  open the existing slot editor. On Stage, the left Assets tree
   opens the same viewer without leaving the Stage: click a **slot**
   (`mouth`, `face`, `eyes`, `right_hand`, `mic_arm`, `body`, …) for a
   labelled grid. The Assets right-hand panel lists every slot as one
@@ -473,7 +483,10 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/trash/:id/restore` | Move that trash folder back to `projects/<originalName>`. 409 if that name exists. |
 | `POST` | `/api/trash/empty` | Permanently delete everything in `_trash`. JSON `{ "confirm": "empty" }`. |
 | `GET` | `/api/projects/:name/scripts` | `script*.txt` files in that folder. |
-| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`, `drawingsDir`, and per-view `views[]`), **project-local** drawings, cycles, thumbnail paths, `style`, and `reference` / `referenceRel`. |
+| `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`, `drawingsDir`, per-view `views[]`, and optional `canvas`), **project-local** drawings, cycles, thumbnail paths, `style`, `reference` / `referenceRel`, `default_scale`, `groups`, and `children` (rig pieces). |
+| `GET` | `/api/projects/:name/characters/:id/status` | Factory Assets payload for one character. Query `?view=` (`front`, `left_34`, `right_34`, `left_side`, `right_side`, `back`) and optional `?key=` for the inspector. Rows are `character.json` slots + children, padded with standard-rig drawings. Each drawing has `key` (`<slot>/<drawing>`, usually the drawings folder + name), `rel` when a file exists, and `badge` `ticked` / `locked` / `draft` / `missing`. `missing` is computed (expected by the standard, no file) and is never stored. Also returns `status`, `redos`, `counts`, `canvas`, and `inspector` (pivot, anchor, path). |
+| `PUT` | `/api/projects/:name/characters/:id/status` | Writes project-local `characters/<id>/status.json`. JSON `{ "key": "eyes_front/surprised", "state": "ticked" }` (Approve) or `{ "key", "redo": "wider lids" }` (stores the note under `_redos` and sets `draft`). Values on the file are only `ticked` / `locked` / `draft`. Never writes `_global_assets`. Returns the same factory payload as GET. |
+| `GET` | `/api/projects/:name/actions` | Action JSON files: `shared/<id>` from a top-level `actions/` folder, plus `characters/<id>/actions/*.json` as `<character>/<action>`. |
 | `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. Library thumbs may use `?library=1` on `/asset` so the catalog still previews while Independent is on. |
 | `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Copies the character folder from `_global_assets` into the project, writes project-local `character.json`, and appends to `library.json`. Does not touch `_global_assets`. |
 | `POST` | `/api/projects/:name/make-independent` | Copies every global character, location/background, prop, and `staging_defaults.json` the project currently uses into the project (skips files already in `_trash/` / `_replaced/`), then sets `studio.json` `independent: true`. |
