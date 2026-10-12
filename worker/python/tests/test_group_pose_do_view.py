@@ -20,15 +20,25 @@ from compositor.timeline_loader import (
 )
 
 
+def _paint_blob(img: np.ndarray, x: int, y: int, bgr: tuple[int, int, int], radius: int = 1) -> None:
+    """A few pixels so rotation interpolation still leaves a detectable colour."""
+    h, w = img.shape[:2]
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            px, py = x + dx, y + dy
+            if 0 <= px < w and 0 <= py < h:
+                img[py, px, 0] = bgr[0]
+                img[py, px, 1] = bgr[1]
+                img[py, px, 2] = bgr[2]
+                img[py, px, 3] = 255
+
+
 def _write_marked(path: Path, w: int, h: int, pivot: tuple[int, int], mark: tuple[int, int], bgr: tuple[int, int, int]) -> Path:
     img = np.zeros((h, w, 4), dtype=np.uint8)
     px, py = pivot
     mx, my = mark
-    img[py, px, :] = (0, 255, 0, 255)  # green neck
-    img[my, mx, 0] = bgr[0]
-    img[my, mx, 1] = bgr[1]
-    img[my, mx, 2] = bgr[2]
-    img[my, mx, 3] = 255
+    _paint_blob(img, px, py, (0, 255, 0))  # green neck
+    _paint_blob(img, mx, my, bgr)
     cv2.imwrite(str(path), img)
     return path
 
@@ -135,6 +145,12 @@ def test_head_group_rotates_rigidly_about_neck_pivot(tmp_path: Path):
 
 
 def test_group_rotation_mirrors_when_flipped(tmp_path: Path):
+    """Flip mirrors X at rest and negates group rotation, same as child Swing.
+
+    90° keeps the far mark on-axis so interpolation cannot hide it. Without
+    the negate, a flipped +90 would send the (now-left) mark *up*.
+    """
+
     body = _write_solid(tmp_path / "body.png", 4, 4, (0, 0, 0), alpha=0)
     base = _write_marked(tmp_path / "base.png", 20, 20, (2, 10), (16, 10), (0, 0, 255))
 
@@ -149,16 +165,34 @@ def test_group_rotation_mirrors_when_flipped(tmp_path: Path):
             slots={"head_base": _head_slot(base, "neutral", (0, 0, 255), 0)},
         )
 
-    a = np.zeros((80, 80, 3), dtype=np.uint8)
-    b = np.zeros((80, 80, 3), dtype=np.uint8)
-    _draw_layer(a, layer_at(20, False), AssetCache(), 0, fps=24)
-    _draw_layer(b, layer_at(20, True), AssetCache(), 0, fps=24)
-    ax, ay = _color_centroid(a, (0, 0, 255))
-    bx, by = _color_centroid(b, (0, 0, 255))
-    # Unflipped +20 sends the mark down-right of the neck; flip mirrors X
-    # and the angle, so the mark is the mirror of that.
-    assert abs((ax - 40) + (bx - 40)) <= 2.5
-    assert abs(ay - by) <= 2.5
+    def draw(rot: float, flip: bool) -> np.ndarray:
+        canvas = np.zeros((80, 80, 3), dtype=np.uint8)
+        _draw_layer(canvas, layer_at(rot, flip), AssetCache(), 0, fps=24)
+        return canvas
+
+    rest = draw(0, False)
+    rest_f = draw(0, True)
+    turned = draw(90, False)
+    turned_f = draw(90, True)
+
+    nx, ny = _color_centroid(rest, (0, 255, 0))
+    rx0, ry0 = _color_centroid(rest, (0, 0, 255))
+    rx0f, ry0f = _color_centroid(rest_f, (0, 0, 255))
+    assert rx0 > nx + 8
+    assert abs(ry0 - ny) <= 2.5
+    assert rx0f < nx - 8
+    assert abs(ry0f - ny) <= 2.5
+    assert abs((rx0 - nx) + (rx0f - nx)) <= 2.5
+    assert abs(ry0 - ry0f) <= 2.5
+
+    rx1, ry1 = _color_centroid(turned, (0, 0, 255))
+    rx1f, ry1f = _color_centroid(turned_f, (0, 0, 255))
+    assert abs(rx1 - nx) <= 2.5
+    assert ry1 > ny + 8
+    # Negated angle: the mirrored mark also goes down, not up.
+    assert abs(rx1f - nx) <= 2.5
+    assert ry1f > ny + 8
+    assert abs(ry1 - ry1f) <= 2.5
 
 
 def test_group_pose_combines_with_head_bob(tmp_path: Path):
