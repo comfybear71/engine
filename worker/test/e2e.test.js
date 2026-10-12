@@ -6,6 +6,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { parseProject } = require("../src/parser");
 
 const REPO_ROOT = path.join(__dirname, "..", "..");
 const WORKER_DIR = path.join(REPO_ROOT, "worker");
@@ -51,6 +52,13 @@ describe("end-to-end: parse + render the sample project via the real CLI", () =>
     assert.ok(codecTypes.includes("audio"), "output is missing an audio stream");
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("parse of the committed sample is unchanged when no new action keys are used", async () => {
+    const committed = JSON.parse(fs.readFileSync(path.join(SAMPLE_PROJECT_DIR, "timeline.json"), "utf8"));
+    const { timeline, errors } = await parseProject(SAMPLE_PROJECT_DIR);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(timeline, committed);
   });
 
   test("`node src/cli.js lint` reports no errors for the committed sample script", () => {

@@ -10,6 +10,8 @@ const { HEAD_VIEWS } = require("./actionTag");
 const assetLibrary = require("./assetLibrary");
 
 const FACES = new Set(["left", "right"]);
+const ACTION_ENDS = new Set(["restore", "hold"]);
+const PROP_PLACEHOLDER = "{prop}";
 
 function loadAction(projectDir, globalAssetsDir, characterId, actionId, options) {
   return assetLibrary.loadAction(projectDir, globalAssetsDir, characterId, actionId, options);
@@ -226,6 +228,70 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     }
   }
 
+  const endRaw = action.end != null && action.end !== "" ? String(action.end).trim().toLowerCase() : "restore";
+  if (!ACTION_ENDS.has(endRaw)) {
+    throw new ScriptError(
+      lineNumber,
+      `Action "${id}" end "${action.end}" is invalid. Expected: restore, hold.`
+    );
+  }
+
+  let bodyRotation = null;
+  if (action.body_rotation != null) {
+    if (!Array.isArray(action.body_rotation) || action.body_rotation.length !== frames) {
+      throw new ScriptError(
+        lineNumber,
+        `Action "${id}" body_rotation length ${Array.isArray(action.body_rotation) ? action.body_rotation.length : 0} != frames ${frames}.`
+      );
+    }
+    bodyRotation = action.body_rotation.map((item, i) => {
+      if (!Number.isFinite(Number(item))) {
+        throw new ScriptError(lineNumber, `Action "${id}" body_rotation[${i}] is not a number.`);
+      }
+      return Number(item);
+    });
+  }
+
+  let propEvents = [];
+  if (action.prop_events != null) {
+    if (!Array.isArray(action.prop_events)) {
+      throw new ScriptError(lineNumber, `Action "${id}" prop_events must be an array.`);
+    }
+    propEvents = action.prop_events.map((item, i) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new ScriptError(lineNumber, `Action "${id}" prop_events[${i}] must be an object.`);
+      }
+      const frame = Number(item.frame);
+      if (!Number.isInteger(frame) || frame < 0 || frame >= frames) {
+        throw new ScriptError(
+          lineNumber,
+          `Action "${id}" prop_events[${i}].frame must be an integer in 0..${frames - 1}.`
+        );
+      }
+      const hasDrawing = item.drawing != null && String(item.drawing).trim() !== "";
+      const hasZ = item.z != null && item.z !== "";
+      if (!hasDrawing && !hasZ) {
+        throw new ScriptError(
+          lineNumber,
+          `Action "${id}" prop_events[${i}] needs drawing= and/or z=.`
+        );
+      }
+      const ev = { frame };
+      if (item.prop != null && String(item.prop).trim() !== "") {
+        ev.prop = String(item.prop).trim();
+      }
+      if (hasDrawing) ev.drawing = String(item.drawing).trim();
+      if (hasZ) {
+        const z = Number(item.z);
+        if (!Number.isFinite(z)) {
+          throw new ScriptError(lineNumber, `Action "${id}" prop_events[${i}].z is not a number.`);
+        }
+        ev.z = z;
+      }
+      return ev;
+    });
+  }
+
   let slotFrames = {};
   if (action.slot_frames != null) {
     if (typeof action.slot_frames !== "object" || Array.isArray(action.slot_frames)) {
@@ -282,6 +348,9 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     joints,
     groups,
     bob: Array.isArray(bob) ? bob.map(Number) : null,
+    body_rotation: bodyRotation,
+    prop_events: propEvents,
+    end: endRaw,
   };
 }
 
@@ -305,6 +374,43 @@ module.exports = {
   loadAndValidateAction,
   slotDrawingNames,
   FACES,
+  ACTION_ENDS,
+  PROP_PLACEHOLDER,
   _findChild,
   _findSlot,
+  _validateChildGraph,
 };
+
+function _validateChildGraph(children, { lineNumber, name } = {}) {
+  const list = Array.isArray(children) ? children : [];
+  const ids = list.map((c) => c && c.id).filter(Boolean);
+  const idSet = new Set(ids);
+  const parents = new Map();
+  for (const child of list) {
+    if (!child || !child.parent) continue;
+    const parent = String(child.parent);
+    if (!idSet.has(parent)) {
+      const err = new ScriptError(
+        lineNumber,
+        `${name || "Character"} child "${child.id}" parent "${parent}" does not exist.`
+      );
+      throw err;
+    }
+    if (parent === child.id) {
+      throw new ScriptError(lineNumber, `${name || "Character"} child "${child.id}" cannot be its own parent.`);
+    }
+    parents.set(child.id, parent);
+  }
+  for (const childId of parents.keys()) {
+    const seen = new Set();
+    let current = childId;
+    while (parents.has(current)) {
+      if (seen.has(current)) {
+        throw new ScriptError(lineNumber, `${name || "Character"} child "${childId}" parent chain cycles.`);
+      }
+      seen.add(current);
+      current = parents.get(current);
+    }
+  }
+  return true;
+}

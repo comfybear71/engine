@@ -88,7 +88,7 @@ class TestPlacementComposition:
         assert parent_p.opacity == pytest.approx(0.5)
         assert parent_p.rotation == pytest.approx(10)
         assert child_p.opacity == pytest.approx(0.25)  # 0.5 * 0.5
-        assert child_p.rotation == pytest.approx(15)  # child rotation is independent
+        assert child_p.rotation == pytest.approx(25)  # layer rotation + child rotation
 
     def test_flip_mirrors_child_rotation(self):
         """Flipped parents draw children at -rotation so Swing mirrors."""
@@ -215,6 +215,49 @@ class TestPixelPivotAndVisibleWhen:
         rxn, ryn = rotate_offset_clockwise(0, 40, -30)
         assert minus_f.x == pytest.approx(200 + rxn)
         assert minus_f.y == pytest.approx(150 + ryn)
+
+    def test_three_level_chain_grandchild_follows_root_rotation(self):
+        t = Transform(x=200, y=150, scale=1.0, anchor="top-left")
+        upper = Child(
+            id="upper", asset=Path("upper.png"), z=1,
+            offset_x=0, offset_y=0, rotation=30,
+        )
+        forearm = Child(
+            id="forearm", asset=Path("forearm.png"), z=2, parent="upper",
+            offset_x=0, offset_y=40, rotation=20,
+        )
+        hand = Child(
+            id="hand", asset=Path("hand.png"), z=3, parent="forearm",
+            offset_x=0, offset_y=30, rotation=0,
+        )
+        # Listed grandchild-first so placement must topo-sort.
+        placed = _resolve_layer_placements(_layer(t, [hand, forearm, upper]))
+        hand_p = next(p for p in placed if p.asset == Path("hand.png"))
+        fx, fy = rotate_offset_clockwise(0, 40, 30)
+        forearm_x, forearm_y = 200 + fx, 150 + fy
+        hx, hy = rotate_offset_clockwise(0, 30, 50)
+        assert hand_p.x == pytest.approx(forearm_x + hx)
+        assert hand_p.y == pytest.approx(forearm_y + hy)
+        assert hand_p.rotation == pytest.approx(50)
+
+        still = Child(
+            id="upper", asset=Path("upper.png"), z=1,
+            offset_x=0, offset_y=0, rotation=0,
+        )
+        still_placed = _resolve_layer_placements(_layer(t, [hand, forearm, still]))
+        still_hand = next(p for p in still_placed if p.asset == Path("hand.png"))
+        assert still_hand.x == pytest.approx(200)
+        assert still_hand.y == pytest.approx(150 + 40 + 30)
+
+    def test_layer_rotation_leans_children_about_the_anchor(self):
+        t = Transform(x=200, y=150, scale=1.0, anchor="bottom-center", rotation=90)
+        child = Child(id="arm", asset=Path("arm.png"), z=1, offset_x=0, offset_y=-40)
+        placed = _resolve_layer_placements(_layer(t, [child]))
+        arm = next(p for p in placed if p.asset == Path("arm.png"))
+        rx, ry = rotate_offset_clockwise(0, -40, 90)
+        assert arm.x == pytest.approx(200 + rx)
+        assert arm.y == pytest.approx(150 + ry)
+        assert arm.rotation == pytest.approx(90)
 
     def test_visible_when_hides_and_shows_child(self, tmp_path):
         root = tmp_path / "root.png"

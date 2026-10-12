@@ -90,7 +90,9 @@ const TIMING_KEYS = new Set(["at_time", "start"]);
 const HOLD_KEYS = new Set(["over", "hold"]);
 const TRIM_KEYS = new Set(["trim_in", "trim_out"]);
 const AUDIO_KEYS = new Set(["file", "lines", "view", "at_time", "start", "trim_in", "trim_out"]);
-const DO_KEYS = new Set(["action", "for", "wait", "at_time", "start"]);
+const DO_KEYS = new Set(["action", "for", "wait", "at_time", "start", "prop"]);
+const BUILTIN_REST_ACTION = "rest";
+const PROP_PLACEHOLDER = "{prop}";
 
 function slugify(text) {
   return (
@@ -214,6 +216,7 @@ class CharacterSceneState {
     this.current = null; // the open segment draft, or null
     this.childRotations = new Map(); // childId -> current degrees (survives layer forks)
     this.groupRotations = new Map(); // groupName -> current degrees (survives layer forks)
+    this.bodyRotation = 0; // layer transform.rotation (whole-body lean; survives forks)
     // Last Action-set drawing/cycle per slot, so a forked layer can continue
     // it instead of snapping back to default_drawing.
     this.activeSlots = new Map(); // slotStateKey -> { ownerType, childId?, slotName, drawing?, cycle?, fps?, startedAtSceneFrame? }
@@ -228,6 +231,7 @@ class PropSceneState {
     this.segments = [];
     this.current = null;
     this.lastPose = null; // last transform/z/mark, so [Prop: show] resumes there
+    this.drawing = "default";
   }
 }
 
@@ -246,6 +250,7 @@ function newSegmentDraft(layerId, startFrame, transform, z, markName) {
     childRotationKeyframes: new Map(), // childId -> [{frame, rotation, ease?}]
     groupRotationKeyframes: new Map(), // groupName -> [{frame, rotation, ease?}]
     openingTransform: { ...transform },
+    drawing: undefined,
   };
 }
 
@@ -713,6 +718,13 @@ class ScriptParser {
    */
   _ensureCharacterPositioned(scene, characterId, lineNumber) {
     const state = this._getOrCreateCharacterState(scene, characterId);
+    if (state.config && !state._childGraphChecked) {
+      actionLibrary._validateChildGraph(state.config.children, {
+        lineNumber,
+        name: (state.config.display_name || state.characterId),
+      });
+      state._childGraphChecked = true;
+    }
     if (state.current) return state;
 
     const markName = this._autoAssignMark(scene, characterId);
@@ -727,6 +739,21 @@ class ScriptParser {
     }
     const asset = raw.asset || `props/${name}.png`;
     const assetRel = `backgrounds/${scene.location}/${asset}`;
+    const drawings = { default: asset };
+    if (raw.drawings && typeof raw.drawings === "object" && !Array.isArray(raw.drawings)) {
+      for (const [drawingName, rel] of Object.entries(raw.drawings)) {
+        const key = String(drawingName || "").trim();
+        const pathRel = typeof rel === "string" ? rel.trim() : "";
+        if (!key) {
+          throw new ScriptError(lineNumber, `Prop "${name}" drawings has an empty name.`);
+        }
+        if (!pathRel) {
+          throw new ScriptError(lineNumber, `Prop "${name}" drawing "${key}" needs a path relative to the location folder.`);
+        }
+        drawings[key] = pathRel;
+      }
+    }
+    if (!drawings.default) drawings.default = asset;
     const anchor = assetLibrary.normalizeAnchor(raw.anchor === undefined ? "bottom-center" : raw.anchor);
     if (!anchor) {
       throw new ScriptError(
@@ -756,28 +783,34 @@ class ScriptParser {
     if (y !== undefined && !Number.isFinite(y)) {
       throw new ScriptError(lineNumber, `Prop "${name}" has invalid y "${raw.y}" -- expected a number.`);
     }
-    return { name, asset, assetRel, x, y, scale, z, anchor };
+    return { name, asset, assetRel, drawings, x, y, scale, z, anchor, location: scene.location };
   }
 
   _placeDeclaredProps(scene, lineNumber) {
     const declared = (scene.staging && scene.staging.props) || {};
     for (const [rawName, raw] of Object.entries(declared)) {
       const def = this._normalizePropDef(scene, rawName, raw, lineNumber);
-      this.usedProps.push({
-        name: def.name,
-        location: scene.location,
-        assetRel: def.assetRel,
-        lineNumber,
-      });
-      const resolved = assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, def.assetRel);
-      if (!resolved) {
-        const present = [...assetLibrary.scanDrawingsDir(this.projectDir, this.globalAssetsDir, `backgrounds/${scene.location}/props`).keys()].sort();
-        throw new ScriptError(
+      const present = [...assetLibrary.scanDrawingsDir(this.projectDir, this.globalAssetsDir, `backgrounds/${scene.location}/props`).keys()].sort();
+      def.resolvedDrawings = {};
+      for (const [drawingName, rel] of Object.entries(def.drawings || { default: def.asset })) {
+        const drawingRel = `backgrounds/${scene.location}/${rel}`;
+        this.usedProps.push({
+          name: def.name,
+          location: scene.location,
+          assetRel: drawingRel,
+          drawing: drawingName,
           lineNumber,
-          `Prop "${def.name}" is missing asset "${def.assetRel}". Available: ${present.join(", ") || "(none)"}`
-        );
+        });
+        const resolved = assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, drawingRel);
+        if (!resolved) {
+          throw new ScriptError(
+            lineNumber,
+            `Prop "${def.name}" is missing ${drawingName === "default" ? "asset" : `drawing "${drawingName}"`} "${drawingRel}". Available: ${present.join(", ") || "(none)"}`
+          );
+        }
+        def.resolvedDrawings[drawingName] = resolved;
       }
-      def.resolved = resolved;
+      def.resolved = def.resolvedDrawings.default;
       const state = new PropSceneState(def.name, def);
       scene.props.set(def.name, state);
       if (def.x !== undefined && def.y !== undefined) {
@@ -819,18 +852,20 @@ class ScriptParser {
     );
   }
 
-  _openPropSegment(scene, state, { transform, z, markName }, lineNumber) {
+  _openPropSegment(scene, state, { transform, z, markName, drawing }, lineNumber) {
     const segmentIndex = state.segments.length + 1;
     const layerId = segmentIndex === 1 ? state.propId : `${state.propId}_${segmentIndex}`;
     state.current = newSegmentDraft(layerId, scene.cursorFrames, transform, z, markName);
+    state.current.drawing = drawing || state.drawing || "default";
+    state.drawing = state.current.drawing;
     state.current._lineNumber = lineNumber;
-    state.lastPose = { transform: { ...transform }, z, markName };
+    state.lastPose = { transform: { ...transform }, z, markName, drawing: state.current.drawing };
   }
 
   _resolvePropPose(scene, state, kv, lineNumber) {
     const current = state.current;
     const prior = current
-      ? { transform: current.transform, z: current.z, markName: current.markName }
+      ? { transform: current.transform, z: current.z, markName: current.markName, drawing: current.drawing }
       : state.lastPose;
     const def = state.def;
     let x = prior ? prior.transform.x : def.x;
@@ -839,6 +874,7 @@ class ScriptParser {
     let z = prior ? prior.z : def.z;
     let anchor = prior ? prior.transform.anchor : def.anchor;
     let markName = prior ? prior.markName : null;
+    let drawing = prior && prior.drawing ? prior.drawing : state.drawing || "default";
 
     if (kv.at !== undefined) {
       const xy = parseXyPair(kv.at);
@@ -866,6 +902,9 @@ class ScriptParser {
         throw new ScriptError(lineNumber, `Invalid z "${kv.z}" -- expected an integer.`);
       }
     }
+    if (kv.drawing !== undefined) {
+      drawing = this._resolvePropDrawingName(state, kv.drawing, lineNumber);
+    }
     if (x === undefined || y === undefined) {
       throw new ScriptError(
         lineNumber,
@@ -876,7 +915,25 @@ class ScriptParser {
       transform: { x, y, scale, anchor: anchor || "bottom-center", flip_x: false },
       z,
       markName,
+      drawing,
     };
+  }
+
+  _propDrawingNames(state) {
+    return Object.keys((state.def && state.def.drawings) || { default: true });
+  }
+
+  _resolvePropDrawingName(state, raw, lineNumber) {
+    const name = String(raw == null ? "" : raw).trim();
+    const known = this._propDrawingNames(state);
+    const match = known.find((item) => item === name) || known.find((item) => item.toLowerCase() === name.toLowerCase());
+    if (!match) {
+      throw new ScriptError(
+        lineNumber,
+        `Prop "${state.propId}" has no drawing "${name || ""}". Available: ${known.join(", ") || "(none)"}`
+      );
+    }
+    return match;
   }
 
   _applyPropPose(scene, state, pose, lineNumber) {
@@ -887,13 +944,21 @@ class ScriptParser {
       current.openingTransform = { ...pose.transform };
       current.z = pose.z;
       current.markName = pose.markName;
+      current.drawing = pose.drawing || current.drawing || "default";
       current._lineNumber = lineNumber;
-      state.lastPose = { transform: { ...pose.transform }, z: pose.z, markName: pose.markName };
+      state.drawing = current.drawing;
+      state.lastPose = { transform: { ...pose.transform }, z: pose.z, markName: pose.markName, drawing: current.drawing };
       return;
     }
-    if (!current || transformsDiffer(current.transform, pose.transform) || current.z !== pose.z) {
+    const drawing = pose.drawing || (current && current.drawing) || state.drawing || "default";
+    if (
+      !current ||
+      transformsDiffer(current.transform, pose.transform) ||
+      current.z !== pose.z ||
+      (current.drawing || "default") !== drawing
+    ) {
       this._closeCurrentSegment(state, scene.cursorFrames);
-      this._openPropSegment(scene, state, pose, lineNumber);
+      this._openPropSegment(scene, state, { ...pose, drawing }, lineNumber);
     }
   }
 
@@ -913,7 +978,9 @@ class ScriptParser {
 
     const z = actionKv.z !== undefined ? parseInt(actionKv.z, 10) : config.z !== undefined ? config.z : 0;
 
-    return { transform: { x, y, scale, flip_x: flipX, anchor: "bottom-center" }, z };
+    const transform = { x, y, scale, flip_x: flipX, anchor: "bottom-center" };
+    if (state.bodyRotation) transform.rotation = state.bodyRotation;
+    return { transform, z };
   }
 
   _openSegment(scene, state, { mark, markName, actionKv, transform, z }, lineNumber) {
@@ -947,6 +1014,7 @@ class ScriptParser {
         transform: { ...state.current.transform },
         z: state.current.z,
         markName: state.current.markName,
+        drawing: state.current.drawing || state.drawing || "default",
       };
     }
     // Snapshot pose at close so a later [Pose] on the next layer cannot
@@ -984,7 +1052,7 @@ class ScriptParser {
     const state = this._resolvePropState(scene, scriptName, token.lineNumber);
     const wantHide = kv.hide === "true" || kv.hide === "1";
     const wantShow = kv.show === "true" || kv.show === "1";
-    const hasPoseChange = kv.at !== undefined || kv.scale !== undefined || kv.z !== undefined;
+    const hasPoseChange = kv.at !== undefined || kv.scale !== undefined || kv.z !== undefined || kv.drawing !== undefined;
     const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
 
     this._runAtEventTime(scene, eventStart, () => {
@@ -1112,7 +1180,7 @@ class ScriptParser {
 
   _handleActionOnProp(scene, state, kv, note, lineNumber) {
     this._warnNoteLooksLikeAssignments(lineNumber, "Action", note);
-    const allowed = new Set(["at", "scale", "z", "at_time", "start", "over"]);
+    const allowed = new Set(["at", "scale", "z", "drawing", "at_time", "start", "over"]);
     const extra = Object.keys(kv).filter((key) => !allowed.has(key));
     if (extra.length > 0) {
       throw new ScriptError(
@@ -1145,6 +1213,7 @@ class ScriptParser {
     this._closeCurrentSegment(state, scene.cursorFrames);
     this._openSegment(scene, state, { transform, z: newZ, markName }, lineNumber);
     this._carryActiveSlots(state, scene, new Set());
+    this._carryHeldRig(state, scene);
   }
 
   // ---- [Action: ...] -------------------------------------------------------
@@ -1261,6 +1330,7 @@ class ScriptParser {
         if (hadOpenSegment) {
           const skipSlots = new Set(Object.keys(kv).filter((k) => !positionKeys.includes(k)));
           this._carryActiveSlots(state, scene, skipSlots);
+          this._carryHeldRig(state, scene);
         }
       }
     }
@@ -1466,6 +1536,34 @@ class ScriptParser {
     }
   }
 
+  /**
+   * Write opening joint / group / body-lean samples onto a newly forked
+   * layer so a held [Do:] pose survives [Action: at=/flip=/z=].
+   */
+  _carryHeldRig(state, scene) {
+    if (!state.current) return;
+    const rel = Math.max(0, scene.cursorFrames - state.current.startFrame);
+    for (const [childId, rotation] of state.childRotations) {
+      const child = this._findChild(state.config, childId);
+      const rest = child && child.rotation !== undefined ? child.rotation : 0;
+      if (rotation === rest) continue;
+      this._addRotationKeyframe(state.current, childId, { frame: rel, rotation, ease: "linear" });
+    }
+    for (const [groupName, rotation] of state.groupRotations) {
+      if (!rotation) continue;
+      this._addGroupRotationKeyframe(state.current, groupName, { frame: rel, rotation, ease: "linear" });
+    }
+    if (state.bodyRotation) {
+      const live = state.current;
+      live.transform = { ...live.transform, rotation: state.bodyRotation };
+      if (rel === 0) {
+        live.openingTransform = { ...live.openingTransform, rotation: state.bodyRotation };
+      } else {
+        this._addTransformKeyframe(live, { frame: rel, rotation: state.bodyRotation, ease: "linear" });
+      }
+    }
+  }
+
   _warnNoteLooksLikeAssignments(lineNumber, tagName, note) {
     if (!noteHasKeyValue(note)) return;
     const extras = note.split(/\s+/).filter((word) => KEY_VALUE_RE.test(word));
@@ -1661,6 +1759,7 @@ class ScriptParser {
     this._closeCurrentSegment(state, scene.cursorFrames);
     this._openSegment(scene, state, { markName, transform: newTransform, z }, lineNumber);
     this._carryActiveSlots(state, scene, new Set());
+    this._carryHeldRig(state, scene);
   }
 
   _ensureFacingTravel(scene, state, dx, faces, lineNumber) {
@@ -2198,7 +2297,7 @@ class ScriptParser {
     if (extra.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[Do: ...] unknown key "${extra[0]}". Expected an action id, optional for=, wait=, at_time=/start=.`
+        `[Do: ...] unknown key "${extra[0]}". Expected an action id, optional for=, wait=, prop=, at_time=/start=.`
       );
     }
     const actionId = (kv.action && String(kv.action).trim()) || (positional && positional[0]) || "";
@@ -2213,6 +2312,10 @@ class ScriptParser {
       scene.castOrder.push(characterId);
     }
     const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
+    if (String(actionId).toLowerCase() === BUILTIN_REST_ACTION) {
+      this._handleDoRest(scene, state, token, kv);
+      return;
+    }
     const action = actionLibrary.loadAndValidateAction(
       this.projectDir,
       this.globalAssetsDir,
@@ -2235,17 +2338,21 @@ class ScriptParser {
     }
 
     const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
+    const holdEnd = action.end === "hold";
     this._runAtEventTime(scene, eventStart, () => {
       const live = state.current;
       const from = live.transform;
       const startRel = Math.max(0, scene.cursorFrames - live.startFrame);
       const endRel = startRel + durationFrames;
       const prevView = this._previousView(state);
+      const prevBodyRot = state.bodyRotation || 0;
+      const boundProp = kv.prop != null ? String(kv.prop).trim() : "";
 
       for (const jointId of Object.keys(action.joints || {})) this._getChildRotation(state, jointId);
       for (const groupName of Object.keys(action.groups || {})) this._getGroupRotation(state, groupName);
       const prevChildRots = new Map(state.childRotations);
       const prevGroupRots = new Map(state.groupRotations);
+      const propRestores = this._collectActionPropRestores(scene, action, boundProp, token.lineNumber);
 
       const hasViewCycle = Array.isArray(action.views) && action.views.length > 0;
       const heldView = action.view;
@@ -2271,45 +2378,95 @@ class ScriptParser {
 
       const scale = from.scale || 1;
       const lastSlotDrawing = new Map();
+      const firedPropEvents = new Set();
+      const lastJoints = new Map();
+      const lastGroups = new Map();
+      let lastBodyRot = prevBodyRot;
       for (let f = 0; f <= durationFrames; f++) {
         const index = this._actionCycleIndex(action, f);
         const atEnd = f === durationFrames;
         if (!atEnd) {
           this._emitActionSlotFrame(state, action, index, startRel + f, lastSlotDrawing);
+          this._emitActionPropEvents(
+            scene,
+            action,
+            index,
+            eventStart + f,
+            boundProp,
+            firedPropEvents,
+            token.lineNumber
+          );
         }
 
+        const transformKey = { frame: startRel + f, ease: "linear" };
+        let writeTransform = false;
         if (action.bob) {
           const bob = atEnd ? 0 : Number(action.bob[index]) || 0;
-          this._addTransformKeyframe(live, {
-            frame: startRel + f,
-            y: from.y + bob * scale,
-            ease: "linear",
-          });
+          transformKey.y = from.y + bob * scale;
+          writeTransform = true;
         }
+        if (action.body_rotation) {
+          if (!atEnd) {
+            lastBodyRot = Number(action.body_rotation[index]) || 0;
+            transformKey.rotation = lastBodyRot;
+            writeTransform = true;
+          } else if (!holdEnd) {
+            transformKey.rotation = prevBodyRot;
+            writeTransform = true;
+            lastBodyRot = prevBodyRot;
+          }
+        }
+        if (writeTransform) this._addTransformKeyframe(live, transformKey);
 
         for (const [jointId, angles] of Object.entries(action.joints || {})) {
           const prev = prevChildRots.has(jointId) ? prevChildRots.get(jointId) : 0;
-          this._addRotationKeyframe(live, jointId, {
-            frame: startRel + f,
-            rotation: atEnd ? prev : Number(angles[index]),
-            ease: "linear",
-          });
-          if (atEnd) state.childRotations.set(jointId, prev);
+          if (!atEnd) {
+            const rotation = Number(angles[index]);
+            lastJoints.set(jointId, rotation);
+            this._addRotationKeyframe(live, jointId, { frame: startRel + f, rotation, ease: "linear" });
+            state.childRotations.set(jointId, rotation);
+          } else if (!holdEnd) {
+            this._addRotationKeyframe(live, jointId, { frame: startRel + f, rotation: prev, ease: "linear" });
+            state.childRotations.set(jointId, prev);
+          } else if (lastJoints.has(jointId)) {
+            state.childRotations.set(jointId, lastJoints.get(jointId));
+          }
         }
 
         for (const [groupName, angles] of Object.entries(action.groups || {})) {
           const prev = prevGroupRots.has(groupName) ? prevGroupRots.get(groupName) : 0;
-          this._addGroupRotationKeyframe(live, groupName, {
-            frame: startRel + f,
-            rotation: atEnd ? prev : Number(angles[index]),
-            ease: "linear",
-          });
-          if (atEnd) state.groupRotations.set(groupName, prev);
+          if (!atEnd) {
+            const rotation = Number(angles[index]);
+            lastGroups.set(groupName, rotation);
+            this._addGroupRotationKeyframe(live, groupName, { frame: startRel + f, rotation, ease: "linear" });
+            state.groupRotations.set(groupName, rotation);
+          } else if (!holdEnd) {
+            this._addGroupRotationKeyframe(live, groupName, { frame: startRel + f, rotation: prev, ease: "linear" });
+            state.groupRotations.set(groupName, prev);
+          } else if (lastGroups.has(groupName)) {
+            state.groupRotations.set(groupName, lastGroups.get(groupName));
+          }
         }
       }
 
-      for (const item of slotRestores) {
-        this._restoreActiveSlot(state, item.owner, item.slotName, item.prev, scene, endRel);
+      if (action.body_rotation) {
+        state.bodyRotation = lastBodyRot;
+        if (lastBodyRot) live.transform = { ...live.transform, rotation: lastBodyRot };
+        else if (live.transform.rotation) {
+          const next = { ...live.transform };
+          delete next.rotation;
+          live.transform = next;
+        }
+      }
+
+      if (!holdEnd) {
+        for (const item of slotRestores) {
+          this._restoreActiveSlot(state, item.owner, item.slotName, item.prev, scene, endRel);
+        }
+        const savedCursor = scene.cursorFrames;
+        scene.cursorFrames = eventStart + durationFrames;
+        this._restoreActionPropSnapshots(scene, propRestores, token.lineNumber);
+        scene.cursorFrames = savedCursor;
       }
 
       const displayName = (state.config && state.config.display_name) || state.characterId;
@@ -2326,6 +2483,152 @@ class ScriptParser {
     });
     this._noteHorizon(scene, eventStart + durationFrames);
     if (wait) scene.cursorFrames += durationFrames;
+  }
+
+  _handleDoRest(scene, state, token, kv) {
+    const wait = parseWaitValue(kv.wait, token.lineNumber);
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
+    this._runAtEventTime(scene, eventStart, () => {
+      const live = state.current;
+      const rel = Math.max(0, scene.cursorFrames - live.startFrame);
+      for (const child of (state.config && state.config.children) || []) {
+        const dest = child.rotation !== undefined ? child.rotation : 0;
+        this._addRotationKeyframe(live, child.id, { frame: rel, rotation: dest, ease: "linear" });
+        state.childRotations.set(child.id, dest);
+      }
+      for (const groupName of this._availableGroups(state.config)) {
+        this._addGroupRotationKeyframe(live, groupName, { frame: rel, rotation: 0, ease: "linear" });
+        state.groupRotations.set(groupName, 0);
+      }
+      if (state.bodyRotation || (live.transform && live.transform.rotation)) {
+        this._addTransformKeyframe(live, { frame: rel, rotation: 0, ease: "linear" });
+        state.bodyRotation = 0;
+        if (live.transform && live.transform.rotation) {
+          const next = { ...live.transform };
+          delete next.rotation;
+          live.transform = next;
+        }
+      }
+      const slotNames = new Set([
+        ...Object.keys((state.config && state.config.slots) || {}),
+        ...((state.config && state.config.children) || []).flatMap((c) => Object.keys(c.slots || {})),
+      ]);
+      for (const slotName of slotNames) {
+        if (RESERVED_SLOT_NAMES.has(slotName)) continue;
+        const owner = this._findSlotOwner(state.config, slotName);
+        if (!owner || !owner.slotConfig) continue;
+        const dest = owner.slotConfig.default_drawing;
+        if (!dest) continue;
+        this._writeSlotKeyframe(live, owner, slotName, { frame: rel, drawing: dest });
+        state.activeSlots.set(slotStateKey(owner, slotName), {
+          ownerType: owner.ownerType,
+          childId: owner.childId,
+          slotName,
+          drawing: dest,
+          startedAtSceneFrame: undefined,
+        });
+      }
+      const displayName = (state.config && state.config.display_name) || state.characterId;
+      this._emitLane({
+        lane: "action",
+        token,
+        startFrame: eventStart,
+        endFrame: eventStart,
+        label: `${displayName} rest`,
+        subject: state.characterId,
+        kv,
+        keys: Object.keys(kv),
+      });
+    });
+    if (wait) {
+      /* rest is an instant pin */
+    }
+  }
+
+  _resolveBoundPropName(eventProp, boundProp, scene, lineNumber) {
+    const raw = eventProp != null && String(eventProp).trim() !== "" ? String(eventProp).trim() : PROP_PLACEHOLDER;
+    const name = raw === PROP_PLACEHOLDER ? String(boundProp || "").trim() : raw;
+    if (!name) {
+      throw new ScriptError(
+        lineNumber,
+        `Action prop_events uses {prop} — add prop=<name> on [Do:], or put a literal prop name in the action. Available: ${this._knownPropNames(scene).join(", ") || "(none)"}`
+      );
+    }
+    const state = this._findPropState(scene, name);
+    if (!state) {
+      throw new ScriptError(
+        lineNumber,
+        `Unknown prop "${name}". Available: ${this._knownPropNames(scene).join(", ") || "(none)"}`
+      );
+    }
+    return state;
+  }
+
+  _collectActionPropRestores(scene, action, boundProp, lineNumber) {
+    const events = (action && action.prop_events) || [];
+    if (!events.length) return [];
+    const seen = new Set();
+    const restores = [];
+    for (const ev of events) {
+      const propState = this._resolveBoundPropName(ev.prop, boundProp, scene, lineNumber);
+      if (seen.has(propState.propId)) continue;
+      seen.add(propState.propId);
+      if (!propState.current && !propState.lastPose) {
+        throw new ScriptError(
+          lineNumber,
+          `"${propState.propId}" is hidden -- show it with [Prop: ${propState.propId} show] before a prop event.`
+        );
+      }
+      restores.push({
+        propId: propState.propId,
+        drawing: (propState.current && propState.current.drawing) || propState.drawing || "default",
+        z: propState.current ? propState.current.z : propState.lastPose.z,
+        transform: propState.current
+          ? { ...propState.current.transform }
+          : { ...propState.lastPose.transform },
+        markName: propState.current ? propState.current.markName : propState.lastPose.markName,
+      });
+    }
+    return restores;
+  }
+
+  _emitActionPropEvents(scene, action, index, absFrame, boundProp, fired, lineNumber) {
+    const events = (action && action.prop_events) || [];
+    if (!events.length) return;
+    const saved = scene.cursorFrames;
+    scene.cursorFrames = absFrame;
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      if (ev.frame !== index) continue;
+      const key = `${i}:${ev.frame}`;
+      if (fired.has(key)) continue;
+      fired.add(key);
+      const propState = this._resolveBoundPropName(ev.prop, boundProp, scene, lineNumber);
+      const kv = {};
+      if (ev.drawing) kv.drawing = ev.drawing;
+      if (ev.z != null) kv.z = String(ev.z);
+      const pose = this._resolvePropPose(scene, propState, kv, lineNumber);
+      this._applyPropPose(scene, propState, pose, lineNumber);
+    }
+    scene.cursorFrames = saved;
+  }
+
+  _restoreActionPropSnapshots(scene, restores, lineNumber) {
+    for (const snap of restores || []) {
+      const propState = this._findPropState(scene, snap.propId);
+      if (!propState) continue;
+      this._applyPropPose(
+        scene,
+        propState,
+        {
+          transform: { ...snap.transform },
+          z: snap.z,
+          markName: snap.markName,
+          drawing: snap.drawing,
+        },
+        lineNumber
+      );
+    }
   }
 
   // ---- [View: Name view=<head view>] ------------------------------------
@@ -2734,11 +3037,19 @@ class ScriptParser {
   }
 
   _buildPropLayerJson(state, segment) {
-    const resolved = state.def.resolved || assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, state.def.assetRel);
+    const drawing = segment.drawing || state.drawing || "default";
+    const resolved =
+      (state.def.resolvedDrawings && state.def.resolvedDrawings[drawing]) ||
+      state.def.resolved ||
+      assetLibrary.resolveAsset(
+        this.projectDir,
+        this.globalAssetsDir,
+        `backgrounds/${state.def.location}/${(state.def.drawings && state.def.drawings[drawing]) || state.def.asset}`
+      );
     if (!resolved) {
       throw new ScriptError(
         segment._lineNumber,
-        `Prop "${state.propId}" is missing asset "${state.def.assetRel}".`
+        `Prop "${state.propId}" is missing ${drawing === "default" ? "asset" : `drawing "${drawing}"`} "${state.def.assetRel}".`
       );
     }
     const layer = {

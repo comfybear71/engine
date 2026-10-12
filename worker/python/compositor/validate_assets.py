@@ -139,12 +139,49 @@ def check_png(path: Path, canvas: dict | None, rel: str) -> list[str]:
     return issues
 
 
+def _validate_child_parents(config: dict) -> list[str]:
+    """Parent must exist; chains may be any depth; cycles are errors."""
+
+    children = config.get("children") or []
+    if not isinstance(children, list):
+        return []
+    ids = [c.get("id") for c in children if isinstance(c, dict) and c.get("id")]
+    id_set = set(ids)
+    issues: list[str] = []
+    parents: dict[str, str] = {}
+    for child in children:
+        if not isinstance(child, dict):
+            continue
+        child_id = child.get("id")
+        parent = child.get("parent")
+        if not child_id or not parent:
+            continue
+        if parent not in id_set:
+            issues.append(f"child {child_id!r} parent {parent!r} does not exist")
+            continue
+        if parent == child_id:
+            issues.append(f"child {child_id!r} cannot be its own parent")
+            continue
+        parents[str(child_id)] = str(parent)
+    for child_id in parents:
+        seen: set[str] = set()
+        current = child_id
+        while current in parents:
+            if current in seen:
+                issues.append(f"child {child_id!r} parent chain cycles")
+                break
+            seen.add(current)
+            current = parents[current]
+    return issues
+
+
 def validate_character(char_dir: Path, config: dict | None = None, *, roots: list[Path] | None = None) -> list[str]:
     config = config if config is not None else _load_character(char_dir / "character.json")
     if not config:
         return []
     issues: list[str] = []
     roots = roots or [char_dir.parent.parent]
+    issues.extend(_validate_child_parents(config))
     head_group = set(_head_group_names(config))
     for slot_name, spec in _rig_head_slots(config).items():
         canvas = spec.get("canvas") if isinstance(spec.get("canvas"), dict) else None

@@ -1,5 +1,5 @@
 """Targeted tests for the cut-out animation additions: pivot-fixed rotation,
-transform/rotation keyframes, one-level child.parent nesting, slot cycles,
+transform/rotation keyframes, child.parent nesting of any depth, slot cycles,
 and visible_when."""
 
 from __future__ import annotations
@@ -215,7 +215,7 @@ def _write_timeline(tmp_path: Path, layer: dict) -> Path:
     return path
 
 
-def test_parent_must_exist_and_nesting_is_one_level(tmp_path):
+def test_parent_must_exist_and_cycles_are_rejected(tmp_path):
     missing = {
         "id": "rig",
         "asset": "body.png",
@@ -234,7 +234,7 @@ def test_parent_must_exist_and_nesting_is_one_level(tmp_path):
     with pytest.raises(ValueError, match="does not exist"):
         load_timeline(_write_timeline(tmp_path, missing))
 
-    too_deep = {
+    three_level = {
         "id": "rig",
         "asset": "body.png",
         "z": 1,
@@ -245,8 +245,23 @@ def test_parent_must_exist_and_nesting_is_one_level(tmp_path):
             {"id": "hand", "asset": "b.png", "z": 3, "offset": {"x": 0, "y": 10}, "parent": "forearm"},
         ],
     }
-    with pytest.raises(ValueError, match="one level"):
-        load_timeline(_write_timeline(tmp_path, too_deep))
+    doc = load_timeline(_write_timeline(tmp_path, three_level))
+    ids = [c.id for c in doc.scenes[0].layers[0].children]
+    assert ids == ["upper", "forearm", "hand"]
+
+    cyclic = {
+        "id": "rig",
+        "asset": "body.png",
+        "z": 1,
+        "transform": {"x": 0, "y": 0},
+        "children": [
+            {"id": "upper", "asset": "a.png", "z": 1, "offset": {"x": 0, "y": 0}, "parent": "hand"},
+            {"id": "forearm", "asset": "a.png", "z": 2, "offset": {"x": 0, "y": 10}, "parent": "upper"},
+            {"id": "hand", "asset": "b.png", "z": 3, "offset": {"x": 0, "y": 10}, "parent": "forearm"},
+        ],
+    }
+    with pytest.raises(ValueError, match="cycles"):
+        load_timeline(_write_timeline(tmp_path, cyclic))
 
 
 def test_new_optional_fields_pass_schema():
@@ -299,6 +314,13 @@ def test_new_optional_fields_pass_schema():
                                 "z": 2,
                                 "offset": {"x": 0, "y": 20},
                                 "parent": "upper",
+                            },
+                            {
+                                "id": "hand",
+                                "asset": "a.png",
+                                "z": -3.5,
+                                "offset": {"x": 0, "y": 10},
+                                "parent": "forearm",
                             },
                         ],
                     }

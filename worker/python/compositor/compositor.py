@@ -122,36 +122,53 @@ def _resolve_layer_placements(
     placements = [root]
     placed_by_id: dict[str, _Placed] = {}
 
-    # Top-level children (no child.parent) stay at their unrotated offset
-    # relative to the layer -- layer.rotation is still not composed into
-    # child placement (documented limitation). Their own rotation is applied
-    # around their own pivot via the pivot-fixed draw path.
-    for child in layer.children:
+    # Layer rotation (body lean) is composed into every child's offset and
+    # world rotation so the whole rig turns about the layer anchor. Children
+    # are placed parent-before-child so chains of any depth accumulate.
+    layer_space = _Placed(
+        z=0, x=t.x, y=t.y, scale=t.scale, flip_x=t.flip_x, rotation=t.rotation,
+        opacity=t.opacity, anchor=t.anchor, asset=layer.asset, slots={},
+    )
+    for child in _children_parent_before_child(layer.children):
+        if drawings is not None and not _visible_when_matches(child.visible_when, drawings):
+            continue
         if child.parent:
-            continue
-        if drawings is not None and not _visible_when_matches(child.visible_when, drawings):
-            continue
-        layer_space = _Placed(
-            z=0, x=t.x, y=t.y, scale=t.scale, flip_x=t.flip_x, rotation=0.0,
-            opacity=t.opacity, anchor=t.anchor, asset=layer.asset, slots={},
-        )
-        placed = _place_child_on_parent(layer_space, child, local_frame)
-        placed_by_id[child.id] = placed
-        placements.append(placed)
-
-    for child in layer.children:
-        if not child.parent:
-            continue
-        if child.parent not in placed_by_id:
-            continue
-        if drawings is not None and not _visible_when_matches(child.visible_when, drawings):
-            continue
-        parent_placed = placed_by_id[child.parent]
+            if child.parent not in placed_by_id:
+                continue
+            parent_placed = placed_by_id[child.parent]
+        else:
+            parent_placed = layer_space
         placed = _place_child_on_parent(parent_placed, child, local_frame)
         placed_by_id[child.id] = placed
         placements.append(placed)
 
     return sorted(placements, key=lambda p: p.z)
+
+
+def _children_parent_before_child(children: list[Child]) -> list[Child]:
+    """Stable topological order: a parent is emitted before any child of it."""
+
+    by_id = {child.id: child for child in children}
+    ordered: list[Child] = []
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(child: Child) -> None:
+        if child.id in visited:
+            return
+        if child.id in visiting:
+            return
+        visiting.add(child.id)
+        parent_id = child.parent
+        if parent_id and parent_id in by_id:
+            visit(by_id[parent_id])
+        visiting.remove(child.id)
+        visited.add(child.id)
+        ordered.append(child)
+
+    for child in children:
+        visit(child)
+    return ordered
 
 
 def _draw_transformed(
