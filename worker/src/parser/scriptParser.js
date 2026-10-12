@@ -2408,7 +2408,10 @@ class ScriptParser {
 
   _buildSlotJson(characterId, slotName, slotConfig, keyframes) {
     const headGroup = this._headGroupNames(characterId);
-    const scanViews = slotName === "mouth" || (headGroup && headGroup.includes(slotName));
+    const scanViews =
+      slotName === "mouth" ||
+      (headGroup && headGroup.includes(slotName)) ||
+      Boolean(slotConfig && slotConfig.views === true);
     if (slotName === "mouth") {
       const { images, images_by_view } = this._scanMouthViewImages(characterId, slotConfig);
       const mouth = { offset: slotConfig.offset || { x: 0, y: 0 }, images, images_by_view, lipsync: { source: "dialogue" } };

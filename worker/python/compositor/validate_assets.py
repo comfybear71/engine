@@ -70,8 +70,15 @@ def _load_character(path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _head_group_names(config: dict) -> list[str]:
+    raw_groups = config.get("groups")
+    if isinstance(raw_groups, dict) and isinstance(raw_groups.get("head"), list):
+        return [str(name) for name in raw_groups["head"] if name]
+    return []
+
+
 def _rig_head_slots(config: dict) -> dict[str, dict]:
-    """Slots that must share a canvas: group members and any slot with canvas."""
+    """Head-group members, slots with canvas, and slots with ``views: true``."""
 
     slots: dict[str, dict] = {}
 
@@ -87,14 +94,9 @@ def _rig_head_slots(config: dict) -> dict[str, dict]:
         if isinstance(child, dict):
             walk(child.get("slots") if isinstance(child.get("slots"), dict) else None)
 
-    group = []
-    raw_groups = config.get("groups")
-    if isinstance(raw_groups, dict) and isinstance(raw_groups.get("head"), list):
-        group = [str(name) for name in raw_groups["head"] if name]
-
-    wanted = set(group)
+    wanted = set(_head_group_names(config))
     for name, spec in slots.items():
-        if spec.get("canvas"):
+        if spec.get("canvas") or spec.get("views") is True:
             wanted.add(name)
     return {name: slots[name] for name in wanted if name in slots}
 
@@ -143,9 +145,11 @@ def validate_character(char_dir: Path, config: dict | None = None, *, roots: lis
         return []
     issues: list[str] = []
     roots = roots or [char_dir.parent.parent]
+    head_group = set(_head_group_names(config))
     for slot_name, spec in _rig_head_slots(config).items():
         canvas = spec.get("canvas") if isinstance(spec.get("canvas"), dict) else None
-        if not canvas:
+        views_only = spec.get("views") is True and slot_name not in head_group
+        if not canvas and not views_only:
             issues.append(f"{slot_name}: missing canvas {{w, h, pivot}} (required for rig-head slots)")
             continue
         folders = _slot_dirs(char_dir, slot_name, spec)

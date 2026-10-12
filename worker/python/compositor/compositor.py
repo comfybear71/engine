@@ -250,7 +250,7 @@ def _draw_layer(
 ) -> None:
     drawings = _collect_slot_drawings(layer, layer_local_frame_idx, fps)
     suppressed = _suppressed_head_slots(layer)
-    layer_view = _layer_view_at(layer, layer_local_frame_idx) if layer.groups.get("head") else None
+    layer_view = _layer_view_at(layer, layer_local_frame_idx)
     for placed in _resolve_layer_placements(layer, layer_local_frame_idx, world_scale=world_scale):
         _draw_transformed(
             canvas, cache, placed.asset,
