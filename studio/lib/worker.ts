@@ -13,6 +13,7 @@ export class WorkerUnreachableError extends Error {
 export type Drawing = { name: string; rel: string; mtime?: number | null; view?: string };
 export type SlotCycle = { drawings: string[]; fps: number };
 export type SlotView = { id: string; drawingsDir: string; drawings: Drawing[] };
+export type SlotCanvas = { w: number; h: number; pivot: { x: number; y: number } | null };
 export type CharacterSlot = {
   name: string;
   owner: string | null;
@@ -24,6 +25,17 @@ export type CharacterSlot = {
   offset: { x: number; y: number };
   scale: number;
   rotation: number;
+  canvas?: SlotCanvas | null;
+};
+export type CharacterChild = {
+  id: string;
+  asset: string | null;
+  rel: string | null;
+  pivot: string | { x: number; y: number } | null;
+  parent: string | null;
+  z: number;
+  offset: { x: number; y: number };
+  mtime?: number | null;
 };
 export type Character = {
   id: string;
@@ -31,6 +43,7 @@ export type Character = {
   aliases: string[];
   source: "global" | "show" | "project";
   z: number;
+  default_scale?: number;
   style: string;
   asset: string | null;
   thumbRel: string | null;
@@ -39,6 +52,9 @@ export type Character = {
   reference: string | null;
   referenceRel: string | null;
   referenceMtime?: number | null;
+  canvas?: { w: number; h: number; pivot: { x: number; y: number } } | null;
+  groups?: { head?: string[] } | null;
+  children?: CharacterChild[];
   slots: CharacterSlot[];
 };
 export type Background = {
@@ -413,6 +429,106 @@ export async function loadCharacters(name: string): Promise<Character[]> {
   if (!res.ok) throw new Error(await readError(res));
   const body = (await res.json()) as { characters: Character[] };
   return body.characters;
+}
+
+export type FactoryBadge = "ticked" | "locked" | "draft" | "missing";
+export type FactoryPiece = {
+  name: string;
+  key: string;
+  rel: string | null;
+  drawingsDir: string | null;
+  expected: boolean;
+  optional?: boolean;
+  missing: boolean;
+  badge: FactoryBadge | null;
+  mtime?: number | null;
+};
+export type FactoryRow = {
+  id: string;
+  label: string;
+  slot: string;
+  owner: string | null;
+  kind: "slot" | "child";
+  drawings: FactoryPiece[];
+};
+export type FactoryInspector = {
+  key: string;
+  slot: string;
+  label: string;
+  drawing: string;
+  view: string;
+  rel: string | null;
+  badge: FactoryBadge | null;
+  missing: boolean;
+  canvas: { w: number; h: number; pivot: { x: number; y: number } };
+  pivot: { x: number; y: number };
+  offset: { x: number; y: number };
+  anchor: string;
+  redo: string;
+};
+export type FactoryCharacter = {
+  ok: boolean;
+  characterId: string;
+  displayName: string;
+  view: string;
+  views: { id: string; label: string }[];
+  status: Record<string, string>;
+  redos: Record<string, string>;
+  counts: { ticked: number; locked: number; draft: number; missing: number };
+  canvas: { w: number; h: number; pivot: { x: number; y: number } };
+  default_scale: number;
+  groups: { head?: string[] } | null;
+  children: CharacterChild[];
+  rows: FactoryRow[];
+  inspector: FactoryInspector | null;
+};
+export type ProjectAction = {
+  id: string;
+  characterId: string | null;
+  label: string;
+  source: string;
+  rel: string;
+};
+
+export async function loadFactoryCharacter(
+  name: string,
+  characterId: string,
+  view?: string,
+  key?: string
+): Promise<FactoryCharacter> {
+  const params = new URLSearchParams();
+  if (view) params.set("view", view);
+  if (key) params.set("key", key);
+  const qs = params.toString();
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/status${qs ? `?${qs}` : ""}`
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<FactoryCharacter>;
+}
+
+export async function saveFactoryStatus(
+  name: string,
+  characterId: string,
+  body: { key: string; state?: FactoryBadge; redo?: string; view?: string }
+): Promise<FactoryCharacter> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/status`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<FactoryCharacter>;
+}
+
+export async function loadProjectActions(name: string): Promise<ProjectAction[]> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/actions`);
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { actions?: ProjectAction[] };
+  return body.actions || [];
 }
 
 export async function loadStaging(name: string): Promise<Staging> {

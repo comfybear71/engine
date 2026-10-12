@@ -18,6 +18,8 @@ const {
   listKnownLocations,
 } = require("./parser/assetLibrary");
 const { discoverSlotViews } = require("./assetEditor");
+const { defaultFactoryCanvas } = require("./factoryStandard");
+const { describeFactoryCharacter, listProjectActions } = require("./characterStatus");
 
 function toPosix(p) {
   return String(p).split(path.sep).join("/");
@@ -74,6 +76,16 @@ function collectSlots(character, projectDir, globalAssetsDir, characterId, optio
         viewDrawings.sort((a, b) => a.name.localeCompare(b.name));
         return { id: view.id, drawingsDir: view.drawingsDir, drawings: viewDrawings };
       });
+      const canvas = spec.canvas && spec.canvas.w && spec.canvas.h
+        ? {
+            w: Number(spec.canvas.w),
+            h: Number(spec.canvas.h),
+            pivot:
+              spec.canvas.pivot && spec.canvas.pivot.x != null && spec.canvas.pivot.y != null
+                ? { x: Number(spec.canvas.pivot.x), y: Number(spec.canvas.pivot.y) }
+                : null,
+          }
+        : null;
       slots.push({
         name,
         owner,
@@ -88,6 +100,7 @@ function collectSlots(character, projectDir, globalAssetsDir, characterId, optio
         },
         scale: spec.scale == null ? 1 : spec.scale,
         rotation: spec.rotation == null ? 0 : spec.rotation,
+        canvas,
       });
     }
   }
@@ -131,12 +144,27 @@ function describeCharacter(projectDir, globalAssetsDir, id, options) {
   if (!resolved || !character) return null;
   const thumbRel = characterThumbRel(character, projectDir, globalAssetsDir, id, options);
   const referenceRel = characterReferenceRel(character, projectDir, globalAssetsDir, id, options);
+  const children = (character.children || []).map((child) => {
+    const assetRel = child.asset ? `characters/${id}/${String(child.asset).replace(/\\/g, "/")}` : null;
+    const offset = child.offset || {};
+    return {
+      id: child.id,
+      asset: child.asset || null,
+      rel: assetRel && resolveAsset(projectDir, globalAssetsDir, assetRel, options) ? assetRel : null,
+      pivot: child.pivot == null ? null : child.pivot,
+      parent: child.parent || null,
+      z: child.z == null ? 0 : child.z,
+      offset: { x: offset.x == null ? 0 : offset.x, y: offset.y == null ? 0 : offset.y },
+      mtime: assetRel ? resolvedMtime(projectDir, globalAssetsDir, assetRel, options) : null,
+    };
+  });
   return {
     id,
     display_name: character.display_name || id,
     aliases: character.aliases || [],
     source: resolved.source,
     z: character.z,
+    default_scale: character.default_scale == null ? 1 : character.default_scale,
     style: typeof character.style === "string" ? character.style : "",
     asset: character.asset || null,
     thumbRel,
@@ -145,6 +173,9 @@ function describeCharacter(projectDir, globalAssetsDir, id, options) {
     reference: typeof character.reference === "string" ? character.reference : null,
     referenceRel,
     referenceMtime: resolvedMtime(projectDir, globalAssetsDir, referenceRel, options),
+    canvas: defaultFactoryCanvas(character),
+    groups: character.groups || null,
+    children,
     slots: collectSlots(character, projectDir, globalAssetsDir, id, options),
   };
 }
@@ -251,4 +282,6 @@ module.exports = {
   listStaging,
   summarizeStage,
   locationFromBackgroundAsset,
+  describeFactoryCharacter,
+  listProjectActions,
 };

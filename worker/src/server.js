@@ -23,6 +23,7 @@ const { explainTimelineError } = require("./parser/explainTimelineError");
 const { resolveAsset } = require("./parser/assetLibrary");
 const { getCachedPreview, storePreview } = require("./previewCache");
 const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = require("./studioLibrary");
+const { describeFactoryCharacter, applyStatusBody, listProjectActions, inspectorForPiece } = require("./characterStatus");
 const { listProjectAudio } = require("./studioAudio");
 const { buildLaneBlocks, clampFrame } = require("./studioLanes");
 const {
@@ -933,6 +934,44 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     const used = collectUsedAssets(projectDir, globalAssetsDir);
     res.json({ characters: listCharacters(projectDir, globalAssetsDir, { ids: used.characterIds }) });
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/status", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const factory = describeFactoryCharacter(projectDir, globalAssetsDir, characterId, req.query.view);
+      const inspector = inspectorForPiece(factory, req.query.key);
+      res.json({ ...factory, inspector });
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.put("/api/projects/:name/characters/:characterId/status", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      applyStatusBody(projectDir, characterId, req.body || {});
+      const factory = describeFactoryCharacter(projectDir, globalAssetsDir, characterId, req.body && req.body.view);
+      const inspector = inspectorForPiece(factory, req.body && req.body.key);
+      res.json({ ok: true, ...factory, inspector });
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/actions", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    res.json({ actions: listProjectActions(projectDir, globalAssetsDir) });
   });
 
   app.get("/api/projects/:name/library", (req, res) => {
