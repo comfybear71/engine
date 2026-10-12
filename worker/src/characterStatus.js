@@ -293,9 +293,17 @@ function childAssetRel(projectDir, globalAssetsDir, characterId, child, options)
   return rel;
 }
 
+function childAllowedOnView(child, view) {
+  const text = `${(child && child.id) || ""} ${(child && child.asset) || ""}`.toLowerCase();
+  if (view === "front") return true;
+  if (view === "back") return /torso|body|shirt|shorts|clothing|leg|cape/.test(text);
+  return /_(left_34|right_34|left_side|right_side|back)$/.test(text);
+}
+
 function buildChildRows(projectDir, globalAssetsDir, characterId, character, view, statusMap, options) {
   const groups = new Map();
   for (const child of character.children || []) {
+    if (!childAllowedOnView(child, view)) continue;
     const label = childRowLabel(child);
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label).push(child);

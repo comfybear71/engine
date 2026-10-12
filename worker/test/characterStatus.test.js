@@ -232,6 +232,12 @@ describe("character status.json", () => {
     assert.ok(torsoRows[0].drawings.some((item) => /shorts/.test(item.rel || item.name)));
     assert.ok(torsoRows[0].drawings.some((item) => /torso_rig/.test(item.rel || item.drawingsDir || "")));
     assert.equal(factory.rows.filter((row) => /overlay/i.test(row.label)).length, 0);
+    const side = describeFactoryCharacter(fixture.projectDir, fixture.globalAssetsDir, "riggy", "left_side");
+    assert.equal(
+      side.rows.some((row) => row.drawings.some((item) => /shirt|shorts/.test(item.rel || item.name))),
+      false
+    );
+    assert.equal(side.views.find((item) => item.id === "left_side").count, 0);
   });
 
   test("eyes stay hidden on the back view; applyStatusBody validates input", () => {

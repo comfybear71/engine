@@ -1030,7 +1030,9 @@ export default function AssetsPanel({
                   onClick={() => setView(tab.id)}
                 >
                   {tab.label}
-                  {"count" in tab && tab.count != null ? <span className="studio-factory-tab-count">{tab.count}</span> : null}
+                  {"count" in tab && tab.count != null ? (
+                    <span className="studio-factory-tab-count">{tab.count}</span>
+                  ) : null}
                 </button>
               ))}
             </div>
