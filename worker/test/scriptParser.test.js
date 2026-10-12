@@ -1360,7 +1360,29 @@ describe("[Move] action=walk_side", { concurrency: false }, () => {
     assert.equal(lane.endFrame - lane.startFrame, 24);
   });
 
-  test("right-to-left auto-starts a flipped layer", async () => {
+  test("silent walk emits right_side view for its duration and restores after", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side]",
+      "Rodney: After.",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const keys = (rodney.view_keyframes || []).slice().sort((a, b) => a.frame - b.frame);
+    assert.equal(keys.length, 2);
+    assert.equal(keys[0].frame, 0);
+    assert.equal(keys[0].view, "right_side");
+    assert.equal(keys[1].frame, 24);
+    assert.equal(keys[1].view, "front");
+    const after = rodney.dialogue.find((c) => c.text === "After.");
+    assert.ok(after);
+    assert.equal(after.view, undefined);
+    assert.ok(after.start_frame >= 24);
+  });
+
+  test("walking left uses right_side view plus flip", async () => {
     const script = [
       "[Scene: Intro]",
       "[Location: room_a]",
@@ -1374,6 +1396,28 @@ describe("[Move] action=walk_side", { concurrency: false }, () => {
     const walk = layers[layers.length - 1];
     assert.equal(walk.transform.flip_x, true);
     assert.ok(walk.transform_keyframes && walk.transform_keyframes.length > 2);
+    const viewKeys = (walk.view_keyframes || []).slice().sort((a, b) => a.frame - b.frame);
+    assert.ok(viewKeys.length >= 1);
+    assert.equal(viewKeys[0].view, "right_side");
+  });
+
+  test("dialogue view= overrides the walk view on that line", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side wait=false]",
+      "Rodney view=up: Hello.",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const keys = (rodney.view_keyframes || []).slice().sort((a, b) => a.frame - b.frame);
+    assert.equal(keys[0].view, "right_side");
+    assert.equal(keys[keys.length - 1].view, "front");
+    const hello = rodney.dialogue.find((c) => /Hello/.test(c.text || ""));
+    assert.ok(hello);
+    assert.equal(hello.view, "up");
+    assert.equal(hello.start_frame, 0);
   });
 
   test("rotation keyframes loop with period frames/fps*24", async () => {
@@ -1475,6 +1519,22 @@ describe("[Move] action=walk_side", { concurrency: false }, () => {
         err.lineNumber === 4 &&
         /length 3 != frames 12/.test(err.message)
     );
+  });
+
+  test("validator finds rig in torso_right_side only", async () => {
+    const charDir = path.join(fixture.projectDir, "characters", "rodney");
+    fs.rmSync(path.join(charDir, "torso", "rig.png"), { force: true });
+    fixture.writePng(path.join(charDir, "torso_right_side", "rig.png"));
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const start = rodney.slots.torso.keyframes.find((k) => k.frame === 0);
+    assert.equal(start.drawing, "rig");
   });
 
   test("ease=inout with action warns about foot slide", async () => {

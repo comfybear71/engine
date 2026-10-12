@@ -71,6 +71,14 @@ class RotationKeyframe:
 
 
 @dataclass(frozen=True)
+class ViewKeyframe:
+    """Held-until-changed head/mouth/eyes view (layer-local frame)."""
+
+    frame: int
+    view: str
+
+
+@dataclass(frozen=True)
 class Child:
     """A cut-out rig part nested under a parent Layer (head, arm, hand, ...).
 
@@ -142,6 +150,7 @@ class Layer:
     slots: dict[str, Slot] = field(default_factory=dict)
     children: list[Child] = field(default_factory=list)
     transform_keyframes: list[TransformKeyframe] = field(default_factory=list)
+    view_keyframes: list[ViewKeyframe] = field(default_factory=list)
     groups: dict[str, list[str]] = field(default_factory=dict)
 
     def is_visible_at(self, frame_idx: int, scene_total_frames: int) -> bool:
@@ -239,6 +248,42 @@ class Timeline:
                     )
             elapsed_frames += scene.total_frames
         return clips
+
+
+def layer_view_at(layer: Layer, local_frame: int) -> str | None:
+    """Head/mouth/eyes view at a layer-local frame.
+
+    An active dialogue clip's own ``view`` wins while that line is
+    playing. Otherwise a held ``view_keyframes`` sample (a silent walk).
+    Otherwise the latest dialogue clip that has already started.
+    """
+
+    last_active: str | None = None
+    for clip in layer.dialogue:
+        view = getattr(clip, "view", None)
+        if not view:
+            continue
+        start = clip.start_frame
+        duration = getattr(clip, "duration_frames", 0) or 0
+        if start <= local_frame < start + duration:
+            last_active = view
+    if last_active:
+        return last_active
+
+    held: str | None = None
+    for key in layer.view_keyframes:
+        if key.frame <= local_frame:
+            held = key.view
+        else:
+            break
+    if held:
+        return held
+
+    last: str | None = None
+    for clip in layer.dialogue:
+        if clip.start_frame <= local_frame and getattr(clip, "view", None):
+            last = clip.view
+    return last
 
 
 def transform_at(layer: Layer, local_frame: int) -> Transform:
@@ -736,7 +781,7 @@ def apply_natural_lipsync(
     visible_frames = max(0, layer_end - layer.start_frame)
 
     for clip in layer.dialogue:
-        available = lipsync_natural.drawing_names(mouth, clip.view)
+        available = lipsync_natural.drawing_names(mouth, layer_view_at(layer, clip.start_frame))
         cues = lipsync_natural.process_mouth_cues(
             clip.cues,
             duration_frames=clip.duration_frames,
@@ -869,6 +914,12 @@ def _build_layer(
         for k in sorted(raw.get("transform_keyframes", []), key=lambda item: item["frame"])
     ]
 
+    view_keyframes = [
+        ViewKeyframe(frame=int(k["frame"]), view=str(k["view"]))
+        for k in sorted(raw.get("view_keyframes", []), key=lambda item: item["frame"])
+        if k.get("view")
+    ]
+
     groups_raw = raw.get("groups") if isinstance(raw.get("groups"), dict) else {}
     groups = {
         str(name): [str(member) for member in members if member]
@@ -889,6 +940,7 @@ def _build_layer(
         slots=_build_slots(raw.get("slots"), project_dir, dialogue=dialogue or None),
         children=[_build_child(c, project_dir) for c in raw.get("children", [])],
         transform_keyframes=transform_keyframes,
+        view_keyframes=view_keyframes,
         groups=groups,
     )
     # Natural lipsync (blinks + bob on the whole head group) is opt-in via

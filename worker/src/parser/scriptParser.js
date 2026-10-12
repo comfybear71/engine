@@ -239,6 +239,7 @@ function newSegmentDraft(layerId, startFrame, transform, z, markName) {
     slotKeyframes: new Map(), // slotName -> [{frame, drawing|cycle}]
     childSlotKeyframes: new Map(), // childId -> Map(slotName -> [{frame, drawing|cycle}])
     transformKeyframes: [], // [{frame, x?, y?, scale?, rotation?, ease?}]
+    viewKeyframes: [], // [{frame, view}] held-until-changed head/mouth/eyes view
     childRotationKeyframes: new Map(), // childId -> [{frame, rotation, ease?}]
     openingTransform: { ...transform },
   };
@@ -1316,13 +1317,18 @@ class ScriptParser {
       );
     }
 
-    const drawingsDir = `characters/${characterId}/${owner.slotConfig.drawings_dir}`;
-    const drawings = assetLibrary.scanDrawingsDir(this.projectDir, this.globalAssetsDir, drawingsDir);
+    const drawings = actionLibrary.slotDrawingNames(
+      this.projectDir,
+      this.globalAssetsDir,
+      characterId,
+      slotName,
+      owner.slotConfig
+    );
     const cycles = (owner.slotConfig && owner.slotConfig.cycles) || {};
     const drawingName = String(drawing == null ? "" : drawing).trim();
     const namedCycle = cycles[drawingName];
     const displayName = config.display_name || characterId;
-    const available = [...drawings.keys()].join(", ") || "(none)";
+    const available = [...drawings].join(", ") || "(none)";
 
     let keyframe;
     const segment = state.current;
@@ -1462,6 +1468,24 @@ class ScriptParser {
       return;
     }
     segment.transformKeyframes.push(keyframe);
+  }
+
+  _addViewKeyframe(segment, keyframe) {
+    if (!segment.viewKeyframes) segment.viewKeyframes = [];
+    const existing = segment.viewKeyframes.find((k) => k.frame === keyframe.frame);
+    if (existing) {
+      existing.view = keyframe.view;
+      return;
+    }
+    segment.viewKeyframes.push({ frame: keyframe.frame, view: keyframe.view });
+  }
+
+  _previousView(state) {
+    const clips = (state.current && state.current.dialogue) || [];
+    for (let i = clips.length - 1; i >= 0; i--) {
+      if (clips[i].view) return clips[i].view;
+    }
+    return state.currentView || "front";
   }
 
   _addRotationKeyframe(segment, childId, keyframe) {
@@ -1718,15 +1742,20 @@ class ScriptParser {
 
     const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
     this._runAtEventTime(scene, eventStart, () => {
+      const prevView = this._previousView(state);
       if (action) {
         this._ensureFacingTravel(scene, state, toX - state.current.transform.x, action.faces, token.lineNumber);
-        if (action.view) state.currentView = action.view;
       }
 
       const live = state.current;
       const liveFrom = live.transform;
       const startRel = Math.max(0, scene.cursorFrames - live.startFrame);
       const endRel = startRel + durationFrames;
+
+      if (action && action.view) {
+        this._addViewKeyframe(live, { frame: startRel, view: action.view });
+        this._addViewKeyframe(live, { frame: endRel, view: prevView || "front" });
+      }
 
       const slotRestores = [];
       if (action && action.set_slots) {
@@ -2445,6 +2474,9 @@ class ScriptParser {
     };
     if (segment.transformKeyframes && segment.transformKeyframes.length > 0) {
       layer.transform_keyframes = [...segment.transformKeyframes].sort((a, b) => a.frame - b.frame);
+    }
+    if (segment.viewKeyframes && segment.viewKeyframes.length > 0) {
+      layer.view_keyframes = [...segment.viewKeyframes].sort((a, b) => a.frame - b.frame);
     }
     if (segment.startFrame !== 0 || segment.endFrame !== undefined) {
       layer.timing = { start_frame: segment.startFrame };

@@ -42,6 +42,41 @@ function _findSlot(config, slotName) {
   return null;
 }
 
+function _viewFolderPrefix(drawingsDir, slotName) {
+  const dir = String(drawingsDir || slotName || "");
+  for (const view of HEAD_VIEWS) {
+    const suffix = `_${view}`;
+    if (dir.endsWith(suffix)) return dir.slice(0, -suffix.length);
+  }
+  return dir || slotName;
+}
+
+/**
+ * Drawing names on a slot, including views:true folders (`<slot>_<view>/`).
+ * Same lookup the parser uses when scanning images_by_view.
+ */
+function slotDrawingNames(projectDir, globalAssetsDir, characterId, slotName, slotConfig) {
+  const names = new Set();
+  const addDir = (relDir) => {
+    if (!relDir) return;
+    const scanned = assetLibrary.scanDrawingsDir(
+      projectDir,
+      globalAssetsDir,
+      `characters/${characterId}/${relDir}`
+    );
+    for (const name of scanned.keys()) names.add(name);
+  };
+  const baseDir = (slotConfig && slotConfig.drawings_dir) || slotName;
+  const prefix = _viewFolderPrefix(baseDir, slotName);
+  addDir(baseDir);
+  addDir(`${prefix}_front`);
+  for (const view of HEAD_VIEWS) {
+    if (view === "front") continue;
+    addDir(`${prefix}_${view}`);
+  }
+  return names;
+}
+
 function _asFiniteNumber(value, label, lineNumber) {
   const n = Number(value);
   if (!Number.isFinite(n)) {
@@ -133,13 +168,12 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
         `Action "${id}" set_slots "${slotName}" is not a slot on ${name}.`
       );
     }
-    const drawingsDir = `characters/${characterId}/${slotConfig.drawings_dir || slotName}`;
-    const drawings = assetLibrary.scanDrawingsDir(projectDir, globalAssetsDir, drawingsDir);
+    const drawings = slotDrawingNames(projectDir, globalAssetsDir, characterId, slotName, slotConfig);
     const drawingName = String(drawing == null ? "" : drawing).trim();
     if (!drawingName || !drawings.has(drawingName)) {
       throw new ScriptError(
         lineNumber,
-        `Action "${id}" set_slots ${slotName}="${drawingName || ""}" is not a drawing. Available: ${[...drawings.keys()].join(", ") || "(none)"}`
+        `Action "${id}" set_slots ${slotName}="${drawingName || ""}" is not a drawing. Available: ${[...drawings].join(", ") || "(none)"}`
       );
     }
   }
@@ -175,6 +209,7 @@ module.exports = {
   listActionIds,
   validateAction,
   loadAndValidateAction,
+  slotDrawingNames,
   FACES,
   _findChild,
   _findSlot,

@@ -33,7 +33,7 @@ from .camera import apply_camera, scale_camera
 from .ffmpeg_writer import write_frames
 from .lipsync_natural import slot_head_bob
 from .slots import Slot, _find_active_clip, active_drawing, drawing_align, is_hide_drawing, slot_is_visible
-from .timeline_loader import Child, Layer, Scene, Timeline, child_rotation_at, transform_at
+from .timeline_loader import Child, Layer, Scene, Timeline, child_rotation_at, layer_view_at, transform_at
 from .transform import rotate_offset_clockwise
 
 
@@ -198,13 +198,9 @@ LEGACY_FULL_HEAD_SLOTS = frozenset({"head", "face", "eyes"})
 
 
 def _layer_view_at(layer: Layer, local_frame: int) -> str | None:
-    """Held view= from the latest dialogue clip that has started."""
+    """Active dialogue view, else held view_keyframes, else last started clip."""
 
-    last: str | None = None
-    for clip in layer.dialogue:
-        if clip.start_frame <= local_frame and getattr(clip, "view", None):
-            last = clip.view
-    return last
+    return layer_view_at(layer, local_frame)
 
 
 def _suppressed_head_slots(layer: Layer) -> set[str]:
