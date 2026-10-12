@@ -108,6 +108,7 @@ in the scene's timeline onward (held until the next change):
 | `z=<integer>` | Overrides this character's draw order from here on. |
 | `hold=<secs>s` | Optional hold length for this pin (Studio move / trim). When set, the lane block lasts that long instead of stretching to the next pin. Does not advance the scene clock. Studio writes `hold=` when you drag a pin so the block never silently lengthens. |
 | `over=<secs>s` | Same as `hold=` on a pin (older alias). On `[Move:]` / `[Pose:]` / `[Camera:]`, `over=` is the timed duration and may advance the clock. |
+| `view=<head view>` | Same as `[View: Name view=…]`: sets the default head/mouth view from this point and writes `view_keyframes`. Accepted views include `back`. |
 | *(anything else)* | Treated as a **slot name** on that character (e.g. `eyes=furious`, `right_hand=point`, `body=walk_side`): the value is either a **named cycle** declared on that slot in `character.json` (emits a `{ frame, cycle, fps }` keyframe), a drawing that must exist in that slot's folder (see [docs/assets.md](assets.md)), or `none` to hide the slot. A drawing becomes a held-until-changed keyframe at the current frame. An empty value (`right_hand=`) is a lint error that names the line and the missing drawing. The reserved `mouth` slot can't be set this way -- it's always driven by dialogue. |
 
 Any `at=`/`scale=`/`flip`/`z` change **that actually differs** from the
@@ -172,15 +173,19 @@ dramatic beat of silence.
 Tweens the character's **current layer** from wherever they are now to a
 target. Does **not** start a new layer (`flip_x` is still not keyframed --
 turn them around with `[Action: Name flip]`, which *does* fork a layer).
-`action=<id>` plays a looping side-view walk from
+`action=<id>` plays a looping walk from
 `characters/<id>/actions/<id>.json` (see [docs/assets.md#actions](assets.md#actions)).
+Side walks (`walk_side`) travel in x; depth walks (`walk_towards` /
+`walk_away`) change y and scale (a mark's own `scale`, or `scale=`).
+A walk straight toward or away from camera has `dx≈0`, so duration cannot
+come from `|dx|` — give `over=` (e.g. `over=3s`).
 
 | Key | Meaning |
 |---|---|
 | `to=<mark>` | Target is that staging mark's `x`/`y` (and its `scale` if the mark defines one). |
 | `to=<x,y>` | Explicit canvas coordinates (no spaces). Keeps the current scale unless `scale=` is also given. |
 | `over=<secs>s` | Duration in seconds (e.g. `1s`, `0.5s`), converted to frames at the document fps. Required unless `action=` is set. |
-| `action=<id>` | Play that character action (usually `walk_side`) while travelling. With no `over=`, duration is `|dx| / (distance_per_cycle × layer scale × fps / frames)` seconds so leg speed matches travel. With `over=`, the same distance is covered in that time and the cycle rate is stretched to match. Auto-faces the direction of travel (a flipped layer, same as `[Action: flip]`) when it does not match `faces`. Head/eyes/mouth stay on top. |
+| `action=<id>` | Play that character action (`walk_side`, `walk_towards`, `walk_away`, …) while travelling. With no `over=`, duration is `|dx| / (distance_per_cycle × layer scale × fps / frames)` seconds so leg speed matches travel. With `over=`, the same distance is covered in that time and the cycle rate is stretched to match (required when `dx≈0`, i.e. a depth walk between marks that share x). Auto-faces the direction of travel (a flipped layer, same as `[Action: flip]`) when it does not match `faces`. Head/eyes/mouth stay on top; in `view=back` a missing `<slot>_back/` folder hides that slot (eyes/mouth) instead of showing the front drawings. |
 | `ease=linear` or `ease=inout` | How to interpolate from the start keyframe. Default `linear`. `ease=inout` with `action=` warns (feet slide). |
 | `wait=true` (default) | Advance the scene clock by the duration, like `[Pause]`. |
 | `wait=false` | Leave the clock where it is so following lines/tags run *during* the move. |
@@ -333,6 +338,7 @@ than one cycle the action loops. Restores view, slot drawings, joint
 angles, group angles, and bob at the end.
 
 The action may change `view` (or a per-frame `views` array), `set_slots`,
+`slot_frames` (per-cycle-frame slot drawings, restored at the end),
 `joints`, optional `groups` (degrees per cycle frame, same rigid group
 rotation as `[Pose:]`), and `bob` (Y offset even while standing still).
 
@@ -535,9 +541,12 @@ set lip-sync uses:
 | `[Audio: Name file=monologue view=right_34]` | Same for an imported take. |
 
 Allowed views: `front`, `left_34`, `left_side`, `right_34`, `right_side`,
-`up`, `down`. `front` is the default and may be omitted. Studio writes
+`up`, `down`, `back`. `front` is the default and may be omitted. Studio writes
 `view=` from the selected Dialogue block's dropdown. The compositor
-resolves `images_by_view[view]` → `front` → `images` → shape `X`.
+resolves `images_by_view[view]` → `front` → `images` → shape `X`, except
+`back`: a view-aware slot with no `<slot>_back/` folder (typical for
+eyes and mouth) draws nothing instead of falling back to front. Lip-sync
+still runs on a spoken line in back view, but no mouth drawing is shown.
 
 ## Lip-sync (on demand)
 
@@ -695,3 +704,20 @@ side view. After the move the previous view is restored. A line with its
 own `view=` still wins while it plays. `ease=inout` with `action=`
 warns because the feet slide. The sample Hicks/Dana characters do not
 ship a walk action; the tags above are the syntax.
+
+Depth walks (toward / away from camera) use the same `[Move]` tag with
+`over=` and marks that differ in **y** and **scale** (same x is fine).
+`action=walk_towards` / `walk_away` hold `view=front` / `view=back` and
+may swap a `legs` (or other) slot every cycle frame via `slot_frames`.
+Those drawings restore after the move, same as `set_slots`.
+
+```text
+[Action: Rodney at=front]
+[Move: Rodney to=upstage action=walk_away over=3s]
+[Move: Rodney to=front action=walk_towards over=3s]
+```
+
+`upstage` is a smaller, higher mark (e.g. scale `0.55`); `front` is
+nearer (scale `~1.0`). Because `dx≈0`, omit `over=` and the duration
+rounds to 0 frames — that is a line-numbered error. `y` and `scale`
+tween across the move; `bob` is still added to `y` each frame.

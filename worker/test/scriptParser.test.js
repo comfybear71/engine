@@ -1268,6 +1268,82 @@ describe("one-head rig emit", () => {
     assert.match(String(layer.slots.torso.images_by_view.left_34.front), /torso_left_34/);
     assert.match(String(layer.slots.torso.images_by_view.front.front), /torso/);
   });
+
+  test("back view resolves torso_back/head_base_back; eyes and mouth have no back folder", async () => {
+    const aliceDir = path.join(fixture.projectDir, "characters", "alice");
+    const globalJson = path.join(fixture.globalAssetsDir, "characters", "alice", "character.json");
+    const character = JSON.parse(fs.readFileSync(globalJson, "utf8"));
+    const canvas = { w: 8, h: 8, pivot: { x: 4, y: 7 } };
+    character.groups = { head: ["head_base", "eyes", "mouth"] };
+    character.slots.head_base = {
+      offset: { x: 0, y: -20 },
+      drawings_dir: "head_base",
+      default_drawing: "neutral",
+      z: 0,
+      canvas,
+    };
+    character.slots.torso = {
+      offset: { x: 0, y: 0 },
+      drawings_dir: "torso",
+      default_drawing: "front",
+      views: true,
+    };
+    character.slots.eyes.z = 1;
+    character.slots.eyes.canvas = canvas;
+    character.slots.mouth.z = 2;
+    character.slots.mouth.canvas = canvas;
+    fs.mkdirSync(path.join(aliceDir, "head_base"), { recursive: true });
+    fs.mkdirSync(path.join(aliceDir, "head_base_back"), { recursive: true });
+    fs.mkdirSync(path.join(aliceDir, "torso"), { recursive: true });
+    fs.mkdirSync(path.join(aliceDir, "torso_back"), { recursive: true });
+    fs.writeFileSync(path.join(aliceDir, "character.json"), JSON.stringify(character, null, 2));
+    fs.writeFileSync(path.join(aliceDir, "head_base", "neutral.png"), TRANSPARENT_PNG_1X1);
+    fs.writeFileSync(path.join(aliceDir, "head_base_back", "neutral.png"), TRANSPARENT_PNG_1X1);
+    fs.writeFileSync(path.join(aliceDir, "torso", "front.png"), TRANSPARENT_PNG_1X1);
+    fs.writeFileSync(path.join(aliceDir, "torso_back", "front.png"), TRANSPARENT_PNG_1X1);
+
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[View: Alice view=back]",
+      "Alice: Hello.",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const layer = timeline.scenes[0].layers[0];
+    assert.match(String(layer.slots.head_base.images_by_view.back.neutral), /head_base_back/);
+    assert.match(String(layer.slots.torso.images_by_view.back.front), /torso_back/);
+    assert.equal(layer.slots.eyes.images_by_view && layer.slots.eyes.images_by_view.back, undefined);
+    assert.equal(layer.slots.mouth.images_by_view && layer.slots.mouth.images_by_view.back, undefined);
+    assert.equal(layer.view_keyframes[0].view, "back");
+    assert.equal(layer.dialogue[0].view, "back");
+  });
+
+  test("[Action: Name view=back] writes view_keyframes and is not a slot", async () => {
+    const aliceDir = path.join(fixture.projectDir, "characters", "alice");
+    const globalJson = path.join(fixture.globalAssetsDir, "characters", "alice", "character.json");
+    const character = JSON.parse(fs.readFileSync(globalJson, "utf8"));
+    character.slots.torso = {
+      offset: { x: 0, y: 0 },
+      drawings_dir: "torso",
+      default_drawing: "front",
+      views: true,
+    };
+    fs.mkdirSync(path.join(aliceDir, "torso_back"), { recursive: true });
+    fs.writeFileSync(path.join(aliceDir, "character.json"), JSON.stringify(character, null, 2));
+    fs.writeFileSync(path.join(aliceDir, "torso", "front.png"), TRANSPARENT_PNG_1X1);
+    fs.writeFileSync(path.join(aliceDir, "torso_back", "front.png"), TRANSPARENT_PNG_1X1);
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "[Action: Alice view=back]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const layer = timeline.scenes[0].layers[0];
+    assert.equal(layer.view_keyframes[0].view, "back");
+    assert.equal(layer.slots.view, undefined);
+  });
 });
 
 describe("imported audio errors", () => {
@@ -1760,5 +1836,200 @@ describe("[Move] action=walk_side", { concurrency: false }, () => {
     const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
     const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
     assert.equal(rodney.view_keyframes[0].view, "left_side");
+  });
+
+  function writeLegsAndWalk(actionId, spec) {
+    const charDir = path.join(fixture.projectDir, "characters", "rodney");
+    const character = JSON.parse(fs.readFileSync(path.join(charDir, "character.json"), "utf8"));
+    character.slots.legs = {
+      offset: { x: 0, y: 0 },
+      drawings_dir: "legs",
+      default_drawing: "passing",
+    };
+    fixture.writeJson(path.join(charDir, "character.json"), character);
+    for (const name of ["L_forward", "passing", "R_forward", "lift_screenL"]) {
+      fixture.writePng(path.join(charDir, "legs", `${name}.png`));
+    }
+    fixture.writeJson(path.join(charDir, "actions", `${actionId}.json`), { id: actionId, ...spec });
+  }
+
+  test("slot_frames emits a keyframe on each drawing change and restores after [Do:]", async () => {
+    writeLegsAndWalk("step", {
+      view: "front",
+      faces: "right",
+      fps: 12,
+      frames: 4,
+      slot_frames: { legs: ["L_forward", "L_forward", "passing", "R_forward"] },
+    });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney step]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const kfs = (rodney.slots.legs.keyframes || []).slice().sort((a, b) => a.frame - b.frame);
+    const byFrame = Object.fromEntries(kfs.map((k) => [k.frame, k.drawing]));
+    assert.equal(byFrame[0], "L_forward");
+    assert.equal(byFrame[2], undefined, "same drawing as frame 0 must not emit again");
+    assert.equal(byFrame[4], "passing");
+    assert.equal(byFrame[6], "R_forward");
+    assert.equal(byFrame[8], "passing");
+  });
+
+  test("slot_frames on [Move] uses the walk cycle index and restores", async () => {
+    writeLegsAndWalk("walk_towards", {
+      view: "front",
+      faces: "right",
+      fps: 12,
+      frames: 4,
+      distance_per_cycle: 100,
+      set_slots: { torso: "rig" },
+      slot_frames: { legs: ["L_forward", "L_forward", "passing", "R_forward"] },
+    });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_towards]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const endFrame = rodney.transform_keyframes[rodney.transform_keyframes.length - 1].frame;
+    const kfs = (rodney.slots.legs.keyframes || []).slice().sort((a, b) => a.frame - b.frame);
+    const byFrame = Object.fromEntries(kfs.map((k) => [k.frame, k.drawing]));
+    assert.equal(byFrame[0], "L_forward");
+    assert.equal(byFrame[4], "passing");
+    assert.equal(byFrame[6], "R_forward");
+    assert.equal(byFrame[endFrame], "passing");
+    const torso = rodney.slots.torso.keyframes;
+    assert.equal(torso.find((k) => k.frame === 0).drawing, "rig");
+    assert.equal(torso.find((k) => k.frame === endFrame).drawing, "stand");
+  });
+
+  test("slot_frames unknown slot cites the line", async () => {
+    writeLegsAndWalk("bad_slot", {
+      view: "front",
+      fps: 12,
+      frames: 4,
+      slot_frames: { wings: ["L_forward", "L_forward", "passing", "R_forward"] },
+    });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney bad_slot]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /slot_frames "wings"/.test(err.message)
+    );
+  });
+
+  test("slot_frames wrong length cites the line", async () => {
+    writeLegsAndWalk("bad_len", {
+      view: "front",
+      fps: 12,
+      frames: 4,
+      slot_frames: { legs: ["L_forward", "passing"] },
+    });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney bad_len]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /slot_frames "legs" length 2 != frames 4/.test(err.message)
+    );
+  });
+
+  test("slot_frames missing drawing cites the line", async () => {
+    writeLegsAndWalk("bad_draw", {
+      view: "front",
+      fps: 12,
+      frames: 4,
+      slot_frames: { legs: ["L_forward", "nope", "passing", "R_forward"] },
+    });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney bad_draw]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /slot_frames legs\[1\]="nope"/.test(err.message) &&
+        /L_forward/.test(err.message)
+    );
+  });
+
+  test("[Move to=mark action=walk_away over=3s] interpolates y and scale with bob when dx=0", async () => {
+    const stagingPath = path.join(fixture.projectDir, "backgrounds", "room_a", "staging.json");
+    fixture.writeJson(stagingPath, {
+      marks: {
+        centre: { x: 500, y: 1000, scale: 1.0 },
+        front: { x: 500, y: 1000, scale: 1.0 },
+        upstage: { x: 500, y: 800, scale: 0.55 },
+        left: { x: 450, y: 1000, scale: 1.0 },
+        right: { x: 550, y: 1000, scale: 1.0 },
+      },
+      auto_order: ["left", "right"],
+    });
+    try {
+      writeRodney({
+        bob: [0, 3, 6, 3, 0, 3, 6, 3, 0, 3, 6, 3],
+        actions: {
+          walk_away: {
+            view: "back",
+            faces: "right",
+            fps: 12,
+            frames: 12,
+            set_slots: { torso: "rig" },
+            joints: { right_arm: Array(12).fill(0) },
+            bob: [0, 3, 6, 3, 0, 3, 6, 3, 0, 3, 6, 3],
+          },
+        },
+      });
+      const script = [
+        "[Scene: Intro]",
+        "[Location: room_a]",
+        "[Cast: Rodney]",
+        "[Action: Rodney at=front]",
+        "[Move: Rodney to=upstage action=walk_away over=3s]",
+      ].join("\n");
+      const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+      const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+      const keys = rodney.transform_keyframes;
+      assert.ok(keys && keys.length > 2);
+      assert.equal(keys[0].x, 500);
+      assert.equal(keys[keys.length - 1].frame, 72);
+      assert.equal(keys[keys.length - 1].x, 500);
+      assert.equal(keys[keys.length - 1].y, 800);
+      assert.equal(keys[keys.length - 1].scale, 0.55);
+      const mid = keys.find((k) => k.frame === 2);
+      const t = 2 / 72;
+      const scale = 1 + (0.55 - 1) * t;
+      const yLinear = 1000 + (800 - 1000) * t;
+      assert.ok(mid, "expected a keyframe at frame 2");
+      assert.ok(Math.abs(mid.scale - scale) < 1e-6, `scale ${mid.scale} != ${scale}`);
+      assert.ok(Math.abs(mid.y - (yLinear + 3 * scale)) < 1e-6, `y ${mid.y} != ${yLinear + 3 * scale}`);
+      const views = (rodney.view_keyframes || []).slice().sort((a, b) => a.frame - b.frame);
+      assert.equal(views[0].view, "back");
+      assert.equal(views[views.length - 1].view, "front");
+    } finally {
+      fs.rmSync(stagingPath, { force: true });
+    }
   });
 });

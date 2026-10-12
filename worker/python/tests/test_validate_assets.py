@@ -76,3 +76,22 @@ def test_validate_character_scans_views_true_folders_without_canvas(tmp_path: Pa
     assert "missing canvas" not in joined
     assert "torso/front.png" not in joined
     assert "torso_left_34/front.png" in joined and "touches the canvas edge" in joined
+
+
+def test_validate_character_scans_back_view_folder(tmp_path: Path):
+    char_dir = tmp_path / "characters" / "bill"
+    (char_dir / "torso").mkdir(parents=True)
+    (char_dir / "torso_back").mkdir()
+    _write_rgba(char_dir / "torso" / "front.png", 16, 16, inset=2)
+    _write_rgba(char_dir / "torso_back" / "front.png", 16, 16, inset=0)
+    config = {
+        "id": "bill",
+        "slots": {
+            "torso": {"drawings_dir": "torso", "views": True, "default_drawing": "front"},
+        },
+    }
+    (char_dir / "character.json").write_text(json.dumps(config))
+    issues = validate_character(char_dir, config, roots=[tmp_path])
+    joined = "\n".join(issues)
+    assert "torso/front.png" not in joined
+    assert "torso_back/front.png" in joined and "touches the canvas edge" in joined

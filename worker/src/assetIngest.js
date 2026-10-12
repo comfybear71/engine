@@ -15,6 +15,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const { loadCharacter, resolveAsset } = require("./parser/assetLibrary");
+const { HEAD_VIEWS } = require("./parser/actionTag");
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 const { isSafeFolderName } = require("./studioProjects");
 const { getNeed, expandNeed } = require("./assetNeeds");
@@ -283,7 +284,7 @@ function readManifest(projectDir, characterId, sid) {
 }
 
 function inferMouthViewDest(needId, dest) {
-  const match = String(needId || "").match(/^mouth_13_(front|left_34|left_side|right_34|right_side|up|down)$/);
+  const match = String(needId || "").match(new RegExp(`^mouth_13_(${HEAD_VIEWS.join("|")})$`));
   if (!match || !dest || dest.kind !== "slot") return dest;
   const dir = match[1] === "front" ? "mouth_front" : `mouth_${match[1]}`;
   const current = dest.drawings_dir || dest.slot;

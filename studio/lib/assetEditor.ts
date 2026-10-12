@@ -473,6 +473,7 @@ export const MOUTH_VIEW_ORDER = [
   "right_side",
   "up",
   "down",
+  "back",
   "loud",
   "mouth",
 ] as const;
@@ -485,6 +486,7 @@ export const MOUTH_VIEW_LABELS: Record<string, string> = {
   right_side: "Right side",
   up: "Up",
   down: "Down",
+  back: "Back",
   loud: "Loud",
   mouth: "Mouth",
 };

@@ -77,7 +77,10 @@ class Slot:
     # Slot only draws when each named slot's active drawing is in the list.
     visible_when: dict[str, list[str]] = field(default_factory=dict)
     # Optional per-head-view mouth sheets (mouth_left_side/, …). Missing
-    # views fall back to "front", then to ``images``.
+    # views fall back to "front", then to ``images``. The back view is the
+    # exception: a view-aware slot with no ``images_by_view["back"]``
+    # (no ``<slot>_back/`` folder) draws nothing instead of showing front
+    # eyes/mouth on the back of the head.
     images_by_view: dict[str, dict[str, Path]] = field(default_factory=dict)
     # Subtle head bob on mouth/face/eyes only (layer-local start frames).
     head_bob_starts: list[int] = field(default_factory=list)
@@ -111,6 +114,9 @@ class Slot:
             named = self.images_by_view.get(wanted)
             if named:
                 pools.append(named)
+            elif wanted == "back" and self.images_by_view:
+                # Missing <slot>_back/: hide. Do not fall back to front.
+                return None
             if wanted != "front":
                 front = self.images_by_view.get("front")
                 if front:

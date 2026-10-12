@@ -51,7 +51,7 @@ const MOUTH_SOUNDS = {
   H: "tongue L",
 };
 const VIEW_IDS = [...HEAD_VIEWS, "loud"];
-const VIEW_NAME = /^(front|left_34|left_side|right_34|right_side|up|down|loud)$/;
+const VIEW_NAME = new RegExp(`^(${VIEW_IDS.join("|")})$`);
 const HISTORY_DIRS = new Set(["_replaced", "_trash", "_backup", "_library", "_reference", "_preview"]);
 const ACTION_TAGS = new Set(["action", "move", "pose", "swing"]);
 

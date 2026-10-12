@@ -9,10 +9,12 @@ const {
   parseCastList,
   parsePauseValue,
   parseSecondsSpec,
+  parseViewValue,
   parseEaseValue,
   parseWaitValue,
   parseNumberValue,
   parseXyPair,
+  HEAD_VIEWS,
 } = require("../src/parser/actionTag");
 const { ScriptError } = require("../src/parser/errors");
 
@@ -129,6 +131,16 @@ describe("animation tag value parsers", () => {
   test("parseSecondsSpec rejects bad values with a line number", () => {
     assert.throws(() => parseSecondsSpec("abc", 4, "over"), (err) => err instanceof ScriptError && err.lineNumber === 4);
     assert.throws(() => parseSecondsSpec("0s", 4, "over"), (err) => err instanceof ScriptError && err.lineNumber === 4);
+  });
+
+  test("parseViewValue accepts back with the other head views", () => {
+    assert.ok(HEAD_VIEWS.includes("back"));
+    assert.equal(parseViewValue("back", 1), "back");
+    assert.equal(parseViewValue("FRONT", 1), "front");
+    assert.throws(
+      () => parseViewValue("sideways", 3),
+      (err) => err instanceof ScriptError && err.lineNumber === 3 && /back/.test(err.message)
+    );
   });
 
   test("parseEaseValue / parseWaitValue / parseXyPair", () => {
