@@ -3,8 +3,10 @@ import { describe, test } from "node:test";
 import {
   BADGE_LABEL,
   FACTORY_VIEW_TABS,
+  formatBounds,
   formatCountLine,
   formatPivot,
+  groupAudioFolders,
   isFactoryBadge,
   pivotPercent,
   sourceLabel,
@@ -41,5 +43,17 @@ describe("factory Assets helpers", () => {
     assert.equal(at.left, 50);
     assert.equal(at.top, 25);
     assert.equal(formatPivot({ x: 509.4, y: 457.2 }), "509 / 457");
+    assert.equal(formatBounds({ x: 460, y: 342, w: 102, h: 120 }), "460,342 → 562,462");
+    assert.deepEqual(
+      groupAudioFolders([
+        { label: "big_red_nude_truck", rel: "audio/big_red_nude_truck/001_rodney.wav" },
+        { label: "big_red_nude_truck", rel: "audio/big_red_nude_truck/002_rodney.wav" },
+        { label: "rodney_jepps", rel: "audio/rodney_jepps/001_rodney.wav" },
+      ]).map((folder) => [folder.label, folder.count]),
+      [
+        ["big_red_nude_truck", 2],
+        ["rodney_jepps", 1],
+      ]
+    );
   });
 });

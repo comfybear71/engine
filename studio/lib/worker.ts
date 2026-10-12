@@ -442,6 +442,8 @@ export type FactoryPiece = {
   missing: boolean;
   badge: FactoryBadge | null;
   mtime?: number | null;
+  compositeRel?: string | null;
+  faceGroup?: string | null;
 };
 export type FactoryRow = {
   id: string;
@@ -451,6 +453,14 @@ export type FactoryRow = {
   kind: "slot" | "child";
   drawings: FactoryPiece[];
 };
+export type FactoryUsage = {
+  kind: string;
+  script: string | null;
+  line: number | null;
+  text: string;
+};
+export type FactoryHistory = { rel: string; mtime: number | null };
+export type FactoryBounds = { x: number; y: number; w: number; h: number; empty?: boolean };
 export type FactoryInspector = {
   key: string;
   slot: string;
@@ -465,13 +475,19 @@ export type FactoryInspector = {
   offset: { x: number; y: number };
   anchor: string;
   redo: string;
+  compositeRel?: string | null;
+  faceGroup?: string | null;
+  bounds?: FactoryBounds | null;
+  usages?: FactoryUsage[];
+  history?: FactoryHistory[];
 };
+export type FactoryViewTab = { id: string; label: string; count?: number };
 export type FactoryCharacter = {
   ok: boolean;
   characterId: string;
   displayName: string;
   view: string;
-  views: { id: string; label: string }[];
+  views: FactoryViewTab[];
   status: Record<string, string>;
   redos: Record<string, string>;
   counts: { ticked: number; locked: number; draft: number; missing: number };
@@ -564,14 +580,33 @@ export async function loadStage(name: string, script?: string | null): Promise<S
 export function assetUrl(
   project: string,
   rel: string | null | undefined,
-  opts?: { thumb?: boolean; v?: number | string | null; library?: boolean }
+  opts?: {
+    thumb?: boolean;
+    factory?: boolean;
+    over?: string | null;
+    v?: number | string | null;
+    library?: boolean;
+  }
 ): string | null {
   if (!rel) return null;
   const params = new URLSearchParams({ rel });
   if (opts?.thumb) params.set("thumb", "1");
+  if (opts?.factory) params.set("factory", "1");
+  if (opts?.over) params.set("over", opts.over);
   if (opts?.library) params.set("library", "1");
   if (opts?.v != null && opts.v !== "") params.set("v", String(opts.v));
   return `${WORKER_URL}${withShow(`/api/projects/${encodeURIComponent(project)}/asset?${params.toString()}`)}`;
+}
+
+export async function openProjectFolder(name: string, rel: string): Promise<{ ok: boolean; path?: string }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/open-folder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rel }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; path?: string; error?: string };
+  if (!res.ok) throw new Error(body.error || `Open folder failed (${res.status})`);
+  return { ok: true, path: body.path };
 }
 
 export type MakeIndependentResult = {

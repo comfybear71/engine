@@ -15,6 +15,7 @@ const {
   normalizeView,
   standardForSlot,
   candidateDrawingsDirs,
+  childRowLabel,
 } = require("../src/factoryStandard");
 const {
   readStatus,
@@ -70,7 +71,15 @@ describe("factory standard catalog", () => {
     assert.deepEqual(parseStatusKey("eyes_front/surprised"), { slot: "eyes_front", drawing: "surprised" });
     assert.equal(drawingBadge({ "eyes_front/surprised": "ticked" }, "eyes_front/surprised", true, true), "ticked");
     assert.equal(drawingBadge({}, "eyes_front/half", false, true), "missing");
-    assert.equal(drawingBadge({}, "eyes_front/open", true, true), null);
+    assert.equal(drawingBadge({}, "eyes_front/open", true, true), "draft");
+  });
+
+  test("shirt and shorts overlays sit under Torso, not Arm rig", () => {
+    assert.equal(childRowLabel({ id: "shirt_overlay", asset: "parts/shirt.png" }), "Torso");
+    assert.equal(childRowLabel({ id: "shorts", asset: "overlays/shorts.png" }), "Torso");
+    assert.equal(childRowLabel({ id: "torso_rig", asset: "parts/torso_rig.png" }), "Torso");
+    assert.equal(childRowLabel({ id: "body", asset: "body.png" }), "Torso");
+    assert.equal(childRowLabel({ id: "arm_upper_L", asset: "parts/arm_upper.png" }), "Arm rig L");
   });
 });
 
@@ -172,12 +181,57 @@ describe("character status.json", () => {
     assert.ok(arms.drawings.some((d) => d.name === "arm_upper" && d.rel));
     assert.ok(factory.counts.missing > 0);
     assert.equal(factory.counts.ticked, 1);
-    const inspect = inspectorForPiece(factory, "eyes_front/surprised");
+    const inspect = inspectorForPiece(factory, "eyes_front/surprised", {
+      projectDir: fixture.projectDir,
+      globalAssetsDir: fixture.globalAssetsDir,
+    });
     assert.equal(inspect.slot, "eyes");
     assert.equal(inspect.drawing, "surprised");
     assert.equal(inspect.rel, "characters/rodney/eyes_front/surprised.png");
+    assert.equal(inspect.compositeRel, "characters/rodney/head_base/neutral.png");
     assert.equal(inspect.canvas.w, 1024);
     assert.equal(inspect.pivot.x, 509);
+    assert.ok(inspect.bounds);
+    assert.ok(Array.isArray(inspect.usages));
+    assert.ok(Array.isArray(inspect.history));
+    const front = factory.views.find((item) => item.id === "front");
+    assert.ok(front && front.count >= 4);
+  });
+
+  test("torso, body, torso_rig and clothing overlays share one Torso row", () => {
+    const dir = path.join(fixture.projectDir, "characters", "riggy");
+    fixture.writePng(path.join(dir, "blank.png"));
+    fixture.writePng(path.join(dir, "torso", "neutral.png"));
+    fixture.writePng(path.join(dir, "body", "walk.png"));
+    fixture.writePng(path.join(dir, "parts", "torso_rig.png"));
+    fixture.writePng(path.join(dir, "parts", "shirt.png"));
+    fixture.writePng(path.join(dir, "parts", "shorts.png"));
+    fixture.writeJson(path.join(dir, "character.json"), {
+      id: "riggy",
+      display_name: "Riggy",
+      aliases: ["Riggy"],
+      asset: "blank.png",
+      z: 10,
+      slots: {
+        torso: { drawings_dir: "torso", default_drawing: "neutral" },
+        body: { drawings_dir: "body", default_drawing: "walk" },
+      },
+      children: [
+        { id: "torso_rig", asset: "parts/torso_rig.png", z: 0, offset: { x: 0, y: 0 } },
+        { id: "shirt_overlay", asset: "parts/shirt.png", z: 1, offset: { x: 0, y: 0 } },
+        { id: "shorts", asset: "parts/shorts.png", z: 1, offset: { x: 0, y: 0 } },
+      ],
+    });
+    const factory = describeFactoryCharacter(fixture.projectDir, fixture.globalAssetsDir, "riggy", "front");
+    const torsoRows = factory.rows.filter((row) => row.label === "Torso");
+    assert.equal(torsoRows.length, 1);
+    const names = torsoRows[0].drawings.map((item) => item.name);
+    assert.ok(names.includes("neutral"));
+    assert.ok(names.includes("walk"));
+    assert.ok(torsoRows[0].drawings.some((item) => /shirt/.test(item.rel || item.name)));
+    assert.ok(torsoRows[0].drawings.some((item) => /shorts/.test(item.rel || item.name)));
+    assert.ok(torsoRows[0].drawings.some((item) => /torso_rig/.test(item.rel || item.drawingsDir || "")));
+    assert.equal(factory.rows.filter((row) => /overlay/i.test(row.label)).length, 0);
   });
 
   test("eyes stay hidden on the back view; applyStatusBody validates input", () => {

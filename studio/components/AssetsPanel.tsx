@@ -3,13 +3,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import AlignHeadModal from "@/components/AlignHeadModal";
 import AssetEditorOverlay from "@/components/AssetEditorOverlay";
-import CharacterReferenceCard from "@/components/CharacterReferenceCard";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
 import { slotViewGroups, type AssetFocus } from "@/lib/assetEditor";
 import {
   FACTORY_VIEW_TABS,
+  formatBounds,
   formatCountLine,
   formatPivot,
+  groupAudioFolders,
   isFactoryBadge,
   pivotPercent,
   sourceLabel,
@@ -19,6 +20,7 @@ import {
   addLibraryCharacter,
   assetUrl,
   loadCharacters,
+  lintScript,
   loadFactoryCharacter,
   loadLibrary,
   loadProjectActions,
@@ -26,6 +28,7 @@ import {
   loadStaging,
   loadStudioSettings,
   makeProjectIndependent,
+  openProjectFolder,
   saveFactoryStatus,
   saveStudioSettings,
   type Character,
@@ -265,12 +268,24 @@ function FactoryCell({
       <span className={`studio-factory-cell-thumb ${piece.rel ? "studio-checker" : ""}`}>
         {piece.rel ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={assetUrl(project, piece.rel, { v: piece.mtime }) || undefined} alt={piece.name} />
+          <img
+            src={
+              assetUrl(project, piece.rel, {
+                factory: true,
+                over: piece.compositeRel,
+                v: piece.mtime,
+              }) || undefined
+            }
+            alt={piece.name}
+          />
         ) : null}
         {badge ? (
-          <span className="studio-factory-badge" data-badge={badge} data-testid={`assets-badge-${badge}`}>
-            {badge === "ticked" ? "✓" : badge === "locked" ? "L" : badge === "draft" ? "d" : "–"}
-          </span>
+          <span
+            className="studio-factory-badge"
+            data-badge={badge}
+            data-testid={`assets-badge-${badge}`}
+            title={badge}
+          />
         ) : null}
       </span>
       <span className="studio-factory-cell-label">{piece.name}</span>
@@ -301,17 +316,13 @@ function FactoryRowBlock({
     { ticked: 0, locked: 0, draft: 0, missing: 0 } as Record<FactoryBadge, number>
   );
   return (
-    <section className="studio-factory-row" data-testid={`assets-slot-${row.slot}`}>
+    <section className="studio-factory-row" data-testid={`assets-row-${row.label}`}>
       <div className="studio-factory-row-head">
         <h4 className="studio-factory-row-title">
-          {row.kind === "slot" ? (
-            <button type="button" onClick={onOpenSlot}>
-              {row.label}
-              {row.owner ? <span className="ml-1 font-normal text-studio-muted">on {row.owner}</span> : null}
-            </button>
-          ) : (
-            <span>{row.label}</span>
-          )}
+          <button type="button" onClick={onOpenSlot}>
+            {row.label}
+            {row.owner ? <span className="ml-1 font-normal text-studio-muted">on {row.owner}</span> : null}
+          </button>
         </h4>
         <span className="studio-factory-row-meta">
           {row.drawings.length} drawing{row.drawings.length === 1 ? "" : "s"}
@@ -386,6 +397,9 @@ export default function AssetsPanel({
   const [redoNote, setRedoNote] = useState("");
   const [statusBusy, setStatusBusy] = useState(false);
   const [importAudioOpen, setImportAudioOpen] = useState(false);
+  const [lintNote, setLintNote] = useState<string | null>(null);
+  const [lintBusy, setLintBusy] = useState(false);
+  const [openBusy, setOpenBusy] = useState(false);
 
   useEffect(() => {
     if (!project || !workerUp) return;
@@ -398,13 +412,16 @@ export default function AssetsPanel({
       loadStudioSettings(project),
       loadProjectActions(project),
       loadProjectAudio(project),
+      loadLibrary(project).catch(() => ({ characters: [], added: [] })),
     ])
-      .then(([chars, nextStaging, settings, nextActions, nextAudio]) => {
+      .then(([chars, nextStaging, settings, nextActions, nextAudio, library]) => {
         if (cancelled) return;
         setCharacters(chars);
         setStaging(nextStaging);
         setActions(nextActions);
         setAudio(nextAudio);
+        setLibraryChars(library.characters || []);
+        setLibraryAdded(library.added || []);
         setIndependent(settings.independent !== false);
         const current = selectedId;
         const nextId = current && chars.some((c) => c.id === current) ? current : chars[0]?.id ?? null;
@@ -444,8 +461,8 @@ export default function AssetsPanel({
   }, [project, workerUp, libraryOpen, reloadKey]);
 
   const selected = useMemo(
-    () => characters.find((c) => c.id === selectedId) || null,
-    [characters, selectedId]
+    () => characters.find((c) => c.id === selectedId) || libraryChars.find((c) => c.id === selectedId) || null,
+    [characters, libraryChars, selectedId]
   );
 
   useEffect(() => {
@@ -463,7 +480,7 @@ export default function AssetsPanel({
     return () => {
       cancelled = true;
     };
-  }, [project, workerUp, selectedId, view, reloadKey, refreshToken, pool]);
+  }, [project, workerUp, selectedId, view, selectedKey, reloadKey, refreshToken, pool]);
 
   useEffect(() => {
     setAlignOpen(false);
@@ -577,11 +594,73 @@ export default function AssetsPanel({
   const selectedProp = librarySel?.kind === "props" ? (staging?.props || []).find((p) => `${p.location}:${p.id}` === librarySel.id) : null;
   const selectedBg = librarySel?.kind === "backgrounds" ? (staging?.backgrounds || []).find((b) => b.id === librarySel.id) : null;
   const selectedAction = librarySel?.kind === "actions" ? actions.find((a) => a.label === librarySel.id) : null;
-  const selectedSound = librarySel?.kind === "sounds" ? audio.find((a) => a.rel === librarySel.id) : null;
+  const soundFolders = useMemo(() => groupAudioFolders(audio), [audio]);
+  const selectedSound = librarySel?.kind === "sounds" ? soundFolders.find((a) => a.label === librarySel.id) : null;
   const showCharacterMain = !librarySel || librarySel.kind === "characters";
+  const libraryOnlyChars = libraryChars.filter((character) => !characters.some((item) => item.id === character.id));
+  const factoryTabs = factory?.views?.length ? factory.views : FACTORY_VIEW_TABS;
+  const factoryCounts = factory?.counts || { ticked: 0, locked: 0, draft: 0, missing: 0 };
+
+  async function onValidate() {
+    if (!project || lintBusy) return;
+    setLintBusy(true);
+    setLintNote(null);
+    try {
+      const result = await lintScript(project, undefined, script);
+      const errors = result.lint?.errors?.length || 0;
+      const warnings = result.lint?.warnings?.length || 0;
+      setLintNote(errors ? `${errors} error${errors === 1 ? "" : "s"}` : warnings ? `${warnings} warning${warnings === 1 ? "" : "s"}` : "ok");
+    } catch (err) {
+      setLintNote(err instanceof Error ? err.message : "Validate failed");
+    } finally {
+      setLintBusy(false);
+    }
+  }
+
+  async function onOpenFolder() {
+    if (!project || !selectedId || openBusy) return;
+    setOpenBusy(true);
+    try {
+      await openProjectFolder(project, `characters/${selectedId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not open folder");
+    } finally {
+      setOpenBusy(false);
+    }
+  }
 
   const toolbar = showCharacters ? (
     <div className={pool ? "flex shrink-0 flex-wrap items-center justify-end gap-2" : "studio-factory-actions"}>
+      {!pool ? (
+        <>
+          <div className="studio-factory-pills" data-testid="assets-status-pills">
+            {(["ticked", "locked", "draft", "missing"] as const).map((badge) => (
+              <span key={badge} className="studio-factory-pill" data-badge={badge} data-testid={`assets-pill-${badge}`}>
+                <i />
+                {factoryCounts[badge]} {badge}
+              </span>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="studio-header-textbtn"
+            data-testid="assets-validate"
+            disabled={lintBusy}
+            onClick={() => void onValidate()}
+          >
+            {lintBusy ? "Validate…" : lintNote ? `Validate · ${lintNote}` : "Validate"}
+          </button>
+          <button
+            type="button"
+            className="studio-header-textbtn"
+            data-testid="assets-open-folder"
+            disabled={!selectedId || openBusy}
+            onClick={() => void onOpenFolder()}
+          >
+            {openBusy ? "Opening…" : "Open folder"}
+          </button>
+        </>
+      ) : null}
       <label className="flex items-center gap-1.5 text-[11px] text-neutral-300" data-testid="independent-toggle">
         <input
           type="checkbox"
@@ -805,6 +884,7 @@ export default function AssetsPanel({
         <LibraryGroup
           kind="characters"
           label="Characters"
+          count={characters.length + libraryOnlyChars.length}
           onNew={() => onNew("characters")}
         >
           {characters.map((character) => (
@@ -821,10 +901,28 @@ export default function AssetsPanel({
                 label={character.display_name}
               />
               <span className="min-w-0 flex-1 truncate">{character.display_name}</span>
+              <span className="studio-asset-count">{character.slots?.length || 0}</span>
+            </button>
+          ))}
+          {libraryOnlyChars.map((character) => (
+            <button
+              key={`lib-${character.id}`}
+              type="button"
+              className="studio-asset-leaf"
+              data-testid={`assets-tree-library-${character.id}`}
+              data-selected={librarySel?.kind === "characters" && librarySel.id === character.id ? "true" : "false"}
+              onClick={() => selectCharacter(character.id)}
+            >
+              <TinyThumb
+                src={assetUrl(project, character.thumbRel, { thumb: true, v: character.mtime, library: true })}
+                label={character.display_name}
+              />
+              <span className="min-w-0 flex-1 truncate">{character.display_name}</span>
+              <span className="studio-asset-count">library</span>
             </button>
           ))}
         </LibraryGroup>
-        <LibraryGroup kind="props" label="Props" onNew={() => onNew("props")}>
+        <LibraryGroup kind="props" label="Props" count={(staging?.props || []).length} onNew={() => onNew("props")}>
           {(staging?.props || []).map((prop) => {
             const id = `${prop.location}:${prop.id}`;
             return (
@@ -842,7 +940,12 @@ export default function AssetsPanel({
             );
           })}
         </LibraryGroup>
-        <LibraryGroup kind="backgrounds" label="Backgrounds" onNew={() => onNew("backgrounds")}>
+        <LibraryGroup
+          kind="backgrounds"
+          label="Backgrounds"
+          count={(staging?.backgrounds || []).length}
+          onNew={() => onNew("backgrounds")}
+        >
           {(staging?.backgrounds || []).map((bg) => (
             <button
               key={bg.id}
@@ -857,7 +960,7 @@ export default function AssetsPanel({
             </button>
           ))}
         </LibraryGroup>
-        <LibraryGroup kind="actions" label="Actions" onNew={() => onNew("actions")}>
+        <LibraryGroup kind="actions" label="Actions" count={actions.length} onNew={() => onNew("actions")}>
           {actions.map((action) => (
             <button
               key={action.label}
@@ -868,20 +971,22 @@ export default function AssetsPanel({
               onClick={() => setLibrarySel({ kind: "actions", id: action.label })}
             >
               <span className="min-w-0 flex-1 truncate">{action.label}</span>
+              <span className="studio-asset-count">1</span>
             </button>
           ))}
         </LibraryGroup>
-        <LibraryGroup kind="sounds" label="Sounds" onNew={() => onNew("sounds")}>
-          {audio.map((file) => (
+        <LibraryGroup kind="sounds" label="Sounds" count={soundFolders.length} onNew={() => onNew("sounds")}>
+          {soundFolders.map((folder) => (
             <button
-              key={file.rel}
+              key={folder.label}
               type="button"
               className="studio-asset-leaf"
-              data-testid={`assets-tree-sound-${file.label}`}
-              data-selected={librarySel?.kind === "sounds" && librarySel.id === file.rel ? "true" : "false"}
-              onClick={() => setLibrarySel({ kind: "sounds", id: file.rel })}
+              data-testid={`assets-tree-sound-${folder.label}`}
+              data-selected={librarySel?.kind === "sounds" && librarySel.id === folder.label ? "true" : "false"}
+              onClick={() => setLibrarySel({ kind: "sounds", id: folder.label })}
             >
-              <span className="min-w-0 flex-1 truncate">{file.label}</span>
+              <span className="min-w-0 flex-1 truncate">{folder.label}</span>
+              <span className="studio-asset-count">{folder.count}</span>
             </button>
           ))}
         </LibraryGroup>
@@ -915,7 +1020,7 @@ export default function AssetsPanel({
         {showCharacterMain ? (
           <>
             <div className="studio-factory-tabs" data-testid="assets-view-tabs">
-              {FACTORY_VIEW_TABS.map((tab) => (
+              {factoryTabs.map((tab) => (
                 <button
                   key={tab.id}
                   type="button"
@@ -925,6 +1030,7 @@ export default function AssetsPanel({
                   onClick={() => setView(tab.id)}
                 >
                   {tab.label}
+                  {"count" in tab && tab.count != null ? <span className="studio-factory-tab-count">{tab.count}</span> : null}
                 </button>
               ))}
             </div>
@@ -941,28 +1047,6 @@ export default function AssetsPanel({
                     onSelect={(piece) => {
                       setSelectedKey(piece.key);
                       setRedoNote(factory.redos[piece.key] || "");
-                      setFactory((current) =>
-                        current
-                          ? {
-                              ...current,
-                              inspector: {
-                                key: piece.key,
-                                slot: row.slot,
-                                label: row.label,
-                                drawing: piece.name,
-                                view: current.view,
-                                rel: piece.rel,
-                                badge: piece.badge,
-                                missing: piece.missing,
-                                canvas: current.canvas,
-                                pivot: current.canvas.pivot,
-                                offset: { x: 0, y: 0 },
-                                anchor: "pivot + offset",
-                                redo: current.redos[piece.key] || "",
-                              },
-                            }
-                          : current
-                      );
                     }}
                     onOpenSlot={() => setAssetFocus({ mode: "slot", characterId: selected.id, slot: row.slot, view })}
                     onOpenDrawing={(piece) =>
@@ -1008,8 +1092,7 @@ export default function AssetsPanel({
             {selectedAction ? <p className="text-[11px] text-neutral-300">{selectedAction.rel}</p> : null}
             {selectedSound ? (
               <p className="text-[11px] text-neutral-300">
-                {selectedSound.rel}
-                {selectedSound.durationSeconds != null ? ` · ${selectedSound.durationSeconds.toFixed(1)}s` : ""}
+                {selectedSound.label} · {selectedSound.count} file{selectedSound.count === 1 ? "" : "s"}
               </p>
             ) : null}
           </div>
@@ -1020,12 +1103,20 @@ export default function AssetsPanel({
         {showCharacterMain && inspector ? (
           <div>
             <h2 className="studio-factory-inspector-title">
-              {inspector.slot} / {inspector.drawing}
+              {inspector.label} / {inspector.drawing}
             </h2>
             <div className="studio-factory-preview studio-checker">
               {inspector.rel ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={assetUrl(project, inspector.rel) || undefined} alt={inspector.drawing} />
+                <img
+                  src={
+                    assetUrl(project, inspector.rel, {
+                      factory: true,
+                      over: inspector.compositeRel,
+                    }) || undefined
+                  }
+                  alt={inspector.drawing}
+                />
               ) : (
                 <div className="flex h-full items-center justify-center text-[10px] text-studio-muted">missing</div>
               )}
@@ -1044,11 +1135,26 @@ export default function AssetsPanel({
                 {inspector.canvas.w} × {inspector.canvas.h}
               </dd>
               <dt>Pivot</dt>
-              <dd>{formatPivot(inspector.pivot)}</dd>
+              <dd>
+                {formatPivot(inspector.pivot)}
+                {inspector.offset ? ` + ${inspector.offset.x},${inspector.offset.y}` : ""}
+              </dd>
               <dt>Anchor</dt>
               <dd>{inspector.anchor}</dd>
               <dt>Source</dt>
               <dd title={inspector.rel || undefined}>{inspector.rel || "—"}</dd>
+              <dt>Bounds</dt>
+              <dd data-testid="assets-inspector-bounds">{formatBounds(inspector.bounds)}</dd>
+              <dt>Used-by</dt>
+              <dd data-testid="assets-inspector-usages">
+                {(inspector.usages || []).length
+                  ? (inspector.usages || [])
+                      .slice(0, 4)
+                      .map((item) => item.script || item.text)
+                      .filter(Boolean)
+                      .join(", ") || `${(inspector.usages || []).length} refs`
+                  : "—"}
+              </dd>
             </dl>
             <div className="studio-factory-btns">
               <button
@@ -1070,32 +1176,62 @@ export default function AssetsPanel({
                 Redo
               </button>
             </div>
+            <label className="studio-factory-redo-label" htmlFor="assets-redo-note">
+              Redo prompt
+            </label>
             <textarea
+              id="assets-redo-note"
               className="studio-factory-redo"
               data-testid="assets-redo-note"
-              placeholder="Redo note"
+              placeholder="wider eyes, brows raised, keep lids and skin tone…"
               value={redoNote}
               onChange={(event) => setRedoNote(event.target.value)}
             />
+            {(inspector.history || []).length > 0 ? (
+              <div className="studio-factory-history" data-testid="assets-inspector-history">
+                <p className="studio-factory-redo-label">History</p>
+                <div className="studio-factory-history-row">
+                  {(inspector.history || []).map((item) => (
+                    <span key={item.rel} className="studio-factory-history-thumb studio-checker">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={assetUrl(project, item.rel, { factory: true, v: item.mtime }) || undefined} alt="" />
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="studio-factory-redo-label" data-testid="assets-inspector-history">
+                History · none
+              </p>
+            )}
           </div>
         ) : showCharacterMain && selected ? (
-          <div className="space-y-3">
-            <div>
-              <p className="text-[11px] uppercase tracking-wider text-studio-muted">Character</p>
-              <h2 className="text-sm font-semibold text-white">{selected.display_name}</h2>
-              <p className="text-[11px] text-studio-muted">
-                {selected.id} · {selected.source} · z {selected.z}
-              </p>
-            </div>
-            <CharacterReferenceCard
-              project={project}
-              character={selected}
-              onChanged={() => {
-                setReloadKey((n) => n + 1);
-                onLibraryChange?.();
-              }}
-            />
-            <p className="text-[11px] text-studio-muted">Click a drawing for pivot, canvas, and Approve / Redo.</p>
+          <div className="studio-factory-summary" data-testid="assets-character-summary">
+            <p className="studio-factory-redo-label">Character</p>
+            <h2 className="studio-factory-inspector-title">{selected.display_name}</h2>
+            <dl className="studio-factory-fields">
+              <dt>Id</dt>
+              <dd>{selected.id}</dd>
+              <dt>Source</dt>
+              <dd>{sourceLabel(selected.source)}</dd>
+              <dt>Canvas</dt>
+              <dd>
+                {factory?.canvas.w || selected.canvas?.w || 1024} × {factory?.canvas.h || selected.canvas?.h || 1024}
+              </dd>
+              <dt>Scale</dt>
+              <dd>{factory?.default_scale ?? selected.default_scale ?? 1}</dd>
+              <dt>Review</dt>
+              <dd>{formatCountLine(factoryCounts) || "no review yet"}</dd>
+            </dl>
+            <ul className="studio-factory-summary-rows">
+              {(factory?.rows || []).map((row) => (
+                <li key={row.id}>
+                  {row.label}
+                  <span>{row.drawings.length}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[10px] text-studio-muted">Click a drawing for bounds, used-by, and Approve / Redo.</p>
           </div>
         ) : (
           <p className="text-[11px] text-studio-muted">Select a library item.</p>
@@ -1110,18 +1246,23 @@ export default function AssetsPanel({
 function LibraryGroup({
   kind,
   label,
+  count,
   onNew,
   children,
 }: {
   kind: LibraryKind;
   label: string;
+  count?: number;
   onNew: () => void;
   children: ReactNode;
 }) {
   return (
     <section className="studio-factory-group">
       <div className="studio-factory-group-head">
-        <h3 className="studio-factory-group-title">{label}</h3>
+        <h3 className="studio-factory-group-title">
+          {label}
+          {count != null ? <span className="studio-asset-count">{count}</span> : null}
+        </h3>
         <button type="button" className="studio-factory-new" data-testid={`assets-new-${kind}`} onClick={onNew}>
           + New
         </button>

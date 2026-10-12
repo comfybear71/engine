@@ -1,4 +1,4 @@
-import rodney from "../../docs/prompt-packs/rodney.json" with { type: "json" };
+import rodney from "../data/prompt-packs/rodney.json" with { type: "json" };
 
 export type PackDest =
   | { kind: "file"; rel: string }
