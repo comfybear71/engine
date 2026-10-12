@@ -421,9 +421,29 @@
           "description": "In the parent's local (pre-scale) pixel space, from the parent's anchor point to this child's pivot point. Mirrored in x when the parent is flipped, so rig parts stay attached correctly when the whole character flips."
         },
         "pivot": {
-          "$ref": "#/definitions/anchor",
           "default": "center",
-          "description": "Which point of this child's own (post-scale) bounding box sits at `offset` -- also the point rotation is applied around. Same enum as a top-level layer's `transform.anchor`."
+          "description": "Which point of this child's own (post-scale) image sits at `offset` -- also the point rotation is applied around. A named box anchor (same enum as a layer's `transform.anchor`) or `{x, y}` in unscaled image pixels (loaded as pivot_px and drawn like a canvas slot).",
+          "oneOf": [
+            { "$ref": "#/definitions/anchor" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["x", "y"],
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" }
+              }
+            }
+          ]
+        },
+        "visible_when": {
+          "type": "object",
+          "description": "Same semantics as slot.visible_when: this child (and its children) only draw when each named slot's currently active drawing is in the given list. Names are resolved on the same layer via the slot drawings collected for that frame.",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" }
+          }
         },
         "scale": { "type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "Multiplies the parent's own scale." },
         "flip_x": { "type": "boolean", "default": false, "description": "Composed with the parent's flip_x (XOR): false (default) means this child simply mirrors along with the parent; true gives it an independent mirror on top of that." },

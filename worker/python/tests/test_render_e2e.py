@@ -7,9 +7,12 @@ import json
 import shutil
 import subprocess
 
+import cv2
+import numpy as np
 import pytest
 
-from compositor.compositor import render
+from compositor.asset_cache import AssetCache
+from compositor.compositor import compose_scene_frame, render
 from compositor.timeline_loader import load_timeline
 
 from .conftest import SAMPLE_PROJECT_DIR
@@ -59,3 +62,69 @@ def test_sample_project_renders_prores4444(tmp_path):
     assert "audio" in codec_types
     video_stream = next(s for s in streams if s["codec_type"] == "video")
     assert video_stream["codec_name"] == "prores"
+
+
+def _solid_png(path, w, h, bgr):
+    img = np.zeros((h, w, 4), dtype=np.uint8)
+    img[:, :, 0], img[:, :, 1], img[:, :, 2], img[:, :, 3] = bgr[0], bgr[1], bgr[2], 255
+    cv2.imwrite(str(path), img)
+
+
+def test_one_second_walk_renders_with_head_slots(tmp_path):
+    """A 1s walk still draws head slots (eyes) on top of the limb rig."""
+
+    _solid_png(tmp_path / "bg.png", 80, 80, (20, 20, 20))
+    _solid_png(tmp_path / "body.png", 8, 8, (40, 40, 40))
+    _solid_png(tmp_path / "eyes_open.png", 10, 10, (0, 255, 0))
+    _solid_png(tmp_path / "thigh.png", 6, 20, (0, 0, 200))
+
+    cycle = [0, 15, 25, 15, 0, -15, -25, -15, 0, 10, 20, 10]
+    doc = {
+        "series": "Test",
+        "episode": "walk",
+        "fps": 24,
+        "canvas": {"width": 80, "height": 80},
+        "scenes": [
+            {
+                "id": "s1",
+                "duration": {"frames": 24},
+                "background": {"asset": "bg.png"},
+                "layers": [
+                    {
+                        "id": "rodney",
+                        "asset": "body.png",
+                        "z": 1,
+                        "transform": {"x": 10, "y": 40, "anchor": "top-left", "scale": 1},
+                        "transform_keyframes": [
+                            {"frame": i, "x": 10 + i * 2, "y": 40, "ease": "linear"} for i in range(25)
+                        ],
+                        "slots": {
+                            "eyes": {
+                                "offset": {"x": 20, "y": 0},
+                                "images": {"open": "eyes_open.png"},
+                                "keyframes": [{"frame": 0, "drawing": "open"}],
+                            }
+                        },
+                        "children": [
+                            {
+                                "id": "right_thigh",
+                                "asset": "thigh.png",
+                                "z": 1,
+                                "offset": {"x": 0, "y": 8},
+                                "pivot": {"x": 3, "y": 0},
+                                "rotation_keyframes": [
+                                    {"frame": i, "rotation": cycle[i % 12], "ease": "linear"}
+                                    for i in range(25)
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    (tmp_path / "timeline.json").write_text(json.dumps(doc))
+    timeline = load_timeline(tmp_path / "timeline.json")
+    frame = compose_scene_frame(timeline.scenes[0], 12, 80, 80, 24, AssetCache())
+    greens = np.all(frame == (0, 255, 0), axis=2)
+    assert greens.any(), "expected head-slot (eyes) pixels on the 1s walk frame"

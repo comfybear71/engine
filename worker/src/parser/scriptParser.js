@@ -66,6 +66,7 @@ const {
 } = require("./actionTag");
 const { ScriptError } = require("./errors");
 const assetLibrary = require("./assetLibrary");
+const actionLibrary = require("./actionLibrary");
 const { probeDurationSeconds } = require("./ffprobeDuration");
 const { findOverlapWarnings, findMouthSheetErrors, findMissingPropAssets, findSharedLibraryWarnings, findRigHeadAssetErrors } = require("./lint");
 const { resolveImportedTrack, wordsToSentences, transcriptFromWords } = require("../importAudio");
@@ -1522,6 +1523,110 @@ class ScriptParser {
     return parts;
   }
 
+  _applyCharacterFlipX(scene, state, flipX, lineNumber) {
+    const current = state.current;
+    if (!current) return;
+    if (!!current.transform.flip_x === !!flipX) return;
+    const newTransform = { ...current.transform, flip_x: !!flipX };
+    const sameFrameAsSegmentStart = current.startFrame === scene.cursorFrames;
+    if (sameFrameAsSegmentStart) {
+      current.transform = { ...current.transform, flip_x: newTransform.flip_x };
+      current.openingTransform = { ...current.openingTransform, flip_x: newTransform.flip_x };
+      current._lineNumber = lineNumber;
+      return;
+    }
+    const markName = current.markName;
+    const z = current.z;
+    this._closeCurrentSegment(state, scene.cursorFrames);
+    this._openSegment(scene, state, { markName, transform: newTransform, z }, lineNumber);
+    this._carryActiveSlots(state, scene, new Set());
+  }
+
+  _ensureFacingTravel(scene, state, dx, faces, lineNumber) {
+    if (!dx) return;
+    const flipX = !!state.current.transform.flip_x;
+    const facesRight = String(faces || "right").toLowerCase() !== "left";
+    const facingRight = facesRight ? !flipX : flipX;
+    const travelingRight = dx > 0;
+    if (facingRight === travelingRight) return;
+    this._applyCharacterFlipX(scene, state, !flipX, lineNumber);
+  }
+
+  _snapshotActiveSlot(state, owner, slotName) {
+    const active = state.activeSlots.get(slotStateKey(owner, slotName));
+    if (active) {
+      return {
+        drawing: active.drawing,
+        cycle: active.cycle ? [...active.cycle] : undefined,
+        fps: active.fps,
+      };
+    }
+    const slotConfig = owner && owner.slotConfig;
+    if (slotConfig && slotConfig.default_drawing) {
+      return { drawing: slotConfig.default_drawing };
+    }
+    return null;
+  }
+
+  _restoreActiveSlot(state, owner, slotName, prev, scene, endRel) {
+    if (!prev) return;
+    const keyframe = prev.cycle
+      ? { frame: endRel, cycle: [...prev.cycle], fps: prev.fps }
+      : { frame: endRel, drawing: prev.drawing };
+    this._writeSlotKeyframe(state.current, owner, slotName, keyframe);
+    state.activeSlots.set(slotStateKey(owner, slotName), {
+      ownerType: owner.ownerType,
+      childId: owner.childId,
+      slotName,
+      drawing: prev.drawing,
+      cycle: prev.cycle ? [...prev.cycle] : undefined,
+      fps: prev.fps,
+      startedAtSceneFrame: prev.cycle ? scene.cursorFrames : undefined,
+    });
+  }
+
+  _emitActionWalk(scene, state, action, from, toX, toY, toScale, startRel, endRel, durationFrames, ease) {
+    const dx = toX - from.x;
+    const naturalPxPerSec = action.distance_per_cycle * (from.scale || 1) * action.fps / action.frames;
+    const naturalSeconds = naturalPxPerSec > 0 ? Math.abs(dx) / naturalPxPerSec : durationFrames / this.fps;
+    const durationSeconds = durationFrames / this.fps;
+    const cycleFps = durationSeconds > 0 ? action.fps * (naturalSeconds / durationSeconds) : action.fps;
+
+    for (let f = 0; f <= durationFrames; f++) {
+      const t = durationFrames === 0 ? 1 : f / durationFrames;
+      const x = from.x + (toX - from.x) * t;
+      const y = from.y + (toY - from.y) * t;
+      const scale = from.scale + (toScale - from.scale) * t;
+      const elapsedSec = f / this.fps;
+      const phase = elapsedSec * cycleFps;
+      let index = action.frames > 0 ? Math.floor(phase) % action.frames : 0;
+      if (index < 0) index += action.frames;
+      const bob = action.bob && f < durationFrames ? Number(action.bob[index]) || 0 : 0;
+      const key = {
+        frame: startRel + f,
+        x,
+        y: y + bob * scale,
+        scale,
+      };
+      if (ease && ease !== "linear") key.ease = ease;
+      else if (f < durationFrames) key.ease = "linear";
+      this._addTransformKeyframe(state.current, key);
+
+      for (const [jointId, angles] of Object.entries(action.joints || {})) {
+        const rotation = f === durationFrames ? 0 : Number(angles[index]);
+        this._addRotationKeyframe(state.current, jointId, {
+          frame: startRel + f,
+          rotation,
+          ease: "linear",
+        });
+      }
+    }
+
+    for (const jointId of Object.keys(action.joints || {})) {
+      state.childRotations.set(jointId, 0);
+    }
+  }
+
   // ---- [Move: ...] -------------------------------------------------------
 
   _handleMove(token) {
@@ -1530,13 +1635,25 @@ class ScriptParser {
       throw new ScriptError(token.lineNumber, `[Move: ...] needs to=<mark> or to=<x,y>.`);
     }
 
-    const overSeconds = parseSecondsSpec(kv.over, token.lineNumber, "over");
-    const ease = parseEaseValue(kv.ease, token.lineNumber);
-    const wait = parseWaitValue(kv.wait, token.lineNumber);
-    const durationFrames = framesFromSeconds(overSeconds, this.fps);
-    if (durationFrames <= 0) {
-      throw new ScriptError(token.lineNumber, `Invalid over "${kv.over}" -- duration rounds to 0 frames at ${this.fps} fps.`);
+    const actionId = kv.action;
+    let action = null;
+    if (actionId !== undefined && String(actionId).trim() !== "") {
+      action = actionLibrary.loadAndValidateAction(
+        this.projectDir,
+        this.globalAssetsDir,
+        state.characterId,
+        String(actionId).trim(),
+        { config: state.config, lineNumber: token.lineNumber }
+      );
     }
+
+    const ease = parseEaseValue(kv.ease, token.lineNumber);
+    if (action && ease === "inout") {
+      this.warnings.push(
+        `Line ${token.lineNumber}: ease=inout with action=${actionId} will slide the feet. Use linear (the default).`
+      );
+    }
+    const wait = parseWaitValue(kv.wait, token.lineNumber);
 
     const segment = state.current;
     const from = segment.transform;
@@ -1575,33 +1692,89 @@ class ScriptParser {
       markName = kv.to;
     }
 
+    let durationSeconds;
+    if (kv.over !== undefined) {
+      durationSeconds = parseSecondsSpec(kv.over, token.lineNumber, "over");
+    } else if (action) {
+      const scale = from.scale || 1;
+      const pxPerSec = (action.distance_per_cycle * scale * action.fps) / action.frames;
+      const dx = Math.abs(toX - from.x);
+      if (!(pxPerSec > 0)) {
+        throw new ScriptError(token.lineNumber, `Action "${actionId}" distance_per_cycle produces no travel speed.`);
+      }
+      durationSeconds = dx / pxPerSec;
+    } else {
+      durationSeconds = parseSecondsSpec(kv.over, token.lineNumber, "over");
+    }
+    const durationFrames = framesFromSeconds(durationSeconds, this.fps);
+    if (durationFrames <= 0) {
+      throw new ScriptError(
+        token.lineNumber,
+        action && kv.over === undefined
+          ? `Move action="${actionId}" duration rounds to 0 frames at ${this.fps} fps.`
+          : `Invalid over "${kv.over}" -- duration rounds to 0 frames at ${this.fps} fps.`
+      );
+    }
+
     const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
     this._runAtEventTime(scene, eventStart, () => {
-      const startRel = Math.max(0, scene.cursorFrames - segment.startFrame);
+      if (action) {
+        this._ensureFacingTravel(scene, state, toX - state.current.transform.x, action.faces, token.lineNumber);
+        if (action.view) state.currentView = action.view;
+      }
+
+      const live = state.current;
+      const liveFrom = live.transform;
+      const startRel = Math.max(0, scene.cursorFrames - live.startFrame);
       const endRel = startRel + durationFrames;
 
-      this._addTransformKeyframe(segment, {
-        frame: startRel,
-        x: from.x,
-        y: from.y,
-        scale: from.scale,
-        ease,
-      });
-      this._addTransformKeyframe(segment, {
-        frame: endRel,
-        x: toX,
-        y: toY,
-        scale: toScale,
-      });
+      const slotRestores = [];
+      if (action && action.set_slots) {
+        for (const [slotName, drawing] of Object.entries(action.set_slots)) {
+          const owner = this._findSlotOwner(state.config, slotName);
+          if (!owner) continue;
+          slotRestores.push({
+            owner,
+            slotName,
+            prev: this._snapshotActiveSlot(state, owner, slotName),
+          });
+          this._applySlotKeyframe(scene, state, state.characterId, slotName, drawing, token.lineNumber);
+        }
+      }
 
-      segment.transform = { ...from, x: toX, y: toY, scale: toScale };
-      segment.markName = markName;
+      if (action) {
+        this._emitActionWalk(scene, state, action, liveFrom, toX, toY, toScale, startRel, endRel, durationFrames, ease);
+        for (const item of slotRestores) {
+          this._restoreActiveSlot(state, item.owner, item.slotName, item.prev, scene, endRel);
+        }
+      } else {
+        this._addTransformKeyframe(live, {
+          frame: startRel,
+          x: liveFrom.x,
+          y: liveFrom.y,
+          scale: liveFrom.scale,
+          ease,
+        });
+        this._addTransformKeyframe(live, {
+          frame: endRel,
+          x: toX,
+          y: toY,
+          scale: toScale,
+        });
+      }
+
+      live.transform = { ...liveFrom, x: toX, y: toY, scale: toScale };
+      live.markName = markName;
+      if (Object.prototype.hasOwnProperty.call(state, "lastPose") || action) {
+        state.lastPose = { transform: { ...live.transform }, z: live.z, markName };
+      }
+      const displayName = (state.config && state.config.display_name) || state.characterId;
       this._emitLane({
         lane: "action",
         token,
         startFrame: eventStart,
         endFrame: eventStart + durationFrames,
-        label: `${state.characterId} → ${kv.to}`,
+        label: action ? `${displayName} walk` : `${state.characterId} → ${kv.to}`,
         subject: state.characterId,
         kv,
         keys: Object.keys(kv),
@@ -2463,6 +2636,7 @@ class ScriptParser {
     };
     if (childConfig.parent) child.parent = childConfig.parent;
     if (childConfig.pivot) child.pivot = childConfig.pivot;
+    if (childConfig.visible_when) child.visible_when = childConfig.visible_when;
     if (childConfig.scale !== undefined) child.scale = childConfig.scale;
     if (childConfig.flip_x !== undefined) child.flip_x = childConfig.flip_x;
     const rotation = liveRotation !== undefined ? liveRotation : childConfig.rotation;

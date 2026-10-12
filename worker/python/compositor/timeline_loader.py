@@ -92,6 +92,8 @@ class Child:
     slots: dict[str, Slot] = field(default_factory=dict)
     parent: str | None = None
     rotation_keyframes: list[RotationKeyframe] = field(default_factory=list)
+    pivot_px: tuple[float, float] | None = None
+    visible_when: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -429,10 +431,7 @@ def _build_slot(raw: dict, project_dir: Path, dialogue: list[DialogueClip] | Non
         raw_keyframes = sorted(raw["keyframes"], key=lambda k: k["frame"])
         keyframes = [_build_slot_keyframe(k) for k in raw_keyframes]
 
-    visible_when = {
-        name: [str(d) for d in drawings]
-        for name, drawings in raw.get("visible_when", {}).items()
-    }
+    visible_when = _parse_visible_when(raw.get("visible_when"))
 
     excluded = frozenset(str(name) for name in (raw.get("exclude_from_lipsync") or []) if name)
 
@@ -519,15 +518,32 @@ def _build_rotation_keyframes(raw: list[dict] | None) -> list[RotationKeyframe]:
     ]
 
 
+def _parse_child_pivot(raw_pivot) -> tuple[str, tuple[float, float] | None]:
+    """Named box anchor, or ``{x, y}`` image pixels loaded as ``pivot_px``."""
+
+    if isinstance(raw_pivot, dict):
+        return "center", (float(raw_pivot.get("x", 0.0)), float(raw_pivot.get("y", 0.0)))
+    if raw_pivot:
+        return str(raw_pivot), None
+    return "center", None
+
+
+def _parse_visible_when(raw: dict | None) -> dict[str, list[str]]:
+    if not raw:
+        return {}
+    return {name: [str(d) for d in drawings] for name, drawings in raw.items()}
+
+
 def _build_child(raw: dict, project_dir: Path) -> Child:
     offset = raw.get("offset", {})
+    pivot, pivot_px = _parse_child_pivot(raw.get("pivot", "center"))
     return Child(
         id=raw["id"],
         asset=_resolve(project_dir, raw["asset"]),
         z=int(raw["z"]),
         offset_x=float(offset.get("x", 0.0)),
         offset_y=float(offset.get("y", 0.0)),
-        pivot=raw.get("pivot", "center"),
+        pivot=pivot,
         scale=float(raw.get("scale", 1.0)),
         flip_x=bool(raw.get("flip_x", False)),
         rotation=float(raw.get("rotation", 0.0)),
@@ -535,6 +551,8 @@ def _build_child(raw: dict, project_dir: Path) -> Child:
         slots=_build_slots(raw.get("slots"), project_dir, dialogue=None),
         parent=raw.get("parent"),
         rotation_keyframes=_build_rotation_keyframes(raw.get("rotation_keyframes")),
+        pivot_px=pivot_px,
+        visible_when=_parse_visible_when(raw.get("visible_when")),
     )
 
 
@@ -598,6 +616,12 @@ def _validate_visible_when(layer_id: str, layer_raw: dict) -> None:
     check(layer_raw.get("slots"), f"layer {layer_id!r}")
     for child in layer_raw.get("children", []):
         check(child.get("slots"), f"child {child['id']!r}")
+        for ref in (child.get("visible_when") or {}):
+            if ref not in names:
+                raise ValueError(
+                    f"child {child['id']!r} visible_when refers to "
+                    f"unknown slot {ref!r} on layer {layer_id!r}"
+                )
 
 
 def _raw_dialogue_clips(layer_raw: dict) -> list[dict]:

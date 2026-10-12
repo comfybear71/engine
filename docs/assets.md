@@ -105,7 +105,7 @@ beyond the generated PNGs/WAVs themselves).
 | `reference` | Optional path, relative to the character folder, to a full-body likeness image (typically `_reference/full.png`). Studio stores the original file — no chroma key or cut-out. Used as a Grok Imagine attach reminder and as the background in **Align head**. |
 | `slots` | Map of slot name -> `{ offset, drawings_dir, default_drawing?, cycles?, visible_when?, scale?, rotation?, z?, canvas?, views?, drawings? }`. `drawings_dir` is a folder (relative to the character's own folder) whose image filenames (without extension) become that slot's valid drawing names. `default_drawing` is used for the slot's initial state before any `[Action: ...]` sets it (irrelevant for the `mouth` slot, which is always dialogue-driven). `cycles` is an optional map of cycle name -> `{ drawings: [drawing, ...], fps }` -- `[Action: Name slot=cycle_name]` emits a looping cycle keyframe; a plain drawing name still emits a held drawing. `visible_when` is copied onto the timeline slot as-is (e.g. hide a mouth unless `body` is showing `"front"`). `scale` (default `1.0`) multiplies the owner's scale around the slot center (the offset point). `rotation` (default `0`, clockwise degrees) is added to the owner's rotation around that same center. Optional `z` is draw order among slots on the same owner (ascending; omitted is 0; ties keep `character.json` order). Optional `canvas: { w, h, pivot: { x, y } }` is a fixed drawing size and neck pivot: the pivot pixel is placed at owner + offset and is the scale/rotation centre. Omit `canvas` for today's centred placement. The parser copies `scale`, `rotation`, `z`, and `canvas` onto the timeline slot. Optional `views: true` scans `<drawings_dir>_<view>/` the same way head-group slots do (then `*_front/`, then the base folder). Those slots follow the line's `view=`; they do not get head bob and are not part of the legacy head-hiding set. `drawings` is an optional per-drawing map (name -> `{ excludeFromLipSync?: true, hand?: "L"\|"R", align?: { x, y, scale } }`). When `excludeFromLipSync` is set, automatic lip sync (Rhubarb cues and natural lipsync) skips that drawing and falls back to a neighbour — `H` becomes `C` or `D`, or the previous cue — but the file stays in the slot for a manual face/expression pin. `align` is the drawing viewer's saved Scale/Nudge (`{x, y, scale}` in the same local-pixel / multiplier units as the panel). The parser copies it onto the timeline slot; the compositor applies it on top of the slot offset/scale, anchored at the attachment point (image centre, or `canvas.pivot` when set), so a Save shows in Stage preview and renders. Studio **Align head** writes slot-level `offset` / `scale` / `rotation` into a **project-local** `character.json` and never into `_global_assets`. |
 | `groups` | Optional. `groups.head` lists the one-head rig slots (blank base + overlays). Opt-in: omit it and existing characters draw as they do today. See [One-head rig](#one-head-rig). |
-| `children` | Rig parts, in the same shape as `schema/timeline.schema.json`'s `child` definition (`id`, `asset`, `z`, `offset`, `pivot`, `scale`, `flip_x`, `rotation`, `parent`), plus their own optional `slots` (same shape as above). `parent` and `pivot` are passed through to the generated timeline. `parent` names one other child on the same character (one nesting level, e.g. `forearm` under `upper_arm`). See [docs/timeline-schema.md#cut-out-rig-nesting](timeline-schema.md#cut-out-rig-nesting). |
+| `children` | Rig parts, in the same shape as `schema/timeline.schema.json`'s `child` definition (`id`, `asset`, `z`, `offset`, `pivot`, `scale`, `flip_x`, `rotation`, `parent`, `visible_when`), plus their own optional `slots` (same shape as above). `parent` and `pivot` are passed through to the generated timeline. `pivot` is a named box anchor *or* `{x, y}` image pixels. `visible_when` is the same gate as on slots (hidden children and their children are skipped). `parent` names one other child on the same character (one nesting level, e.g. `forearm` under `upper_arm`). See [docs/timeline-schema.md#cut-out-rig-nesting](timeline-schema.md#cut-out-rig-nesting). |
 
 The `mouth` slot is special: it's always driven by the character's dialogue
 (`lipsync.source: "dialogue"`), so it never has a `default_drawing` and
@@ -315,6 +315,47 @@ The parser already emits every `character.json` slot onto the layer
 is passed through so a mouth can hide while the body shows a back view.
 If the base asset file is missing, the parser raises a line-numbered
 error that points at this pattern.
+
+## Actions
+
+A character can ship looping motion in `characters/<id>/actions/<id>.json`.
+Lookup is the same as `character.json`: episode (project folder) overrides
+show, then global when Independent is off. `[Move: Rodney to=right action=walk_side]`
+loads `characters/rodney/actions/walk_side.json`.
+
+```json
+{
+  "id": "walk_side",
+  "view": "right_side",
+  "faces": "right",
+  "fps": 12,
+  "frames": 12,
+  "distance_per_cycle": 80,
+  "set_slots": { "torso": "rig" },
+  "joints": {
+    "left_thigh": [0, 12, 20, 12, 0, -12, -20, -12, 0, 8, 12, 6],
+    "right_thigh": [0, -12, -20, -12, 0, 12, 20, 12, 0, -8, -12, -6]
+  },
+  "bob": [0, 1, 2, 1, 0, 1, 2, 1, 0, 1, 2, 1]
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | Action name; must match the filename (`walk_side.json`). |
+| `view` | Head/mouth set held for the walk (`right_side`). Walking the other way is this view plus a flip. |
+| `faces` | Which way the art faces when the layer is unflipped (`left` or `right`). Travel the other way starts a flipped layer, same as `[Action: flip]`. |
+| `fps` / `frames` | Cycle rate and length. Joint and bob arrays must be `frames` long. |
+| `distance_per_cycle` | How far the character travels in **character-local pixels** during one cycle, before mark/layer scale. Duration with no `over=` is `|dx| / (distance_per_cycle × layer scale × fps / frames)` seconds. |
+| `set_slots` | Slot drawings to hold for the walk (e.g. `torso=rig`). Restored to the previous drawing at the end. Each drawing must exist. |
+| `joints` | Child id -> clockwise degrees per cycle frame. Unknown child ids, or an array whose length is not `frames`, are line-numbered errors. |
+| `bob` | Optional `frames`-long list of Y pixels per cycle frame (`+` is down). Multiplied by layer scale and merged into the Move `y` keyframes. |
+
+The parser writes per-scene-frame `rotation_keyframes` (phase = elapsed
+seconds × action fps, linear) and per-frame position keyframes with bob
+folded into `y`. At the end, joints key back to 0. Head, eyes, mouth,
+blinks, and lip-sync slots keep drawing on top. One nesting level only;
+layer rotation is out of scope.
 
 ## Staging
 

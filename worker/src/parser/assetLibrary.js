@@ -169,6 +169,30 @@ function loadCharacter(projectDir, globalAssetsDir, characterId, options) {
   return readJsonAsset(projectDir, globalAssetsDir, `characters/${characterId}/character.json`, options);
 }
 
+/** Loads characters/<id>/actions/<actionId>.json. Project-local overrides global, like character.json. */
+function loadAction(projectDir, globalAssetsDir, characterId, actionId, options) {
+  if (!characterId || !actionId) return null;
+  if (!SAFE_FOLDER_NAME.test(String(actionId))) return null;
+  return readJsonAsset(projectDir, globalAssetsDir, `characters/${characterId}/actions/${actionId}.json`, options);
+}
+
+/** Action ids from characters/<id>/actions/*.json. Later roots win (episode > show > global). */
+function listActionIds(projectDir, globalAssetsDir, characterId, options) {
+  const ids = new Set();
+  if (!characterId) return [];
+  for (const root of assetSearchRoots(projectDir, globalAssetsDir, options).reverse()) {
+    const dir = path.join(root.dir, "characters", characterId, "actions");
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+    for (const entry of fs.readdirSync(dir)) {
+      if (path.extname(entry).toLowerCase() !== ".json") continue;
+      const id = path.basename(entry, ".json");
+      if (!SAFE_FOLDER_NAME.test(id)) continue;
+      ids.add(id);
+    }
+  }
+  return [...ids].sort();
+}
+
 const SAFE_FOLDER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function listIdsInFolder(baseDir, folder, isCharacter) {
@@ -255,6 +279,8 @@ module.exports = {
   readJsonAsset,
   scanDrawingsDir,
   loadCharacter,
+  loadAction,
+  listActionIds,
   loadStaging,
   listKnownCharacterIds,
   listKnownLocations,
@@ -267,4 +293,5 @@ module.exports = {
   ANCHOR_NAMES,
   DEFAULT_AUTO_ORDER,
   STUDIO_SETTINGS_FILENAME,
+  SAFE_FOLDER_NAME,
 };

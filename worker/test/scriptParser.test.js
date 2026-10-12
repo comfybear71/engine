@@ -1283,3 +1283,210 @@ describe("imported audio errors", () => {
     );
   });
 });
+
+function writeRodney(overrides = {}) {
+  const { MOUTH_SHAPES } = require("./helpers/fixtureLibrary");
+  const charDir = path.join(fixture.globalAssetsDir, "characters", "rodney");
+  fixture.writePng(path.join(charDir, "body.png"));
+  fixture.writePng(path.join(charDir, "parts", "arm.png"));
+  fixture.writePng(path.join(charDir, "torso", "stand.png"));
+  fixture.writePng(path.join(charDir, "torso", "rig.png"));
+  fixture.writePng(path.join(charDir, "eyes", "open.png"));
+  fixture.writePng(path.join(charDir, "eyes", "closed.png"));
+  for (const shape of MOUTH_SHAPES) fixture.writePng(path.join(charDir, "mouth", `${shape}.png`));
+  const joints = overrides.joints || {
+    right_arm: [15, 25, 20, 10, 0, -10, -20, -10, 0, 10, 20, 10],
+  };
+  const bob = overrides.bob || [0, 3, 6, 3, 0, 3, 6, 3, 0, 3, 6, 3];
+  const frames = overrides.frames || 12;
+  fixture.writeJson(path.join(charDir, "character.json"), {
+    id: "rodney",
+    display_name: "Rodney",
+    aliases: ["Rodney"],
+    asset: "body.png",
+    z: 10,
+    default_scale: 1.0,
+    slots: {
+      mouth: { offset: { x: 0, y: -10 }, drawings_dir: "mouth" },
+      eyes: { offset: { x: 0, y: -12 }, drawings_dir: "eyes", default_drawing: "open" },
+      torso: { offset: { x: 0, y: 0 }, drawings_dir: "torso", default_drawing: "stand" },
+    },
+    children: [
+      {
+        id: "right_arm",
+        asset: "parts/arm.png",
+        z: 1,
+        offset: { x: -5, y: -8 },
+        pivot: "top-center",
+      },
+    ],
+  });
+  fixture.writeJson(path.join(charDir, "actions", "walk_side.json"), {
+    id: "walk_side",
+    view: "right_side",
+    faces: "right",
+    fps: 12,
+    frames,
+    distance_per_cycle: overrides.distance_per_cycle != null ? overrides.distance_per_cycle : 100,
+    set_slots: { torso: "rig" },
+    joints,
+    bob,
+  });
+}
+
+describe("[Move] action=walk_side", () => {
+  beforeEach(() => writeRodney());
+
+  test("duration comes from distance_per_cycle", async () => {
+    // left 450 → right 550, |dx|=100. dpc=100, scale=1, fps=12, frames=12
+    // speed = 100 * 1 * 12/12 = 100 px/s → 1s → 24 frames.
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side]",
+    ].join("\n");
+    const { timeline, laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, {
+      fps: 24,
+    });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const keys = rodney.transform_keyframes;
+    assert.equal(keys[0].frame, 0);
+    assert.equal(keys[keys.length - 1].frame, 24);
+    assert.equal(keys[keys.length - 1].x, 550);
+    const lane = laneEvents.find((e) => e.tag === "move");
+    assert.equal(lane.label, "Rodney walk");
+    assert.equal(lane.endFrame - lane.startFrame, 24);
+  });
+
+  test("right-to-left auto-starts a flipped layer", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "Rodney: Hi.",
+      "[Move: Rodney to=off_left action=walk_side]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const layers = layersFor(timeline).filter((l) => l.character_id === "rodney");
+    assert.ok(layers.length >= 2, `expected a forked flipped layer, got ${layers.length}`);
+    const walk = layers[layers.length - 1];
+    assert.equal(walk.transform.flip_x, true);
+    assert.ok(walk.transform_keyframes && walk.transform_keyframes.length > 2);
+  });
+
+  test("rotation keyframes loop with period frames/fps*24", async () => {
+    writeRodney({ distance_per_cycle: 50 });
+    // |dx|=100 / 50 = 2s = 48 frames. Cycle period = 12/12*24 = 24.
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const arm = rodney.children.find((c) => c.id === "right_arm");
+    const keys = arm.rotation_keyframes;
+    const at = (frame) => keys.find((k) => k.frame === frame);
+    assert.equal(at(0).rotation, 15);
+    assert.equal(at(24).rotation, 15);
+    assert.notEqual(at(2).rotation, at(0).rotation);
+    assert.equal(at(48).rotation, 0);
+  });
+
+  test("bob is added to Move y keyframes", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const keys = rodney.transform_keyframes;
+    // elapsed 2/24 s * 12 fps = phase 1 → bob[1]=3. y marks are both 1000.
+    const mid = keys.find((k) => k.frame === 2);
+    assert.equal(mid.y, 1003);
+    const end = keys[keys.length - 1];
+    assert.equal(end.y, 1000);
+  });
+
+  test("torso=rig at start and restored at end", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const kfs = rodney.slots.torso.keyframes;
+    const start = kfs.find((k) => k.frame === 0);
+    const end = kfs.find((k) => k.frame === 24);
+    assert.equal(start.drawing, "rig");
+    assert.equal(end.drawing, "stand");
+  });
+
+  test("unknown action cites the script line", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=moonwalk]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) => err instanceof ScriptError && err.lineNumber === 4 && /Unknown action "moonwalk"/.test(err.message)
+    );
+  });
+
+  test("bad joint cites the script line", async () => {
+    writeRodney({ joints: { left_foot: Array(12).fill(0) } });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /joint "left_foot"/.test(err.message) &&
+        /right_arm/.test(err.message)
+    );
+  });
+
+  test("wrong joint length cites the script line", async () => {
+    writeRodney({ joints: { right_arm: [0, 10, 20] }, frames: 12 });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /length 3 != frames 12/.test(err.message)
+    );
+  });
+
+  test("ease=inout with action warns about foot slide", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Move: Rodney to=right action=walk_side ease=inout]",
+    ].join("\n");
+    const { warnings } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    assert.ok(
+      warnings.some((w) => /Line 4:/.test(w) && /inout/.test(w) && /slide/.test(w)),
+      `expected inout foot-slide warning, got: ${JSON.stringify(warnings)}`
+    );
+  });
+});

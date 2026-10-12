@@ -51,29 +51,59 @@ class _Placed(NamedTuple):
     anchor: str
     asset: Path
     slots: dict[str, Slot]
+    pivot_px: tuple[float, float] | None = None
+
+
+def _visible_when_matches(visible_when: dict[str, list[str]], drawings: dict[str, str | None]) -> bool:
+    """Same gate as ``slot_is_visible``: every named slot's drawing is allowed."""
+
+    if not visible_when:
+        return True
+    for other_name, allowed in visible_when.items():
+        if drawings.get(other_name) not in allowed:
+            return False
+    return True
 
 
 def _place_child_on_parent(parent: _Placed, child: Child, local_frame: int) -> _Placed:
     """Place ``child`` in ``parent``'s local space, rotating the offset
-    about the parent's pivot by the parent's current rotation."""
+    about the parent's pivot by the parent's current rotation.
 
+    When the parent is flipped, offset rotation uses ``-parent.rotation``
+    and the child is drawn at ``-child_rotation`` so a swing mirrors
+    instead of rotating the same way on both facings.
+    """
+
+    child_rot = child_rotation_at(child, local_frame)
+    if parent.flip_x:
+        offset_rot = -parent.rotation
+        draw_child_rot = -child_rot
+    else:
+        offset_rot = parent.rotation
+        draw_child_rot = child_rot
     mirrored_x = -child.offset_x if parent.flip_x else child.offset_x
-    rotated_x, rotated_y = rotate_offset_clockwise(mirrored_x, child.offset_y, parent.rotation)
+    rotated_x, rotated_y = rotate_offset_clockwise(mirrored_x, child.offset_y, offset_rot)
     return _Placed(
         z=child.z,
         x=parent.x + rotated_x * parent.scale,
         y=parent.y + rotated_y * parent.scale,
         scale=parent.scale * child.scale,
         flip_x=(parent.flip_x != child.flip_x),
-        rotation=parent.rotation + child_rotation_at(child, local_frame),
+        rotation=parent.rotation + draw_child_rot,
         opacity=parent.opacity * child.opacity,
         anchor=child.pivot,
         asset=child.asset,
         slots=child.slots,
+        pivot_px=child.pivot_px,
     )
 
 
-def _resolve_layer_placements(layer: Layer, local_frame: int = 0, world_scale: float = 1.0) -> list[_Placed]:
+def _resolve_layer_placements(
+    layer: Layer,
+    local_frame: int = 0,
+    world_scale: float = 1.0,
+    drawings: dict[str, str | None] | None = None,
+) -> list[_Placed]:
     t = transform_at(layer, local_frame)
     s = float(world_scale) if world_scale else 1.0
     root = _Placed(
@@ -90,6 +120,8 @@ def _resolve_layer_placements(layer: Layer, local_frame: int = 0, world_scale: f
     for child in layer.children:
         if child.parent:
             continue
+        if drawings is not None and not _visible_when_matches(child.visible_when, drawings):
+            continue
         layer_space = _Placed(
             z=0, x=t.x, y=t.y, scale=t.scale, flip_x=t.flip_x, rotation=0.0,
             opacity=t.opacity, anchor=t.anchor, asset=layer.asset, slots={},
@@ -100,6 +132,10 @@ def _resolve_layer_placements(layer: Layer, local_frame: int = 0, world_scale: f
 
     for child in layer.children:
         if not child.parent:
+            continue
+        if child.parent not in placed_by_id:
+            continue
+        if drawings is not None and not _visible_when_matches(child.visible_when, drawings):
             continue
         parent_placed = placed_by_id[child.parent]
         placed = _place_child_on_parent(parent_placed, child, local_frame)
@@ -251,11 +287,15 @@ def _draw_layer(
     drawings = _collect_slot_drawings(layer, layer_local_frame_idx, fps)
     suppressed = _suppressed_head_slots(layer)
     layer_view = _layer_view_at(layer, layer_local_frame_idx)
-    for placed in _resolve_layer_placements(layer, layer_local_frame_idx, world_scale=world_scale):
+    for placed in _resolve_layer_placements(
+        layer, layer_local_frame_idx, world_scale=world_scale, drawings=drawings
+    ):
+        pivot = placed.pivot_px
+        anchor = "top-left" if pivot is not None else placed.anchor
         _draw_transformed(
             canvas, cache, placed.asset,
             placed.x, placed.y, placed.scale, placed.flip_x, placed.rotation,
-            placed.anchor, placed.opacity,
+            anchor, placed.opacity, pivot=pivot,
         )
         for name, slot in _sorted_slots(placed.slots):
             if name in suppressed:
