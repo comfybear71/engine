@@ -353,9 +353,12 @@ loads `characters/rodney/actions/walk_side.json`.
 
 The parser writes per-scene-frame `rotation_keyframes` (phase = elapsed
 seconds × action fps, linear) and per-frame position keyframes with bob
-folded into `y`. At the end, joints key back to 0. Head, eyes, mouth,
-blinks, and lip-sync slots keep drawing on top. One nesting level only;
-layer rotation is out of scope.
+folded into `y`. At the end, joints key back to 0. It also writes
+`view_keyframes` for the action's `view` (held for the walk, then the
+previous view), so a silent walk still uses the side head / eyes / mouth
+drawings; a line with its own `view=` still wins while it plays. Head,
+eyes, mouth, blinks, and lip-sync slots keep drawing on top. One nesting
+level only; layer rotation is out of scope.
 
 ## Staging
 

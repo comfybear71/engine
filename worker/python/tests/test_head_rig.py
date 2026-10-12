@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 from compositor.asset_cache import AssetCache
-from compositor.compositor import _Placed, _draw_layer, _draw_slot, _sorted_slots, _suppressed_head_slots
+from compositor.compositor import (
+    _Placed,
+    _draw_layer,
+    _draw_slot,
+    _sorted_slots,
+    _suppressed_head_slots,
+    compose_scene_frame,
+)
 from compositor.lipsync_natural import LipSyncSettings
 from compositor.slots import Slot, SlotKeyframe
-from compositor.timeline_loader import DialogueClip, Layer, Transform, apply_natural_lipsync
+from compositor.timeline_loader import DialogueClip, Layer, Transform, ViewKeyframe, apply_natural_lipsync, load_timeline
 
 
 def _write_bgra(path: Path, w: int, h: int, bgr: tuple[int, int, int], alpha: int = 255) -> Path:
@@ -273,3 +281,122 @@ def test_views_slot_does_not_get_head_bob(tmp_path: Path):
     assert out.slots["torso"].head_bob_starts == []
     assert out.slots["head_base"].head_bob_amp == 4.0
     assert out.slots["eyes"].head_bob_amp == 4.0
+
+
+def test_silent_walk_timeline_uses_side_view_slots(tmp_path: Path):
+    """A silent walk's view_keyframes pick head/eyes/mouth from the side folder."""
+
+    _write_bgra(tmp_path / "bg.png", 40, 40, (10, 10, 10))
+    _write_bgra(tmp_path / "body.png", 8, 8, (0, 0, 0), alpha=0)
+    head_front = _write_bgra(tmp_path / "head_front.png", 8, 8, (0, 0, 255))  # red
+    head_side = _write_bgra(tmp_path / "head_side.png", 8, 8, (0, 255, 0))  # green
+    eyes_front = _write_bgra(tmp_path / "eyes_front.png", 8, 8, (0, 255, 255))  # yellow
+    eyes_side = _write_bgra(tmp_path / "eyes_side.png", 8, 8, (255, 0, 0))  # blue
+    mouth_front = _write_bgra(tmp_path / "mouth_front.png", 8, 8, (255, 0, 255))  # magenta
+    mouth_side = _write_bgra(tmp_path / "mouth_side.png", 8, 8, (255, 255, 0))  # cyan
+
+    def slot(front: str, side: str, drawing: str, dx: int, dy: int) -> dict:
+        return {
+            "offset": {"x": dx, "y": dy},
+            "images": {drawing: front},
+            "images_by_view": {
+                "front": {drawing: front},
+                "right_side": {drawing: side},
+            },
+            "keyframes": [{"frame": 0, "drawing": drawing}],
+        }
+
+    doc = {
+        "series": "Test",
+        "episode": "silent-walk",
+        "fps": 24,
+        "canvas": {"width": 40, "height": 40},
+        "scenes": [
+            {
+                "id": "s1",
+                "duration": {"frames": 30},
+                "background": {"asset": "bg.png"},
+                "layers": [
+                    {
+                        "id": "rodney",
+                        "asset": "body.png",
+                        "z": 1,
+                        "transform": {"x": 12, "y": 12, "anchor": "top-left", "scale": 1},
+                        "view_keyframes": [
+                            {"frame": 0, "view": "right_side"},
+                            {"frame": 24, "view": "front"},
+                        ],
+                        "slots": {
+                            "head_base": slot("head_front.png", "head_side.png", "neutral", 0, 0),
+                            "eyes": slot("eyes_front.png", "eyes_side.png", "open", 16, 0),
+                            "mouth": slot("mouth_front.png", "mouth_side.png", "X", 0, 16),
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    (tmp_path / "timeline.json").write_text(json.dumps(doc))
+    timeline = load_timeline(tmp_path / "timeline.json")
+    during = compose_scene_frame(timeline.scenes[0], 12, 40, 40, 24, AssetCache())
+    assert _has_color(during, (0, 255, 0)), "head should use right_side during the walk"
+    assert _has_color(during, (255, 0, 0)), "eyes should use right_side during the walk"
+    assert _has_color(during, (255, 255, 0)), "mouth should use right_side during the walk"
+    assert not _has_color(during, (0, 0, 255))
+    assert not _has_color(during, (0, 255, 255))
+    assert not _has_color(during, (255, 0, 255))
+
+    after = compose_scene_frame(timeline.scenes[0], 24, 40, 40, 24, AssetCache())
+    assert _has_color(after, (0, 0, 255)), "head should restore front after the walk"
+    assert _has_color(after, (0, 255, 255)), "eyes should restore front after the walk"
+    assert _has_color(after, (255, 0, 255)), "mouth should restore front after the walk"
+    assert not _has_color(after, (0, 255, 0))
+    assert not _has_color(after, (255, 0, 0))
+    assert not _has_color(after, (255, 255, 0))
+
+
+def test_active_dialogue_view_overrides_walk_view_keyframes(tmp_path: Path):
+    body = _write_bgra(tmp_path / "body.png", 8, 8, (0, 0, 0), alpha=0)
+    front = _write_bgra(tmp_path / "head_front.png", 8, 8, (0, 0, 255))  # red
+    side = _write_bgra(tmp_path / "head_side.png", 8, 8, (0, 255, 0))  # green
+    up = _write_bgra(tmp_path / "head_up.png", 8, 8, (255, 0, 0))  # blue
+    layer = Layer(
+        id="char",
+        asset=body,
+        z=0,
+        transform=Transform(x=20, y=20, anchor="center"),
+        view_keyframes=[
+            ViewKeyframe(frame=0, view="right_side"),
+            ViewKeyframe(frame=10, view="front"),
+        ],
+        dialogue=[
+            DialogueClip(
+                audio=tmp_path / "missing.wav",
+                start_frame=0,
+                duration_frames=4,
+                cues=[],
+                estimated=True,
+                view="up",
+            )
+        ],
+        slots={
+            "head_base": Slot(
+                images={"neutral": front},
+                images_by_view={
+                    "front": {"neutral": front},
+                    "right_side": {"neutral": side},
+                    "up": {"neutral": up},
+                },
+                keyframes=[SlotKeyframe(frame=0, drawing="neutral")],
+            ),
+        },
+    )
+    during_line = np.zeros((40, 40, 3), dtype=np.uint8)
+    _draw_layer(during_line, layer, AssetCache(), 1, fps=24)
+    assert _has_color(during_line, (255, 0, 0)), "line view=up wins during the line"
+    assert not _has_color(during_line, (0, 255, 0))
+
+    during_walk = np.zeros((40, 40, 3), dtype=np.uint8)
+    _draw_layer(during_walk, layer, AssetCache(), 6, fps=24)
+    assert _has_color(during_walk, (0, 255, 0)), "walk view resumes after the line"
+    assert not _has_color(during_walk, (255, 0, 0))

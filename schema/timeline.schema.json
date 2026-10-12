@@ -185,6 +185,24 @@
       }
     },
 
+    "view_keyframe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame", "view"],
+      "properties": {
+        "frame": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Layer-local frame (relative to this layer's timing.start_frame) this view starts at. Held until the next view_keyframe."
+        },
+        "view": {
+          "type": "string",
+          "enum": ["front", "left_34", "left_side", "right_34", "right_side", "up", "down"],
+          "description": "Head/mouth/eyes drawing set from this frame until the next view_keyframe. An active dialogue clip's own view still wins while that line is playing."
+        }
+      }
+    },
+
     "transform": {
       "type": "object",
       "additionalProperties": false,
@@ -282,7 +300,7 @@
         },
         "images_by_view": {
           "type": "object",
-          "description": "Optional per-head-view drawing maps (view name -> drawing name -> image path). Used by a dialogue-driven mouth slot when the active clip has `view`. Resolution order: images_by_view[view], then images_by_view.front, then `images`, then drawing X.",
+          "description": "Optional per-head-view drawing maps (view name -> drawing name -> image path). Used when the layer's view_keyframes or an active dialogue clip has `view`. Resolution order: images_by_view[view], then images_by_view.front, then `images`, then drawing X.",
           "additionalProperties": {
             "type": "object",
             "minProperties": 1,
@@ -529,6 +547,11 @@
           "type": "array",
           "description": "Optional per-property animation of this layer's x/y/scale/rotation. Frames are layer-local (relative to timing.start_frame). Each property is interpolated independently between keyframes that specify it, held before the first and after the last. Properties never mentioned keep the static `transform` value. flip_x is not keyframed -- flip by adding a new layer. Omit entirely for a pose that never moves.",
           "items": { "$ref": "#/definitions/transform_keyframe" }
+        },
+        "view_keyframes": {
+          "type": "array",
+          "description": "Optional held-until-changed head/mouth/eyes view for this layer (layer-local frames). A Move action with view= writes the action's view at the walk start and the previous view at the walk end, so a silent walk still uses the side drawings. An active dialogue clip's own view wins while that line is playing. Omit entirely when view only comes from dialogue.",
+          "items": { "$ref": "#/definitions/view_keyframe" }
         },
         "timing": { "$ref": "#/definitions/timing" },
         "dialogue": {

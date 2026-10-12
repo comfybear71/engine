@@ -641,7 +641,9 @@ Rodney: I'm fine, this is fine.
 see [docs/assets.md#actions](assets.md#actions). Duration is
 `|dx| / (distance_per_cycle × layer scale × fps / frames)` seconds so
 one cycle covers `distance_per_cycle` character-local pixels after mark
-scale. The walk facing right uses `view=right_side`; walking left flips
-the layer and keeps that same side view. `ease=inout` with `action=`
+scale. The walk facing right uses `view=right_side` for the whole move (even
+with no line playing); walking left flips the layer and keeps that same
+side view. After the move the previous view is restored. A line with its
+own `view=` still wins while it plays. `ease=inout` with `action=`
 warns because the feet slide. The sample Hicks/Dana characters do not
 ship a walk action; the tags above are the syntax.

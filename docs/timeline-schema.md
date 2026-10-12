@@ -155,6 +155,7 @@ frame briefly after the audio/dialogue ends.
     "rotation": 0, "opacity": 1.0
   },
   "transform_keyframes": [ /* optional, see Transform keyframes */ ],
+  "view_keyframes": [ /* optional, held head/mouth/eyes view */ ],
   "timing": { "start_frame": 24, "end_from_audio": "audio/scene1/004_hicks.wav" },
   "dialogue": [ /* optional, see Multi-line dialogue per character */ ],
   "slots": { /* optional, see Slots */ },
@@ -171,6 +172,7 @@ frame briefly after the audio/dialogue ends.
 | `z` | integer | yes | **Explicit** draw order, ascending (higher `z` draws on top). The background is implicitly behind every layer. |
 | `transform` | object | yes | See below. |
 | `transform_keyframes` | array | no | Optional per-property animation of `x`/`y`/`scale`/`rotation`. See [Transform keyframes](#transform-keyframes). |
+| `view_keyframes` | array | no | Optional held-until-changed head/mouth/eyes view (`{ frame, view }`, layer-local). A silent walk writes the action's view for the move and restores the previous view at the end. An active dialogue clip's own `view` wins while that line is playing. |
 | `timing` | object | no | See below. Omit entirely for "visible for the whole scene". |
 | `dialogue` | array of [dialogue clip](#multi-line-dialogue-per-character) | no | This character's spoken lines in the scene. See below. |
 | `audio` | string | no, **deprecated** | Single-clip shorthand kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: 0 }]` (the clip begins when the layer becomes visible). Ignored if `dialogue` is also given; prefer `dialogue` for anything with more than one line. |
@@ -337,7 +339,7 @@ change. **This is one unified mechanism for mouths, blinks and hand poses**
 | `align` | object | no | Per-drawing Scale/Nudge from Studio Assets Save (`character.json` `slots.<slot>.drawings.<name>.align`). Map of drawing name -> `{ x, y, scale }`. `x`/`y` are local pixels added to this slot's offset; `scale` multiplies this slot's scale. The drawing stays anchored at the resulting attachment point (image centre, or `canvas.pivot` when set). Missing drawing: identity `(0, 0, 1)`. |
 | `rotation` | number | no (default `0`) | Degrees, clockwise, around this slot's center. Added to the owner's current rotation. |
 | `images` | object | yes | Map of drawing name -> image path. A `lipsync`-driven slot's names must be Rhubarb shapes (`A`-`H`, `X`); a `keyframes`-driven slot's names can be anything (`"fist"`, `"open"`, ...). A missing drawing at render time falls back to `"X"` if present, else the first entry. |
-| `images_by_view` | object | no | Optional map of head view -> drawing name -> path (`mouth_left_side/`, …). Used when the active dialogue clip has `view`. Missing views fall back to `front`, then `images`. |
+| `images_by_view` | object | no | Optional map of head view -> drawing name -> path (`mouth_left_side/`, …). Used when the layer's `view_keyframes` or an active dialogue clip has `view`. Missing views fall back to `front`, then `images`. |
 | `keyframes` | array | exactly one of `keyframes`/`lipsync` | Sorted ascending by `frame`. Each entry is either `{ frame, drawing }` (held until the next keyframe) or `{ frame, cycle: [drawing, ...], fps }` (loops those drawings from this frame until the next keyframe). `drawing` may be `"none"` to hide the slot. A keyframe with only `frame` is invalid. Cycle index is `floor((frame - keyframe.frame) / document_fps * cycle.fps) % len(cycle)`. A scene `frame_step` of N>1 already holds the picture on in-between frames, so the cycle is only evaluated on recomputed frames. Frames are relative to the slot's owner's own `start_frame`. Before the first keyframe, the first keyframe's drawing/cycle is used. Empty `keyframes` is allowed when the slot has no default drawing yet. |
 | `visible_when` | object | no | Map of `<slot name>` -> list of drawings. This slot only draws when each named slot's *currently active* drawing is in that list. Names are resolved on the same layer (the layer's own slots and every child's slots). Example: `"visible_when": { "body": ["front"] }` hides a mouth while the body slot is showing the back view. |
 | `lipsync` | object | exactly one of `keyframes`/`lipsync` | See [Lip-sync cue resolution order](#lip-sync-cue-resolution-order) below. |
