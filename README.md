@@ -90,7 +90,7 @@ engine/
 │       │   ├── transform.py     # anchor/placement/clipping math (pure)
 │       │   ├── blend.py         # vectorised alpha compositing
 │       │   ├── background.py    # fit background to canvas (cover/contain)
-│       │   ├── camera.py        # pan/zoom/shake post-process
+│       │   ├── camera.py        # pan/zoom/shake view, folded into placement
 │       │   ├── slots.py         # drawing-swap slots (mouths, blinks, hand poses, dialogue-driven mouths)
 │       │   ├── lipsync.py       # Rhubarb integration + cue-to-shape mapping
 │       │   ├── media_probe.py   # ffprobe wrapper (audio duration)

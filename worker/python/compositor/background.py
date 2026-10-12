@@ -49,3 +49,64 @@ def fit_to_canvas(img: np.ndarray, canvas_w: int, canvas_h: int, mode: str = "co
     y0 = (canvas_h - new_h) // 2
     canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
     return canvas
+
+
+def fit_to_canvas_camera(
+    img: np.ndarray,
+    canvas_w: int,
+    canvas_h: int,
+    mode: str,
+    cx: float,
+    cy: float,
+    zoom: float,
+) -> np.ndarray:
+    """Fit a background from its source with the camera transform folded in.
+
+    Same cover/contain placement as :func:`fit_to_canvas`, then
+    ``T = translate(W/2, H/2) * scale(zoom) * translate(-cx, -cy)``. One
+    resample from the source image, not from an already-fitted canvas.
+    """
+
+    img = _to_bgr(img)
+    h, w = img.shape[:2]
+    if mode == "cover":
+        fit_scale = max(canvas_w / w, canvas_h / h)
+    elif mode == "contain":
+        fit_scale = min(canvas_w / w, canvas_h / h)
+    else:
+        raise ValueError(f"Unknown background fit mode: {mode!r}")
+
+    fitted_w = max(1, round(w * fit_scale))
+    fitted_h = max(1, round(h * fit_scale))
+    sx_scale = fitted_w / float(w)
+    sy_scale = fitted_h / float(h)
+
+    if mode == "cover":
+        origin_x = -max(0, (fitted_w - canvas_w) // 2)
+        origin_y = -max(0, (fitted_h - canvas_h) // 2)
+        border = cv2.BORDER_REPLICATE
+        border_value = (0, 0, 0)
+    else:
+        origin_x = (canvas_w - fitted_w) // 2
+        origin_y = (canvas_h - fitted_h) // 2
+        border = cv2.BORDER_CONSTANT
+        border_value = (0, 0, 0)
+
+    zoom = max(float(zoom), 1e-3)
+    combined = zoom * sx_scale
+    interp = cv2.INTER_AREA if combined < 1.0 else cv2.INTER_LINEAR
+    matrix = np.array(
+        [
+            [zoom * sx_scale, 0.0, canvas_w / 2.0 + (origin_x - cx) * zoom],
+            [0.0, zoom * sy_scale, canvas_h / 2.0 + (origin_y - cy) * zoom],
+        ],
+        dtype=np.float64,
+    )
+    return cv2.warpAffine(
+        img,
+        matrix,
+        (canvas_w, canvas_h),
+        flags=interp,
+        borderMode=border,
+        borderValue=border_value,
+    )
