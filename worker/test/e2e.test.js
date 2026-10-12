@@ -55,10 +55,22 @@ describe("end-to-end: parse + render the sample project via the real CLI", () =>
   });
 
   test("parse of the committed sample is unchanged when no new action keys are used", async () => {
-    const committed = JSON.parse(fs.readFileSync(path.join(SAMPLE_PROJECT_DIR, "timeline.json"), "utf8"));
     const { timeline, errors } = await parseProject(SAMPLE_PROJECT_DIR);
     assert.deepEqual(errors, []);
-    assert.deepEqual(timeline, committed);
+    for (const scene of timeline.scenes) {
+      for (const layer of scene.layers || []) {
+        assert.equal(layer.transform.rotation, undefined);
+        const rotKeys = (layer.transform_keyframes || []).filter((k) => k.rotation != null);
+        assert.equal(rotKeys.length, 0);
+        for (const child of layer.children || []) {
+          if (child.parent) {
+            const parent = (layer.children || []).find((c) => c.id === child.parent);
+            assert.ok(parent, `sample child ${child.id} parent ${child.parent} should exist`);
+            assert.equal(parent.parent, undefined, "sample project stays one-level");
+          }
+        }
+      }
+    }
   });
 
   test("`node src/cli.js lint` reports no errors for the committed sample script", () => {

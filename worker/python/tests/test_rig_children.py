@@ -240,14 +240,22 @@ class TestPixelPivotAndVisibleWhen:
         assert hand_p.y == pytest.approx(forearm_y + hy)
         assert hand_p.rotation == pytest.approx(50)
 
-        still = Child(
+        still_upper = Child(
             id="upper", asset=Path("upper.png"), z=1,
             offset_x=0, offset_y=0, rotation=0,
         )
-        still_placed = _resolve_layer_placements(_layer(t, [hand, forearm, still]))
-        still_hand = next(p for p in still_placed if p.asset == Path("hand.png"))
-        assert still_hand.x == pytest.approx(200)
-        assert still_hand.y == pytest.approx(150 + 40 + 30)
+        still_forearm = Child(
+            id="forearm", asset=Path("forearm.png"), z=2, parent="upper",
+            offset_x=0, offset_y=40, rotation=0,
+        )
+        still_hand = Child(
+            id="hand", asset=Path("hand.png"), z=3, parent="forearm",
+            offset_x=0, offset_y=30, rotation=0,
+        )
+        still_placed = _resolve_layer_placements(_layer(t, [still_hand, still_forearm, still_upper]))
+        still_p = next(p for p in still_placed if p.asset == Path("hand.png"))
+        assert still_p.x == pytest.approx(200)
+        assert still_p.y == pytest.approx(150 + 40 + 30)
 
     def test_layer_rotation_leans_children_about_the_anchor(self):
         t = Transform(x=200, y=150, scale=1.0, anchor="bottom-center", rotation=90)
