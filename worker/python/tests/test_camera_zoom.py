@@ -139,9 +139,12 @@ def test_zoom_3_crop_is_sharper_than_crop_and_upscale(tmp_path: Path):
 
 def test_zoom_placement_matches_old_path_within_1px(tmp_path: Path):
     marker = _solid_bgra(20, 20, (0, 0, 255))
+    # 480 / 3 = 160 so the old integer crop window is exact, not a
+    # 400/3 rounding artifact.
+    canvas = 480
     scene = _scene(
         tmp_path,
-        canvas=400,
+        canvas=canvas,
         piece=marker,
         x=180.0,
         y=160.0,
@@ -149,8 +152,8 @@ def test_zoom_placement_matches_old_path_within_1px(tmp_path: Path):
         camera=Camera(keyframes=[CameraKeyframe(frame=0, x=180.0, y=160.0, zoom=3.0)]),
         bg=(0, 0, 0),
     )
-    new = _compose(scene)
-    old = _compose_legacy(scene)
+    new = _compose(scene, canvas=canvas)
+    old = _compose_legacy(scene, canvas=canvas)
     new_mask = np.all(new == (0, 0, 255), axis=2)
     old_mask = np.all(old == (0, 0, 255), axis=2)
     assert new_mask.any() and old_mask.any()

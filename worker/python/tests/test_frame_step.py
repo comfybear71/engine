@@ -63,7 +63,7 @@ def test_frame_step_only_invokes_draw_layer_on_key_frames(tmp_path, monkeypatch)
     calls = []
     monkeypatch.setattr(
         compositor_module, "_draw_layer",
-        lambda canvas, layer, cache, local_frame, fps: calls.append(local_frame),
+        lambda canvas, layer, cache, local_frame, fps, **_kwargs: calls.append(local_frame),
     )
 
     from compositor.timeline_loader import Layer, Transform
