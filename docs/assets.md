@@ -336,6 +336,7 @@ loads `characters/rodney/actions/walk_side.json`.
     "left_thigh": [0, 12, 20, 12, 0, -12, -20, -12, 0, 8, 12, 6],
     "right_thigh": [0, -12, -20, -12, 0, 12, 20, 12, 0, -8, -12, -6]
   },
+  "groups": { "head": [0, 2, 4, 2, 0, -2, -4, -2, 0, 2, 4, 2] },
   "bob": [0, 1, 2, 1, 0, 1, 2, 1, 0, 1, 2, 1]
 }
 ```
@@ -343,22 +344,27 @@ loads `characters/rodney/actions/walk_side.json`.
 | Field | Notes |
 |---|---|
 | `id` | Action name; must match the filename (`walk_side.json`). |
-| `view` | Head/mouth set held for the walk (`right_side`). Walking the other way is this view plus a flip. |
-| `faces` | Which way the art faces when the layer is unflipped (`left` or `right`). Travel the other way starts a flipped layer, same as `[Action: flip]`. |
-| `fps` / `frames` | Cycle rate and length. Joint and bob arrays must be `frames` long. |
-| `distance_per_cycle` | How far the character travels in **character-local pixels** during one cycle, before mark/layer scale. Duration with no `over=` is `|dx| / (distance_per_cycle × layer scale × fps / frames)` seconds. |
-| `set_slots` | Slot drawings to hold for the walk (e.g. `torso=rig`). Restored to the previous drawing at the end. Each drawing must exist. |
+| `view` | Head/mouth set held for the walk or `[Do:]` (`right_side`). Walking the other way is this view plus a flip. |
+| `views` | Optional `frames`-long list of per-cycle-frame views. When set, `[Do:]` writes a held `view_keyframes` sample whenever the view changes, then restores. |
+| `faces` | Which way the art faces when the layer is unflipped (`left` or `right`). Travel the other way starts a flipped layer, same as `[Action: flip]`. `[Do:]` ignores this (no auto-flip). |
+| `fps` / `frames` | Cycle rate and length. Joint, group, bob, and `views` arrays must be `frames` long. |
+| `distance_per_cycle` | How far the character travels in **character-local pixels** during one cycle, before mark/layer scale. Required for `[Move: ... action=]`. Duration with no `over=` is `|dx| / (distance_per_cycle × layer scale × fps / frames)` seconds. Optional for in-place `[Do:]`. |
+| `set_slots` | Slot drawings to hold for the walk / `[Do:]` (e.g. `torso=rig`). Restored to the previous drawing at the end. Each drawing must exist. |
 | `joints` | Child id -> clockwise degrees per cycle frame. Unknown child ids, or an array whose length is not `frames`, are line-numbered errors. |
-| `bob` | Optional `frames`-long list of Y pixels per cycle frame (`+` is down). Multiplied by layer scale and merged into the Move `y` keyframes. |
+| `groups` | Optional group name -> clockwise degrees per cycle frame (e.g. `head: [...]`). The named group must exist on `character.json`. `[Do:]` rotates the whole group rigidly about the group pivot; restored at the end. |
+| `bob` | Optional `frames`-long list of Y pixels per cycle frame (`+` is down). Multiplied by layer scale and applied as a position offset — including while standing still on `[Do:]`. |
 
 The parser writes per-scene-frame `rotation_keyframes` (phase = elapsed
 seconds × action fps, linear) and per-frame position keyframes with bob
-folded into `y`. At the end, joints key back to 0. It also writes
-`view_keyframes` for the action's `view` (held for the walk, then the
-previous view), so a silent walk still uses the side head / eyes / mouth
-drawings; a line with its own `view=` still wins while it plays. Head,
-eyes, mouth, blinks, and lip-sync slots keep drawing on top. One nesting
-level only; layer rotation is out of scope.
+folded into `y`. At the end of a `[Move]`, joints key back to 0. `[Do:
+Name <id>]` plays the same cycle in place (no travel, no flip), loops if
+`for=` exceeds one cycle, and restores view, slots, joints, group
+rotations, and bob. It also writes `view_keyframes` for the action's
+`view` (held for the walk / `[Do:]`, then the previous view), so a silent
+walk still uses the side head / eyes / mouth drawings; a line with its
+own `view=` still wins while it plays. Head, eyes, mouth, blinks, and
+lip-sync slots keep drawing on top. One nesting level only; layer
+rotation is out of scope.
 
 ## Staging
 

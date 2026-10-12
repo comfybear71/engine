@@ -172,12 +172,14 @@ frame briefly after the audio/dialogue ends.
 | `z` | integer | yes | **Explicit** draw order, ascending (higher `z` draws on top). The background is implicitly behind every layer. |
 | `transform` | object | yes | See below. |
 | `transform_keyframes` | array | no | Optional per-property animation of `x`/`y`/`scale`/`rotation`. See [Transform keyframes](#transform-keyframes). |
-| `view_keyframes` | array | no | Optional held-until-changed head/mouth/eyes view (`{ frame, view }`, layer-local). A silent walk writes the action's view for the move and restores the previous view at the end. An active dialogue clip's own `view` wins while that line is playing. |
+| `view_keyframes` | array | no | Optional held-until-changed head/mouth/eyes view (`{ frame, view }`, layer-local). A silent walk or `[Do:]` writes the action's view and restores the previous view at the end. A silent `[View:]` writes the new view from that frame. An active dialogue clip's own `view` wins while that line is playing. |
 | `timing` | object | no | See below. Omit entirely for "visible for the whole scene". |
 | `dialogue` | array of [dialogue clip](#multi-line-dialogue-per-character) | no | This character's spoken lines in the scene. See below. |
 | `audio` | string | no, **deprecated** | Single-clip shorthand kept for backward compatibility: equivalent to `dialogue: [{ audio, start_frame: 0 }]` (the clip begins when the layer becomes visible). Ignored if `dialogue` is also given; prefer `dialogue` for anything with more than one line. |
 | `slots` | object | no | Drawing-swap slots attached to this layer's own root image. See [Slots](#slots--drawing-swaps-mouths-blinks-hand-poses). |
 | `groups` | object | no | Optional slot groups from `character.json`. `head` lists the one-head rig slots; see [docs/assets.md#one-head-rig](assets.md#one-head-rig). |
+| `group_rotations` | object | no | Rest pose for each named group, clockwise degrees about that group's pivot. |
+| `group_rotation_keyframes` | object | no | Map of group name -> `{ frame, rotation, ease? }` list. The whole group rotates rigidly about the group pivot (typically the neck). Flip mirrors the angle. Combines with automatic dialogue head-bob. |
 | `children` | array | no | Cut-out rig parts nested under this layer. See [Cut-out rig nesting](#cut-out-rig-nesting). |
 
 ## Multi-line dialogue per character

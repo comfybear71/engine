@@ -12,9 +12,10 @@
  * (real, via ffprobe, if its audio file already exists; otherwise estimated
  * from word count). [Pause: ...] advances the cursor without emitting a
  * dialogue clip. [Action: ...] takes effect *at* the current cursor
- * position (it doesn't advance it). [Move:]/[Pose:]/[Swing:] write
+ * position (it doesn't advance it). [Move:]/[Pose:]/[Swing:]/[Do:] write
  * keyframes on the current layer; wait=true (default) advances the cursor
  * like [Pause], wait=false leaves it so following lines run during the motion.
+ * [Do:] plays an actions/*.json cycle in place (no travel, no flip).
  * [Camera:] writes scene-level camera keyframes the same way.
  * [Audio: Name file=<label>] places an import-audio track (WAV + Rhubarb
  * cues + optional words.json) as that character's dialogue at the cursor
@@ -89,6 +90,7 @@ const TIMING_KEYS = new Set(["at_time", "start"]);
 const HOLD_KEYS = new Set(["over", "hold"]);
 const TRIM_KEYS = new Set(["trim_in", "trim_out"]);
 const AUDIO_KEYS = new Set(["file", "lines", "view", "at_time", "start", "trim_in", "trim_out"]);
+const DO_KEYS = new Set(["action", "for", "wait", "at_time", "start"]);
 
 function slugify(text) {
   return (
@@ -211,6 +213,7 @@ class CharacterSceneState {
     this.segments = []; // finished segments (plain JSON layer objects)
     this.current = null; // the open segment draft, or null
     this.childRotations = new Map(); // childId -> current degrees (survives layer forks)
+    this.groupRotations = new Map(); // groupName -> current degrees (survives layer forks)
     // Last Action-set drawing/cycle per slot, so a forked layer can continue
     // it instead of snapping back to default_drawing.
     this.activeSlots = new Map(); // slotStateKey -> { ownerType, childId?, slotName, drawing?, cycle?, fps?, startedAtSceneFrame? }
@@ -241,6 +244,7 @@ function newSegmentDraft(layerId, startFrame, transform, z, markName) {
     transformKeyframes: [], // [{frame, x?, y?, scale?, rotation?, ease?}]
     viewKeyframes: [], // [{frame, view}] held-until-changed head/mouth/eyes view
     childRotationKeyframes: new Map(), // childId -> [{frame, rotation, ease?}]
+    groupRotationKeyframes: new Map(), // groupName -> [{frame, rotation, ease?}]
     openingTransform: { ...transform },
   };
 }
@@ -281,7 +285,7 @@ class ScriptParser {
         ? "dialogue"
         : token.kind === "audio"
           ? "audio"
-          : token.kind === "swing"
+          : token.kind === "swing" || token.kind === "do"
             ? "for"
             : token.kind === "move" || token.kind === "pose" || token.kind === "camera"
               ? "over"
@@ -579,6 +583,9 @@ class ScriptParser {
         return;
       case "swing":
         this._handleSwing(token);
+        return;
+      case "do":
+        this._handleDo(token);
         return;
       case "camera":
         this._handleCamera(token);
@@ -946,6 +953,9 @@ class ScriptParser {
     // rewrite this segment's static child rotations.
     if (state.childRotations) {
       state.current.closingChildRotations = new Map(state.childRotations);
+    }
+    if (state.groupRotations) {
+      state.current.closingGroupRotations = new Map(state.groupRotations);
     }
     // A hide/replace at the same frame the segment opened never existed
     // on screen -- skip the zero-length layer.
@@ -1502,6 +1512,40 @@ class ScriptParser {
     list.push(keyframe);
   }
 
+  _addGroupRotationKeyframe(segment, groupName, keyframe) {
+    if (!segment.groupRotationKeyframes) segment.groupRotationKeyframes = new Map();
+    let list = segment.groupRotationKeyframes.get(groupName);
+    if (!list) {
+      list = [];
+      segment.groupRotationKeyframes.set(groupName, list);
+    }
+    const existing = list.find((k) => k.frame === keyframe.frame);
+    if (existing) {
+      Object.assign(existing, keyframe);
+      return;
+    }
+    list.push(keyframe);
+  }
+
+  _findGroupName(config, name) {
+    const groups = this._characterGroups(config);
+    if (!groups) return null;
+    if (groups[name]) return name;
+    const lower = String(name).toLowerCase();
+    return Object.keys(groups).find((g) => g.toLowerCase() === lower) || null;
+  }
+
+  _availableGroups(config) {
+    const groups = this._characterGroups(config);
+    return groups ? Object.keys(groups) : [];
+  }
+
+  _getGroupRotation(state, groupName) {
+    if (state.groupRotations.has(groupName)) return state.groupRotations.get(groupName);
+    state.groupRotations.set(groupName, 0);
+    return 0;
+  }
+
   _addCameraKeyframe(scene, keyframe) {
     const existing = scene.cameraKeyframes.find((k) => k.frame === keyframe.frame);
     if (existing) {
@@ -1526,25 +1570,54 @@ class ScriptParser {
 
   _collectPartAngles(kv, reservedKeys, state, lineNumber, tagName) {
     const parts = [];
+    const availableParts = this._availableParts(state.config);
+    const availableGroups = this._availableGroups(state.config);
+    const availableHint = () => {
+      const bits = [`Available: ${availableParts.join(", ") || "(none)"}`];
+      if (availableGroups.length) bits.push(`Groups: ${availableGroups.join(", ")}`);
+      return bits.join(". ");
+    };
     for (const [key, value] of Object.entries(kv)) {
       if (reservedKeys.has(key)) continue;
+      const groupName = this._findGroupName(state.config, key);
+      if (groupName) {
+        const degrees = parseNumberValue(value, lineNumber, `${tagName} ${key}`);
+        parts.push({ kind: "group", id: groupName, degrees });
+        continue;
+      }
       const child = this._findChild(state.config, key);
       if (!child) {
         throw new ScriptError(
           lineNumber,
-          `Unknown part "${key}" on ${state.config.display_name || state.characterId}. Available: ${this._availableParts(state.config).join(", ") || "(none)"}`
+          `Unknown part "${key}" on ${state.config.display_name || state.characterId}. ${availableHint()}`
         );
       }
       const degrees = parseNumberValue(value, lineNumber, `${tagName} ${key}`);
-      parts.push({ childId: child.id, degrees });
+      parts.push({ kind: "child", id: child.id, degrees });
     }
     if (parts.length === 0) {
       throw new ScriptError(
         lineNumber,
-        `[${tagName}: ...] needs at least one part angle (e.g. right_arm=30). Available: ${this._availableParts(state.config).join(", ") || "(none)"}`
+        `[${tagName}: ...] needs at least one part or group angle (e.g. right_arm=30 or head=8). ${availableHint()}`
       );
     }
     return parts;
+  }
+
+  _applyMotionKeys(segment, state, parts, makeKeys) {
+    for (const part of parts) {
+      if (part.kind === "group") {
+        const current = this._getGroupRotation(state, part.id);
+        const keys = makeKeys(current, part.degrees);
+        for (const key of keys) this._addGroupRotationKeyframe(segment, part.id, key);
+        state.groupRotations.set(part.id, keys.length ? keys[keys.length - 1].rotation : current);
+      } else {
+        const current = this._getChildRotation(state, part.id);
+        const keys = makeKeys(current, part.degrees);
+        for (const key of keys) this._addRotationKeyframe(segment, part.id, key);
+        state.childRotations.set(part.id, keys.length ? keys[keys.length - 1].rotation : current);
+      }
+    }
   }
 
   _applyCharacterFlipX(scene, state, flipX, lineNumber) {
@@ -1611,10 +1684,15 @@ class ScriptParser {
 
   _emitActionWalk(scene, state, action, from, toX, toY, toScale, startRel, endRel, durationFrames, ease) {
     const dx = toX - from.x;
-    const naturalPxPerSec = action.distance_per_cycle * (from.scale || 1) * action.fps / action.frames;
-    const naturalSeconds = naturalPxPerSec > 0 ? Math.abs(dx) / naturalPxPerSec : durationFrames / this.fps;
+    const dpc = action.distance_per_cycle;
+    const naturalPxPerSec = dpc > 0 ? dpc * (from.scale || 1) * action.fps / action.frames : 0;
+    const naturalSeconds = naturalPxPerSec > 0 ? Math.abs(dx) / naturalPxPerSec : 0;
     const durationSeconds = durationFrames / this.fps;
-    const cycleFps = durationSeconds > 0 ? action.fps * (naturalSeconds / durationSeconds) : action.fps;
+    // Standing still (dx=0) used to make cycleFps=0, so bob/joints stuck on frame 0.
+    const cycleFps =
+      durationSeconds > 0 && naturalSeconds > 0
+        ? action.fps * (naturalSeconds / durationSeconds)
+        : action.fps;
 
     for (let f = 0; f <= durationFrames; f++) {
       const t = durationFrames === 0 ? 1 : f / durationFrames;
@@ -1649,6 +1727,14 @@ class ScriptParser {
     for (const jointId of Object.keys(action.joints || {})) {
       state.childRotations.set(jointId, 0);
     }
+  }
+
+  _actionCycleIndex(action, frameOffset) {
+    const elapsedSec = frameOffset / this.fps;
+    const phase = elapsedSec * action.fps;
+    let index = action.frames > 0 ? Math.floor(phase) % action.frames : 0;
+    if (index < 0) index += action.frames;
+    return index;
   }
 
   // ---- [Move: ...] -------------------------------------------------------
@@ -1720,8 +1806,15 @@ class ScriptParser {
     if (kv.over !== undefined) {
       durationSeconds = parseSecondsSpec(kv.over, token.lineNumber, "over");
     } else if (action) {
+      const dpc = action.distance_per_cycle;
+      if (!(dpc > 0)) {
+        throw new ScriptError(
+          token.lineNumber,
+          `Action "${actionId}" needs distance_per_cycle to travel. Use [Do: ${state.config.display_name || state.characterId} ${actionId}] to play it in place.`
+        );
+      }
       const scale = from.scale || 1;
-      const pxPerSec = (action.distance_per_cycle * scale * action.fps) / action.frames;
+      const pxPerSec = (dpc * scale * action.fps) / action.frames;
       const dx = Math.abs(toX - from.x);
       if (!(pxPerSec > 0)) {
         throw new ScriptError(token.lineNumber, `Action "${actionId}" distance_per_cycle produces no travel speed.`);
@@ -1833,19 +1926,17 @@ class ScriptParser {
       const startRel = Math.max(0, scene.cursorFrames - segment.startFrame);
       const endRel = startRel + durationFrames;
 
-      for (const part of parts) {
-        const from = this._getChildRotation(state, part.childId);
-        this._addRotationKeyframe(segment, part.childId, { frame: startRel, rotation: from, ease });
-        this._addRotationKeyframe(segment, part.childId, { frame: endRel, rotation: part.degrees });
-        state.childRotations.set(part.childId, part.degrees);
-      }
+      this._applyMotionKeys(segment, state, parts, (from, degrees) => [
+        { frame: startRel, rotation: from, ease },
+        { frame: endRel, rotation: degrees },
+      ]);
 
       this._emitLane({
         lane: "action",
         token,
         startFrame: eventStart,
         endFrame: eventStart + durationFrames,
-        label: `${state.characterId} pose ${parts.map((p) => p.childId).join(" ")}`.trim(),
+        label: `${state.characterId} pose ${parts.map((p) => p.id).join(" ")}`.trim(),
         subject: state.characterId,
         kv,
         keys: Object.keys(kv),
@@ -1880,12 +1971,9 @@ class ScriptParser {
       const segment = state.current;
       const startRel = Math.max(0, scene.cursorFrames - segment.startFrame);
 
-      for (const part of parts) {
-        const current = this._getChildRotation(state, part.childId);
-        const keys = swingRotationKeyframes(current, part.degrees, periodFrames, durationFrames, startRel);
-        for (const key of keys) this._addRotationKeyframe(segment, part.childId, key);
-        state.childRotations.set(part.childId, current); // ends back at the start angle
-      }
+      this._applyMotionKeys(segment, state, parts, (current, amplitude) =>
+        swingRotationKeyframes(current, amplitude, periodFrames, durationFrames, startRel)
+      );
 
       this._emitLane({
         lane: "action",
@@ -2033,24 +2121,172 @@ class ScriptParser {
     scene.cursorFrames += advance;
   }
 
+  // ---- [Do: Name <actionId> for=Ns wait=] -------------------------------
+
+  _handleDo(token) {
+    const scene = this._requireScene(token.lineNumber, "Do");
+    const { character: scriptName, kv, note, positional } = parseActionTag(token.body, { allowPositional: true });
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "Do", note);
+    if (!scriptName) throw new ScriptError(token.lineNumber, "[Do: ...] needs a character name.");
+    const extra = Object.keys(kv).filter((key) => !DO_KEYS.has(key));
+    if (extra.length > 0) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[Do: ...] unknown key "${extra[0]}". Expected an action id, optional for=, wait=, at_time=/start=.`
+      );
+    }
+    const actionId = (kv.action && String(kv.action).trim()) || (positional && positional[0]) || "";
+    if (!actionId) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[Do: ...] needs an action id, e.g. [Do: Rodney nod] or [Do: Rodney nod for=1s].`
+      );
+    }
+    const characterId = this._resolveCharacterIdOrThrow(scriptName, token.lineNumber);
+    if (!scene.castOrder.includes(characterId)) {
+      scene.castOrder.push(characterId);
+    }
+    const state = this._ensureCharacterPositioned(scene, characterId, token.lineNumber);
+    const action = actionLibrary.loadAndValidateAction(
+      this.projectDir,
+      this.globalAssetsDir,
+      state.characterId,
+      actionId,
+      { config: state.config, lineNumber: token.lineNumber }
+    );
+
+    const durationSeconds =
+      kv.for !== undefined ? parseSecondsSpec(kv.for, token.lineNumber, "for") : action.frames / action.fps;
+    const wait = parseWaitValue(kv.wait, token.lineNumber);
+    const durationFrames = framesFromSeconds(durationSeconds, this.fps);
+    if (durationFrames <= 0) {
+      throw new ScriptError(
+        token.lineNumber,
+        kv.for !== undefined
+          ? `Invalid for "${kv.for}" -- duration rounds to 0 frames at ${this.fps} fps.`
+          : `Do action="${actionId}" duration rounds to 0 frames at ${this.fps} fps.`
+      );
+    }
+
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
+    this._runAtEventTime(scene, eventStart, () => {
+      const live = state.current;
+      const from = live.transform;
+      const startRel = Math.max(0, scene.cursorFrames - live.startFrame);
+      const endRel = startRel + durationFrames;
+      const prevView = this._previousView(state);
+
+      for (const jointId of Object.keys(action.joints || {})) this._getChildRotation(state, jointId);
+      for (const groupName of Object.keys(action.groups || {})) this._getGroupRotation(state, groupName);
+      const prevChildRots = new Map(state.childRotations);
+      const prevGroupRots = new Map(state.groupRotations);
+
+      const hasViewCycle = Array.isArray(action.views) && action.views.length > 0;
+      const heldView = action.view;
+      if (hasViewCycle || heldView) {
+        let lastWritten = null;
+        for (let f = 0; f < durationFrames; f++) {
+          const index = this._actionCycleIndex(action, f);
+          const v = hasViewCycle ? action.views[index] : heldView;
+          if (v && v !== lastWritten) {
+            this._addViewKeyframe(live, { frame: startRel + f, view: v });
+            lastWritten = v;
+          }
+        }
+        this._addViewKeyframe(live, { frame: endRel, view: prevView || "front" });
+      }
+
+      const slotRestores = [];
+      if (action.set_slots) {
+        for (const [slotName, drawing] of Object.entries(action.set_slots)) {
+          const owner = this._findSlotOwner(state.config, slotName);
+          if (!owner) continue;
+          slotRestores.push({
+            owner,
+            slotName,
+            prev: this._snapshotActiveSlot(state, owner, slotName),
+          });
+          this._applySlotKeyframe(scene, state, state.characterId, slotName, drawing, token.lineNumber);
+        }
+      }
+
+      const scale = from.scale || 1;
+      for (let f = 0; f <= durationFrames; f++) {
+        const index = this._actionCycleIndex(action, f);
+        const atEnd = f === durationFrames;
+
+        if (action.bob) {
+          const bob = atEnd ? 0 : Number(action.bob[index]) || 0;
+          this._addTransformKeyframe(live, {
+            frame: startRel + f,
+            y: from.y + bob * scale,
+            ease: "linear",
+          });
+        }
+
+        for (const [jointId, angles] of Object.entries(action.joints || {})) {
+          const prev = prevChildRots.has(jointId) ? prevChildRots.get(jointId) : 0;
+          this._addRotationKeyframe(live, jointId, {
+            frame: startRel + f,
+            rotation: atEnd ? prev : Number(angles[index]),
+            ease: "linear",
+          });
+          if (atEnd) state.childRotations.set(jointId, prev);
+        }
+
+        for (const [groupName, angles] of Object.entries(action.groups || {})) {
+          const prev = prevGroupRots.has(groupName) ? prevGroupRots.get(groupName) : 0;
+          this._addGroupRotationKeyframe(live, groupName, {
+            frame: startRel + f,
+            rotation: atEnd ? prev : Number(angles[index]),
+            ease: "linear",
+          });
+          if (atEnd) state.groupRotations.set(groupName, prev);
+        }
+      }
+
+      for (const item of slotRestores) {
+        this._restoreActiveSlot(state, item.owner, item.slotName, item.prev, scene, endRel);
+      }
+
+      const displayName = (state.config && state.config.display_name) || state.characterId;
+      this._emitLane({
+        lane: "action",
+        token,
+        startFrame: eventStart,
+        endFrame: eventStart + durationFrames,
+        label: `${displayName} ${actionId}`,
+        subject: state.characterId,
+        kv,
+        keys: Object.keys(kv),
+      });
+    });
+    this._noteHorizon(scene, eventStart + durationFrames);
+    if (wait) scene.cursorFrames += durationFrames;
+  }
+
   // ---- [View: Name view=<head view>] ------------------------------------
 
   _handleView(token) {
     const scene = this._requireScene(token.lineNumber, "View");
-    const { character: scriptName, kv, note } = parseActionTag(token.body);
+    const { character: scriptName, kv, note, positional } = parseActionTag(token.body, { allowPositional: true });
     if (!scriptName) throw new ScriptError(token.lineNumber, "[View: ...] needs a character name.");
     this._warnNoteLooksLikeAssignments(token.lineNumber, "View", note);
-    if (kv.view === undefined) {
-      throw new ScriptError(token.lineNumber, `[View: ...] needs view=<${HEAD_VIEWS.join("|")}>.`);
+    const viewRaw = kv.view !== undefined ? kv.view : positional && positional[0];
+    if (viewRaw === undefined || viewRaw === "") {
+      throw new ScriptError(
+        token.lineNumber,
+        `[View: ...] needs a view, e.g. [View: Name right_34] or view=<${HEAD_VIEWS.join("|")}>.`
+      );
     }
     const extra = Object.keys(kv).filter((key) => key !== "view" && !TIMING_KEYS.has(key));
     if (extra.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[View: ...] only accepts view= and optional at_time=/start=. Unexpected: ${extra.join(", ")}`
+        `[View: ...] only accepts a view name, view=, and optional at_time=/start=. Unexpected: ${extra.join(", ")}`
       );
     }
-    const view = parseViewValue(kv.view, token.lineNumber);
+    const view = parseViewValue(viewRaw, token.lineNumber);
     const characterId = this._resolveCharacterIdOrThrow(scriptName, token.lineNumber);
     if (!scene.castOrder.includes(characterId)) {
       scene.castOrder.push(characterId);
@@ -2059,6 +2295,9 @@ class ScriptParser {
     const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
     this._runAtEventTime(scene, eventStart, () => {
       state.currentView = view || "front";
+      const segment = state.current;
+      const startRel = Math.max(0, scene.cursorFrames - segment.startFrame);
+      this._addViewKeyframe(segment, { frame: startRel, view: state.currentView });
     });
   }
 
@@ -2477,6 +2716,21 @@ class ScriptParser {
     }
     if (segment.viewKeyframes && segment.viewKeyframes.length > 0) {
       layer.view_keyframes = [...segment.viewKeyframes].sort((a, b) => a.frame - b.frame);
+    }
+    const groupRotMap = segment.closingGroupRotations || state.groupRotations;
+    if (groupRotMap && groupRotMap.size) {
+      const staticRots = {};
+      for (const [name, rot] of groupRotMap) {
+        if (rot) staticRots[name] = rot;
+      }
+      if (Object.keys(staticRots).length) layer.group_rotations = staticRots;
+    }
+    if (segment.groupRotationKeyframes && segment.groupRotationKeyframes.size) {
+      const keyed = {};
+      for (const [name, keys] of segment.groupRotationKeyframes) {
+        if (keys && keys.length) keyed[name] = [...keys].sort((a, b) => a.frame - b.frame);
+      }
+      if (Object.keys(keyed).length) layer.group_rotation_keyframes = keyed;
     }
     if (segment.startFrame !== 0 || segment.endFrame !== undefined) {
       layer.timing = { start_frame: segment.startFrame };

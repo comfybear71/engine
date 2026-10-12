@@ -25,12 +25,14 @@ const HEAD_VIEWS = ["front", "left_34", "left_side", "right_34", "right_side", "
 function parseActionTag(body, options = {}) {
   const words = body.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) {
-    return { character: null, kv: {}, note: "" };
+    return { character: null, kv: {}, note: "", positional: [] };
   }
 
   const extraBare = new Set((options.bareFlags || []).map((flag) => String(flag).toLowerCase()));
+  const allowPositional = Boolean(options.allowPositional);
   const character = words[0];
   const kv = {};
+  const positional = [];
   let i = 1;
   for (; i < words.length; i++) {
     const match = words[i].match(KEY_VALUE_RE);
@@ -45,11 +47,17 @@ function parseActionTag(body, options = {}) {
       kv[word] = "true";
       continue;
     }
+    // [Do: Name nod for=1s] / [View: Name right_34]: one positional token
+    // may sit among key=value pairs; parsing continues after it.
+    if (allowPositional && positional.length === 0) {
+      positional.push(words[i]);
+      continue;
+    }
     break;
   }
 
   const note = words.slice(i).join(" ");
-  return { character, kv, note };
+  return { character, kv, note, positional };
 }
 
 /**

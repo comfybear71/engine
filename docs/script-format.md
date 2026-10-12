@@ -195,14 +195,28 @@ next `[Move]` or a later `[Action: flip]` continues from there.
 
 ### `[Pose: Name part=deg part2=deg over=<secs>s ease=linear|inout wait=true|false]`
 
-Tweens one or more rig children's rotation from their current angle to
-the given degrees. Same `over` / `ease` / `wait` rules as `[Move]`.
-`part` is a `character.json` child id (`right_arm=40`, `forearm=-15`).
-Unknown parts raise a line-numbered error listing every child id.
+Tweens one or more rig children's rotation — or a named slot **group** —
+from their current angle to the given degrees. Same `over` / `ease` /
+`wait` rules as `[Move]`. `part` is a `character.json` child id
+(`right_arm=40`, `forearm=-15`) **or** a `groups` name (`head=8`).
+Unknown names raise a line-numbered error listing every child id and
+group name.
 
-Writes `{ frame, rotation, ease? }` onto that child's `rotation_keyframes`.
-The new angle becomes the current pose, so a later `[Pose]` or `[Swing]`
-continues from there (and a flipped new layer keeps the posed angle).
+A group (e.g. `head` = `head_base`, `eyes`, `mouth`) rotates **rigidly**
+about the group pivot (the first member's offset / `canvas.pivot`, the
+neck). No scale or warp. Automatic dialogue head-bob still applies on
+top; lip-sync and blinks keep swapping drawings. Flip mirrors the angle,
+same as a child swing.
+
+Writes `{ frame, rotation, ease? }` onto that child's `rotation_keyframes`,
+or onto the layer's `group_rotation_keyframes.<name>`. The new angle
+becomes the current pose, so a later `[Pose]` or `[Swing]` continues from
+there (and a flipped new layer keeps the posed angle).
+
+```text
+[Pose: Rodney head=8 over=0.15s]
+[Pose: Rodney right_arm=40 over=1s]
+```
 
 ### `[Camera: zoom=<n> | pan=x,y | tilt=<dy> | to=x,y zoom=<n> | reset over=<secs>s ease=linear|inout wait=true|false]`
 
@@ -249,17 +263,22 @@ Hicks: The floor's closer than it looks.
 ### `[Swing: Name part=±deg ... period=<secs>s for=<secs>s wait=true|false]`
 
 Generates a back-and-forth rotation around each part's **current** angle,
-then ends back at it. Ease is always `inout`.
+then ends back at it. Ease is always `inout`. `part` may be a child id
+or a `groups` name (same rigid group rotation as `[Pose:]`).
 
 | Key | Meaning |
 |---|---|
-| `part=±deg` | Amplitude (and first-swing direction) relative to the current angle. `right_arm=30` swings +30 then -30; `right_arm=-30` goes the other way first. |
+| `part=±deg` | Amplitude (and first-swing direction) relative to the current angle. `right_arm=30` swings +30 then -30; `right_arm=-30` goes the other way first. `head=6` nods the whole head group. |
 | `period=<secs>s` | One full cycle (center → +amp → center → −amp → center). |
 | `for=<secs>s` | How long to keep swinging. |
 | `wait=` | Same as `[Move]`: default `true` advances the clock; `wait=false` lets a dialogue line play over the swing. |
 
 Keyframe count for `for` = `period` at 24 fps is 5 (frames 0, T/4, T/2,
 3T/4, T), first and last at the start angle.
+
+```text
+[Swing: Rodney head=6 period=0.45s for=0.9s]
+```
 
 ### `[Audio: Name file=<label>]`
 
@@ -305,10 +324,35 @@ Single speaker only. Studio **Import audio** (Script tab, or Stage
 transport / Script drawer) calls the same work via
 `POST /api/projects/:name/import-audio` -- see [docs/studio.md](studio.md).
 
-### `[View: Name view=<head view>]`
+### `[Do: Name <actionId> (for=Ns) (wait=)]`
+
+Plays `characters/<id>/actions/<actionId>.json` **in place**: no travel,
+no auto-flip. Same `wait=` clock as `[Move:]` (`true` default). Omit
+`for=` to play one cycle (`frames / fps` seconds); if `for=` is longer
+than one cycle the action loops. Restores view, slot drawings, joint
+angles, group angles, and bob at the end.
+
+The action may change `view` (or a per-frame `views` array), `set_slots`,
+`joints`, optional `groups` (degrees per cycle frame, same rigid group
+rotation as `[Pose:]`), and `bob` (Y offset even while standing still).
+
+```text
+[Do: Rodney nod]
+[Do: Rodney walk_side for=2s wait=false]
+```
+
+### `[View: Name view=<head view>]` or `[View: Name <head view>]`
 
 Sets the default head/mouth view for following spoken lines and `[Audio:]`
-takes by that character. See [Head view](#head-view-view--view).
+takes by that character, **and** writes `view_keyframes` so a silent
+shot (no dialogue) actually switches the drawings on screen from this
+point — same held-until-changed samples a walk writes. See
+[Head view](#head-view-view--view).
+
+```text
+[View: Rodney right_34]
+[View: Rodney view=right_34]
+```
 
 ### `Character: dialogue text`
 
@@ -355,7 +399,7 @@ attribute; you can also type it by hand.
 | `start=2s` or `start=48` | Same meaning; an alias. If both are present, `at_time=` wins. |
 
 Accepted on `[Action:]`, `[Prop:]`, `[Layer:]`, `[Move:]`, `[Pose:]`,
-`[Swing:]`, `[Camera:]`, `[Audio:]`, and on dialogue as
+`[Swing:]`, `[Do:]`, `[Camera:]`, `[Audio:]`, `[View:]`, and on dialogue as
 `Name at_time=2s: spoken text`. Zero is allowed (`at_time=0s`).
 
 **The cursor does not move to `at_time=`.** A `wait=true` move, a
@@ -377,7 +421,7 @@ script line (an `[Audio:]` take plus its sentence chips) share one
 
 Studio edge-trims rewrite the script, then re-parse.
 
-**Timed tags** (`[Move:]`, `[Pose:]`, `[Camera:]`, `[Swing:]`) change
+**Timed tags** (`[Move:]`, `[Pose:]`, `[Camera:]`, `[Swing:]`, `[Do:]`) change
 `over=` or `for=`. Dragging the start edge also writes `at_time=` so the
 end stays put. Instant pins (`[Action:]` / `[Prop:]` / `[Layer:]`) accept
 optional `hold=` (or `over=`) to lock a fixed length instead of stretching
@@ -487,7 +531,7 @@ set lip-sync uses:
 | Form | Meaning |
 |---|---|
 | `Name view=left_side: text` | This line uses `mouth_left_side/` (falls back to `mouth_front/` / `mouth/`). |
-| `[View: Name view=left_side]` | Sets the default for following lines until another `[View:]` or a per-line `view=`. |
+| `[View: Name view=left_side]` or `[View: Name left_side]` | Sets the default for following lines until another `[View:]` or a per-line `view=`, and writes `view_keyframes` so a silent shot switches the head drawings from this point. |
 | `[Audio: Name file=monologue view=right_34]` | Same for an imported take. |
 
 Allowed views: `front`, `left_34`, `left_side`, `right_34`, `right_side`,
@@ -537,7 +581,11 @@ are skipped, never errors.
   the current position *is* the target, so `[Action: Name flip]` opens the
   new layer there (not back at the original mark).
 - **`[Pose:]` / `[Swing:]` never fork a layer.** They write
-  `rotation_keyframes` on the named rig children.
+  `rotation_keyframes` on the named rig children, or
+  `group_rotation_keyframes` for a `character.json` group name.
+- **`[Do:]` never forks a layer** and does not travel or flip. It samples
+  an action cycle in place (view, slots, joints, group rotations, bob)
+  and restores those at the end.
 - **`[Camera:]` never forks a layer.** It writes scene-level
   `camera.keyframes` (see [docs/timeline-schema.md#camera](timeline-schema.md#camera)).
   `wait=true` advances the shared cursor like `[Move:]`.

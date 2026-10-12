@@ -242,7 +242,7 @@ clobber the project's `timeline.json`.
   and **editable timeline lanes** at the bottom (Body/Move, Face, Props,
   Dialogue, Mouth, Audio, SFX, Camera).
   The old single Action lane is split so overlapping motion is visible:
-  `[Move:]` / `[Swing:]` / `[Pose:]` / `body=` cycles on Body/Move,
+  `[Move:]` / `[Swing:]` / `[Pose:]` / `[Do:]` / `body=` cycles on Body/Move,
   `face=` / `eyes=` expression pins on Face, synced mouth cues on Mouth
   (directly under Dialogue), `[Prop:]` on Props, and
   `[Camera:]` stays on Camera. Occupied lanes default to ~30px per stacked
@@ -535,7 +535,7 @@ are reserved and cannot be created, renamed to, duplicated as, or deleted.
 routes reuse `/api/projects/:name/…` with `?show=<showId>` so Stage /
 Assets / Script / Render stay the same inside an episode.
 
-Lane `lane` values are `body` (`[Move:]`, `[Swing:]`, `[Pose:]`,
+Lane `lane` values are `body` (`[Move:]`, `[Swing:]`, `[Pose:]`, `[Do:]`,
 `body=` cycles, character `at=` / `flip` / layer-z), `face` (`face=` /
 `eyes=` expression pins only), `mouth` (one red lip-sync block per
 synced Dialogue line), `props` (`[Prop:]` and prop layer-z), `dialogue`

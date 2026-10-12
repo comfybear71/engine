@@ -33,7 +33,16 @@ from .camera import apply_camera, scale_camera
 from .ffmpeg_writer import write_frames
 from .lipsync_natural import slot_head_bob
 from .slots import Slot, _find_active_clip, active_drawing, drawing_align, is_hide_drawing, slot_is_visible
-from .timeline_loader import Child, Layer, Scene, Timeline, child_rotation_at, layer_view_at, transform_at
+from .timeline_loader import (
+    Child,
+    Layer,
+    Scene,
+    Timeline,
+    child_rotation_at,
+    group_rotation_at,
+    layer_view_at,
+    transform_at,
+)
 from .transform import rotate_offset_clockwise
 
 
@@ -233,6 +242,8 @@ def _draw_slot(
     fps: int,
     drawings: dict[str, str | None],
     view: str | None = None,
+    group_rot: float = 0.0,
+    group_pivot: tuple[float, float] | None = None,
 ) -> None:
     if not slot_is_visible(slot, drawings):
         return
@@ -253,15 +264,23 @@ def _draw_slot(
     align = drawing_align(slot, drawing)
     local_x = slot.offset_x + align.x
     local_y = slot.offset_y + align.y
+    # Rigid group rotation about the group pivot (typically the neck).
+    # Flip mirrors the angle, same as child swings.
+    group_draw = -group_rot if owner.flip_x else group_rot
+    gx, gy = group_pivot if group_pivot is not None else (local_x, local_y)
     mirrored_x = -local_x if owner.flip_x else local_x
-    rotated_x, rotated_y = rotate_offset_clockwise(mirrored_x, local_y, owner.rotation)
+    mirrored_gx = -gx if owner.flip_x else gx
+    rdx, rdy = rotate_offset_clockwise(mirrored_x - mirrored_gx, local_y - gy, group_draw)
+    att_x = mirrored_gx + rdx
+    att_y = gy + rdy
+    rotated_x, rotated_y = rotate_offset_clockwise(att_x, att_y, owner.rotation)
     bob_dy, bob_rot = slot_head_bob(slot, owner_local_frame_idx)
     slot_x = owner.x + rotated_x * owner.scale
     slot_y = owner.y + rotated_y * owner.scale + bob_dy
     # Slot scale/rotation (and align.scale) are around the attachment point
     # (center, or the canvas neck pivot when set), so the offset stays put.
     slot_scale = owner.scale * (slot.scale if slot.scale else 1.0) * (align.scale if align.scale else 1.0)
-    slot_rotation = owner.rotation + slot.rotation + bob_rot
+    slot_rotation = owner.rotation + slot.rotation + group_draw + bob_rot
     pivot = (slot.pivot_x, slot.pivot_y) if slot.has_canvas else None
     anchor = "center" if pivot is None else "top-left"
 
@@ -283,6 +302,25 @@ def _draw_layer(
     drawings = _collect_slot_drawings(layer, layer_local_frame_idx, fps)
     suppressed = _suppressed_head_slots(layer)
     layer_view = _layer_view_at(layer, layer_local_frame_idx)
+    group_rot_by_slot: dict[str, float] = {}
+    group_pivot_by_slot: dict[str, tuple[float, float]] = {}
+    for group_name, members in (layer.groups or {}).items():
+        rot = group_rotation_at(layer, group_name, layer_local_frame_idx)
+        pivot_slot = None
+        for member in members:
+            if member in layer.slots:
+                pivot_slot = layer.slots[member]
+                break
+            for child in layer.children:
+                if member in child.slots:
+                    pivot_slot = child.slots[member]
+                    break
+            if pivot_slot is not None:
+                break
+        pivot_xy = (pivot_slot.offset_x, pivot_slot.offset_y) if pivot_slot is not None else (0.0, 0.0)
+        for member in members:
+            group_rot_by_slot[member] = rot
+            group_pivot_by_slot[member] = pivot_xy
     for placed in _resolve_layer_placements(
         layer, layer_local_frame_idx, world_scale=world_scale, drawings=drawings
     ):
@@ -299,6 +337,8 @@ def _draw_layer(
             _draw_slot(
                 canvas, cache, slot, placed, layer_local_frame_idx, fps, drawings,
                 view=layer_view,
+                group_rot=group_rot_by_slot.get(name, 0.0),
+                group_pivot=group_pivot_by_slot.get(name),
             )
 
 

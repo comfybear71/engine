@@ -63,7 +63,7 @@ function assignActionLane(event) {
   if (tag === "dialogue") return "dialogue";
   if (tag === "audio") return "audio";
   if (tag === "prop" || (event && event.subjectKind === "prop")) return "props";
-  if (tag === "move" || tag === "pose" || tag === "swing") return "body";
+  if (tag === "move" || tag === "pose" || tag === "swing" || tag === "do") return "body";
 
   const keys = eventKeys(event || {});
   const label = event && event.label;

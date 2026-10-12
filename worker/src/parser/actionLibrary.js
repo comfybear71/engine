@@ -105,9 +105,12 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
   if (!(fps > 0)) {
     throw new ScriptError(lineNumber, `Action "${id}" fps must be greater than 0.`);
   }
-  const distance = _asFiniteNumber(action.distance_per_cycle, `"${id}" distance_per_cycle`, lineNumber);
-  if (!(distance > 0)) {
-    throw new ScriptError(lineNumber, `Action "${id}" distance_per_cycle must be greater than 0.`);
+  let distance = null;
+  if (action.distance_per_cycle != null && action.distance_per_cycle !== "") {
+    distance = _asFiniteNumber(action.distance_per_cycle, `"${id}" distance_per_cycle`, lineNumber);
+    if (!(distance > 0)) {
+      throw new ScriptError(lineNumber, `Action "${id}" distance_per_cycle must be greater than 0.`);
+    }
   }
 
   const view = action.view != null ? String(action.view) : "";
@@ -116,6 +119,25 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
       lineNumber,
       `Action "${id}" view "${view}" is invalid. Expected: ${HEAD_VIEWS.join(", ")}.`
     );
+  }
+  let views = null;
+  if (action.views != null) {
+    if (!Array.isArray(action.views) || action.views.length !== frames) {
+      throw new ScriptError(
+        lineNumber,
+        `Action "${id}" views length ${Array.isArray(action.views) ? action.views.length : 0} != frames ${frames}.`
+      );
+    }
+    views = action.views.map((item, i) => {
+      const v = String(item == null ? "" : item).trim().toLowerCase();
+      if (!HEAD_VIEWS.includes(v)) {
+        throw new ScriptError(
+          lineNumber,
+          `Action "${id}" views[${i}] "${item}" is invalid. Expected: ${HEAD_VIEWS.join(", ")}.`
+        );
+      }
+      return v;
+    });
   }
   const faces = action.faces != null ? String(action.faces).toLowerCase() : "right";
   if (!FACES.has(faces)) {
@@ -159,6 +181,30 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     }
   }
 
+  const groupAngles = action.groups && typeof action.groups === "object" ? action.groups : {};
+  const charGroups = (config && config.groups && typeof config.groups === "object") ? config.groups : {};
+  const availableGroups = Object.keys(charGroups).filter((g) => Array.isArray(charGroups[g]) && charGroups[g].length);
+  for (const [groupName, angles] of Object.entries(groupAngles)) {
+    const known = availableGroups.find((g) => g === groupName) || availableGroups.find((g) => g.toLowerCase() === String(groupName).toLowerCase());
+    if (!known) {
+      throw new ScriptError(
+        lineNumber,
+        `Action "${id}" group "${groupName}" is not a group on ${name}. Available: ${availableGroups.join(", ") || "(none)"}`
+      );
+    }
+    if (!Array.isArray(angles) || angles.length !== frames) {
+      throw new ScriptError(
+        lineNumber,
+        `Action "${id}" group "${groupName}" length ${Array.isArray(angles) ? angles.length : 0} != frames ${frames}.`
+      );
+    }
+    for (let i = 0; i < angles.length; i++) {
+      if (!Number.isFinite(Number(angles[i]))) {
+        throw new ScriptError(lineNumber, `Action "${id}" group "${groupName}"[${i}] is not a number.`);
+      }
+    }
+  }
+
   const setSlots = action.set_slots && typeof action.set_slots === "object" ? action.set_slots : {};
   for (const [slotName, drawing] of Object.entries(setSlots)) {
     const slotConfig = _findSlot(config, slotName);
@@ -178,15 +224,22 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     }
   }
 
+  const groups = {};
+  for (const [groupName, angles] of Object.entries(groupAngles)) {
+    groups[groupName] = angles.map(Number);
+  }
+
   return {
     id: action.id || id,
     view: view || null,
+    views,
     faces,
     fps,
     frames,
     distance_per_cycle: distance,
     set_slots: setSlots,
     joints,
+    groups,
     bob: Array.isArray(bob) ? bob.map(Number) : null,
   };
 }

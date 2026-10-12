@@ -87,6 +87,7 @@ function tokenize(scriptText) {
         "camera",
         "audio",
         "view",
+        "do",
       ];
       if (!knownTags.includes(tag)) {
         throw new ScriptError(

@@ -152,6 +152,8 @@ class Layer:
     transform_keyframes: list[TransformKeyframe] = field(default_factory=list)
     view_keyframes: list[ViewKeyframe] = field(default_factory=list)
     groups: dict[str, list[str]] = field(default_factory=dict)
+    group_rotations: dict[str, float] = field(default_factory=dict)
+    group_rotation_keyframes: dict[str, list[RotationKeyframe]] = field(default_factory=dict)
 
     def is_visible_at(self, frame_idx: int, scene_total_frames: int) -> bool:
         end = self.end_frame if self.end_frame is not None else scene_total_frames
@@ -322,6 +324,18 @@ def child_rotation_at(child: Child, local_frame: int) -> float:
         return child.rotation
     return interpolate_scalar(
         [(k.frame, k.rotation, k.ease) for k in kfs], local_frame, child.rotation
+    )
+
+
+def group_rotation_at(layer: Layer, group_name: str, local_frame: int) -> float:
+    """Named slot-group rotation at a layer-local frame (rigid about the group pivot)."""
+
+    base = float(layer.group_rotations.get(group_name, 0.0) or 0.0)
+    kfs = layer.group_rotation_keyframes.get(group_name) or []
+    if not kfs:
+        return base
+    return interpolate_scalar(
+        [(k.frame, k.rotation, k.ease) for k in kfs], local_frame, base
     )
 
 
@@ -927,6 +941,19 @@ def _build_layer(
         if isinstance(members, list)
     }
 
+    group_rotations_raw = raw.get("group_rotations") if isinstance(raw.get("group_rotations"), dict) else {}
+    group_rotations = {
+        str(name): float(value)
+        for name, value in group_rotations_raw.items()
+        if value is not None
+    }
+    group_kf_raw = raw.get("group_rotation_keyframes") if isinstance(raw.get("group_rotation_keyframes"), dict) else {}
+    group_rotation_keyframes = {
+        str(name): _build_rotation_keyframes(keys)
+        for name, keys in group_kf_raw.items()
+        if isinstance(keys, list)
+    }
+
     layer = Layer(
         id=raw["id"],
         character_id=raw.get("character_id"),
@@ -942,6 +969,8 @@ def _build_layer(
         transform_keyframes=transform_keyframes,
         view_keyframes=view_keyframes,
         groups=groups,
+        group_rotations=group_rotations,
+        group_rotation_keyframes=group_rotation_keyframes,
     )
     # Natural lipsync (blinks + bob on the whole head group) is opt-in via
     # groups.head so existing characters without the new field stay unchanged.
