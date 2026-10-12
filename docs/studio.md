@@ -149,11 +149,18 @@ clobber the project's `timeline.json`.
   **+ New** (Imagine / ingest for image types; Import audio for Sounds;
   Library if there is no character yet), a main view of the selected
   character with **Front / L 3/4 / R 3/4 / Side L / Side R / Back** tabs
-  and slot rows of real thumbnails, and a right inspector (checkerboard,
-  pivot, canvas, path, **Approve** / **Redo**). Badges
-  (`ticked` / `locked` / `draft` / `missing`) come from
-  `characters/<id>/status.json` plus the standard rig (missing = expected,
-  no file). Thumbnail grids of Characters, Backgrounds, and Props **this
+  and slot rows of real thumbnails, and a right inspector (cropped piece,
+  on the head for eyes/mouth, bounds, used-by, history, **Approve** /
+  **Redo**). Status dots and header pills (`ticked` / `locked` / `draft` /
+  `missing`) come from `characters/<id>/status.json` plus the standard rig
+  (present with no review is draft; missing = expected, no file). View tabs
+  show present-file counts. Slot rows are grouped Head / Eyes / Mouth /
+  Torso / Arm rig / Hands / Legs — torso, body, torso_rig, and shirt/shorts
+  overlays share one Torso row. **Validate** lints the current script;
+  **Open folder** opens the character folder. Factory thumbs are
+  `GET .../asset?factory=1` (alpha crop + pad; `over=` composites a face
+  overlay on that view's head_base). When nothing is selected the inspector
+  shows a character summary, not the green-screen reference. Thumbnail grids of Characters, Backgrounds, and Props **this
   project uses** still load from the same sources: characters named in `[Cast:]` (any of its scripts) or
   sitting in a project-local `characters/` folder or listed in
   `library.json`; backgrounds from `[Location:]` / local `backgrounds/`;
@@ -486,6 +493,8 @@ other media durations are cached by path + mtime + size.
 | `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`, `drawingsDir`, per-view `views[]`, and optional `canvas`), **project-local** drawings, cycles, thumbnail paths, `style`, `reference` / `referenceRel`, `default_scale`, `groups`, and `children` (rig pieces). |
 | `GET` | `/api/projects/:name/characters/:id/status` | Factory Assets payload for one character. Query `?view=` (`front`, `left_34`, `right_34`, `left_side`, `right_side`, `back`) and optional `?key=` for the inspector. Rows are `character.json` slots + children, padded with standard-rig drawings. Each drawing has `key` (`<slot>/<drawing>`, usually the drawings folder + name), `rel` when a file exists, and `badge` `ticked` / `locked` / `draft` / `missing`. `missing` is computed (expected by the standard, no file) and is never stored. Also returns `status`, `redos`, `counts`, `canvas`, and `inspector` (pivot, anchor, path). |
 | `PUT` | `/api/projects/:name/characters/:id/status` | Writes project-local `characters/<id>/status.json`. JSON `{ "key": "eyes_front/surprised", "state": "ticked" }` (Approve) or `{ "key", "redo": "wider lids" }` (stores the note under `_redos` and sets `draft`). Values on the file are only `ticked` / `locked` / `draft`. Never writes `_global_assets`. Returns the same factory payload as GET. |
+| `GET` | `/api/projects/:name/asset?rel=&factory=1&over=` | Factory thumbnail: crop the PNG to its opaque bounds (plus padding). `over=` is an optional same-canvas head_base to composite first (eyes/mouth). |
+| `POST` | `/api/projects/:name/open-folder` | Opens a project-relative folder in the desktop file manager. JSON `{ "rel": "characters/rodney" }`. |
 | `GET` | `/api/projects/:name/actions` | Action JSON files: `shared/<id>` from a top-level `actions/` folder, plus `characters/<id>/actions/*.json` as `<character>/<action>`. |
 | `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. Library thumbs may use `?library=1` on `/asset` so the catalog still previews while Independent is on. |
 | `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Copies the character folder from `_global_assets` into the project, writes project-local `character.json`, and appends to `library.json`. Does not touch `_global_assets`. |

@@ -38,7 +38,11 @@ export default function StudioApp({
 }) {
   const project = projectName;
   const [showName, setShowName] = useState<string | null>(showId || null);
-  const [tab, setTab] = useState<TabId>("stage");
+  const [tab, setTab] = useState<TabId>(() => {
+    if (typeof window === "undefined") return "stage";
+    const next = new URLSearchParams(window.location.search).get("tab");
+    return next && TABS.some((item) => item.id === next) ? (next as TabId) : "stage";
+  });
   const [scripts, setScripts] = useState<string[]>([]);
   const [script, setScript] = useState<string>("script.txt");
   const [workerUp, setWorkerUp] = useState<boolean | null>(null);
@@ -169,6 +173,7 @@ export default function StudioApp({
             <button
               key={item.id}
               type="button"
+              data-testid={`studio-tab-${item.id}`}
               onClick={() => setTab(item.id)}
               className={`px-3 py-3 text-sm ${
                 tab === item.id

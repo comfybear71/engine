@@ -25,6 +25,8 @@ const { getCachedPreview, storePreview } = require("./previewCache");
 const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = require("./studioLibrary");
 const { describeFactoryCharacter, applyStatusBody, listProjectActions, inspectorForPiece } = require("./characterStatus");
 const { listProjectAudio } = require("./studioAudio");
+const { renderFactoryThumb } = require("./factoryThumb");
+const { openProjectRel } = require("./factoryOpen");
 const { buildLaneBlocks, clampFrame } = require("./studioLanes");
 const {
   DEFAULT_SCRIPT,
@@ -944,7 +946,7 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
       const factory = describeFactoryCharacter(projectDir, globalAssetsDir, characterId, req.query.view);
-      const inspector = inspectorForPiece(factory, req.query.key);
+      const inspector = inspectorForPiece(factory, req.query.key, { projectDir, globalAssetsDir });
       res.json({ ...factory, inspector });
     } catch (err) {
       sendIngestError(res, err);
@@ -960,7 +962,7 @@ function createApp(options = {}) {
     try {
       applyStatusBody(projectDir, characterId, req.body || {});
       const factory = describeFactoryCharacter(projectDir, globalAssetsDir, characterId, req.body && req.body.view);
-      const inspector = inspectorForPiece(factory, req.body && req.body.key);
+      const inspector = inspectorForPiece(factory, req.body && req.body.key, { projectDir, globalAssetsDir });
       res.json({ ok: true, ...factory, inspector });
     } catch (err) {
       sendIngestError(res, err);
@@ -1405,6 +1407,28 @@ function createApp(options = {}) {
     if (!type) {
       return res.status(400).json({ error: "Unsupported asset type" });
     }
+    const wantFactory = req.query.factory === "1" || req.query.factory === "true";
+    if (wantFactory) {
+      try {
+        const overRel = typeof req.query.over === "string" ? req.query.over : "";
+        let basePath = null;
+        if (overRel && isSafeRelPath(overRel)) {
+          const over = resolveAsset(
+            projectDir,
+            globalAssetsDir,
+            overRel,
+            libraryPreview ? { includeGlobal: true } : undefined
+          );
+          if (over) basePath = over.absPath;
+        }
+        const rendered = renderFactoryThumb({ piecePath: resolved.absPath, basePath });
+        setAssetCacheControl(req, res, resolved.absPath);
+        res.type("image/png").send(rendered.png);
+      } catch (err) {
+        if (!res.headersSent) res.status(500).json({ error: err.message });
+      }
+      return;
+    }
     const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
     if (wantThumb) {
       cachedBackgroundThumb(resolved.absPath)
@@ -1421,6 +1445,19 @@ function createApp(options = {}) {
     }
     setAssetCacheControl(req, res, resolved.absPath);
     res.type(type).sendFile(resolved.absPath);
+  });
+
+  app.post("/api/projects/:name/open-folder", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const rel = typeof body.rel === "string" ? body.rel : "";
+    try {
+      res.json(openProjectRel(projectDir, rel || "."));
+    } catch (err) {
+      const code = err && err.code === "ENOENT" ? 404 : 400;
+      res.status(code).json({ error: err.message || "Could not open folder" });
+    }
   });
 
   app.get("/api/projects/:name/script", (req, res) => {

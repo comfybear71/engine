@@ -59,3 +59,22 @@ export function formatPivot(pivot: { x: number; y: number } | null | undefined):
   if (!pivot) return "—";
   return `${Math.round(pivot.x)} / ${Math.round(pivot.y)}`;
 }
+
+export function formatBounds(
+  bounds: { x: number; y: number; w: number; h: number } | null | undefined
+): string {
+  if (!bounds) return "—";
+  return `${Math.round(bounds.x)},${Math.round(bounds.y)} → ${Math.round(bounds.x + bounds.w)},${Math.round(bounds.y + bounds.h)}`;
+}
+
+export type AudioFolder = { label: string; count: number; rel: string };
+
+export function groupAudioFolders(files: { label: string; rel: string }[]): AudioFolder[] {
+  const map = new Map<string, AudioFolder>();
+  for (const file of files || []) {
+    const current = map.get(file.label);
+    if (current) current.count += 1;
+    else map.set(file.label, { label: file.label, count: 1, rel: file.rel });
+  }
+  return [...map.values()];
+}

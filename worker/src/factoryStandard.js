@@ -143,17 +143,46 @@ function drawingBadge(statusMap, key, hasFile, expected) {
   if (!hasFile) return expected ? "missing" : null;
   const raw = statusMap && statusMap[key];
   if (isStatusState(raw)) return raw;
-  return null;
+  return "draft";
+}
+
+function childText(child) {
+  return `${(child && child.id) || ""} ${(child && child.asset) || ""}`.toLowerCase();
+}
+
+function childSideSuffix(child) {
+  const id = String((child && child.id) || "").toLowerCase();
+  if (/(?:^|_)l(?:_|$)|left/.test(id)) return " L";
+  if (/(?:^|_)r(?:_|$)|right/.test(id)) return " R";
+  return "";
+}
+
+function isClothingOverlay(text) {
+  return /shirt|shorts|clothing|tie|belt|cape|skirt|jacket|vest/.test(text);
 }
 
 function childRowLabel(child) {
-  const id = String((child && child.id) || "").toLowerCase();
-  const side = /(?:^|_)l(?:_|$)|left/.test(id) ? " L" : /(?:^|_)r(?:_|$)|right/.test(id) ? " R" : "";
-  if (/arm|forearm|sleeve|cape|shoulder|overlay/.test(id)) return `Arm rig${side}`.trimEnd();
-  if (/hand/.test(id)) return "Hands";
-  if (/leg|thigh|shin|boot/.test(id)) return `Legs${side}`.trimEnd();
-  if (/torso/.test(id)) return "Torso";
+  const text = childText(child);
+  const side = childSideSuffix(child);
+  if (/hand/.test(text) && !/arm/.test(text)) return "Hands";
+  if (/leg|thigh|shin|boot/.test(text) && !/arm/.test(text)) return `Legs${side}`.trimEnd();
+  if (/torso_rig|\btorso\b|\bbody\b/.test(text) && !/arm|hand|leg/.test(text)) return "Torso";
+  if (isClothingOverlay(text) && !/arm|hand|leg|sleeve|shoulder/.test(text)) return "Torso";
+  if (/overlay/.test(text) && !/arm|hand|leg|sleeve|shoulder/.test(text)) return "Torso";
+  if (/arm|forearm|sleeve|shoulder/.test(text)) return `Arm rig${side}`.trimEnd();
+  if (/head/.test(text)) return "Head";
   return (child && (child.id || child.asset)) || "Piece";
+}
+
+function isFaceOverlaySlot(slotName) {
+  const spec = standardForSlot(slotName);
+  return Boolean(spec && (spec.slot === "eyes" || spec.slot === "mouth"));
+}
+
+function rowGroupLabel(slotName, owner) {
+  const spec = standardForSlot(slotName);
+  if (spec) return spec.label;
+  return slotRowLabel(slotName, owner);
 }
 
 function slotRowLabel(slotName, owner) {
@@ -228,6 +257,8 @@ module.exports = {
   isStatusState,
   drawingBadge,
   childRowLabel,
+  isFaceOverlaySlot,
+  rowGroupLabel,
   slotRowLabel,
   countBadges,
   sumCounts,

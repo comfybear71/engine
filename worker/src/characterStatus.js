@@ -13,7 +13,8 @@ const path = require("path");
 const { loadCharacter, scanDrawingsDir, resolveAsset, listActionIds, listKnownCharacterIds } = require("./parser/assetLibrary");
 const { isSafeFolderName } = require("./studioProjects");
 const { characterDir } = require("./characterLocal");
-const { discoverSlotViews } = require("./assetEditor");
+const { discoverSlotViews, findDrawingUsages } = require("./assetEditor");
+const { decodeRgbaFile, alphaBounds } = require("./factoryThumb");
 const {
   FACTORY_VIEWS,
   normalizeView,
@@ -25,6 +26,7 @@ const {
   isStatusState,
   drawingBadge,
   childRowLabel,
+  isFaceOverlaySlot,
   slotRowLabel,
   sumCounts,
   namedPivotPoint,
@@ -175,6 +177,21 @@ function presentDrawings(projectDir, globalAssetsDir, characterId, dirs, options
   return byName;
 }
 
+function headBaseRelForView(projectDir, globalAssetsDir, characterId, view, options) {
+  const dirs = [
+    ...candidateDrawingsDirs("head_base", view, "head_base"),
+    ...candidateDrawingsDirs("head", view, "head"),
+  ];
+  const seen = [];
+  for (const dir of dirs) {
+    if (!seen.includes(dir)) seen.push(dir);
+  }
+  return (
+    lookupDrawing(projectDir, globalAssetsDir, characterId, seen, "neutral", options) ||
+    lookupDrawing(projectDir, globalAssetsDir, characterId, seen, "head_base", options)
+  );
+}
+
 function mtimeForRel(projectDir, globalAssetsDir, rel, options) {
   if (!rel) return null;
   const resolved = resolveAsset(projectDir, globalAssetsDir, rel, options);
@@ -186,7 +203,7 @@ function mtimeForRel(projectDir, globalAssetsDir, rel, options) {
   }
 }
 
-function makePiece({ name, key, rel, drawingsDir, statusMap, expected, optional, mtime }) {
+function makePiece({ name, key, rel, drawingsDir, statusMap, expected, optional, mtime, compositeRel, faceGroup }) {
   const hasFile = Boolean(rel);
   const badge = drawingBadge(statusMap, key, hasFile, expected);
   return {
@@ -199,10 +216,12 @@ function makePiece({ name, key, rel, drawingsDir, statusMap, expected, optional,
     missing: badge === "missing",
     badge,
     mtime: mtime || null,
+    compositeRel: compositeRel || null,
+    faceGroup: faceGroup || null,
   };
 }
 
-function buildSlotRow(projectDir, globalAssetsDir, characterId, slotName, spec, owner, view, statusMap, options) {
+function buildSlotRow(projectDir, globalAssetsDir, characterId, slotName, spec, owner, view, statusMap, options, headBaseRel) {
   const baseDir = (spec && spec.drawings_dir) || slotName;
   const views = discoverSlotViews(projectDir, globalAssetsDir, characterId, slotName, spec || { drawings_dir: baseDir });
   const viewHit = views.find((item) => item.id === view);
@@ -232,6 +251,7 @@ function buildSlotRow(projectDir, globalAssetsDir, characterId, slotName, spec, 
     (viewHit && viewHit.drawingsDir) ||
     dirs[0] ||
     baseDir;
+  const faceGroup = isFaceOverlaySlot(slotName) ? standardForFace(slotName) : null;
   const drawings = names.map((name) => {
     const file = found.get(name);
     const dir = (file && file.drawingsDir) || preferredDir;
@@ -245,6 +265,8 @@ function buildSlotRow(projectDir, globalAssetsDir, characterId, slotName, spec, 
       expected,
       optional: optional.has(name),
       mtime: file ? mtimeForRel(projectDir, globalAssetsDir, file.rel, options) : null,
+      compositeRel: faceGroup ? headBaseRel || null : null,
+      faceGroup,
     });
   });
   return {
@@ -257,6 +279,13 @@ function buildSlotRow(projectDir, globalAssetsDir, characterId, slotName, spec, 
   };
 }
 
+function standardForFace(slotName) {
+  const name = String(slotName || "").toLowerCase();
+  if (name.startsWith("eyes")) return "eyes";
+  if (name.startsWith("mouth")) return "mouth";
+  return null;
+}
+
 function childAssetRel(projectDir, globalAssetsDir, characterId, child, options) {
   if (!child || !child.asset) return null;
   const rel = posixJoin("characters", characterId, String(child.asset).replace(/\\/g, "/"));
@@ -264,9 +293,17 @@ function childAssetRel(projectDir, globalAssetsDir, characterId, child, options)
   return rel;
 }
 
+function childAllowedOnView(child, view) {
+  const text = `${(child && child.id) || ""} ${(child && child.asset) || ""}`.toLowerCase();
+  if (view === "front") return true;
+  if (view === "back") return /torso|body|shirt|shorts|clothing|leg|cape/.test(text);
+  return /_(left_34|right_34|left_side|right_side|back)$/.test(text);
+}
+
 function buildChildRows(projectDir, globalAssetsDir, characterId, character, view, statusMap, options) {
   const groups = new Map();
   for (const child of character.children || []) {
+    if (!childAllowedOnView(child, view)) continue;
     const label = childRowLabel(child);
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label).push(child);
@@ -342,6 +379,110 @@ function rowSortKey(row) {
   return i >= 0 ? i : 50 + row.label.localeCompare("z");
 }
 
+const CANONICAL_SLOT = {
+  Head: "head_base",
+  Eyes: "eyes",
+  Mouth: "mouth",
+  Torso: "torso",
+  "Arm rig": "arm",
+  "Arm rig L": "arm_L",
+  "Arm rig R": "arm_R",
+  Hands: "hand",
+  Legs: "legs",
+  "Legs L": "legs_L",
+  "Legs R": "legs_R",
+};
+
+function mergeFactoryRows(rows) {
+  const byLabel = new Map();
+  for (const row of rows || []) {
+    const existing = byLabel.get(row.label);
+    if (!existing) {
+      byLabel.set(row.label, {
+        ...row,
+        id: `group:${row.label}`,
+        slot: CANONICAL_SLOT[row.label] || row.slot,
+        drawings: [...(row.drawings || [])],
+      });
+      continue;
+    }
+    const seen = new Set(existing.drawings.map((item) => item.key));
+    for (const piece of row.drawings || []) {
+      if (seen.has(piece.key)) continue;
+      seen.add(piece.key);
+      existing.drawings.push(piece);
+    }
+  }
+  return [...byLabel.values()];
+}
+
+function presentCount(rows) {
+  let n = 0;
+  for (const row of rows || []) {
+    for (const piece of row.drawings || []) {
+      if (piece.rel) n += 1;
+    }
+  }
+  return n;
+}
+
+function listReplacedHistory(projectDir, characterId, rel) {
+  const folder = path.join(characterDir(projectDir, characterId), "_replaced");
+  if (!rel || !fs.existsSync(folder)) return [];
+  const tail = String(rel).replace(/^characters\/[^/]+\//, "").replace(/\\/g, "/");
+  const out = [];
+  function walk(dir) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const posix = abs.replace(/\\/g, "/");
+      if (!posix.endsWith(`/${tail}`)) continue;
+      out.push({
+        rel: path.relative(projectDir, abs).replace(/\\/g, "/"),
+        mtime: Math.round(fs.statSync(abs).mtimeMs),
+      });
+    }
+  }
+  walk(folder);
+  return out.sort((a, b) => (b.mtime || 0) - (a.mtime || 0)).slice(0, 8);
+}
+
+function boundsForRel(projectDir, globalAssetsDir, rel, options) {
+  if (!rel) return null;
+  const resolved = resolveAsset(projectDir, globalAssetsDir, rel, options);
+  if (!resolved) return null;
+  try {
+    const decoded = decodeRgbaFile(resolved.absPath);
+    const box = alphaBounds(decoded.rgba, decoded.width, decoded.height);
+    return { x: box.x, y: box.y, w: box.w, h: box.h, empty: Boolean(box.empty) };
+  } catch {
+    return null;
+  }
+}
+
+function usagesForPiece(projectDir, globalAssetsDir, characterId, slotName, drawingName) {
+  try {
+    return (findDrawingUsages(projectDir, globalAssetsDir, characterId, slotName, drawingName) || []).map((item) => ({
+      kind: item.kind || "script",
+      script: item.script || null,
+      line: item.line == null ? null : item.line,
+      text: item.text || "",
+    }));
+  } catch {
+    return [];
+  }
+}
+
 function describeChildren(projectDir, globalAssetsDir, characterId, character, options) {
   return (character.children || []).map((child) => {
     const rel = childAssetRel(projectDir, globalAssetsDir, characterId, child, options);
@@ -359,20 +500,28 @@ function describeChildren(projectDir, globalAssetsDir, characterId, character, o
   });
 }
 
-function describeFactoryCharacter(projectDir, globalAssetsDir, characterId, viewId, options = {}) {
-  assertCharacterId(characterId);
-  const character = loadCharacter(projectDir, globalAssetsDir, characterId);
-  if (!character) throw statusError(`Unknown character: ${characterId}`, "ENOTFOUND");
-  const view = normalizeView(viewId);
-  const status = readStatus(projectDir, characterId);
+function collectFactoryRows(projectDir, globalAssetsDir, character, characterId, view, statusMap, options) {
   const rows = [];
   const seenSlots = new Set();
+  const headHit = headBaseRelForView(projectDir, globalAssetsDir, characterId, view, options);
+  const headBaseRel = headHit ? headHit.rel : null;
 
   function addSlot(name, spec, owner) {
     if (!name || seenSlots.has(name)) return;
     seenSlots.add(name);
     const standard = expectedDrawings(name, view, { includeOptional: true });
-    const row = buildSlotRow(projectDir, globalAssetsDir, characterId, name, spec, owner, view, status.drawings, options);
+    const row = buildSlotRow(
+      projectDir,
+      globalAssetsDir,
+      characterId,
+      name,
+      spec,
+      owner,
+      view,
+      statusMap,
+      options,
+      headBaseRel
+    );
     if (row.drawings.length === 0 && standard.length === 0) return;
     rows.push(row);
   }
@@ -381,8 +530,34 @@ function describeFactoryCharacter(projectDir, globalAssetsDir, characterId, view
   for (const child of character.children || []) {
     for (const [name, spec] of Object.entries(child.slots || {})) addSlot(name, spec, child.id);
   }
-  rows.push(...buildChildRows(projectDir, globalAssetsDir, characterId, character, view, status.drawings, options));
-  rows.sort((a, b) => rowSortKey(a) - rowSortKey(b) || a.label.localeCompare(b.label));
+  rows.push(...buildChildRows(projectDir, globalAssetsDir, characterId, character, view, statusMap, options));
+  const merged = mergeFactoryRows(rows);
+  merged.sort((a, b) => rowSortKey(a) - rowSortKey(b) || a.label.localeCompare(b.label));
+  return merged;
+}
+
+function describeFactoryCharacter(projectDir, globalAssetsDir, characterId, viewId, options = {}) {
+  assertCharacterId(characterId);
+  const character = loadCharacter(projectDir, globalAssetsDir, characterId);
+  if (!character) throw statusError(`Unknown character: ${characterId}`, "ENOTFOUND");
+  const view = normalizeView(viewId);
+  const status = readStatus(projectDir, characterId);
+  const rows = collectFactoryRows(
+    projectDir,
+    globalAssetsDir,
+    character,
+    characterId,
+    view,
+    status.drawings,
+    options
+  );
+  const views = FACTORY_VIEWS.map((id) => {
+    const viewRows =
+      id === view
+        ? rows
+        : collectFactoryRows(projectDir, globalAssetsDir, character, characterId, id, status.drawings, options);
+    return { id, label: viewTabLabel(id), count: presentCount(viewRows) };
+  });
 
   const canvas = defaultFactoryCanvas(character);
   const counts = sumCounts(rows);
@@ -391,7 +566,7 @@ function describeFactoryCharacter(projectDir, globalAssetsDir, characterId, view
     characterId,
     displayName: character.display_name || characterId,
     view,
-    views: FACTORY_VIEWS.map((id) => ({ id, label: viewTabLabel(id) })),
+    views,
     status: status.drawings,
     redos: status.redos,
     counts,
@@ -403,7 +578,7 @@ function describeFactoryCharacter(projectDir, globalAssetsDir, characterId, view
   };
 }
 
-function inspectorForPiece(factory, key) {
+function inspectorForPiece(factory, key, ctx) {
   const k = String(key || "");
   for (const row of factory.rows || []) {
     const piece = (row.drawings || []).find((item) => item.key === k);
@@ -411,6 +586,9 @@ function inspectorForPiece(factory, key) {
     const child = (factory.children || []).find((item) => item.id === row.slot || item.id === piece.drawingsDir);
     const slotCanvas = factory.canvas || { w: 1024, h: 1024, pivot: { x: 509, y: 457 } };
     const pivot = child ? namedPivotPoint(child.pivot, slotCanvas) : slotCanvas.pivot;
+    const projectDir = ctx && ctx.projectDir;
+    const globalAssetsDir = ctx && ctx.globalAssetsDir;
+    const options = (ctx && ctx.options) || {};
     return {
       key: piece.key,
       slot: row.slot,
@@ -423,8 +601,15 @@ function inspectorForPiece(factory, key) {
       canvas: slotCanvas,
       pivot,
       offset: child ? child.offset : { x: 0, y: 0 },
-      anchor: child && child.pivot && typeof child.pivot === "string" ? String(child.pivot) : "pivot + offset",
+      anchor: child && child.pivot && typeof child.pivot === "string" ? String(child.pivot) : "canvas pivot + offset",
       redo: (factory.redos && factory.redos[piece.key]) || "",
+      compositeRel: piece.compositeRel || null,
+      faceGroup: piece.faceGroup || null,
+      bounds: projectDir ? boundsForRel(projectDir, globalAssetsDir, piece.rel, options) : null,
+      usages: projectDir
+        ? usagesForPiece(projectDir, globalAssetsDir, factory.characterId, row.slot, piece.name)
+        : [],
+      history: projectDir ? listReplacedHistory(projectDir, factory.characterId, piece.rel) : [],
     };
   }
   return null;
