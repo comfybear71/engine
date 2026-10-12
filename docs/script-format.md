@@ -377,8 +377,11 @@ point — same held-until-changed samples a walk writes. See
 ### `Character: dialogue text`
 
 A spoken line. `Character` is matched the same way as in `[Cast: ...]`.
-Optional `at_time=` / `start=`, `view=`, and `trim_in=` / `trim_out=` may
-sit on the name: `Hicks at_time=2s view=left_side trim_in=0.5s: text`.
+Optional `at_time=` / `start=`, `view=`, `loud=off` / `auto` / `<value>`,
+and `trim_in=` / `trim_out=` may sit on the name:
+`Hicks at_time=2s view=left_side loud=off trim_in=0.5s: text`.
+`loud=` only chooses the B/C/D/E loud drawing when that file exists; it
+never changes the Rhubarb phoneme.
 Lines run **strictly in sequence against one shared per-scene cursor** --
 there's no overlapping dialogue -- so each line's `start_frame` is wherever
 the cursor currently is, and the cursor then advances by that line's
@@ -576,10 +579,12 @@ A line is **not synced** until `<wav>.rhubarb.json` has mouth cues,
 **stale** when the WAV or text changed after the last sync.
 
 At render / Stage preview the compositor then applies optional natural
-lip-sync (2-frame minimum hold, light smoothing, loud B/C/D/E variants,
-head bob, auto blinks). See [docs/assets.md](assets.md#thirteen-mouths-per-view)
-and project `studio.json` `lipsync`. Missing loud or closed-eye drawings
-are skipped, never errors.
+lip-sync (2-frame minimum hold, light smoothing, volume-driven loud
+B/C/D/E variants with hysteresis, head bob, auto blinks). See
+[docs/assets.md](assets.md#thirteen-mouths-per-view) and project
+`studio.json` `lipsync`. A line may set `loud=off`, `loud=auto`, or
+`loud=<percentile>`. Missing loud or closed-eye drawings are skipped,
+never errors.
 
 ## Timing and layers
 

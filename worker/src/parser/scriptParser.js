@@ -89,7 +89,7 @@ const CAMERA_KEYS = new Set(["zoom", "pan", "tilt", "to", "over", "ease", "wait"
 const TIMING_KEYS = new Set(["at_time", "start"]);
 const HOLD_KEYS = new Set(["over", "hold"]);
 const TRIM_KEYS = new Set(["trim_in", "trim_out"]);
-const AUDIO_KEYS = new Set(["file", "lines", "view", "at_time", "start", "trim_in", "trim_out"]);
+const AUDIO_KEYS = new Set(["file", "lines", "view", "loud", "at_time", "start", "trim_in", "trim_out"]);
 const DO_KEYS = new Set(["action", "for", "wait", "at_time", "start", "prop"]);
 const BUILTIN_REST_ACTION = "rest";
 const PROP_PLACEHOLDER = "{prop}";
@@ -528,6 +528,21 @@ class ScriptParser {
   _resolveLineView(kv, state, lineNumber) {
     if (kv && kv.view !== undefined) return parseViewValue(kv.view, lineNumber);
     return state && state.currentView && state.currentView !== "front" ? state.currentView : null;
+  }
+
+  _resolveLineLoud(kv, lineNumber) {
+    if (!kv || kv.loud === undefined) return undefined;
+    const text = String(kv.loud).trim().toLowerCase();
+    if (text === "off") return "off";
+    if (text === "auto") return "auto";
+    const number = Number(text);
+    if (!Number.isFinite(number) || number < 0) {
+      throw new ScriptError(
+        lineNumber,
+        `Invalid loud="${kv.loud}" -- expected off, auto, or a number (0–1 or 0–100).`
+      );
+    }
+    return number > 1 ? number / 100 : number;
   }
 
   // ---- top-level driver -------------------------------------------------
@@ -2687,7 +2702,7 @@ class ScriptParser {
     if (extra.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[Audio: ...] unknown key "${extra[0]}". Expected file=<label>, optional lines=true|false, view=, at_time=/start=, and trim_in=/trim_out=.`
+        `[Audio: ...] unknown key "${extra[0]}". Expected file=<label>, optional lines=true|false, view=, loud=, at_time=/start=, and trim_in=/trim_out=.`
       );
     }
     let emitSentenceLines = true;
@@ -2726,6 +2741,7 @@ class ScriptParser {
 
     scene.lineCounter += 1;
     const lineView = this._resolveLineView(kv, state, token.lineNumber);
+    const lineLoud = this._resolveLineLoud(kv, token.lineNumber);
     const clip = {
       audio: imported.wav,
       start_frame: startFrame - state.current.startFrame,
@@ -2738,6 +2754,7 @@ class ScriptParser {
       clip.words = words;
     }
     if (lineView) clip.view = lineView;
+    if (lineLoud !== undefined) clip.loud = lineLoud;
     if (window.inSec > 0) clip.trim_in = Math.round(window.inSec * 1000) / 1000;
     if (window.outSec + 1e-6 < sourceSeconds) clip.trim_out = Math.round(window.outSec * 1000) / 1000;
     state.current.dialogue.push(clip);
@@ -2875,6 +2892,7 @@ class ScriptParser {
     const spokenText = words.length > 0 ? transcriptFromWords(words) : token.text;
 
     const lineView = this._resolveLineView(kv, state, token.lineNumber);
+    const lineLoud = this._resolveLineLoud(kv, token.lineNumber);
     const clip = {
       audio: audioRelPath,
       start_frame: startFrame - state.current.startFrame,
@@ -2887,6 +2905,7 @@ class ScriptParser {
       clip.estimated_duration_seconds = Math.round(window.durationSec * 100) / 100;
     }
     if (lineView) clip.view = lineView;
+    if (lineLoud !== undefined) clip.loud = lineLoud;
     if (words.length > 0) clip.words = words;
     if (window.inSec > 0) clip.trim_in = Math.round(window.inSec * 1000) / 1000;
     if (window.outSec + 1e-6 < sourceSeconds) clip.trim_out = Math.round(window.outSec * 1000) / 1000;

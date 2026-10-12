@@ -1071,6 +1071,20 @@ describe("at_time= / start= explicit start", () => {
     assert.equal(dlg[0].sync, "not_synced");
   });
 
+  test("loud= on a line is stored on the clip", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "Alice loud=off: Hello.",
+      "Alice loud=80: Next.",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script);
+    const clips = timeline.scenes[0].layers[0].dialogue;
+    assert.equal(clips[0].loud, "off");
+    assert.equal(clips[1].loud, 0.8);
+  });
+
   test("mouth_front/ is the default image set when view is omitted", async () => {
     const aliceDir = path.join(fixture.projectDir, "characters", "alice");
     const globalMouth = path.join(fixture.globalAssetsDir, "characters", "alice", "mouth");

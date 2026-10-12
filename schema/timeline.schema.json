@@ -505,6 +505,13 @@
           "enum": ["front", "left_34", "left_side", "right_34", "right_side", "up", "down", "back"],
           "description": "Head/mouth drawing set for this line's lip-sync. The compositor looks up slot.images_by_view[view], then front, then slot.images. The back view does not fall back to front when <slot>_back/ is missing (eyes/mouth stay hidden). Omitted or unknown views use front."
         },
+        "loud": {
+          "description": "Optional per-line loud-mouth override. \"off\" keeps the normal B/C/D/E drawings; \"auto\" uses character.json / studio.json lipsync.loud_threshold (default: 80th percentile of this line's voiced frames); a number is that percentile (0–1, or 0–100).",
+          "oneOf": [
+            { "type": "string", "enum": ["off", "auto"] },
+            { "type": "number", "minimum": 0 }
+          ]
+        },
         "trim_in": {
           "type": "number",
           "minimum": 0,

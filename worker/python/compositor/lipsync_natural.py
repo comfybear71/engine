@@ -23,7 +23,12 @@ from .slots import Slot, SlotKeyframe
 
 LOUD_SHAPES = ("B", "C", "D", "E")
 MIN_HOLD_FRAMES = 2
-DEFAULT_LOUD_PERCENTILE = 0.75
+DEFAULT_LOUD_PERCENTILE = 0.80
+# Exit loud below enter_threshold * this, so a frame just under the
+# percentile does not flicker the mouth drawing.
+LOUD_HYSTERESIS = 0.85
+# Ignore near-silence when picking the per-line voiced percentile.
+VOICED_RMS_FLOOR = 0.05
 DEFAULT_SMOOTHING = "light"
 DEFAULT_HEAD_BOB = "subtle"
 HEAD_SLOT_NAMES = frozenset({"mouth", "face", "eyes"})
@@ -45,6 +50,7 @@ class LipSyncSettings:
     smoothing: str = DEFAULT_SMOOTHING
     head_bob: str = DEFAULT_HEAD_BOB
     blinks: bool = True
+    loud: str = "auto"
     loud_threshold: float = DEFAULT_LOUD_PERCENTILE
     blink_every: tuple[float, float] = DEFAULT_BLINK_EVERY
     blink_frames: int = DEFAULT_BLINK_FRAMES
@@ -75,6 +81,51 @@ def _as_percentile(value: object, default: float = DEFAULT_LOUD_PERCENTILE) -> f
 def _as_mode(value: object, allowed: Sequence[str], default: str) -> str:
     text = str(value or "").strip().lower()
     return text if text in allowed else default
+
+
+def _is_off_token(value: object) -> bool:
+    if value is False:
+        return True
+    return str(value or "").strip().lower() in {"off", "false", "no"}
+
+
+def _is_auto_token(value: object) -> bool:
+    if value is True:
+        return True
+    return str(value or "").strip().lower() in {"auto", "on", "true", ""}
+
+
+def parse_loud_option(
+    value: object,
+    default_threshold: float = DEFAULT_LOUD_PERCENTILE,
+) -> tuple[str, float]:
+    """Return ``("off"|"auto", percentile)`` for character.json / script ``loud=``."""
+
+    if value is None or _is_auto_token(value):
+        return "auto", default_threshold
+    if _is_off_token(value):
+        return "off", default_threshold
+    return "auto", _as_percentile(value, default_threshold)
+
+
+def coerce_loud_field(value: object) -> str | float | None:
+    """Normalise a timeline ``dialogue[].loud`` value, or ``None`` if omitted."""
+
+    if value is None:
+        return None
+    mode, threshold = parse_loud_option(value)
+    if mode == "off":
+        return "off"
+    if _is_auto_token(value):
+        return "auto"
+    return threshold
+
+
+def has_loud_drawings(available: Iterable[str] | None) -> bool:
+    if available is None:
+        return True
+    names = {str(name) for name in available}
+    return any(f"{shape}_loud" in names for shape in LOUD_SHAPES)
 
 
 def load_json_object(path: Path) -> dict:
@@ -159,6 +210,7 @@ def merge_lipsync_settings(studio_raw: dict | None, character_raw: dict | None) 
 
     smoothing = DEFAULT_SMOOTHING
     head_bob = DEFAULT_HEAD_BOB
+    loud = "auto"
     loud_threshold = DEFAULT_LOUD_PERCENTILE
     blinks = True
     blink_every = DEFAULT_BLINK_EVERY
@@ -188,6 +240,10 @@ def merge_lipsync_settings(studio_raw: dict | None, character_raw: dict | None) 
             head_bob = _as_mode(src.get("head_bob"), HEAD_BOB_MODES, head_bob)
         if "loud_threshold" in src:
             loud_threshold = _as_percentile(src.get("loud_threshold"), loud_threshold)
+        if "loud" in src:
+            loud, parsed = parse_loud_option(src.get("loud"), loud_threshold)
+            if loud == "auto" and not _is_auto_token(src.get("loud")):
+                loud_threshold = parsed
         if src.get("blinks") is False or src.get("blinks") == "off":
             blinks = False
         elif src.get("blinks") is True or src.get("blinks") == "on":
@@ -197,6 +253,7 @@ def merge_lipsync_settings(studio_raw: dict | None, character_raw: dict | None) 
         smoothing=smoothing,
         head_bob=head_bob,
         blinks=blinks,
+        loud=loud,
         loud_threshold=loud_threshold,
         blink_every=blink_every,
         blink_frames=blink_frames,
@@ -382,35 +439,121 @@ def drawing_names(slot: Slot | None, view: str | None = None) -> set[str]:
     return names
 
 
+def normalize_rms(values: Sequence[float]) -> list[float]:
+    """Scale one line's per-frame RMS so the peak is 1.0."""
+
+    peak = max(values) if values else 0.0
+    if peak <= 0.0:
+        return [0.0] * len(values)
+    return [float(value) / peak for value in values]
+
+
+def voiced_rms_values(rms: Sequence[float], shapes: Sequence[str] | None = None) -> list[float]:
+    """RMS samples that count as voiced for the per-line percentile."""
+
+    voiced: list[float] = []
+    for idx, value in enumerate(rms):
+        if value <= VOICED_RMS_FLOOR:
+            continue
+        if shapes is not None:
+            base = lipsync._base_shape(shapes[idx] if idx < len(shapes) else lipsync.DEFAULT_SHAPE)
+            if base == lipsync.DEFAULT_SHAPE:
+                continue
+        voiced.append(float(value))
+    return voiced
+
+
+def voiced_threshold(
+    rms: Sequence[float],
+    shapes: Sequence[str] | None = None,
+    percentile: float = DEFAULT_LOUD_PERCENTILE,
+) -> float:
+    voiced = voiced_rms_values(rms, shapes)
+    if not voiced:
+        return float("inf")
+    return percentile_threshold(voiced, percentile)
+
+
+def loud_mask(
+    rms: Sequence[float],
+    *,
+    threshold: float,
+    hysteresis: float = LOUD_HYSTERESIS,
+    min_hold: int = MIN_HOLD_FRAMES,
+) -> list[bool]:
+    """Per-frame loud flags with hysteresis and a minimum hold."""
+
+    low = threshold * hysteresis if threshold < float("inf") else float("inf")
+    hold = max(1, int(min_hold))
+    loud = False
+    remaining = 0
+    out: list[bool] = []
+    for value in rms:
+        if remaining > 0:
+            out.append(loud)
+            remaining -= 1
+            continue
+        if not loud and value > threshold:
+            loud = True
+            remaining = hold - 1
+        elif loud and value < low:
+            loud = False
+            remaining = hold - 1
+        out.append(loud)
+    return out
+
+
+def apply_loud_shapes(
+    frames: Sequence[str],
+    loud: Sequence[bool],
+    available: Iterable[str] | None = None,
+) -> list[str]:
+    """Swap B/C/D/E for ``*_loud`` when loud; never change the phoneme."""
+
+    available_names = None if available is None else {str(name) for name in available}
+    out: list[str] = []
+    for idx, shape in enumerate(frames):
+        base = lipsync._base_shape(shape)
+        is_loud = idx < len(loud) and loud[idx]
+        if is_loud and base in LOUD_SHAPES:
+            loud_name = f"{base}_loud"
+            if available_names is None or loud_name in available_names:
+                out.append(loud_name)
+                continue
+        out.append(base)
+    return out
+
+
 def select_loud_variants(
-    cues: Sequence[lipsync.MouthCue],
+    frames: Sequence[str],
     rms_values: Sequence[float],
     *,
     threshold_percentile: float = DEFAULT_LOUD_PERCENTILE,
     available: Iterable[str] | None = None,
-) -> list[lipsync.MouthCue]:
-    """Promote B/C/D/E to ``*_loud`` when RMS is above the clip percentile.
+    hysteresis: float = LOUD_HYSTERESIS,
+    min_hold: int = MIN_HOLD_FRAMES,
+) -> list[str]:
+    """Promote B/C/D/E to ``*_loud`` on loud frames.
 
-    Missing loud files stay on the normal shape.
+    ``rms_values`` are per-frame and should already be normalised for the
+    line. Missing loud files stay on the normal shape. The phoneme letter
+    never changes.
     """
 
-    available_names = set(available or [])
-    values = list(rms_values)
-    if len(values) < len(cues):
-        values.extend([0.0] * (len(cues) - len(values)))
-    threshold = percentile_threshold(values, threshold_percentile)
-    out: list[lipsync.MouthCue] = []
-    for cue, rms in zip(cues, values):
-        shape = cue.shape
-        base = shape[:-5] if shape.endswith("_loud") else shape
-        if base in LOUD_SHAPES and rms > threshold:
-            loud_name = f"{base}_loud"
-            if not available_names or loud_name in available_names:
-                shape = loud_name
-            else:
-                shape = base
-        out.append(lipsync.MouthCue(start=cue.start, end=cue.end, shape=shape))
-    return out
+    if not frames:
+        return []
+    if not has_loud_drawings(available):
+        return list(frames)
+    values = normalize_rms(rms_values)
+    if len(values) < len(frames):
+        values = values + [0.0] * (len(frames) - len(values))
+    elif len(values) > len(frames):
+        values = values[: len(frames)]
+    if not any(values):
+        return list(frames)
+    threshold = voiced_threshold(values, frames, threshold_percentile)
+    mask = loud_mask(values, threshold=threshold, hysteresis=hysteresis, min_hold=min_hold)
+    return apply_loud_shapes(frames, mask, available)
 
 
 def read_wav_mono(path: Path) -> tuple[np.ndarray, int] | None:
@@ -467,25 +610,61 @@ def cue_rms_values(
     return [window_rms(data, rate, trim_in + cue.start, trim_in + cue.end) for cue in cues]
 
 
+def frame_rms_values(
+    audio_path: Path,
+    *,
+    duration_frames: int,
+    fps: int,
+    trim_in: float = 0.0,
+) -> list[float]:
+    """One RMS sample per animation frame, from ``trim_in`` along the WAV."""
+
+    n = max(0, int(duration_frames))
+    if n <= 0 or fps <= 0:
+        return []
+    loaded = read_wav_mono(audio_path)
+    if loaded is None:
+        return [0.0] * n
+    data, rate = loaded
+    out: list[float] = []
+    for idx in range(n):
+        start = trim_in + idx / float(fps)
+        end = trim_in + (idx + 1) / float(fps)
+        out.append(window_rms(data, rate, start, end))
+    return out
+
+
 def apply_loud_to_cues(
     cues: Sequence[lipsync.MouthCue],
     audio_path: Path,
     *,
+    fps: int,
+    duration_frames: int,
     trim_in: float = 0.0,
     threshold_percentile: float = DEFAULT_LOUD_PERCENTILE,
     available: Iterable[str] | None = None,
+    loud: object = "auto",
 ) -> list[lipsync.MouthCue]:
-    if not cues:
-        return []
-    rms_values = cue_rms_values(audio_path, cues, trim_in=trim_in)
+    mode, threshold = parse_loud_option(loud, threshold_percentile)
+    if mode == "off" or not cues or duration_frames <= 0 or fps <= 0:
+        return list(cues)
+    if not has_loud_drawings(available):
+        return list(cues)
+    rms_values = frame_rms_values(
+        audio_path, duration_frames=duration_frames, fps=fps, trim_in=trim_in
+    )
     if not any(rms_values):
         return list(cues)
-    return select_loud_variants(
-        cues,
+    frames = cues_to_frames(cues, duration_frames, fps)
+    out_frames = select_loud_variants(
+        frames,
         rms_values,
-        threshold_percentile=threshold_percentile,
+        threshold_percentile=threshold,
         available=available,
     )
+    if out_frames == frames:
+        return list(cues)
+    return frames_to_cues(out_frames, fps)
 
 
 def stressed_midpoints(

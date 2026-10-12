@@ -134,6 +134,7 @@ class DialogueClip:
     trim_in: float = 0.0  # seconds into the source file
     source_duration_seconds: float | None = None
     words: list[WordTiming] = field(default_factory=list)
+    loud: str | float | None = None  # "off" | "auto" | voiced-frame percentile
 
 
 @dataclass(frozen=True)
@@ -739,6 +740,7 @@ def _build_dialogue_clip(
         trim_in=trim_in,
         source_duration_seconds=source_s,
         words=words,
+        loud=lipsync_natural.coerce_loud_field(raw.get("loud")),
     )
 
 
@@ -790,7 +792,7 @@ def apply_natural_lipsync(
     settings: lipsync_natural.LipSyncSettings,
     seed: int,
 ) -> Layer:
-    """Min-hold, smoothing, loud mouths, blinks, and head bob on one layer."""
+    """Min-hold, smoothing, blinks, and head bob on one layer."""
 
     mouth = _find_named_slot(layer, "mouth")
     dialogue: list[DialogueClip] = []
@@ -809,13 +811,6 @@ def apply_natural_lipsync(
             available=available,
         )
         if not clip.estimated and clip.audio.is_file():
-            cues = lipsync_natural.apply_loud_to_cues(
-                cues,
-                clip.audio,
-                trim_in=clip.trim_in,
-                threshold_percentile=settings.loud_threshold,
-                available=available,
-            )
             play_s = clip.duration_frames / float(fps) if fps else 0.0
             stress = lipsync_natural.clip_stress_times(
                 clip.words,
@@ -887,6 +882,63 @@ def apply_natural_lipsync(
         for child in layer.children
     ]
     return replace(layer, dialogue=dialogue, slots=new_slots, children=new_children)
+
+
+def apply_loud_mouths(
+    layer: Layer,
+    *,
+    fps: int,
+    settings: lipsync_natural.LipSyncSettings,
+) -> Layer:
+    """Swap B/C/D/E for ``*_loud`` from per-frame RMS. No-op without files."""
+
+    if not layer.dialogue:
+        return layer
+    mouth = _find_named_slot(layer, "mouth")
+    dialogue: list[DialogueClip] = []
+    changed = False
+    for clip in layer.dialogue:
+        option = clip.loud if clip.loud is not None else settings.loud
+        mode, threshold = lipsync_natural.parse_loud_option(option, settings.loud_threshold)
+        if (
+            mode == "off"
+            or clip.estimated
+            or not clip.cues
+            or not clip.audio.is_file()
+        ):
+            dialogue.append(clip)
+            continue
+        available = lipsync_natural.drawing_names(mouth, layer_view_at(layer, clip.start_frame))
+        cues = lipsync_natural.apply_loud_to_cues(
+            clip.cues,
+            clip.audio,
+            fps=fps,
+            duration_frames=clip.duration_frames,
+            trim_in=clip.trim_in,
+            threshold_percentile=threshold,
+            available=available,
+            loud=option if option is not None else settings.loud,
+        )
+        if list(cues) == list(clip.cues):
+            dialogue.append(clip)
+        else:
+            dialogue.append(replace(clip, cues=cues))
+            changed = True
+    if not changed:
+        return layer
+
+    def _with_dialogue(slots: dict[str, Slot]) -> dict[str, Slot]:
+        remapped: dict[str, Slot] = {}
+        for name, slot in slots.items():
+            remapped[name] = replace(slot, dialogue=dialogue) if slot.dialogue is not None else slot
+        return remapped
+
+    return replace(
+        layer,
+        dialogue=dialogue,
+        slots=_with_dialogue(layer.slots),
+        children=[replace(child, slots=_with_dialogue(child.slots)) for child in layer.children],
+    )
 
 
 def _build_layer(
@@ -978,18 +1030,20 @@ def _build_layer(
     )
     # Natural lipsync (blinks + bob on the whole head group) is opt-in via
     # groups.head so existing characters without the new field stay unchanged.
+    # Loud mouths are separate: they only swap B/C/D/E for *_loud and no-op
+    # when those files are missing or loud=off.
+    character = lipsync_natural.load_character_config(project_dir, layer.character_id)
+    settings = lipsync_natural.merge_lipsync_settings(studio_lipsync, character)
     if groups.get("head"):
-        character = lipsync_natural.load_character_config(project_dir, layer.character_id)
-        settings = lipsync_natural.merge_lipsync_settings(studio_lipsync, character)
         char_seed = lipsync_natural.project_seed(project_dir, layer.character_id or layer.id)
-        return apply_natural_lipsync(
+        layer = apply_natural_lipsync(
             layer,
             fps=fps,
             scene_frames=scene_frames,
             settings=settings,
             seed=seed ^ char_seed,
         )
-    return layer
+    return apply_loud_mouths(layer, fps=fps, settings=settings)
 
 
 def _build_camera(raw: dict | None) -> Camera | None:

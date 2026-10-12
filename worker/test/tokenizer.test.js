@@ -79,6 +79,15 @@ describe("tokenizer", () => {
     assert.equal(token.kv.trim_out, "2s");
   });
 
+  test("dialogue speaker accepts loud=", () => {
+    const [token] = tokenize("Alice loud=off: Hello.");
+    assert.equal(token.kv.loud, "off");
+    const auto = tokenize("Alice loud=auto: Hello.")[0];
+    assert.equal(auto.kv.loud, "auto");
+    const value = tokenize("Alice loud=0.8: Hello.")[0];
+    assert.equal(value.kv.loud, "0.8");
+  });
+
   test("unknown bracket tag throws a line-numbered ScriptError", () => {
     assert.throws(
       () => tokenize("[Foo: bar]"),

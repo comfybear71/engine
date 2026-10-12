@@ -403,11 +403,14 @@ the Stage preview) applies, all optional and all no-ops when art is missing:
    frames is kept (a real M/B/P between words).
 2. **Smoothing** — `lipsync.smoothing` `off` / `light` (default) / `medium`.
    Light collapses a 1-frame flicker such as C-B-C within 3 frames.
-3. **Loud variants** — for shapes B, C, D, E, if RMS over that cue is above
-   the clip's configured percentile (default ~75th, `lipsync.loud_threshold`
-   in `studio.json` or `character.json`) the compositor looks for
-   `B_loud.png` (and the same name under `mouth_<view>/`). Missing loud
-   files stay on the normal drawing.
+3. **Loud variants** — per-frame RMS of the line's audio (normalised on
+   that line). When a frame is above the voiced-frame percentile (default
+   ~80th, `lipsync.loud_threshold` in `studio.json` or `character.json`, or
+   a per-line `loud=` / `dialogue[].loud`) the compositor looks for
+   `B_loud.png` / `C_loud.png` / `D_loud.png` / `E_loud.png` for the current
+   view. Hysteresis and a 2-frame hold stop flicker. The phoneme never
+   changes — only the loud drawing is picked. Missing loud files, or
+   `loud=off`, stay on the normal drawing.
 4. **Head bob** — `lipsync.head_bob` `off` / `subtle` (default) / `strong`.
    Stressed words (from `words`) or loudness peaks add a 6-frame down-and-back
    offset (4–10 px, ±1–1.5°) on `mouth` / `face` / `eyes` only.

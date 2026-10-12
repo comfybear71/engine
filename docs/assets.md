@@ -164,7 +164,8 @@ these for a whole episode):
 "lipsync": {
   "smoothing": "light",
   "head_bob": "subtle",
-  "loud_threshold": 0.75
+  "loud": "auto",
+  "loud_threshold": 0.8
 },
 "blinks": { "every": [3, 6], "frames": 5 }
 ```
