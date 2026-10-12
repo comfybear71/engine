@@ -471,31 +471,21 @@ one unit.
 | `asset` | string | yes | This part's image. |
 | `z` | integer | yes | Draw order **relative to the parent's own base image and sibling children only** -- the parent's own image is implicitly `z = 0` among its children (e.g. an arm behind the torso uses `z < 0`; one in front uses `z > 0`). This stacking is local to the parent; it does not interleave with other top-level scene layers' `z`. |
 | `offset.x` / `offset.y` | number | no (default 0,0) | In the parent's local (pre-scale) pixel space, from the parent's pivot (the layer anchor, or the named `parent` child's pivot) to this child's pivot. Mirrored in `x` when that parent is flipped. When `parent` is another child, this offset is also rotated about that parent's pivot by the parent's current rotation. |
-| `parent` | string | no | Id of another child on the same layer that this child hangs off (e.g. `forearm` of `upper_arm`). The named parent must exist, must not itself have a `parent` (only one level of nesting), and must not create a cycle -- the loader rejects all three. Slots on this child (e.g. `right_hand` on `forearm`) follow the nested placement. |
+| `parent` | string | no | Id of another child on the same layer that this child hangs off (e.g. `forearm` of `upper_arm`, `hand` of `forearm`). The named parent must exist and must not create a cycle -- the loader rejects both. Chains may be any depth; the compositor places parent before child. Slots on this child follow the nested placement. |
 | `pivot` | enum or `{x, y}` | no (default `"center"`) | Which point of this child's own (post-scale) image sits at `offset` -- also the rotation center. A named box anchor (same enum as a layer's `transform.anchor`) or `{x, y}` in unscaled image pixels (loaded as `pivot_px` and drawn like a canvas slot). After rotate+canvas-expand, this point stays fixed at `offset`. |
 | `visible_when` | object | no | Same gate as [slot `visible_when`](#slots): this child and its children only draw when each named slot's active drawing is in the list. |
 | `scale` | number > 0 | no (default `1.0`) | Multiplies the **parent's own** scale. |
 | `flip_x` | boolean | no (default `false`) | Composed with the parent's `flip_x` via XOR: `false` (default) means this part simply mirrors along with the parent (the common case); `true` gives it an *independent* mirror on top of that (e.g. a hand drawn facing the "wrong" way in its source art). |
-| `rotation` | number (degrees) | no (default `0`) | Clockwise, around this child's own `pivot`. Used when `rotation_keyframes` is omitted. Independent of the *layer's* `transform.rotation`. When this child is someone else's `parent`, rotations accumulate (grandchild world rotation = parent rotation + own rotation). |
+| `rotation` | number (degrees) | no (default `0`) | Clockwise, around this child's own `pivot`. Used when `rotation_keyframes` is omitted. Added to the parent's current rotation (the layer's `transform.rotation` for a top-level child). When this child is someone else's `parent`, rotations accumulate (grandchild world rotation = parent rotation + own rotation). |
 | `rotation_keyframes` | array | no | `{ frame, rotation, ease? }`, layer-local frames, same interpolation as [transform keyframes](#transform-keyframes). |
 | `opacity` | number 0-1 | no (default `1.0`) | Multiplies the **parent's own** opacity. |
 | `slots` | object | no | Drawing-swap slots attached to this specific child instead of the parent root (e.g. a hand-pose slot on a forearm, or a mouth slot on a head). Slot offsets rotate with this child's current (accumulated) rotation. |
 
-**Known limitations, by design:**
-
-- **Child-to-child nesting is one level only.** `forearm` may name
-  `upper_arm` as `parent`, but `hand` may not then name `forearm` -- that
-  would be two levels. Deeper chains (fingers on a hand on an arm) would
-  need a proper scene-graph/transform-stack rewrite.
-- **A rotating layer's `transform.rotation` is not composed into its
-  children's placement.** The layer's own base image still rotates
-  correctly around its own anchor (pivot stays fixed); each child also
-  rotates correctly around its own `pivot`. What's *not* done is rotating
-  each top-level child's `offset` vector together with the layer -- so if
-  the layer itself spins, its direct children stay at their unrotated
-  offset instead of swinging around with it. Child-to-child `parent`
-  nesting *does* rotate the grandchild offset around the parent child's
-  pivot.
+**Nesting and layer rotation:** parent chains may be any depth (shoulder
+→ elbow → wrist). The loader rejects a missing parent or a cycle. A
+layer's `transform.rotation` (whole-body lean) is composed into every
+child's offset and world rotation about the layer anchor, so children
+and their slots follow a `[Do:]` `body_rotation` track.
 
 ## Camera
 

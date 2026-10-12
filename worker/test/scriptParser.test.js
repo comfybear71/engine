@@ -2033,3 +2033,349 @@ describe("[Move] action=walk_side", { concurrency: false }, () => {
     }
   });
 });
+
+describe("rig grab actions (nesting, slot_frames, prop events, lean, hold)", { concurrency: false }, () => {
+  after(() => {
+    fs.rmSync(path.join(fixture.projectDir, "backgrounds", "room_a"), { recursive: true, force: true });
+  });
+
+  function writeGrabRig() {
+    writeRodney();
+    const charDir = path.join(fixture.projectDir, "characters", "rodney");
+    const character = JSON.parse(fs.readFileSync(path.join(charDir, "character.json"), "utf8"));
+    fixture.writePng(path.join(charDir, "parts", "upper.png"));
+    fixture.writePng(path.join(charDir, "parts", "forearm.png"));
+    fixture.writePng(path.join(charDir, "parts", "hand.png"));
+    fixture.writePng(path.join(charDir, "hand_L", "open.png"));
+    fixture.writePng(path.join(charDir, "hand_L", "palm.png"));
+    fixture.writePng(path.join(charDir, "hand_L", "mic.png"));
+    fixture.writePng(path.join(charDir, "torso", "armless_L.png"));
+    character.children = [
+      {
+        id: "arm_upper_L",
+        asset: "parts/upper.png",
+        z: -3,
+        offset: { x: -8, y: -20 },
+        pivot: { x: 10, y: 4 },
+        visible_when: { torso: ["armless_L"] },
+      },
+      {
+        id: "arm_lower_L",
+        asset: "parts/forearm.png",
+        z: -2,
+        parent: "arm_upper_L",
+        offset: { x: 0, y: 18 },
+        pivot: { x: 8, y: 2 },
+        slots: {
+          hand_L: {
+            offset: { x: 0, y: 16 },
+            drawings_dir: "hand_L",
+            default_drawing: "open",
+          },
+        },
+      },
+      {
+        id: "hand_L",
+        asset: "parts/hand.png",
+        z: 4,
+        parent: "arm_lower_L",
+        offset: { x: 0, y: 14 },
+        pivot: { x: 6, y: 2 },
+      },
+    ];
+    fixture.writeJson(path.join(charDir, "character.json"), character);
+    fixture.writePng(path.join(fixture.projectDir, "backgrounds", "room_a", "props", "stand.png"));
+    fixture.writePng(path.join(fixture.projectDir, "backgrounds", "room_a", "props", "pole.png"));
+    const stagingPath = path.join(fixture.projectDir, "backgrounds", "room_a", "staging.json");
+    fixture.writeJson(stagingPath, {
+      marks: {
+        centre: { x: 500, y: 1000, scale: 1.0 },
+        left: { x: 450, y: 1000, scale: 1.0 },
+        right: { x: 550, y: 1000, scale: 1.0 },
+      },
+      auto_order: ["left", "right"],
+      props: {
+        mic_stand: {
+          asset: "props/stand.png",
+          x: 700,
+          y: 1000,
+          z: 8,
+          drawings: {
+            default: "props/stand.png",
+            pole: "props/pole.png",
+          },
+        },
+      },
+    });
+    fixture.writeJson(path.join(charDir, "actions", "grab_mic.json"), {
+      id: "grab_mic",
+      view: "front",
+      fps: 24,
+      frames: 4,
+      end: "hold",
+      set_slots: { torso: "armless_L" },
+      joints: {
+        arm_upper_L: [0, 10, 20, 25],
+        arm_lower_L: [0, 5, 10, 12],
+        hand_L: [0, -4, -8, -10],
+      },
+      slot_frames: { hand_L: ["open", "open", "palm", "mic"] },
+      body_rotation: [0, 1, 2, 3],
+      prop_events: [
+        { frame: 2, prop: "{prop}", drawing: "pole" },
+        { frame: 2, prop: "{prop}", z: 5 },
+      ],
+    });
+    fixture.writeJson(path.join(charDir, "actions", "drop_mic.json"), {
+      id: "drop_mic",
+      view: "front",
+      fps: 24,
+      frames: 2,
+      end: "hold",
+      joints: {
+        arm_upper_L: [25, 0],
+        arm_lower_L: [12, 0],
+        hand_L: [-10, 0],
+      },
+      slot_frames: { hand_L: ["mic", "open"] },
+      body_rotation: [3, 0],
+    });
+  }
+
+  beforeEach(() => writeGrabRig());
+
+  test("3-level children are emitted with parent links", async () => {
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Rodney]"].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const byId = Object.fromEntries(rodney.children.map((c) => [c.id, c]));
+    assert.equal(byId.arm_lower_L.parent, "arm_upper_L");
+    assert.equal(byId.hand_L.parent, "arm_lower_L");
+    assert.ok(byId.arm_lower_L.slots.hand_L);
+  });
+
+  test("child-slot slot_frames swaps and restores unless end=hold", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney grab_mic prop=mic_stand]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const hand = rodney.children.find((c) => c.id === "arm_lower_L").slots.hand_L;
+    const byFrame = Object.fromEntries((hand.keyframes || []).map((k) => [k.frame, k.drawing]));
+    assert.equal(byFrame[0], "open");
+    assert.equal(byFrame[2], "palm");
+    assert.equal(byFrame[3], "mic");
+    assert.equal(byFrame[4], undefined, "hold must not restore the child slot");
+    const upper = rodney.children.find((c) => c.id === "arm_upper_L").rotation_keyframes;
+    assert.equal(upper.find((k) => k.frame === 3).rotation, 25);
+    assert.equal(
+      upper.find((k) => k.frame === 4),
+      undefined,
+      "hold must not write a restore joint keyframe"
+    );
+    const lean = (rodney.transform_keyframes || []).filter((k) => k.rotation != null);
+    assert.equal(lean.find((k) => k.frame === 3).rotation, 3);
+    assert.equal(lean.find((k) => k.frame === 4), undefined);
+    const props = layersFor(timeline).filter((l) => l.prop_id === "mic_stand");
+    assert.ok(props.length >= 2);
+    const after = props[props.length - 1];
+    assert.match(after.asset, /pole\.png$/);
+    assert.equal(after.z, 5);
+    assert.equal(after.transform.anchor, "bottom-center");
+  });
+
+  test("default end restores child slot, joints, lean, and prop", async () => {
+    const charDir = path.join(fixture.projectDir, "characters", "rodney");
+    const action = JSON.parse(fs.readFileSync(path.join(charDir, "actions", "grab_mic.json"), "utf8"));
+    delete action.end;
+    fixture.writeJson(path.join(charDir, "actions", "grab_mic.json"), action);
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney grab_mic prop=mic_stand]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const hand = rodney.children.find((c) => c.id === "arm_lower_L").slots.hand_L;
+    const byFrame = Object.fromEntries((hand.keyframes || []).map((k) => [k.frame, k.drawing]));
+    assert.equal(byFrame[4], "open");
+    const upper = rodney.children.find((c) => c.id === "arm_upper_L").rotation_keyframes;
+    assert.equal(upper.find((k) => k.frame === 4).rotation, 0);
+    const lean = (rodney.transform_keyframes || []).filter((k) => k.rotation != null);
+    assert.equal(lean.find((k) => k.frame === 4).rotation, 0);
+    const props = layersFor(timeline).filter((l) => l.prop_id === "mic_stand");
+    const last = props[props.length - 1];
+    assert.match(last.asset, /stand\.png$/);
+    assert.equal(last.z, 8);
+  });
+
+  test("held pose keeps lip-sync on following dialogue; rest releases", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney grab_mic prop=mic_stand]",
+      "Rodney: G'day, ladies and germs!",
+      "[Do: Rodney rest]",
+    ].join("\n");
+    const { timeline, lines } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const layers = layersFor(timeline).filter((l) => l.character_id === "rodney");
+    const rodney = layers[0];
+    assert.ok(rodney.dialogue && rodney.dialogue.length >= 1);
+    assert.ok(rodney.dialogue[0].start_frame >= 4);
+    assert.equal(rodney.slots.mouth.lipsync.source, "dialogue");
+    assert.ok(lines[0].text.includes("G'day"));
+    const upper = rodney.children.find((c) => c.id === "arm_upper_L").rotation_keyframes;
+    const restKey = [...upper].sort((a, b) => a.frame - b.frame).pop();
+    assert.equal(restKey.rotation, 0);
+    const hand = rodney.children.find((c) => c.id === "arm_lower_L").slots.hand_L;
+    const lastHand = [...hand.keyframes].sort((a, b) => a.frame - b.frame).pop();
+    assert.equal(lastHand.drawing, "open");
+  });
+
+  test("[Action: z=] fork carries held child rotations", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney grab_mic prop=mic_stand]",
+      "[Action: Rodney z=20]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const layers = layersFor(timeline).filter((l) => l.character_id === "rodney");
+    assert.ok(layers.length >= 2);
+    const forked = layers[layers.length - 1];
+    const upper = forked.children.find((c) => c.id === "arm_upper_L");
+    assert.equal(upper.rotation, 25);
+    const keys = upper.rotation_keyframes || [];
+    assert.ok(keys.some((k) => k.rotation === 25));
+    assert.equal(forked.transform.rotation, 3);
+  });
+
+  test("[Do: drop] starts from the held pose", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney grab_mic prop=mic_stand]",
+      "[Do: Rodney drop_mic]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const upper = rodney.children.find((c) => c.id === "arm_upper_L").rotation_keyframes;
+    assert.equal(upper.find((k) => k.frame === 4).rotation, 25);
+    assert.equal(upper.find((k) => k.frame === 5).rotation, 0);
+  });
+
+  test("[Prop: drawing=] swaps the asset in place", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Prop: mic_stand drawing=pole]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const props = layersFor(timeline).filter((l) => l.prop_id === "mic_stand");
+    assert.match(props[props.length - 1].asset, /pole\.png$/);
+    assert.equal(props[props.length - 1].transform.anchor, "bottom-center");
+  });
+
+  test("unknown prop= lists known props", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney grab_mic prop=nope]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 }),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /Unknown prop "nope"/.test(err.message) &&
+        /mic_stand/.test(err.message)
+    );
+  });
+
+  test("missing prop drawing file is a parse error", async () => {
+    const stagingPath = path.join(fixture.projectDir, "backgrounds", "room_a", "staging.json");
+    const staging = JSON.parse(fs.readFileSync(stagingPath, "utf8"));
+    staging.props.mic_stand.drawings.ghost = "props/ghost.png";
+    fixture.writeJson(stagingPath, staging);
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Rodney]"].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 }),
+      (err) =>
+        err instanceof ScriptError &&
+        /drawing "ghost"/.test(err.message)
+    );
+  });
+
+  test("prop_events {prop} without prop= cites known props", async () => {
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney grab_mic]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 }),
+      (err) =>
+        err instanceof ScriptError &&
+        /\{prop\}/.test(err.message) &&
+        /mic_stand/.test(err.message)
+    );
+  });
+
+  test("invalid end and body_rotation length cite the line", async () => {
+    const charDir = path.join(fixture.projectDir, "characters", "rodney");
+    fixture.writeJson(path.join(charDir, "actions", "bad_end.json"), {
+      id: "bad_end",
+      fps: 24,
+      frames: 2,
+      end: "freeze",
+    });
+    await assert.rejects(
+      () =>
+        parseScript(
+          fixture.projectDir,
+          fixture.globalAssetsDir,
+          ["[Scene: Intro]", "[Location: room_a]", "[Cast: Rodney]", "[Do: Rodney bad_end]"].join("\n"),
+          { fps: 24 }
+        ),
+      (err) => err instanceof ScriptError && /end "freeze"/.test(err.message)
+    );
+    fixture.writeJson(path.join(charDir, "actions", "bad_lean.json"), {
+      id: "bad_lean",
+      fps: 24,
+      frames: 2,
+      body_rotation: [0],
+    });
+    await assert.rejects(
+      () =>
+        parseScript(
+          fixture.projectDir,
+          fixture.globalAssetsDir,
+          ["[Scene: Intro]", "[Location: room_a]", "[Cast: Rodney]", "[Do: Rodney bad_lean]"].join("\n"),
+          { fps: 24 }
+        ),
+      (err) => err instanceof ScriptError && /body_rotation length 1 != frames 2/.test(err.message)
+    );
+  });
+
+  test("child parent cycle is a line-numbered error", async () => {
+    const charDir = path.join(fixture.projectDir, "characters", "rodney");
+    const character = JSON.parse(fs.readFileSync(path.join(charDir, "character.json"), "utf8"));
+    character.children[0].parent = "hand_L";
+    fixture.writeJson(path.join(charDir, "character.json"), character);
+    const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Rodney]"].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 }),
+      (err) => err instanceof ScriptError && /cycles/.test(err.message)
+    );
+  });
+});

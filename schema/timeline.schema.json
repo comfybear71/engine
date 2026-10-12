@@ -423,7 +423,7 @@
     },
 
     "child": {
-      "description": "A cut-out rig child part (head, arm, hand, ...), nested under a parent layer. The parent's transform (position, scale, flip_x) applies to every child, so flipping or walking the parent on/off-screen keeps all its parts aligned and clipped together; `offset`/`pivot`/`z` are the child's own placement relative to its parent (the layer root, or another child named in `parent`). One level of child-to-child nesting is allowed via `parent`; deeper chains and cycles are rejected at load time.",
+      "description": "A cut-out rig child part (head, arm, hand, ...), nested under a parent layer. The parent's transform (position, scale, flip_x, rotation) applies to every child, so flipping, leaning, or walking the parent on/off-screen keeps all its parts aligned and clipped together; `offset`/`pivot`/`z` are the child's own placement relative to its parent (the layer root, or another child named in `parent`). Parent chains may be any depth; cycles are rejected at load time.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "asset", "z", "offset"],
@@ -431,8 +431,8 @@
         "id": { "type": "string", "minLength": 1, "description": "Unique id of this child within its parent layer." },
         "asset": { "type": "string", "description": "Path (relative to the project folder) to this part's image." },
         "z": {
-          "type": "integer",
-          "description": "Draw order relative to the parent's own base image and sibling children (ascending; the parent's own base image is implicitly z = 0 among its children, so e.g. an arm behind the torso uses z < 0 and one in front uses z > 0). This stacking is local to the parent -- it does not interleave with other top-level scene layers' z."
+          "type": "number",
+          "description": "Draw order relative to the parent's own base image and sibling children (ascending; the parent's own base image is implicitly z = 0 among its children, so e.g. an arm behind the torso uses z < 0 and one in front uses z > 0). This stacking is local to the parent -- it does not interleave with other top-level scene layers' z. Fractional values are allowed (e.g. -3.5)."
         },
         "offset": {
           "$ref": "#/definitions/offset",
@@ -465,7 +465,7 @@
         },
         "scale": { "type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "Multiplies the parent's own scale." },
         "flip_x": { "type": "boolean", "default": false, "description": "Composed with the parent's flip_x (XOR): false (default) means this child simply mirrors along with the parent; true gives it an independent mirror on top of that." },
-        "rotation": { "type": "number", "default": 0, "description": "Degrees, clockwise, around this child's own pivot (the pivot stays fixed after rotate+canvas-expand). Independent of the layer's own `transform.rotation` (a rotating layer's rotation is not composed into its children -- see docs/timeline-schema.md). When this child is the `parent` of another child, that grandchild's offset is rotated by this value and the rotations accumulate." },
+        "rotation": { "type": "number", "default": 0, "description": "Degrees, clockwise, around this child's own pivot (the pivot stays fixed after rotate+canvas-expand). Added to the parent's current rotation (the layer's `transform.rotation` for a top-level child, or the named `parent` child's world rotation). When this child is the `parent` of another child, that descendant's offset is rotated by the accumulated value." },
         "rotation_keyframes": {
           "type": "array",
           "description": "Optional animation of this child's rotation, layer-local frames, same interpolation rules as `layer.transform_keyframes`. The static `rotation` is used when this list is omitted or empty.",
@@ -474,7 +474,7 @@
         "parent": {
           "type": "string",
           "minLength": 1,
-          "description": "Id of another child on the same layer that this child hangs off. Offset is in that parent's local space and is rotated about the parent's pivot by the parent's current rotation. The parent must exist, must not itself have a parent (only one level of nesting), and must not create a cycle."
+          "description": "Id of another child on the same layer that this child hangs off. Offset is in that parent's local space and is rotated about the parent's pivot by the parent's current rotation. The parent must exist. Chains may be any depth; cycles are rejected at load time."
         },
         "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0, "description": "Multiplies the parent's own opacity." },
         "slots": { "$ref": "#/definitions/slots", "description": "Drawing-swap slots attached to this child instead of to the parent root (e.g. a mouth slot on a head child, a pose slot on a hand child). Slot offsets rotate with this child's current rotation so e.g. a hand on a forearm stays at the wrist." }

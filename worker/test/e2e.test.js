@@ -6,6 +6,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { parseProject } = require("../src/parser");
 
 const REPO_ROOT = path.join(__dirname, "..", "..");
 const WORKER_DIR = path.join(REPO_ROOT, "worker");
@@ -51,6 +52,25 @@ describe("end-to-end: parse + render the sample project via the real CLI", () =>
     assert.ok(codecTypes.includes("audio"), "output is missing an audio stream");
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("parse of the committed sample is unchanged when no new action keys are used", async () => {
+    const { timeline, errors } = await parseProject(SAMPLE_PROJECT_DIR);
+    assert.deepEqual(errors, []);
+    for (const scene of timeline.scenes) {
+      for (const layer of scene.layers || []) {
+        assert.equal(layer.transform.rotation, undefined);
+        const rotKeys = (layer.transform_keyframes || []).filter((k) => k.rotation != null);
+        assert.equal(rotKeys.length, 0);
+        for (const child of layer.children || []) {
+          if (child.parent) {
+            const parent = (layer.children || []).find((c) => c.id === child.parent);
+            assert.ok(parent, `sample child ${child.id} parent ${child.parent} should exist`);
+            assert.equal(parent.parent, undefined, "sample project stays one-level");
+          }
+        }
+      }
+    }
   });
 
   test("`node src/cli.js lint` reports no errors for the committed sample script", () => {

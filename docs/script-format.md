@@ -144,6 +144,7 @@ the current cursor onward (same instant-cut layer fork as `[Action: ...]`).
 | `at=<x,y>` | Move to explicit canvas coordinates (no spaces). |
 | `scale=<number>` | Override scale from here on. |
 | `z=<integer>` | Override draw order from here on. |
+| `drawing=<name>` | Swap to a named drawing from `staging.json` `props.<name>.drawings` (or `default` = the prop's `asset`). Bottom-center anchoring keeps equal-width, bottom-aligned drawings in place. |
 | `hide` (bare) or `hide=true` | Hide the prop from this point (closes its current layer). |
 | `show` (bare) or `show=true` | Show it again at its last pose, or at `at=`/`scale=`/`z=` if given. |
 
@@ -329,22 +330,35 @@ Single speaker only. Studio **Import audio** (Script tab, or Stage
 transport / Script drawer) calls the same work via
 `POST /api/projects/:name/import-audio` -- see [docs/studio.md](studio.md).
 
-### `[Do: Name <actionId> (for=Ns) (wait=)]`
+### `[Do: Name <actionId> (for=Ns) (wait=) (prop=)]`
 
 Plays `characters/<id>/actions/<actionId>.json` **in place**: no travel,
 no auto-flip. Same `wait=` clock as `[Move:]` (`true` default). Omit
 `for=` to play one cycle (`frames / fps` seconds); if `for=` is longer
 than one cycle the action loops. Restores view, slot drawings, joint
-angles, group angles, and bob at the end.
+angles, group angles, body lean, prop events, and bob at the end unless
+the action sets `"end": "hold"`.
 
 The action may change `view` (or a per-frame `views` array), `set_slots`,
-`slot_frames` (per-cycle-frame slot drawings, restored at the end),
+`slot_frames` (per-cycle-frame slot drawings on the layer or a child),
 `joints`, optional `groups` (degrees per cycle frame, same rigid group
-rotation as `[Pose:]`), and `bob` (Y offset even while standing still).
+rotation as `[Pose:]`), `bob` (Y offset even while standing still),
+`body_rotation` (clockwise degrees about the feet), and `prop_events`
+(swap a prop drawing and/or `z` at an action frame). `prop=` binds
+`{prop}` in those events to a location prop (`[Do: Rodney grab_mic prop=mic_stand]`).
+A literal prop name in the action also works. Unknown prop is a
+line-numbered error listing known props.
+
+`[Do: Name rest]` is a built-in (not an action file): it writes the
+character's `character.json` defaults (joint angles, group rotations,
+body lean, slot `default_drawing`) at this frame so a held pose can be
+released. Mouth stays dialogue-driven.
 
 ```text
 [Do: Rodney nod]
 [Do: Rodney walk_side for=2s wait=false]
+[Do: Rodney grab_mic prop=mic_stand]
+[Do: Rodney rest]
 ```
 
 ### `[View: Name view=<head view>]` or `[View: Name <head view>]`
@@ -580,8 +594,9 @@ are skipped, never errors.
   ...) opens there with the new transform. `flip_x` is not keyframed, so
   turning a character around is always this kind of cut. The new layer
   **keeps** each slot's active drawing or cycle (rotated so the cycle
-  continues from the drawing that was showing) and each child's current
-  rotation, unless the same tag sets that slot. `[Prop: ...]` and
+  continues from the drawing that was showing), each child's current
+  rotation, group rotations, and body lean (including a held `[Do:]`
+  pose), unless the same tag sets that slot. `[Prop: ...]` and
   `[Layer: ... z=]` fork the same way for props (and `[Layer: ...]` for
   characters). Props and characters share one `layers` list and are drawn
   together in ascending `z`; the background stays behind every layer.

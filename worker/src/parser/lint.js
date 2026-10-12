@@ -181,7 +181,7 @@ function findMissingPropAssets(usedProps, projectDir, globalAssetsDir) {
       ? [...assetLibrary.scanDrawingsDir(projectDir, globalAssetsDir, propsDir).keys()].sort()
       : [];
     errors.push(
-      `Line ${prop.lineNumber}: Prop "${prop.name}" is missing asset "${prop.assetRel}". Available: ${present.join(", ") || "(none)"}`
+      `Line ${prop.lineNumber}: Prop "${prop.name}" is missing ${prop.drawing && prop.drawing !== "default" ? `drawing "${prop.drawing}"` : "asset"} "${prop.assetRel}". Available: ${present.join(", ") || "(none)"}`
     );
   }
 

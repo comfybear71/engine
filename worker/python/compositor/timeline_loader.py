@@ -84,7 +84,7 @@ class Child:
 
     Position/scale/flip are relative to the parent's own transform; see
     docs/timeline-schema.md for the exact composition rules. A child may
-    name one other child as ``parent`` (one level of nesting, no cycles).
+    name another child as ``parent`` (any depth, no cycles).
     """
 
     id: str
@@ -599,7 +599,7 @@ def _build_child(raw: dict, project_dir: Path) -> Child:
     return Child(
         id=raw["id"],
         asset=_resolve(project_dir, raw["asset"]),
-        z=int(raw["z"]),
+        z=float(raw["z"]),
         offset_x=float(offset.get("x", 0.0)),
         offset_y=float(offset.get("y", 0.0)),
         pivot=pivot,
@@ -616,7 +616,7 @@ def _build_child(raw: dict, project_dir: Path) -> Child:
 
 
 def _validate_children(layer_id: str, children_raw: list[dict]) -> None:
-    """Parent must exist, no deeper than one level, no cycles."""
+    """Parent must exist; parent chains may be any depth; cycles are rejected."""
 
     if not children_raw:
         return
@@ -643,12 +643,16 @@ def _validate_children(layer_id: str, children_raw: list[dict]) -> None:
                 f"layer {layer_id!r} child {child_id!r} cannot be its own parent"
             )
         parents[child_id] = parent
-    for child_id, parent_id in parents.items():
-        if parent_id in parents:
-            raise ValueError(
-                f"layer {layer_id!r} child {child_id!r} parent {parent_id!r} is "
-                f"itself parented (only one level of nesting is allowed; no cycles)"
-            )
+    for child_id in parents:
+        seen: set[str] = set()
+        current = child_id
+        while current in parents:
+            if current in seen:
+                raise ValueError(
+                    f"layer {layer_id!r} child {child_id!r} parent chain cycles"
+                )
+            seen.add(current)
+            current = parents[current]
 
 
 def _layer_slot_names(layer_raw: dict) -> set[str]:

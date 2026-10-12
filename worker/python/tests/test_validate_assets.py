@@ -78,6 +78,36 @@ def test_validate_character_scans_views_true_folders_without_canvas(tmp_path: Pa
     assert "torso_left_34/front.png" in joined and "touches the canvas edge" in joined
 
 
+def test_validate_character_accepts_three_level_children(tmp_path: Path):
+    char_dir = tmp_path / "characters" / "bill"
+    char_dir.mkdir(parents=True)
+    config = {
+        "id": "bill",
+        "children": [
+            {"id": "upper", "asset": "parts/upper.png", "z": -3.5, "offset": {"x": 0, "y": 0}},
+            {"id": "forearm", "asset": "parts/forearm.png", "z": -3, "offset": {"x": 0, "y": 10}, "parent": "upper"},
+            {"id": "hand", "asset": "parts/hand.png", "z": 4, "offset": {"x": 0, "y": 10}, "parent": "forearm"},
+        ],
+    }
+    (char_dir / "character.json").write_text(json.dumps(config))
+    assert validate_character(char_dir, config, roots=[tmp_path]) == []
+
+
+def test_validate_character_rejects_child_parent_cycle(tmp_path: Path):
+    char_dir = tmp_path / "characters" / "bill"
+    char_dir.mkdir(parents=True)
+    config = {
+        "id": "bill",
+        "children": [
+            {"id": "upper", "asset": "a.png", "z": 1, "offset": {"x": 0, "y": 0}, "parent": "hand"},
+            {"id": "hand", "asset": "b.png", "z": 2, "offset": {"x": 0, "y": 0}, "parent": "upper"},
+        ],
+    }
+    (char_dir / "character.json").write_text(json.dumps(config))
+    issues = validate_character(char_dir, config, roots=[tmp_path])
+    assert any("cycles" in line for line in issues)
+
+
 def test_validate_character_scans_back_view_folder(tmp_path: Path):
     char_dir = tmp_path / "characters" / "bill"
     (char_dir / "torso").mkdir(parents=True)
