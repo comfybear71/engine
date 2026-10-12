@@ -715,7 +715,13 @@ export function trimKindForBlock(block: {
 }
 
 export function durationAttrForBlock(block: { timing?: { kind?: string } | null; tag?: string | null }): "over" | "for" | "hold" {
-  if (block.timing?.kind === "for" || String(block.tag || "").toLowerCase() === "swing") return "for";
+  if (
+    block.timing?.kind === "for" ||
+    String(block.tag || "").toLowerCase() === "swing" ||
+    String(block.tag || "").toLowerCase() === "do"
+  ) {
+    return "for";
+  }
   if (block.timing?.kind === "pin") return "hold";
   return "over";
 }

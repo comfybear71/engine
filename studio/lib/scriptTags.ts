@@ -5,6 +5,7 @@ export type InsertActionId =
   | "frontBack"
   | "pose"
   | "move"
+  | "do"
   | "propShow"
   | "propHide";
 
@@ -48,6 +49,11 @@ export const INSERT_ACTIONS: InsertActionDef[] = [
     id: "move",
     label: "Move",
     template: (name) => `[Move: ${name} to=mark over=2s]`,
+  },
+  {
+    id: "do",
+    label: "Do action",
+    template: (name) => `[Do: ${name} nod]`,
   },
   {
     id: "propShow",

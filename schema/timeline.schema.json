@@ -563,10 +563,23 @@
         "slots": { "$ref": "#/definitions/slots", "description": "Drawing-swap slots attached directly to this layer's own root image (e.g. a mouth on a single-image character with no separate head part)." },
         "groups": {
           "type": "object",
-          "description": "Optional named slot groups copied from character.json. `head` lists the one-head rig slots (blank base + overlays). When set, only that group's active view= angle draws, and legacy full-head slots (head/face/eyes not in the group) are skipped.",
+          "description": "Optional named slot groups copied from character.json. `head` lists the one-head rig slots (blank base + overlays). When set, only that group's active view= angle draws, and legacy full-head slots (head/face/eyes not in the group) are skipped. [Pose:]/[Swing:]/[Do:] can rotate a named group rigidly about its pivot (the first member's offset / canvas.pivot).",
           "additionalProperties": {
             "type": "array",
             "items": { "type": "string", "minLength": 1 }
+          }
+        },
+        "group_rotations": {
+          "type": "object",
+          "description": "Rest pose for each named slot group, clockwise degrees about that group's pivot (typically the neck). Used when `group_rotation_keyframes` is omitted or as the interpolator default. Flip mirrors the angle.",
+          "additionalProperties": { "type": "number" }
+        },
+        "group_rotation_keyframes": {
+          "type": "object",
+          "description": "Optional animation of each named slot group's rotation, layer-local frames, same interpolation as child `rotation_keyframes`. The whole group rotates rigidly about the group pivot (no scale/warp). Combines with automatic dialogue head-bob; lip-sync and blinks still swap drawings on top.",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/rotation_keyframe" }
           }
         },
         "children": {

@@ -74,7 +74,7 @@ export function classifyClipboardLine(
   if (/^\[Audio:/i.test(trimmed)) return "speech";
   if (/^\[Prop:/i.test(trimmed)) return "prop";
   if (/^\[Camera:/i.test(trimmed)) return "camera";
-  if (/^\[(?:Move|Pose|Swing):/i.test(trimmed)) return "body";
+  if (/^\[(?:Move|Pose|Swing|Do):/i.test(trimmed)) return "body";
   if (/^\[Action:/i.test(trimmed)) {
     if (/\b(?:face|eyes|head)=/i.test(trimmed)) return "face";
     return "body";

@@ -76,6 +76,24 @@ describe("parseActionTag", () => {
     assert.deepEqual(kv, {});
     assert.equal(note, "");
   });
+
+  test("allowPositional keeps key=value after a bare action id", () => {
+    const { character, kv, note, positional } = parseActionTag("Rodney nod for=0.9s wait=false", {
+      allowPositional: true,
+    });
+    assert.equal(character, "Rodney");
+    assert.deepEqual(positional, ["nod"]);
+    assert.equal(kv.for, "0.9s");
+    assert.equal(kv.wait, "false");
+    assert.equal(note, "");
+  });
+
+  test("allowPositional accepts a bare view name", () => {
+    const { character, kv, positional } = parseActionTag("Rodney right_34", { allowPositional: true });
+    assert.equal(character, "Rodney");
+    assert.deepEqual(positional, ["right_34"]);
+    assert.deepEqual(kv, {});
+  });
 });
 
 describe("parseCastList", () => {

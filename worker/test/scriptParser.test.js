@@ -1299,6 +1299,30 @@ function writeRodney(overrides = {}) {
   };
   const bob = overrides.bob || [0, 3, 6, 3, 0, 3, 6, 3, 0, 3, 6, 3];
   const frames = overrides.frames || 12;
+  const slots = {
+    mouth: { offset: { x: 0, y: -10 }, drawings_dir: "mouth" },
+    eyes: { offset: { x: 0, y: -12 }, drawings_dir: "eyes", default_drawing: "open" },
+    torso: { offset: { x: 0, y: 0 }, drawings_dir: "torso", default_drawing: "stand" },
+  };
+  if (overrides.groups && overrides.groups.head) {
+    const canvas = { w: 32, h: 32, pivot: { x: 16, y: 28 } };
+    slots.head_base = {
+      offset: { x: 0, y: -20 },
+      drawings_dir: "head_base",
+      default_drawing: "neutral",
+      canvas,
+    };
+    slots.eyes.offset = { x: 0, y: -20 };
+    slots.eyes.canvas = canvas;
+    slots.mouth.offset = { x: 0, y: -20 };
+    slots.mouth.canvas = canvas;
+    fixture.writePng(path.join(charDir, "head_base", "neutral.png"));
+    for (const view of ["right_34", "right_side"]) {
+      fixture.writePng(path.join(charDir, `head_base_${view}`, "neutral.png"));
+      fixture.writePng(path.join(charDir, `eyes_${view}`, "open.png"));
+      fixture.writePng(path.join(charDir, `mouth_${view}`, "X.png"));
+    }
+  }
   fixture.writeJson(path.join(charDir, "character.json"), {
     id: "rodney",
     display_name: "Rodney",
@@ -1306,11 +1330,8 @@ function writeRodney(overrides = {}) {
     asset: "body.png",
     z: 10,
     default_scale: 1.0,
-    slots: {
-      mouth: { offset: { x: 0, y: -10 }, drawings_dir: "mouth" },
-      eyes: { offset: { x: 0, y: -12 }, drawings_dir: "eyes", default_drawing: "open" },
-      torso: { offset: { x: 0, y: 0 }, drawings_dir: "torso", default_drawing: "stand" },
-    },
+    slots,
+    groups: overrides.groups,
     children: [
       {
         id: "right_arm",
@@ -1332,6 +1353,11 @@ function writeRodney(overrides = {}) {
     joints,
     bob,
   });
+  if (overrides.actions) {
+    for (const [id, spec] of Object.entries(overrides.actions)) {
+      fixture.writeJson(path.join(charDir, "actions", `${id}.json`), { id, ...spec });
+    }
+  }
 }
 
 describe("[Move] action=walk_side", { concurrency: false }, () => {
@@ -1549,5 +1575,190 @@ describe("[Move] action=walk_side", { concurrency: false }, () => {
       warnings.some((w) => /Line 4:/.test(w) && /inout/.test(w) && /slide/.test(w)),
       `expected inout foot-slide warning, got: ${JSON.stringify(warnings)}`
     );
+  });
+
+  const headGroup = { head: ["head_base", "eyes", "mouth"] };
+  const nod = {
+    fps: 12,
+    frames: 4,
+    view: "right_34",
+    set_slots: { torso: "rig" },
+    joints: { right_arm: [0, 10, 0, -10] },
+    groups: { head: [0, 8, 0, -8] },
+    bob: [0, 4, 0, 4],
+  };
+
+  test("[Pose] head= writes group_rotation_keyframes about the group", async () => {
+    writeRodney({ groups: headGroup });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Pose: Rodney head=8 over=0.15s]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const keys = rodney.group_rotation_keyframes.head;
+    assert.equal(keys.length, 2);
+    assert.equal(keys[0].frame, 0);
+    assert.equal(keys[0].rotation, 0);
+    assert.equal(keys[1].frame, 4);
+    assert.equal(keys[1].rotation, 8);
+    assert.equal(rodney.group_rotations.head, 8);
+    assert.equal(rodney.children.find((c) => c.id === "right_arm").rotation_keyframes, undefined);
+  });
+
+  test("[Swing] head= writes a period of group keys and ends at 0", async () => {
+    writeRodney({ groups: headGroup });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Swing: Rodney head=6 period=0.4s for=0.4s]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const keys = rodney.group_rotation_keyframes.head;
+    assert.ok(keys.length >= 5);
+    assert.equal(keys[0].rotation, 0);
+    assert.equal(keys[1].rotation, 6);
+    assert.equal(keys[keys.length - 1].rotation, 0);
+  });
+
+  test("unknown group cites available parts and groups", async () => {
+    writeRodney({ groups: headGroup });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Pose: Rodney tail=8 over=0.15s]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) =>
+        err instanceof ScriptError &&
+        err.lineNumber === 4 &&
+        /Unknown part "tail"/.test(err.message) &&
+        /right_arm/.test(err.message) &&
+        /Groups: head/.test(err.message)
+    );
+  });
+
+  test("[Do] plays one cycle, writes view/slots/joints/groups/bob, restores at the end", async () => {
+    writeRodney({ groups: headGroup, actions: { nod } });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney nod]",
+    ].join("\n");
+    const { timeline, laneEvents } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, {
+      fps: 24,
+    });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    // 4 frames at 12 fps = 1/3s = 8 document frames
+    const viewKeys = (rodney.view_keyframes || []).slice().sort((a, b) => a.frame - b.frame);
+    assert.equal(viewKeys[0].view, "right_34");
+    assert.equal(viewKeys[viewKeys.length - 1].frame, 8);
+    assert.equal(viewKeys[viewKeys.length - 1].view, "front");
+
+    const torso = rodney.slots.torso.keyframes;
+    assert.equal(torso.find((k) => k.frame === 0).drawing, "rig");
+    assert.equal(torso.find((k) => k.frame === 8).drawing, "stand");
+
+    const arm = rodney.children.find((c) => c.id === "right_arm").rotation_keyframes;
+    assert.equal(arm.find((k) => k.frame === 0).rotation, 0);
+    assert.notEqual(arm.find((k) => k.frame === 2).rotation, 0);
+    assert.equal(arm.find((k) => k.frame === 8).rotation, 0);
+
+    const head = rodney.group_rotation_keyframes.head;
+    assert.equal(head.find((k) => k.frame === 0).rotation, 0);
+    assert.equal(head.find((k) => k.frame === 2).rotation, 8);
+    assert.equal(head.find((k) => k.frame === 8).rotation, 0);
+
+    const yKeys = rodney.transform_keyframes.filter((k) => k.y != null);
+    assert.equal(yKeys.find((k) => k.frame === 0).y, 1000);
+    assert.equal(yKeys.find((k) => k.frame === 2).y, 1004);
+    assert.equal(yKeys.find((k) => k.frame === 8).y, 1000);
+
+    const lane = laneEvents.find((e) => e.tag === "do");
+    assert.equal(lane.endFrame - lane.startFrame, 8);
+    assert.match(lane.label, /nod/);
+  });
+
+  test("[Do] for= longer than one cycle loops; wait=false leaves the cursor", async () => {
+    writeRodney({ groups: headGroup, actions: { nod } });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney nod for=1s wait=false]",
+      "Rodney: During.",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const head = rodney.group_rotation_keyframes.head;
+    assert.equal(head[head.length - 1].frame, 24);
+    // second cycle: frame 10 is elapsed 10/24*12 = 5 → index 5%4 = 1 → 8
+    assert.equal(head.find((k) => k.frame === 10).rotation, 8);
+    assert.equal(rodney.dialogue[0].start_frame, 0);
+  });
+
+  test("[Do] bob y changes while standing still (not stuck on the first sample)", async () => {
+    writeRodney({ groups: headGroup, actions: { nod } });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney nod]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const ys = [...new Set(rodney.transform_keyframes.map((k) => k.y))];
+    assert.ok(ys.length > 1, `expected bob to vary y, got ${JSON.stringify(ys)}`);
+  });
+
+  test("unknown [Do] action cites the line", async () => {
+    writeRodney({ groups: headGroup, actions: { nod } });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[Do: Rodney moonwalk]",
+    ].join("\n");
+    await assert.rejects(
+      () => parseScript(fixture.projectDir, fixture.globalAssetsDir, script),
+      (err) => err instanceof ScriptError && err.lineNumber === 4 && /Unknown action "moonwalk"/.test(err.message)
+    );
+  });
+  test("positional [View: Name right_34] writes view_keyframes", async () => {
+    writeRodney({ groups: headGroup });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[View: Rodney right_34]",
+      "[Pause: 12]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    const keys = (rodney.view_keyframes || []).slice().sort((a, b) => a.frame - b.frame);
+    assert.equal(keys.length, 1);
+    assert.equal(keys[0].frame, 0);
+    assert.equal(keys[0].view, "right_34");
+    assert.equal((rodney.dialogue || []).length, 0);
+  });
+
+  test("view= form still writes view_keyframes", async () => {
+    writeRodney({ groups: headGroup });
+    const script = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Cast: Rodney]",
+      "[View: Rodney view=left_side]",
+    ].join("\n");
+    const { timeline } = await parseScript(fixture.projectDir, fixture.globalAssetsDir, script, { fps: 24 });
+    const rodney = layersFor(timeline).find((l) => l.character_id === "rodney");
+    assert.equal(rodney.view_keyframes[0].view, "left_side");
   });
 });
