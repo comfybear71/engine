@@ -27,9 +27,9 @@ import cv2
 import numpy as np
 
 from .asset_cache import AssetCache, anchor_after_rotation, point_after_rotation
-from .background import fit_to_canvas
+from .background import fit_to_canvas, fit_to_canvas_camera
 from .blend import draw_image
-from .camera import apply_camera, scale_camera
+from .camera import CameraView, camera_view, scale_camera
 from .ffmpeg_writer import write_frames
 from .lipsync_natural import slot_head_bob
 from .slots import Slot, _find_active_clip, active_drawing, drawing_align, is_hide_drawing, slot_is_visible
@@ -261,6 +261,7 @@ def _draw_slot(
     view: str | None = None,
     group_rot: float = 0.0,
     group_pivot: tuple[float, float] | None = None,
+    camera: CameraView | None = None,
 ) -> None:
     if not slot_is_visible(slot, drawings):
         return
@@ -297,6 +298,8 @@ def _draw_slot(
     # Slot scale/rotation (and align.scale) are around the attachment point
     # (center, or the canvas neck pivot when set), so the offset stays put.
     slot_scale = owner.scale * (slot.scale if slot.scale else 1.0) * (align.scale if align.scale else 1.0)
+    if camera is not None:
+        slot_x, slot_y, slot_scale = camera.map_placement(slot_x, slot_y, slot_scale)
     slot_rotation = owner.rotation + slot.rotation + group_draw + bob_rot
     pivot = (slot.pivot_x, slot.pivot_y) if slot.has_canvas else None
     anchor = "center" if pivot is None else "top-left"
@@ -315,6 +318,7 @@ def _draw_layer(
     layer_local_frame_idx: int,
     fps: int,
     world_scale: float = 1.0,
+    camera: CameraView | None = None,
 ) -> None:
     drawings = _collect_slot_drawings(layer, layer_local_frame_idx, fps)
     suppressed = _suppressed_head_slots(layer)
@@ -343,9 +347,12 @@ def _draw_layer(
     ):
         pivot = placed.pivot_px
         anchor = "top-left" if pivot is not None else placed.anchor
+        draw_x, draw_y, draw_scale = placed.x, placed.y, placed.scale
+        if camera is not None:
+            draw_x, draw_y, draw_scale = camera.map_placement(draw_x, draw_y, draw_scale)
         _draw_transformed(
             canvas, cache, placed.asset,
-            placed.x, placed.y, placed.scale, placed.flip_x, placed.rotation,
+            draw_x, draw_y, draw_scale, placed.flip_x, placed.rotation,
             anchor, placed.opacity, pivot=pivot,
         )
         for name, slot in _sorted_slots(placed.slots):
@@ -356,6 +363,7 @@ def _draw_layer(
                 view=layer_view,
                 group_rot=group_rot_by_slot.get(name, 0.0),
                 group_pivot=group_pivot_by_slot.get(name),
+                camera=camera,
             )
 
 
@@ -375,6 +383,10 @@ def compose_scene_frame(
     ``out_width`` / ``out_height`` compose onto a smaller canvas (preview /
     proxy segments) by scaling placements and camera into that space so
     assets are pre-scaled instead of blending a full 1080p frame.
+
+    A non-identity camera is folded into each layer's placement (and the
+    background sample) so pieces are resampled once from source. Zoom 1
+    with the centre on the canvas centre skips that path entirely.
     """
 
     orig_w, orig_h = canvas_w, canvas_h
@@ -385,19 +397,32 @@ def compose_scene_frame(
         world_scale = min(canvas_w / float(orig_w), canvas_h / float(orig_h))
         bg_fitted = None
 
-    if bg_fitted is None:
-        bg_raw = cache.get_raw(scene.background.asset)
-        bg_fitted = fit_to_canvas(bg_raw, canvas_w, canvas_h, scene.background.fit)
-
     frame_step = max(1, scene.frame_step)
     composed_idx = local_frame - (local_frame % frame_step)
-    canvas = bg_fitted.copy()
+    view = camera_view(
+        scale_camera(scene.camera, world_scale), canvas_w, canvas_h, composed_idx, fps
+    )
+
+    if view.is_identity:
+        if bg_fitted is None:
+            bg_raw = cache.get_raw(scene.background.asset)
+            bg_fitted = fit_to_canvas(bg_raw, canvas_w, canvas_h, scene.background.fit)
+        canvas = bg_fitted.copy()
+        draw_camera = None
+    else:
+        bg_raw = cache.get_raw(scene.background.asset)
+        canvas = fit_to_canvas_camera(
+            bg_raw, canvas_w, canvas_h, scene.background.fit, view.cx, view.cy, view.zoom
+        )
+        draw_camera = view
+
     for layer in sorted(scene.layers, key=lambda l: l.z):
         if layer.is_visible_at(composed_idx, scene.total_frames):
             _draw_layer(
-                canvas, layer, cache, composed_idx - layer.start_frame, fps, world_scale=world_scale
+                canvas, layer, cache, composed_idx - layer.start_frame, fps,
+                world_scale=world_scale, camera=draw_camera,
             )
-    return apply_camera(canvas, scale_camera(scene.camera, world_scale), composed_idx, fps)
+    return canvas
 
 
 def iter_scene_frames(scene: Scene, canvas_w: int, canvas_h: int, fps: int, cache: AssetCache) -> Iterator[np.ndarray]:

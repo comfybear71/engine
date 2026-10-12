@@ -226,8 +226,8 @@ there (and a flipped new layer keeps the posed angle).
 
 ### `[Camera: zoom=<n> | pan=x,y | tilt=<dy> | to=x,y zoom=<n> | reset over=<secs>s ease=linear|inout wait=true|false]`
 
-Tweens the scene's **virtual camera** (the compositor's post-process pan/zoom
-on `camera.py`) from wherever it is now. Same `over` / `ease` / `wait` clock
+Tweens the scene's **virtual camera** (pan/zoom folded into layer
+placement in `camera.py`) from wherever it is now. Same `over` / `ease` / `wait` clock
 as `[Move:]`: `wait=true` (default) advances the scene cursor; `wait=false`
 leaves it so following lines/tags run during the move. Does not fork layers.
 

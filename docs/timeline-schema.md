@@ -513,12 +513,11 @@ Deliberately minimal, structured so it can grow:
   `start_frame`/`end_frame` (default: whole scene). Not authored by
   `[Camera:]` tags.
 
-**Known limitation:** the camera is applied as a post-process crop + resize
-on the already-composited, canvas-resolution frame (there's no separate
-higher-resolution "world" to re-render from a new viewpoint). Zooming in
-therefore re-samples already-rendered pixels rather than revealing more
-detail. This is fine for the kind of modest pans/zooms used in cut-out
-animation; it would need revisiting if large zoom-ins become common.
+The compositor folds the camera into each layer's placement (and the
+background sample) before drawing, so a zoom resamples each cut-out once
+from its source PNG instead of cropping and upscaling the finished
+1920×1080 frame. At zoom 1 with the centre on the canvas centre the
+camera path is skipped and the frame matches a render with no camera.
 
 ## Mouth shape reference (Rhubarb)
 

@@ -609,7 +609,7 @@
     },
 
     "camera": {
-      "description": "Optional, minimal virtual camera applied to the fully-composited frame: pans/zooms between keyframes (linearly interpolated) and/or an additive shake. Deliberately simple so it can grow later.",
+      "description": "Optional, minimal virtual camera folded into layer placement before compositing: pans/zooms between keyframes (linearly interpolated) and/or an additive shake. Deliberately simple so it can grow later.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

@@ -2,11 +2,13 @@
 
 Deliberately simple (see schema/timeline.schema.json `camera`): a list of
 (frame, x, y, zoom) keyframes, interpolated (linear or inout ease on the
-departing keyframe), plus an optional sine-based shake. It is applied as a
-post-process on the fully composited canvas-sized frame: crop the visible
-window, then resize back up to the canvas size. That means zooming in
-re-samples already-rendered pixels (a documented limitation, not a bug --
-see docs/timeline-schema.md).
+departing keyframe), plus an optional sine-based shake.
+
+The compositor folds the view
+``T = translate(W/2, H/2) * scale(zoom) * translate(-cx, -cy)``
+into every layer's placement (and the background sample) so each cut-out
+is resampled once from its source PNG. ``apply_camera`` is the older
+crop-then-upscale post-process, kept for tests and comparison.
 """
 
 from __future__ import annotations
@@ -114,35 +116,99 @@ def scale_camera(camera: Camera | None, scale: float) -> Camera | None:
     return replace(camera, keyframes=keyframes, shake=shake)
 
 
+@dataclass(frozen=True)
+class CameraView:
+    """Resolved camera centre/zoom in the output canvas's pixel space."""
+
+    cx: float
+    cy: float
+    zoom: float
+    canvas_w: int
+    canvas_h: int
+
+    @property
+    def is_identity(self) -> bool:
+        """True when zoom is 1 and the centre is the canvas centre."""
+
+        return (
+            abs(self.zoom - 1.0) < 1e-9
+            and abs(self.cx - self.canvas_w / 2.0) < 1e-9
+            and abs(self.cy - self.canvas_h / 2.0) < 1e-9
+        )
+
+    def map_placement(self, x: float, y: float, scale: float) -> tuple[float, float, float]:
+        """Apply ``T = translate(W/2, H/2) * scale(zoom) * translate(-cx, -cy)``."""
+
+        z = self.zoom
+        return (
+            self.canvas_w / 2.0 + (x - self.cx) * z,
+            self.canvas_h / 2.0 + (y - self.cy) * z,
+            scale * z,
+        )
+
+
+def _clamp_view(
+    cx: float, cy: float, zoom: float, canvas_w: int, canvas_h: int
+) -> tuple[float, float, float]:
+    """Keep the visible window on the canvas, matching ``apply_camera``."""
+
+    zoom = max(float(zoom), 1e-3)
+    crop_w = canvas_w / zoom
+    crop_h = canvas_h / zoom
+    x0 = cx - crop_w / 2.0
+    y0 = cy - crop_h / 2.0
+    if crop_w <= canvas_w:
+        x0 = min(max(x0, 0.0), canvas_w - crop_w)
+    else:
+        x0 = -(canvas_w - crop_w) / 2.0
+    if crop_h <= canvas_h:
+        y0 = min(max(y0, 0.0), canvas_h - crop_h)
+    else:
+        y0 = -(canvas_h - crop_h) / 2.0
+    return x0 + crop_w / 2.0, y0 + crop_h / 2.0, zoom
+
+
+def camera_view(
+    camera: Camera | None,
+    canvas_w: int,
+    canvas_h: int,
+    frame_idx: int,
+    fps: int,
+) -> CameraView:
+    """Interpolate + shake + clamp the camera for one frame."""
+
+    if camera is None:
+        return CameraView(canvas_w / 2.0, canvas_h / 2.0, 1.0, canvas_w, canvas_h)
+    cx, cy, zoom = _interpolate(camera.keyframes, frame_idx, canvas_w, canvas_h)
+    shake_dx, shake_dy = _shake_offset(camera.shake, frame_idx, fps)
+    cx, cy, zoom = _clamp_view(cx + shake_dx, cy + shake_dy, zoom, canvas_w, canvas_h)
+    return CameraView(cx, cy, zoom, canvas_w, canvas_h)
+
+
 def apply_camera(
     frame_bgr: np.ndarray,
     camera: Camera | None,
     frame_idx: int,
     fps: int,
 ) -> np.ndarray:
-    """Apply pan/zoom/shake to a composited frame. No-op if camera is None/default."""
+    """Crop-and-upscale a composited frame. No-op if camera is None/identity.
+
+    Kept as the old post-process so tests can compare it with the
+    pre-composite camera path. Production compositing no longer calls this.
+    """
 
     if camera is None:
         return frame_bgr
 
     canvas_h, canvas_w = frame_bgr.shape[:2]
-    cx, cy, zoom = _interpolate(camera.keyframes, frame_idx, canvas_w, canvas_h)
-    shake_dx, shake_dy = _shake_offset(camera.shake, frame_idx, fps)
-    cx += shake_dx
-    cy += shake_dy
-
-    if abs(zoom - 1.0) < 1e-9 and abs(shake_dx) < 1e-9 and abs(shake_dy) < 1e-9:
+    view = camera_view(camera, canvas_w, canvas_h, frame_idx, fps)
+    if view.is_identity:
         return frame_bgr
 
-    zoom = max(zoom, 1e-3)
-    crop_w = canvas_w / zoom
-    crop_h = canvas_h / zoom
-
-    x0 = cx - crop_w / 2.0
-    y0 = cy - crop_h / 2.0
-    # Keep the crop window fully inside the canvas.
-    x0 = min(max(x0, 0.0), canvas_w - crop_w) if crop_w <= canvas_w else -(canvas_w - crop_w) / 2.0
-    y0 = min(max(y0, 0.0), canvas_h - crop_h) if crop_h <= canvas_h else -(canvas_h - crop_h) / 2.0
+    crop_w = canvas_w / view.zoom
+    crop_h = canvas_h / view.zoom
+    x0 = view.cx - crop_w / 2.0
+    y0 = view.cy - crop_h / 2.0
 
     x0i, y0i = int(round(x0)), int(round(y0))
     x1i = int(round(x0i + crop_w))
