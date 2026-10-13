@@ -75,7 +75,13 @@ def _visible_when_matches(visible_when: dict[str, list[str]], drawings: dict[str
     return True
 
 
-_WALK_DRAWING = re.compile(r"^(walk|run)", re.I)
+_WALK_DRAWING = re.compile(r"^(walk|run)_", re.I)
+
+
+def is_walk_frame_name(name: str | None) -> bool:
+    """True for walk_side_01 / walk_side_long_stride_01, not a standing ``walk``."""
+
+    return bool(name and _WALK_DRAWING.match(str(name).strip()))
 
 
 def is_walk_cycle_drawing(drawings: dict[str, str | None] | None) -> bool:
@@ -83,17 +89,18 @@ def is_walk_cycle_drawing(drawings: dict[str, str | None] | None) -> bool:
 
     Factory walks (and the painted ``walk_side_*`` set) replace torso/body
     with a hat-to-boots drawing. Overlay children — standing torso_rig,
-    shirt, shorts, separate arms — must not composite on top of that.
+    shirt, shorts, separate arms — and every other slot (head, hat, eyes,
+    mouth, collar, legs) must not composite on top of that.
     """
 
     if not drawings:
         return False
     torso = drawings.get("torso")
     if torso:
-        return bool(_WALK_DRAWING.match(str(torso).strip()))
+        return is_walk_frame_name(torso)
     body = drawings.get("body")
     if body:
-        return bool(_WALK_DRAWING.match(str(body).strip()))
+        return is_walk_frame_name(body)
     return False
 
 
@@ -348,6 +355,7 @@ def _draw_layer(
     camera: CameraView | None = None,
 ) -> None:
     drawings = _collect_slot_drawings(layer, layer_local_frame_idx, fps)
+    hide_rig_base = is_walk_cycle_drawing(drawings)
     suppressed = _suppressed_head_slots(layer)
     layer_view = _layer_view_at(layer, layer_local_frame_idx)
     group_rot_by_slot: dict[str, float] = {}
@@ -384,6 +392,10 @@ def _draw_layer(
         )
         for name, slot in _sorted_slots(placed.slots):
             if name in suppressed:
+                continue
+            if hide_rig_base and not is_walk_frame_name(drawings.get(name)):
+                # Head, hat, eyes, mouth, legs, standing body — the walk
+                # drawing already includes them.
                 continue
             _draw_slot(
                 canvas, cache, slot, placed, layer_local_frame_idx, fps, drawings,

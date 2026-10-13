@@ -370,6 +370,7 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     bob: Array.isArray(bob) ? bob.map(Number) : null,
     body_rotation: bodyRotation,
     prop_events: propEvents,
+    hide_children: Boolean(action.hide_children),
     end: endRaw,
   };
 }

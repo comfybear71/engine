@@ -20,6 +20,8 @@ from compositor.factory_fit import (
     validate_piece,
     validate_walk_composite,
     validate_walk_frame,
+    validate_preview_motion,
+    validate_composite_matches_cell,
     walk_pose_problems,
 )
 
@@ -289,6 +291,12 @@ def test_walk_pose_rejects_identical_cells_and_accepts_a_cycle():
     assert walk_pose_problems(cycle) == []
 
 
+def test_walk_pose_fails_any_consecutive_pair():
+    frames = [_full_figure_facing_right() for _ in range(8)]
+    frames[4] = _stride_figure(8)
+    assert any("near-identical" in item for item in walk_pose_problems(frames))
+
+
 def test_extract_then_standing_torso_is_duplicated_boots():
     src = _full_figure_facing_right()
     torso, legs = _rig_refs()
@@ -297,6 +305,22 @@ def test_extract_then_standing_torso_is_duplicated_boots():
     )
     problems = validate_walk_composite(chopped, [torso, legs])
     assert any("duplicated" in item or "rig base" in item for item in problems)
+
+
+def test_preview_motion_fails_frozen_frames_and_passes_a_stride():
+    frozen = [_full_figure_facing_right() for _ in range(8)]
+    assert any("near-identical" in item for item in validate_preview_motion(frozen))
+    cycle = [_stride_figure((i % 4) * 4 - 4) for i in range(8)]
+    assert validate_preview_motion(cycle) == []
+
+
+def test_composite_must_match_the_cell_without_an_extra_head():
+    cell = _full_figure_facing_right()
+    assert validate_composite_matches_cell(cell, cell) == []
+    stacked = cell.copy()
+    stacked[0:18, 30:70] = (40, 40, 200, 255)  # front hat/collar sitting on the head
+    problems = validate_composite_matches_cell(stacked, cell)
+    assert any("head/hat" in item or "rig layers" in item for item in problems)
 
 
 def test_whole_body_walk_covers_standing_rig():

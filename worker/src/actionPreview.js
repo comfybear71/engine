@@ -163,6 +163,9 @@ function spawnActionPreview(timelinePath, projectDir, outputPath, options = {}) 
   if (options.aspect) args.push("--aspect", String(options.aspect));
   if (options.previewWidth) args.push("--width", String(options.previewWidth));
   if (options.previewHeight) args.push("--height", String(options.previewHeight));
+  if (options.sampleFps) args.push("--sample-fps", String(options.sampleFps));
+  if (options.cycleFrames) args.push("--cycle-frames", String(options.cycleFrames));
+  if (options.dumpFramesDir) args.push("--dump-frames", path.resolve(options.dumpFramesDir));
   return new Promise((resolve, reject) => {
     const child = spawn(pythonBin, args, {
       cwd: PYTHON_DIR,
@@ -217,7 +220,8 @@ async function renderActionPreview(projectDir, globalAssetsDir, characterId, act
   if (!character) throw new Error(`Unknown character ${characterId}`);
   const stage = pickPreviewStage(projectDir, globalAssetsDir, action, options);
   if (!stage.locationId) throw new Error("No location to stage an action preview");
-  const seconds = actionPreviewSeconds(action.frames, action.fps);
+  const seconds =
+    Number(options.seconds) > 0 ? Number(options.seconds) : actionPreviewSeconds(action.frames, action.fps);
   const displayName = character.display_name || characterId;
   const bindProp = actionNeedsBoundProp(action) ? stage.prop : null;
   const scripts = [

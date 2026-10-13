@@ -4,10 +4,12 @@ const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   assembleHiddenPrompt,
+  assembleWalkPhasePrompt,
   clampFactoryFrames,
   factoryGrid,
   inferFactoryIntent,
   slugActionId,
+  walkPhases,
   buildFactoryPack,
 } = require("../src/factoryPrompt");
 
@@ -34,9 +36,30 @@ describe("factory hidden prompt pack", () => {
     assert.match(pack.hiddenPrompt, /Never zoom into legs/);
     assert.match(pack.hiddenPrompt, /never a close-up of legs/);
     assert.match(pack.hiddenPrompt, /WALK CYCLE/);
-    assert.match(pack.hiddenPrompt, /Eight DISTINCT phases/);
-    assert.match(pack.hiddenPrompt, /contact \(right heel/);
-    assert.match(pack.hiddenPrompt, /passing \(left leg swings/);
+    assert.match(pack.hiddenPrompt, /8 DISTINCT phases/);
+    const phases = walkPhases(8);
+    assert.equal(phases.length, 8);
+    const contact = assembleWalkPhasePrompt({
+      character: { id: "rodney", display_name: "Rodney" },
+      userPrompt: "long strides",
+      frames: 8,
+      phase: phases[0],
+      index: 0,
+    });
+    const opposite = assembleWalkPhasePrompt({
+      character: { id: "rodney", display_name: "Rodney" },
+      userPrompt: "long strides",
+      frames: 8,
+      phase: phases[4],
+      index: 4,
+    });
+    assert.match(contact, /gait phase 1 of 8/);
+    assert.match(contact, /right heel striking/);
+    assert.match(opposite, /gait phase 5 of 8/);
+    assert.match(opposite, /left heel striking/);
+    assert.notEqual(contact, opposite);
+    assert.match(pack.hiddenPrompt, /right heel striking/);
+    assert.match(pack.hiddenPrompt, /left leg swinging past/);
     assert.equal(pack.greenScreen, "#00FF00");
     assert.equal(pack.references[0].rel, "characters/rodney/_reference/full.png");
     assert.equal(assembleHiddenPrompt({

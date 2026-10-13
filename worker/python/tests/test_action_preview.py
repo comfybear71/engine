@@ -7,6 +7,7 @@ from compositor.action_preview import (
     content_bbox,
     crop_rect,
     crop_square,
+    sample_frame_indices,
     square_crop_box,
     union_bbox,
 )
@@ -39,3 +40,13 @@ def test_contain_crop_is_16x9_and_keeps_the_whole_figure():
     tile = crop_rect(frame, crop, 854, 480)
     assert tile.shape == (480, 854, 3)
     assert tile.max() > 0
+
+
+def test_sample_indices_are_one_cycle_without_wrap_or_holds():
+    # 2s loop at 24fps of an 8-frame 12fps walk used to dump 0,2,… then wrap
+    # so frames 8/10/12/14 copied 0/2/4/6.
+    wrapped = sample_frame_indices(48, 24, sample_fps=12, cycle_frames=8)
+    assert wrapped == [0, 2, 4, 6, 8, 10, 12, 14]
+    assert len(set(wrapped)) == 8
+    one_cycle = sample_frame_indices(16, 24, sample_fps=12, cycle_frames=8)
+    assert one_cycle == [0, 2, 4, 6, 8, 10, 12, 14]

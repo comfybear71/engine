@@ -30,6 +30,7 @@ GIANT_LEGS_REF_RATIO = 2.4
 WALK_SCALE_TOLERANCE = 0.22
 LEGS_OF_FIGURE_FRAC = 0.42
 POSE_DIFF_MIN = 0.028
+PREVIEW_POSE_DIFF_MIN = 0.012
 WALK_BOOT_X_MIN_STD = 2.5
 
 
@@ -495,7 +496,11 @@ def _boot_xs(frame: np.ndarray) -> list[float]:
     return xs
 
 
-def walk_pose_problems(frames: list[np.ndarray]) -> list[str]:
+def walk_pose_problems(
+    frames: list[np.ndarray],
+    *,
+    min_diff: float = POSE_DIFF_MIN,
+) -> list[str]:
     """Reject a sheet of near-identical mid-stride copies with no gait change."""
 
     samples: list[np.ndarray] = []
@@ -515,10 +520,12 @@ def walk_pose_problems(frames: list[np.ndarray]) -> list[str]:
     if len(samples) < 2:
         return []
     diffs = [float(np.mean(np.abs(samples[i] - samples[i - 1]))) for i in range(1, len(samples))]
-    mean_diff = float(np.mean(diffs)) if diffs else 0.0
-    boot_std = float(np.std(np.asarray(lead_xs, dtype=np.float32))) if len(lead_xs) >= 2 else 0.0
-    if mean_diff < POSE_DIFF_MIN and boot_std < WALK_BOOT_X_MIN_STD:
-        return ["near-identical cells (walk cycle poses do not change)"]
+    for i, diff in enumerate(diffs, start=1):
+        boot_delta = 0.0
+        if i < len(lead_xs):
+            boot_delta = abs(lead_xs[i] - lead_xs[i - 1])
+        if diff < min_diff and boot_delta < WALK_BOOT_X_MIN_STD:
+            return [f"near-identical cells (frames {i} and {i + 1} do not change)"]
     return []
 
 
@@ -638,6 +645,82 @@ def validate_piece(bgra: np.ndarray, canvas_w: int, canvas_h: int) -> list[str]:
     return problems
 
 
+def _figure_mask(img: np.ndarray) -> np.ndarray:
+    src = img
+    if src.ndim == 3 and src.shape[2] == 4:
+        return src[:, :, 3] > 16
+    if src.ndim == 3:
+        gray = cv2.cvtColor(src[:, :, :3], cv2.COLOR_BGR2GRAY)
+        return gray > 18
+    return src > 18
+
+
+def _mask_to_bgra(mask: np.ndarray) -> np.ndarray:
+    out = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
+    out[mask, 3] = 255
+    out[mask, :3] = 200
+    return out
+
+
+def validate_preview_motion(frames: list[np.ndarray]) -> list[str]:
+    """Fail when consecutive preview frames are frozen (same pose)."""
+
+    if len(frames) < 2:
+        return []
+    grays = []
+    for frame in frames:
+        if frame.ndim == 3:
+            grays.append(cv2.cvtColor(frame[:, :, :3], cv2.COLOR_BGR2GRAY))
+        else:
+            grays.append(frame)
+    for i in range(1, len(grays)):
+        mask = _figure_mask(frames[i]) | _figure_mask(frames[i - 1])
+        ys, xs = np.where(mask)
+        if ys.size < 16:
+            continue
+        y0, y1 = int(ys.min()), int(ys.max()) + 1
+        x0, x1 = int(xs.min()), int(xs.max()) + 1
+        a = grays[i - 1][y0:y1, x0:x1].astype(np.float32)
+        b = grays[i][y0:y1, x0:x1].astype(np.float32)
+        diff = float(np.mean(np.abs(a - b))) / 255.0
+        if diff < PREVIEW_POSE_DIFF_MIN:
+            return [f"near-identical cells (frames {i} and {i + 1} do not change)"]
+    return []
+
+
+def validate_composite_matches_cell(composite: np.ndarray, cell: np.ndarray) -> list[str]:
+    """Fail when the preview composite contains a second head/hat/collar the cell does not."""
+
+    c_mask = _figure_mask(composite)
+    s_mask = _figure_mask(cell)
+    ys, xs = np.where(c_mask)
+    if ys.size < 16 or not np.any(s_mask):
+        return []
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    crop = c_mask[y0:y1, x0:x1]
+    ch, cw = crop.shape
+    sys, sxs = np.where(s_mask)
+    sy0, sy1 = int(sys.min()), int(sys.max()) + 1
+    sx0, sx1 = int(sxs.min()), int(sxs.max()) + 1
+    src = s_mask[sy0:sy1, sx0:sx1].astype(np.uint8) * 255
+    resized = cv2.resize(src, (cw, ch), interpolation=cv2.INTER_NEAREST) > 127
+    extra = crop & ~resized
+    overlap = crop & resized
+    union = crop | resized
+    iou = float(np.count_nonzero(overlap)) / max(1, int(np.count_nonzero(union)))
+    top = max(1, ch // 3)
+    extra_top = int(np.count_nonzero(extra[:top]))
+    top_n = int(np.count_nonzero(crop[:top]))
+    if iou < 0.55 or extra_top > max(40, int(top_n * 0.28)):
+        return ["more than one head/hat in composite"]
+    extra_n = int(np.count_nonzero(extra))
+    body_n = int(np.count_nonzero(crop))
+    if extra_n > max(120, int(body_n * 0.28)):
+        return ["rig layers visible in walk composite"]
+    return []
+
+
 def _load(path: Path) -> np.ndarray:
     img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if img is None:
@@ -684,7 +767,32 @@ def main(argv: list[str] | None = None) -> int:
         help="Exit non-zero when any walk frame fails validation (do not keep broken output)",
     )
     parser.add_argument("--expect-face", default="right", help="Expected walk facing (right|left)")
+    parser.add_argument("--validate-preview", action="store_true")
+    parser.add_argument("--preview-frames", type=Path, dest="preview_frames")
+    parser.add_argument("--cell-dir", type=Path, dest="cell_dir")
     args = parser.parse_args(argv)
+
+    if args.validate_preview:
+        preview_dir = args.preview_frames
+        cell_dir = args.cell_dir
+        if not preview_dir or not preview_dir.exists():
+            print(json.dumps({"ok": False, "error": "preview frames missing"}))
+            return 1
+        previews = [_load(p) for p in sorted(preview_dir.glob("frame_*.png"))]
+        problems = validate_preview_motion(previews)
+        if cell_dir and cell_dir.exists() and previews:
+            cells = [_load(p) for p in sorted(cell_dir.glob("*.png"))]
+            n = min(len(previews), len(cells))
+            for i in range(n):
+                problems.extend(
+                    f"frame {i + 1}: {item}" for item in validate_composite_matches_cell(previews[i], cells[i])
+                )
+        problems = list(dict.fromkeys(problems))
+        if problems:
+            print(json.dumps({"ok": False, "error": "; ".join(problems[:8]), "problems": problems}))
+            return 1
+        print(json.dumps({"ok": True, "frames": len(previews), "problems": []}))
+        return 0
 
     ref = _load(args.ref) if args.ref else None
     head_ref = _load(args.head_ref) if args.head_ref else None

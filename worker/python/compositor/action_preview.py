@@ -145,6 +145,40 @@ def parse_aspect(value: str | None) -> tuple[int, int] | None:
     return w, h
 
 
+def sample_frame_indices(
+    total: int,
+    timeline_fps: float,
+    sample_fps: float | None = None,
+    cycle_frames: int | None = None,
+) -> list[int]:
+    """Pick timeline indices: one unique action cell, no wrap, no hold-pairs.
+
+    A 2s loop of an 8-frame walk at 24fps used to dump frames 0,2,… then
+    wrap so 8/10/12/14 were copies of 0/2/4/6. Factory now asks for
+    ``cycle_frames`` samples at the action fps so each gait phase is once.
+    """
+
+    total = max(1, int(total))
+    tl = max(1.0, float(timeline_fps) if timeline_fps else 24.0)
+    samp = float(sample_fps) if sample_fps else tl
+    samp = max(1.0, samp)
+    if cycle_frames:
+        n = max(1, int(cycle_frames))
+        ratio = tl / samp
+        out: list[int] = []
+        seen: set[int] = set()
+        for i in range(n):
+            idx = int(round(i * ratio))
+            idx = min(max(0, idx), total - 1)
+            if idx in seen:
+                continue
+            seen.add(idx)
+            out.append(idx)
+        return out or [0]
+    step = max(1, int(round(tl / samp)))
+    return list(range(0, total, step))
+
+
 def render_action_preview(
     timeline: Timeline,
     output_path: Path,
@@ -153,6 +187,9 @@ def render_action_preview(
     aspect: str | None = None,
     width: int | None = None,
     height: int | None = None,
+    sample_fps: float | None = None,
+    cycle_frames: int | None = None,
+    dump_frames: Path | None = None,
 ) -> Path:
     """Compose every frame, crop to the character, write a silent looping MP4."""
 
@@ -161,7 +198,9 @@ def render_action_preview(
     cache_frames: list[np.ndarray] = []
     bbox = None
     total = max(1, int(timeline.total_frames))
-    for index in range(total):
+    sample_fps = float(sample_fps) if sample_fps else float(timeline.fps)
+    indices = sample_frame_indices(total, float(timeline.fps), sample_fps, cycle_frames)
+    for index in indices:
         frame = compose_frame(timeline, index, width=PROXY_WIDTH, height=PROXY_HEIGHT)
         cache_frames.append(frame)
         bbox = union_bbox(bbox, content_bbox(frame))
@@ -173,11 +212,15 @@ def render_action_preview(
         out_w = max(2, int(width or WIDE_WIDTH) - int(width or WIDE_WIDTH) % 2)
         out_h = max(2, int(height or WIDE_HEIGHT) - int(height or WIDE_HEIGHT) % 2)
         tiles = [crop_rect(frame, crop, out_w, out_h) for frame in cache_frames]
-        write_preview_segment(iter(tiles), dest, out_w, out_h, timeline.fps)
+        write_preview_segment(iter(tiles), dest, out_w, out_h, int(sample_fps or timeline.fps))
     else:
         crop = square_crop_box(bbox, PROXY_WIDTH, PROXY_HEIGHT)
         tiles = [crop_square(frame, crop, size) for frame in cache_frames]
-        write_preview_segment(iter(tiles), dest, size, size, timeline.fps)
+        write_preview_segment(iter(tiles), dest, size, size, int(sample_fps or timeline.fps))
+    if dump_frames and tiles:
+        dump_frames.mkdir(parents=True, exist_ok=True)
+        for i, tile in enumerate(tiles):
+            cv2.imwrite(str(dump_frames / f"frame_{i:02d}.png"), tile)
     if tiles:
         poster = dest.with_suffix(".jpg")
         cv2.imwrite(str(poster), tiles[0], [int(cv2.IMWRITE_JPEG_QUALITY), 85])
@@ -193,6 +236,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--aspect", default="1:1", help="1:1 (Action Shot tiles) or 16:9 (Factory walk)")
     parser.add_argument("--width", type=int, default=0)
     parser.add_argument("--height", type=int, default=0)
+    parser.add_argument("--sample-fps", type=float, default=0)
+    parser.add_argument("--cycle-frames", type=int, default=0)
+    parser.add_argument("--dump-frames", type=Path, dest="dump_frames")
     args = parser.parse_args(argv)
     timeline = load_timeline(args.timeline.resolve(), project_dir=args.project_dir.resolve())
     render_action_preview(
@@ -202,6 +248,9 @@ def main(argv: list[str] | None = None) -> int:
         aspect=args.aspect,
         width=args.width or None,
         height=args.height or None,
+        sample_fps=args.sample_fps or None,
+        cycle_frames=args.cycle_frames or None,
+        dump_frames=args.dump_frames,
     )
     return 0
 

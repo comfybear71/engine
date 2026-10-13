@@ -9,7 +9,16 @@ const path = require("path");
 const { encodeRgbaPng } = require("../src/pngFlip");
 const { decodeRgbaFile, alphaBounds } = require("../src/factoryThumb");
 const { buildRodneyTestProject } = require("./helpers/rodneyTestProject");
-const { resolveActionDest, uniqueActionId, walkBob, runFactoryJob, tickFactoryJob, pickSideTorsoDrawing } = require("../src/factoryJob");
+const {
+  resolveActionDest,
+  uniqueActionId,
+  walkBob,
+  walkSetSlots,
+  findSideReferenceAbs,
+  runFactoryJob,
+  tickFactoryJob,
+  pickSideTorsoDrawing,
+} = require("../src/factoryJob");
 const { createApp } = require("../src/server");
 
 function fillRect(rgba, width, x, y, w, h, r, g, b, a) {
@@ -141,7 +150,7 @@ describe("factory dest and names", () => {
       { kind: "walk", view: "right_side" }
     );
     assert.equal(dest.slot, "torso");
-    assert.equal(dest.drawings_dir, "torso");
+    assert.equal(dest.drawings_dir, "torso_right_side");
     assert.deepEqual(walkBob(8).length, 8);
   });
 
@@ -151,7 +160,7 @@ describe("factory dest and names", () => {
       { kind: "walk", view: "right_side" }
     );
     assert.equal(dest.slot, "body");
-    assert.equal(dest.drawings_dir, "body");
+    assert.equal(dest.drawings_dir, "body_right_side");
   });
 
   test("side torso skip list ignores walk/run/approach so a walk job uses a standing torso", () => {
@@ -163,6 +172,48 @@ describe("factory dest and names", () => {
         fs.writeFileSync(path.join(dir, name), "");
       }
       assert.equal(pickSideTorsoDrawing(root, "rodney", "right_side"), "neutral");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("walk hides every non-dest slot including head, hat, and arms", () => {
+    const setSlots = walkSetSlots(
+      {
+        slots: {
+          torso: { drawings_dir: "torso" },
+          head_base: {},
+          eyes: {},
+          mouth: {},
+          hat: {},
+          legs: {},
+          body: {},
+        },
+        children: [{ slots: { arm_L: {}, cape: {} } }],
+      },
+      { slot: "torso", drawings_dir: "torso_right_side" }
+    );
+    assert.equal(setSlots.head_base, "none");
+    assert.equal(setSlots.eyes, "none");
+    assert.equal(setSlots.mouth, "none");
+    assert.equal(setSlots.hat, "none");
+    assert.equal(setSlots.cape, "none");
+    assert.equal(setSlots.arm_L, "none");
+    assert.equal(setSlots.legs, "none");
+    assert.equal(setSlots.body, "none");
+    assert.equal(setSlots.torso, undefined);
+  });
+
+  test("side walk reference prefers a side drawing over the front full.png", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-side-ref-"));
+    try {
+      const rodney = path.join(root, "characters", "rodney");
+      fs.mkdirSync(path.join(rodney, "_reference"), { recursive: true });
+      fs.mkdirSync(path.join(rodney, "torso_right_side"), { recursive: true });
+      fs.writeFileSync(path.join(rodney, "_reference", "full.png"), "front");
+      fs.writeFileSync(path.join(rodney, "torso_right_side", "neutral.png"), "side");
+      const abs = findSideReferenceAbs(root, "rodney", "right_side");
+      assert.ok(abs.endsWith(path.join("torso_right_side", "neutral.png")));
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -213,14 +264,19 @@ describe("factory pipeline with a fixture sheet", () => {
     assert.equal(job.ticked, false);
     assert.ok(job.drawings.length >= 2);
     assert.equal(job.dest.slot, "torso");
-    assert.equal(job.dest.drawings_dir, "torso");
+    assert.equal(job.dest.drawings_dir, "torso_right_side");
     assert.match(job.actionId, /walk_side/);
     assert.equal(job.action && job.action.set_slots && job.action.set_slots.body, "none");
     assert.equal(job.action && job.action.set_slots && job.action.set_slots.legs, "none");
+    assert.equal(job.action && job.action.set_slots && job.action.set_slots.head_base, "none");
+    assert.equal(job.action && job.action.set_slots && job.action.set_slots.eyes, "none");
+    assert.equal(job.action && job.action.set_slots && job.action.set_slots.mouth, "none");
+    assert.equal(job.action && job.action.set_slots && job.action.set_slots.hand, "none");
     assert.equal(job.action && job.action.set_slots && job.action.set_slots.torso, undefined);
+    assert.equal(job.action && job.action.hide_children, true);
     assert.ok(job.action && job.action.slot_frames && job.action.slot_frames.torso);
     assert.equal(job.action && job.action.view, "right_side");
-    const liveDir = path.join(projectDir, "characters", "rodney", "torso");
+    const liveDir = path.join(projectDir, "characters", "rodney", "torso_right_side");
     const oldTorso = path.join(liveDir, "neutral.png");
     assert.equal(fs.existsSync(oldTorso), true, "existing standing torso stays on disk until Tick");
     const manifest = JSON.parse(
@@ -246,7 +302,14 @@ describe("factory pipeline with a fixture sheet", () => {
     );
     assert.equal(actionJson.set_slots.body, "none");
     assert.equal(actionJson.set_slots.legs, "none");
+    assert.equal(actionJson.set_slots.head_base, "none");
+    assert.equal(actionJson.set_slots.mouth, "none");
+    assert.equal(actionJson.hide_children, true);
     assert.equal(actionJson.view, "right_side");
+    const charJson = JSON.parse(
+      fs.readFileSync(path.join(projectDir, "characters", "rodney", "character.json"), "utf8")
+    );
+    assert.equal(charJson.slots.torso.views, true);
     assert.ok(fs.existsSync(oldTorso), "Tick adds new whole-body frames and does not delete the leftover file on disk");
     assert.ok(fs.readdirSync(liveDir).some((name) => name.startsWith(job.actionId) && name.endsWith(".png")));
     assert.equal(fs.existsSync(path.join(otherDir, "characters", "rodney")), false);
@@ -271,6 +334,15 @@ describe("factory pipeline with a fixture sheet", () => {
         { encoding: "utf8" }
       ).trim();
       assert.equal(dims, "854,480", "factory walk preview must be 16:9, not a cropped square");
+    }
+    const dumpDir = path.join(projectDir, "characters", "rodney", "_factory", job.jobId, "preview_frames");
+    if (fs.existsSync(dumpDir)) {
+      const dumped = fs.readdirSync(dumpDir).filter((name) => /^frame_\d+\.png$/.test(name)).sort();
+      assert.equal(dumped.length, 8, "preview dump is one cycle, not a wrapping 2s loop");
+      const hashes = dumped.map((name) => fs.readFileSync(path.join(dumpDir, name)).toString("base64"));
+      for (let i = 1; i < hashes.length; i += 1) {
+        assert.notEqual(hashes[i], hashes[i - 1], `preview frames ${i} and ${i + 1} must not be pixel-identical`);
+      }
     }
   });
 

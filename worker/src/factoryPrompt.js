@@ -99,30 +99,85 @@ function inferFactoryIntent(prompt) {
   return { kind: "action", view };
 }
 
+const WALK_PHASES_8 = [
+  {
+    id: "contact_R",
+    pose: "right heel striking the ground ahead of the body, left leg extended behind, left toes pushing off",
+  },
+  {
+    id: "down_R",
+    pose: "right knee bent, weight over the front right foot, left foot just leaving the ground behind",
+  },
+  {
+    id: "passing_R",
+    pose: "left leg swinging past the standing right, thighs crossing, right foot flat on the ground",
+  },
+  {
+    id: "up_R",
+    pose: "left heel reaching ahead, right toes pushing off, body leaning slightly forward",
+  },
+  {
+    id: "contact_L",
+    pose: "left heel striking the ground ahead of the body, right leg extended behind, right toes pushing off",
+  },
+  {
+    id: "down_L",
+    pose: "left knee bent, weight over the front left foot, right foot just leaving the ground behind",
+  },
+  {
+    id: "passing_L",
+    pose: "right leg swinging past the standing left, thighs crossing, left foot flat on the ground",
+  },
+  {
+    id: "up_L",
+    pose: "right heel reaching ahead, left toes pushing off, body leaning slightly forward",
+  },
+];
+
+function walkPhases(frames) {
+  const n = clampFactoryFrames(frames);
+  if (n === 8) return WALK_PHASES_8.map((item) => ({ ...item }));
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    const t = (i / n) * WALK_PHASES_8.length;
+    const a = Math.floor(t) % WALK_PHASES_8.length;
+    const src = WALK_PHASES_8[a];
+    const inBetween = t - Math.floor(t) > 0.01 && t - Math.floor(t) < 0.99;
+    out.push({
+      id: `${src.id}_${String(i + 1).padStart(2, "0")}`,
+      pose: inBetween ? `in-between toward ${src.pose}` : src.pose,
+    });
+  }
+  return out;
+}
+
 function walkPoseNotes(frames) {
   const n = clampFactoryFrames(frames);
   const lead =
     "WALK CYCLE. Side view, same direction in every cell. Each cell is the WHOLE BODY from hat to boots — never crop to the waist or legs. " +
     "Legs alternate. Do not repeat the same mid-stride pose. Front leg reaches ahead, heel first — legs must not trail behind the body.";
-  if (n === 8) {
-    return (
-      `${lead} Eight DISTINCT phases, left to right: ` +
-      `1 contact (right heel lands ahead), 2 down (right knee bends, weight over the front foot), ` +
-      `3 passing (left leg swings past the right), 4 up/push-off (right toe pushes, left reaches ahead), ` +
-      `5 contact (left heel lands ahead), 6 down (left knee bends), ` +
-      `7 passing (right leg swings past the left), 8 up/push-off (left toe pushes, right reaches ahead). Slight body bob.`
-    );
-  }
-  if (n === 12) {
-    return (
-      `${lead} Twelve DISTINCT frames: contact, down, passing, and up/push-off on each leg, ` +
-      `with one in-between after each of those poses. Legs alternate. Slight body bob.`
-    );
-  }
-  return (
-    `${lead} Sixteen DISTINCT frames: contact, down, passing, and up/push-off on each leg, ` +
-    `with two in-betweens after each of those poses. Legs alternate. Slight body bob.`
-  );
+  const phases = walkPhases(n)
+    .map((item, i) => `${i + 1} ${item.id.replace(/_/g, " ")} (${item.pose})`)
+    .join("; ");
+  return `${lead} ${n} DISTINCT phases, one pose per image: ${phases}. Slight body bob.`;
+}
+
+function assembleWalkPhasePrompt(opts) {
+  const style = projectStyleBlock(opts.character, opts.projectStyle);
+  const name = (opts.character && (opts.character.display_name || opts.character.id)) || "the character";
+  const phase = opts.phase || walkPhases(8)[0];
+  const index = Number(opts.index) || 0;
+  const n = clampFactoryFrames(opts.frames);
+  const asked = String(opts.userPrompt || "").trim() || "walking long strides";
+  return [
+    style,
+    RIG_RULES.join(" "),
+    `ONE production still of ${name}, side view, facing right, walking ${asked}.`,
+    `This is gait phase ${index + 1} of ${n} (${phase.id.replace(/_/g, " ")}): ${phase.pose}.`,
+    "WHOLE BODY from hat to boots. Same scale and ground line as the reference. Do not crop to the waist.",
+    "Do not draw a second figure. Do not copy a mid-stride pose unless this phase is mid-stride.",
+    `Flat ${GREEN} green background, no shadow, no floor, no text, no watermark.`,
+  ].join(" ");
 }
 
 function lockedStyle(character) {
@@ -452,7 +507,9 @@ module.exports = {
   factoryUsesFrames,
   clampFactoryFrames,
   inferFactoryIntent,
+  walkPhases,
   walkPoseNotes,
+  assembleWalkPhasePrompt,
   lockedStyle,
   stripGreenFromStyle,
   projectStyleBlock,

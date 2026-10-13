@@ -365,3 +365,43 @@ class TestPixelPivotAndVisibleWhen:
         walking = np.full((40, 40, 3), 255, dtype=np.uint8)
         _draw_layer(walking, layer, AssetCache(), 10, fps=24)
         assert tuple(walking[20, 20]) != (255, 0, 0)
+
+    def test_walk_hides_head_hat_and_collar_slots(self, tmp_path):
+        root = tmp_path / "root.png"
+        walk = tmp_path / "walk_side_01.png"
+        hat = tmp_path / "hat.png"
+        collar = tmp_path / "collar.png"
+        _write_solid_png(root, 8, (0, 0, 0))
+        _write_solid_png(walk, 8, (0, 255, 0))
+        _write_solid_png(hat, 40, (255, 0, 0))
+        _write_solid_png(collar, 40, (200, 0, 40))
+
+        torso = Slot(
+            images={"walk_side_01": walk},
+            keyframes=[SlotKeyframe(frame=0, drawing="walk_side_01")],
+        )
+        head = Slot(
+            images={"neutral": hat},
+            keyframes=[SlotKeyframe(frame=0, drawing="neutral")],
+        )
+        child = Child(
+            id="shirt_overlay",
+            asset=collar,
+            z=1,
+            offset_x=0,
+            offset_y=0,
+            pivot="top-left",
+        )
+        layer = Layer(
+            id="rig",
+            asset=root,
+            z=0,
+            transform=Transform(x=0, y=0, anchor="top-left"),
+            slots={"torso": torso, "head_base": head},
+            children=[child],
+        )
+
+        walking = np.full((40, 40, 3), 255, dtype=np.uint8)
+        _draw_layer(walking, layer, AssetCache(), 0, fps=24)
+        # Hat/collar are 40×40 fills; if either still composites, the centre is not white.
+        assert tuple(walking[20, 20]) == (255, 255, 255)
