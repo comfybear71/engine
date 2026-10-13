@@ -12,11 +12,12 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const { parseProjectToTemp } = require("./parser");
-const { loadAction, loadCharacter, listKnownLocations } = require("./parser/assetLibrary");
+const { loadAction, loadCharacter, listKnownLocations, loadStaging } = require("./parser/assetLibrary");
 const { encodeRgbaPng } = require("./pngFlip");
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 
 const SIZE = 256;
+const CACHE_VERSION = "v3-character-only";
 const inFlight = new Map();
 
 function actionPreviewSeconds(frames, fps) {
@@ -71,18 +72,64 @@ function rigFiles(projectDir, globalAssetsDir, characterId, actionId) {
 }
 
 function actionPreviewFingerprint(projectDir, globalAssetsDir, characterId, actionId) {
-  return fingerprintFiles(rigFiles(projectDir, globalAssetsDir, characterId, actionId));
+  const files = fingerprintFiles(rigFiles(projectDir, globalAssetsDir, characterId, actionId));
+  return crypto.createHash("sha1").update(`${CACHE_VERSION}\n${files}`).digest("hex");
 }
 
-function buildActionPreviewScript(displayName, locationId, actionId, seconds) {
+function actionNeedsBoundProp(action) {
+  return (action && Array.isArray(action.prop_events)
+    ? action.prop_events
+    : []
+  ).some((event) => String((event && event.prop) || "").trim() === "{prop}");
+}
+
+function firstLocationProp(projectDir, globalAssetsDir, locationId, options) {
+  if (!locationId) return null;
+  const staging = loadStaging(projectDir, globalAssetsDir, locationId, options);
+  const names = Object.keys((staging && staging.props) || {});
+  return names[0] || null;
+}
+
+function pickPreviewStage(projectDir, globalAssetsDir, action, options = {}) {
+  const locations = listKnownLocations(projectDir, globalAssetsDir, options);
+  const needsProp = actionNeedsBoundProp(action);
+  for (const locationId of locations) {
+    const prop = firstLocationProp(projectDir, globalAssetsDir, locationId, options);
+    if (!needsProp || prop) return { locationId, prop };
+  }
+  return { locationId: locations[0] || null, prop: null };
+}
+
+function buildActionPreviewScript(displayName, locationId, actionId, seconds, options = {}) {
+  const prop = options && options.prop ? String(options.prop).trim() : "";
+  const doLine = prop
+    ? `[Do: ${displayName} ${actionId} prop=${prop} for=${seconds}s wait=false]`
+    : `[Do: ${displayName} ${actionId} for=${seconds}s wait=false]`;
   return [
     "[Scene: ActionPreview]",
     `[Location: ${locationId}]`,
     `[Cast: ${displayName}]`,
     `[Action: ${displayName} at=centre]`,
-    `[Do: ${displayName} ${actionId} for=${seconds}s wait=false]`,
+    doLine,
     "",
   ].join("\n");
+}
+
+function buildStandingPreviewScript(displayName, locationId) {
+  return [
+    "[Scene: ActionPreview]",
+    `[Location: ${locationId}]`,
+    `[Cast: ${displayName}]`,
+    `[Action: ${displayName} at=centre]`,
+    "",
+  ].join("\n");
+}
+
+function stripNonCharacterLayers(timeline, characterId) {
+  for (const scene of timeline.scenes || []) {
+    scene.layers = (scene.layers || []).filter((layer) => layer && layer.character_id === characterId);
+  }
+  return timeline;
 }
 
 function writeBlackPng(dest) {
@@ -127,17 +174,9 @@ function spawnActionPreview(timelinePath, projectDir, outputPath, options = {}) 
   });
 }
 
-async function renderActionPreview(projectDir, globalAssetsDir, characterId, actionId, dest, options = {}) {
-  const action = loadAction(projectDir, globalAssetsDir, characterId, actionId, options);
-  if (!action) throw new Error(`Unknown action ${characterId}/${actionId}`);
-  const character = loadCharacter(projectDir, globalAssetsDir, characterId, options);
-  if (!character) throw new Error(`Unknown character ${characterId}`);
-  const locations = listKnownLocations(projectDir, globalAssetsDir, options);
-  if (!locations.length) throw new Error("No location to stage an action preview");
-  const seconds = actionPreviewSeconds(action.frames, action.fps);
-  const displayName = character.display_name || characterId;
+async function composePreviewTimeline(projectDir, globalAssetsDir, scriptText, characterId, dest, options = {}) {
   const parsed = await parseProjectToTemp(projectDir, {
-    scriptText: buildActionPreviewScript(displayName, locations[0], actionId, seconds),
+    scriptText,
     skipValidate: true,
     globalAssetsDir,
   });
@@ -145,6 +184,7 @@ async function renderActionPreview(projectDir, globalAssetsDir, characterId, act
     const black = path.join(parsed.tmpDir, "black.png");
     writeBlackPng(black);
     const timeline = JSON.parse(fs.readFileSync(parsed.timelinePath, "utf8"));
+    stripNonCharacterLayers(timeline, characterId);
     for (const scene of timeline.scenes || []) {
       scene.background = { asset: black, fit: "cover" };
     }
@@ -156,6 +196,31 @@ async function renderActionPreview(projectDir, globalAssetsDir, characterId, act
   } finally {
     fs.rmSync(parsed.tmpDir, { recursive: true, force: true });
   }
+}
+
+async function renderActionPreview(projectDir, globalAssetsDir, characterId, actionId, dest, options = {}) {
+  const action = loadAction(projectDir, globalAssetsDir, characterId, actionId, options);
+  if (!action) throw new Error(`Unknown action ${characterId}/${actionId}`);
+  const character = loadCharacter(projectDir, globalAssetsDir, characterId, options);
+  if (!character) throw new Error(`Unknown character ${characterId}`);
+  const stage = pickPreviewStage(projectDir, globalAssetsDir, action, options);
+  if (!stage.locationId) throw new Error("No location to stage an action preview");
+  const seconds = actionPreviewSeconds(action.frames, action.fps);
+  const displayName = character.display_name || characterId;
+  const bindProp = actionNeedsBoundProp(action) ? stage.prop : null;
+  const scripts = [
+    buildActionPreviewScript(displayName, stage.locationId, actionId, seconds, { prop: bindProp }),
+    buildStandingPreviewScript(displayName, stage.locationId),
+  ];
+  let lastError = null;
+  for (const scriptText of scripts) {
+    try {
+      return await composePreviewTimeline(projectDir, globalAssetsDir, scriptText, characterId, dest, options);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error(`Could not render action preview ${characterId}/${actionId}`);
 }
 
 async function ensureActionPreview(projectDir, globalAssetsDir, characterId, actionId, options = {}) {
@@ -172,9 +237,14 @@ async function ensureActionPreview(projectDir, globalAssetsDir, characterId, act
 
 module.exports = {
   SIZE,
+  CACHE_VERSION,
   actionPreviewSeconds,
   actionPreviewFingerprint,
+  actionNeedsBoundProp,
+  pickPreviewStage,
   buildActionPreviewScript,
+  buildStandingPreviewScript,
+  stripNonCharacterLayers,
   contentFiles: rigFiles,
   ensureActionPreview,
   renderActionPreview,

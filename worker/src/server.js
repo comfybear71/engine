@@ -97,6 +97,13 @@ const {
 const { snapshotScriptWrite, listScriptHistory, restoreScriptSnapshot } = require("./scriptHistory");
 const { describeEngineSettings, saveXaiApiKey } = require("./engineSettings");
 const { generateProjectImage, GenerateImageError } = require("./generateImage");
+const {
+  runFactoryJob,
+  describeFactoryJob,
+  resolveFactoryPreview,
+  tickFactoryJob,
+  redoFactoryJob,
+} = require("./factoryJob");
 const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
 const {
   isSafeShowId,
@@ -1025,9 +1032,90 @@ function createApp(options = {}) {
         options.pythonBin ? { pythonBin: options.pythonBin } : {}
       );
       res.setHeader("Cache-Control", "private, max-age=30");
-      res.type("video/mp4").sendFile(path.resolve(file));
+      res.sendFile(path.resolve(file), {
+        headers: { "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
+      });
     } catch (err) {
       if (!res.headersSent) res.status(500).json({ error: err.message || "Action preview failed" });
+    }
+  });
+
+  function sendFactoryError(res, err) {
+    if (err instanceof GenerateImageError) return sendGenerateError(res, err);
+    const status = err.code === "ENOTFOUND" || err.code === "ENOENT" ? 404 : err.code === "EINVAL" ? 400 : 500;
+    if (!res.headersSent) res.status(status).json({ error: err.message || "Factory failed" });
+  }
+
+  app.post("/api/projects/:name/factory", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await runFactoryJob(projectDir, globalAssetsDir, req.body || {}, {
+        fetchFn,
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/factory/:characterId/:jobId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(describeFactoryJob(projectDir, req.params.characterId, req.params.jobId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/factory/:characterId/:jobId/preview", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const file = resolveFactoryPreview(projectDir, req.params.characterId, req.params.jobId);
+      res.setHeader("Cache-Control", "private, max-age=30");
+      res.sendFile(path.resolve(file), {
+        headers: { "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
+      });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/factory/:characterId/:jobId/tick", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(tickFactoryJob(projectDir, globalAssetsDir, req.params.characterId, req.params.jobId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/factory/:characterId/:jobId/redo", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await redoFactoryJob(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.jobId,
+        req.body || {},
+        { fetchFn, pythonBin: options.pythonBin }
+      );
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
     }
   });
 

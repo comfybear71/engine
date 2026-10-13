@@ -79,7 +79,7 @@ export default function StudioSettings({
           />
         </label>
         <p className="mt-1.5 text-[11px] text-studio-muted">
-          Stored as XAI_API_KEY. Never shown back. Used by Generate in Grok Imagine.
+          Stored as XAI_API_KEY. Never shown back. Used by Factory Generate.
         </p>
         {error ? <p className="mt-2 text-sm text-red-400">{error}</p> : null}
         {saved ? <p className="mt-2 text-[12px] text-emerald-300">Saved.</p> : null}

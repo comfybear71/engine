@@ -1801,7 +1801,7 @@ function SlotGrid({
           Fit to head canvas
         </button>
         <button type="button" className="studio-header-textbtn" data-testid="asset-imagine" onClick={onOpenImagine}>
-          Open Grok Imagine for this slot
+          Open Factory for this slot
         </button>
       </div>
       {slot.missingShapes.length ? (

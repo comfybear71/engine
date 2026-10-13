@@ -80,8 +80,8 @@ export function saveStageLayout(layout: StageLayout): void {
 }
 
 export const IMAGINE_DOCK_KEY = "engine.studio.imagineDock.v1";
-export const DEFAULT_IMAGINE_HEIGHT = 280;
-export const IMAGINE_HEIGHT_LIMITS = { min: 160, max: 560 } as const;
+export const DEFAULT_IMAGINE_HEIGHT = 360;
+export const IMAGINE_HEIGHT_LIMITS = { min: 160, max: 720 } as const;
 
 export function clampImagineHeight(value: number): number {
   return clamp(

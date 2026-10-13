@@ -12,6 +12,12 @@ body {
   color: #e8e8e8;
 }
 
+:root {
+  --factory-thumb: 256px;
+  --factory-thumb-wide: 256px;
+  --factory-thumb-compact: 88px;
+}
+
 input[type="range"].studio-scrubber {
   -webkit-appearance: none;
   appearance: none;
@@ -960,7 +966,7 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 
 .studio-factory-cell {
   display: flex;
-  width: 72px;
+  width: var(--factory-thumb, 256px);
   flex-direction: column;
   gap: 2px;
   padding: 0;
@@ -998,8 +1004,8 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 .studio-factory-cell-label {
   overflow: hidden;
   color: #9a9a9a;
-  font-size: 9px;
-  line-height: 12px;
+  font-size: 11px;
+  line-height: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1255,7 +1261,7 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 
 .studio-factory-home-card {
   display: flex;
-  width: 88px;
+  width: var(--factory-thumb, 256px);
   flex-direction: column;
   overflow: hidden;
   border: 0;
@@ -1349,7 +1355,7 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 
 .studio-factory-add {
   display: flex;
-  width: 72px;
+  width: var(--factory-thumb, 256px);
   flex-direction: column;
   padding: 0;
   border: 0;
@@ -1371,7 +1377,7 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 }
 
 .studio-factory-add[data-wide="true"] {
-  width: 128px;
+  width: var(--factory-thumb-wide, 256px);
 }
 
 .studio-factory-add[data-wide="true"] span {
@@ -1385,11 +1391,11 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 
 .studio-factory-tile-wrap {
   position: relative;
-  width: 72px;
+  width: var(--factory-thumb, 256px);
 }
 
 .studio-factory-tile-wrap[data-wide="true"] {
-  width: 128px;
+  width: var(--factory-thumb-wide, 256px);
 }
 
 .studio-factory-trash {
@@ -1431,7 +1437,8 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   gap: 8px;
 }
 
-.studio-factory-fit img {
+.studio-factory-fit img,
+.studio-factory-fit video {
   max-width: 100%;
   max-height: calc(100vh - 180px);
   width: auto;

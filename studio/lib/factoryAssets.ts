@@ -204,6 +204,10 @@ export function visibleDrawings<T extends { missing?: boolean }>(drawings: T[], 
 
 export type AssetsSection = "characters" | "props" | "backgrounds" | "actions" | "sounds";
 
+export const FACTORY_THUMB_PX = 256;
+export const FACTORY_THUMB_WIDE_PX = 256;
+export const FACTORY_THUMB_COMPACT_PX = 88;
+
 export const ASSET_SECTIONS: { id: AssetsSection; label: string }[] = [
   { id: "characters", label: "Characters" },
   { id: "props", label: "Props" },

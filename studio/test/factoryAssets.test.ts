@@ -23,6 +23,9 @@ import {
   visibleDrawings,
   pickVisibleProp,
   actionPreviewSeconds,
+  FACTORY_THUMB_PX,
+  FACTORY_THUMB_WIDE_PX,
+  FACTORY_THUMB_COMPACT_PX,
 } from "../lib/factoryAssets.ts";
 
 describe("factory Assets helpers", () => {
@@ -134,5 +137,8 @@ describe("factory Assets helpers", () => {
     assert.equal(pickVisibleProp([{ id: "letterbox" }, { id: "mic_stand" }, { id: "speaker" }])?.id, "mic_stand");
     assert.equal(actionPreviewSeconds(8, 12), 2);
     assert.equal(actionPreviewSeconds(4, 12), 2);
+    assert.equal(FACTORY_THUMB_PX, 256);
+    assert.equal(FACTORY_THUMB_WIDE_PX, 256);
+    assert.equal(FACTORY_THUMB_COMPACT_PX, 88);
   });
 });

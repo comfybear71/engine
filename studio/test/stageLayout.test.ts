@@ -47,7 +47,7 @@ describe("stage layout", () => {
 
   test("clampImagineHeight bounds the Grok Imagine dock", () => {
     assert.equal(clampImagineHeight(80), 160);
-    assert.equal(clampImagineHeight(900), 560);
+    assert.equal(clampImagineHeight(900), 720);
     assert.equal(clampImagineHeight(DEFAULT_IMAGINE_HEIGHT), DEFAULT_IMAGINE_HEIGHT);
   });
 

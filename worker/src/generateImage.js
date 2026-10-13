@@ -481,4 +481,6 @@ module.exports = {
   generateProjectImage,
   attachReferenceSentence,
   resolvePrompt,
+  collectReferences,
+  findCharacter,
 };
