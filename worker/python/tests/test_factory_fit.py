@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import numpy as np
 
+from compositor.align import alpha_bbox
 from compositor.factory_fit import (
     count_boots,
+    count_figures,
     extract_legs,
     facing_direction,
     fit_piece_no_squash,
+    fit_walk_piece,
     looks_like_full_figure,
     looks_like_full_head,
+    normalize_walk_batch,
     validate_piece,
     validate_walk_frame,
 )
@@ -73,3 +77,104 @@ def test_validate_walk_rejects_stacked_boots_and_wrong_facing():
     left = np.fliplr(_full_figure_facing_right())
     facing = validate_walk_frame(left, expect_face="right")
     assert any("facing" in item for item in facing)
+
+
+def _zoomed_boots() -> np.ndarray:
+    """Real Grok failure mode: a close-up of two boots filling the cell."""
+
+    img = np.zeros((220, 220, 4), dtype=np.uint8)
+    img[40:200, 20:95] = (24, 40, 70, 255)
+    img[40:200, 125:200] = (24, 40, 70, 255)
+    return img
+
+
+def _two_rodneys() -> np.ndarray:
+    left = _full_figure_facing_right()
+    right = np.fliplr(_full_figure_facing_right())
+    img = np.zeros((130, 180, 4), dtype=np.uint8)
+    img[5:125, 4:84] = left
+    img[5:125, 96:176] = right
+    return img
+
+
+def _rig_refs() -> tuple[np.ndarray, np.ndarray]:
+    torso = np.zeros((1024, 1024, 4), dtype=np.uint8)
+    torso[470:690, 430:640] = (150, 28, 28, 255)
+    legs = np.zeros((1024, 1024, 4), dtype=np.uint8)
+    legs[700:790, 450:480] = (40, 20, 10, 255)
+    legs[700:790, 520:550] = (40, 20, 10, 255)
+    return torso, legs
+
+
+def test_count_figures_one_body_not_cape_or_two_people():
+    assert count_figures(_full_figure_facing_right()) == 1
+    assert count_figures(_two_rodneys()) == 2
+
+
+def test_validate_walk_rejects_extra_figures_and_zoomed_boots():
+    extras = validate_walk_frame(_two_rodneys(), expect_face=None, require_full_figure=True)
+    assert any("extra figures" in item for item in extras)
+    zoomed = validate_walk_frame(_zoomed_boots(), expect_face=None, require_full_figure=True)
+    assert any("extra figures" in item or "zoomed crop" in item for item in zoomed)
+
+
+def test_old_extract_then_canvas_fit_enlarges_legs_the_live_bug():
+    src = _full_figure_facing_right()
+    chopped = extract_legs(src)
+    giant = fit_piece_no_squash(chopped, 1024, 1024, margin=8)
+    box = alpha_bbox(giant)
+    assert box is not None
+    assert box[3] - box[1] > 800
+
+
+def test_fit_walk_matches_rig_scale_and_plants_feet():
+    src = _full_figure_facing_right()
+    torso, legs = _rig_refs()
+    fitted, problems = fit_walk_piece(
+        src, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face="right"
+    )
+    assert problems == []
+    box = alpha_bbox(fitted)
+    assert box is not None
+    height = box[3] - box[1]
+    assert 70 <= height <= 160
+    assert 760 <= box[3] <= 810
+    assert height < 1024 * 0.4
+
+
+def test_fit_walk_rejects_extra_figures_instead_of_compositing_them():
+    torso, legs = _rig_refs()
+    fitted, problems = fit_walk_piece(
+        _two_rodneys(), 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face=None
+    )
+    assert any("extra figures" in item for item in problems)
+    assert int(np.count_nonzero(fitted[:, :, 3] > 16)) == 0
+
+
+def test_fit_walk_rejects_zoomed_boots_instead_of_scaling_them():
+    torso, legs = _rig_refs()
+    fitted, problems = fit_walk_piece(
+        _zoomed_boots(), 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face=None
+    )
+    assert any("zoomed crop" in item or "extra figures" in item for item in problems)
+    assert int(np.count_nonzero(fitted[:, :, 3] > 16)) == 0
+
+
+def test_normalize_walk_batch_shares_a_ground_line():
+    torso, legs = _rig_refs()
+    small = _full_figure_facing_right()
+    big = np.zeros((180, 120, 4), dtype=np.uint8)
+    big[10:170, 20:100] = _resize_like(small, 160, 80)
+    a, _p = fit_walk_piece(small, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face="right")
+    b, _q = fit_walk_piece(big, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face="right")
+    out = normalize_walk_batch([a, b])
+    grounds = [alpha_bbox(frame)[3] for frame in out]
+    heights = [alpha_bbox(frame)[3] - alpha_bbox(frame)[1] for frame in out]
+    assert max(grounds) - min(grounds) <= 2
+    assert abs(heights[0] - heights[1]) <= 4
+
+
+def _resize_like(src: np.ndarray, h: int, w: int) -> np.ndarray:
+    import cv2
+
+    return cv2.resize(src, (w, h), interpolation=cv2.INTER_NEAREST)

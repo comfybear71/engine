@@ -47,7 +47,8 @@ const RIG_RULES = [
   "Eyes and mouths are overlays on a blank head — never full heads.",
   "Never squash or stretch a piece; keep natural proportions.",
   `Flat ${GREEN} green background, no shadow, no floor, no text, no watermark.`,
-  "Full figure fully visible. Small empty margin inside each cell. One character only.",
+  "Full figure fully visible from hat to feet. Small empty margin inside each cell. One character only.",
+  "Never zoom into legs or boots. Never draw a second figure. Same scale and ground line in every cell.",
 ];
 
 const PROP_RULES = [
@@ -318,7 +319,7 @@ function assembleCharacterPrompt(opts) {
     `A ${grid.cols}x${grid.rows} production sheet of ${name}.`,
     pose,
     `The user asked: ${String(opts.userPrompt || "").trim() || "an action"}.`,
-    "Same size, ground line, and position in every cell; only the pose changes. Do not crop feet, hands, or the hat.",
+    "Same size, ground line, and position in every cell; only the pose changes. Do not crop feet, hands, or the hat. Whole body in every cell — never a close-up of legs.",
   ].join(" ");
 }
 

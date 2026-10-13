@@ -175,10 +175,47 @@ function writeManifest(dir, manifest) {
 
 function findAlignRef(projectDir, characterId, dest) {
   if (!dest || dest.kind !== "slot") return null;
-  const dir = path.join(characterDir(projectDir, characterId), dest.drawings_dir || dest.slot);
-  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return null;
-  const names = fs.readdirSync(dir).filter((name) => /\.png$/i.test(name)).sort();
-  return names[0] ? path.join(dir, names[0]) : null;
+  const root = characterDir(projectDir, characterId);
+  const dirs = [];
+  const add = (name) => {
+    if (name && !dirs.includes(name)) dirs.push(name);
+  };
+  add(dest.drawings_dir || dest.slot);
+  add(dest.slot);
+  if (dest.slot === "legs") {
+    add("legs_right_side");
+    add("legs_left_side");
+    add("legs");
+  }
+  for (const dirName of dirs) {
+    const dir = path.join(root, dirName);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+    const names = fs
+      .readdirSync(dir)
+      .filter((name) => /\.png$/i.test(name))
+      .sort();
+    const preferred = names.filter((name) => !/^none\.png$/i.test(name));
+    const pick = preferred[0] || names[0];
+    if (pick) return path.join(dir, pick);
+  }
+  return null;
+}
+
+function findTorsoRef(projectDir, characterId, view) {
+  const name = pickSideTorsoDrawing(projectDir, characterId, view);
+  if (!name) return null;
+  const root = characterDir(projectDir, characterId);
+  for (const dir of [`torso_${view || "right_side"}`, "torso"]) {
+    const abs = path.join(root, dir, `${name}.png`);
+    if (fs.existsSync(abs)) return abs;
+  }
+  return null;
+}
+
+function isWalkValidationFailure(err) {
+  return /extra figures|zoomed crop|giant legs|too many boots|scale mismatch|ground line|Factory fit failed/i.test(
+    String((err && err.message) || "")
+  );
 }
 
 function slotCanvas(character, dest) {
@@ -324,10 +361,16 @@ async function renderJobPreview(projectDir, globalAssetsDir, character, job, opt
     fs.writeFileSync(path.join(bgDir, "bg.png"), encodeRgbaPng(8, 8, Buffer.alloc(8 * 8 * 4)));
     fs.writeFileSync(
       path.join(bgDir, "staging.json"),
-      `${JSON.stringify({ marks: { centre: { x: 960, y: 1080, scale: 1 } }, auto_order: ["centre"] }, null, 2)}\n`
+      `${JSON.stringify({ marks: { centre: { x: 960, y: 760, scale: 0.7 } }, auto_order: ["centre"] }, null, 2)}\n`
     );
     const dest = path.join(jobDir(projectDir, character.id, job.id), "preview.mp4");
-    await renderActionPreview(tmp, null, character.id, job.actionId, dest, options);
+    const previewOpts = {
+      ...options,
+      aspect: "16:9",
+      previewWidth: 854,
+      previewHeight: 480,
+    };
+    await renderActionPreview(tmp, null, character.id, job.actionId, dest, previewOpts);
     return dest;
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -746,65 +789,109 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   }
 
   const fixture = decodeImage(body);
-  let sheetBuf = fixture;
-  let usedFixture = Boolean(fixture);
-  if (!sheetBuf) {
-    const generated = await generateProjectImage(
-      projectDir,
-      globalAssetsDir,
-      {
-        characterId: character.id,
-        needId: "factory_action",
-        n: 1,
-        prompt: pack.hiddenPrompt,
-        frames,
-      },
-      options
-    );
-    const first = generated.images && generated.images[0];
-    if (!first || !first.imageBase64) throw factoryError("xAI returned no image.", "EXAI");
-    sheetBuf = decodeImage({ imageBase64: first.imageBase64 });
-    usedFixture = false;
-  }
-
   const jobId = stampJobId();
   const dir = jobDir(projectDir, character.id, jobId);
-  fs.mkdirSync(path.join(dir, "cells"), { recursive: true });
-  const sheetPath = path.join(dir, "sheet.png");
-  fs.writeFileSync(sheetPath, sheetBuf);
-
-  const cut = await runCutout(
-    ["--input", sheetPath, "--out-dir", path.join(dir, "cells"), "--grid", `${pack.grid.cols}x${pack.grid.rows}`, "--detect-gaps"],
-    options
-  );
-
   const canvas = slotCanvas(writable, dest);
   const refAbs = findAlignRef(projectDir, character.id, dest);
-  const alignedDir = path.join(dir, "aligned");
-  fs.mkdirSync(alignedDir, { recursive: true });
-  const fitArgs = [
-    "--src-dir",
-    path.join(dir, "cells"),
-    "--out-dir",
-    alignedDir,
-    "--canvas-w",
-    String(canvas.w),
-    "--canvas-h",
-    String(canvas.h),
-  ];
-  if (refAbs) fitArgs.push("--ref", refAbs);
-  if (isOverlayDest(dest)) fitArgs.push("--check-head");
-  if (intent.kind === "walk") {
-    fitArgs.push("--extract-legs", "--validate-walk", "--expect-face", intent.view === "left_side" ? "left" : "right");
-  }
-  const fitted = await runFactoryFit(fitArgs, options);
+  const torsoRefAbs = intent.kind === "walk" ? findTorsoRef(projectDir, character.id, intent.view) : null;
+  const maxAttempts = fixture || options.skipWalkRetry ? 1 : intent.kind === "walk" ? 2 : 1;
+  let cut = null;
+  let fitted = null;
+  let usedFixture = Boolean(fixture);
+  let lastWalkError = null;
 
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.mkdirSync(path.join(dir, "cells"), { recursive: true });
+      let sheetBuf = fixture;
+      usedFixture = Boolean(fixture);
+      if (!sheetBuf) {
+        const generated = await generateProjectImage(
+          projectDir,
+          globalAssetsDir,
+          {
+            characterId: character.id,
+            needId: "factory_action",
+            n: 1,
+            prompt: pack.hiddenPrompt,
+            frames,
+          },
+          options
+        );
+        const first = generated.images && generated.images[0];
+        if (!first || !first.imageBase64) throw factoryError("xAI returned no image.", "EXAI");
+        sheetBuf = decodeImage({ imageBase64: first.imageBase64 });
+        usedFixture = false;
+      }
+      const sheetPath = path.join(dir, "sheet.png");
+      fs.writeFileSync(sheetPath, sheetBuf);
+
+      const cutArgs = [
+        "--input",
+        sheetPath,
+        "--out-dir",
+        path.join(dir, "cells"),
+        "--grid",
+        `${pack.grid.cols}x${pack.grid.rows}`,
+        "--detect-gaps",
+      ];
+      if (intent.kind === "walk") cutArgs.push("--keep-extras");
+      cut = await runCutout(cutArgs, options);
+
+      const alignedDir = path.join(dir, "aligned");
+      fs.mkdirSync(alignedDir, { recursive: true });
+      const fitArgs = [
+        "--src-dir",
+        path.join(dir, "cells"),
+        "--out-dir",
+        alignedDir,
+        "--canvas-w",
+        String(canvas.w),
+        "--canvas-h",
+        String(canvas.h),
+      ];
+      if (refAbs) fitArgs.push("--ref", refAbs);
+      if (torsoRefAbs) fitArgs.push("--torso-ref", torsoRefAbs);
+      if (isOverlayDest(dest)) fitArgs.push("--check-head");
+      if (intent.kind === "walk") {
+        fitArgs.push(
+          "--extract-legs",
+          "--validate-walk",
+          "--fail-closed",
+          "--expect-face",
+          intent.view === "left_side" ? "left" : "right"
+        );
+      }
+      fitted = await runFactoryFit(fitArgs, options);
+      lastWalkError = null;
+      break;
+    } catch (err) {
+      lastWalkError = err;
+      const retryable = intent.kind === "walk" && !fixture && isWalkValidationFailure(err);
+      if (!retryable || attempt + 1 >= maxAttempts) {
+        if (intent.kind === "walk" && isWalkValidationFailure(err)) {
+          throw factoryError(
+            `Walk sheet failed validation (${String(err.message || err).replace(/^Factory fit failed: /, "")}). Extra figures and zoomed crops are rejected automatically — hit Redo.`,
+            err.code || "EINVAL"
+          );
+        }
+        throw err;
+      }
+    }
+  }
+  if (!cut || !fitted) {
+    throw lastWalkError || factoryError("Walk sheet failed validation. Hit Redo.", "EINVAL");
+  }
+
+  const alignedDir = path.join(dir, "aligned");
   const actionBase =
     intent.kind === "walk" && body._walkFrame ? `${pack.actionId}_${frames}` : pack.actionId;
   const actionId = uniqueActionId(projectDir, character.id, actionBase);
   const names = drawingNames(actionId, frames);
   const drawings = [];
   const warnings = [...(cut.warnings || []), ...((fitted && fitted.warnings) || [])];
+  const fatalWalk = [];
   for (let i = 0; i < frames; i += 1) {
     const cell = (cut.cells || [])[i];
     const alignedName = cell ? path.basename(cell.path) : `cell_${String(i).padStart(2, "0")}.png`;
@@ -812,15 +899,19 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
     const row = (fitted.written || []).find((item) => path.basename(item.src) === alignedName);
     if (!cell || cell.empty || !fs.existsSync(alignedPath)) {
       warnings.push(`Frame ${i + 1} was empty after cut-out.`);
+      if (intent.kind === "walk") fatalWalk.push(`Frame ${i + 1} empty`);
       continue;
     }
     if (isOverlayDest(dest) && (fitted.warnings || []).some((line) => line.includes(alignedName))) {
       throw factoryError("Eyes and mouths must be overlays, never full heads.", "EINVAL");
     }
     const problems = (row && row.problems) || [];
-    const rejected = problems.some((line) => /too many boots|facing /.test(String(line)));
+    const rejected = problems.some((line) =>
+      /too many boots|facing |extra figures|zoomed crop|giant legs|scale mismatch|ground line/.test(String(line))
+    );
     if (rejected) {
       warnings.push(`Frame ${i + 1} rejected: ${problems.join("; ")}`);
+      fatalWalk.push(`Frame ${i + 1}: ${problems.join("; ")}`);
       continue;
     }
     drawings.push({
@@ -829,7 +920,19 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
       problems,
     });
   }
+  if (intent.kind === "walk" && fatalWalk.length) {
+    throw factoryError(
+      `Walk sheet failed validation (${fatalWalk.slice(0, 4).join("; ")}). Extra figures and zoomed crops are rejected automatically — hit Redo.`,
+      "EINVAL"
+    );
+  }
   if (drawings.length < 2) throw factoryError("Cut-out did not produce enough frames. Try Redo.", "EINVAL");
+  if (intent.kind === "walk" && drawings.length < frames) {
+    throw factoryError(
+      `Walk sheet lost ${frames - drawings.length} frame(s) after validation. Hit Redo.`,
+      "EINVAL"
+    );
+  }
 
   const cycleName = intent.kind === "walk" ? (intent.view === "left_side" ? "walk_left_side" : "walk_side") : actionId;
   const setSlots = intent.kind === "walk" ? walkSetSlots(writable, projectDir, character.id, intent.view) : {};
@@ -972,6 +1075,7 @@ module.exports = {
   walkBob,
   drawingNames,
   pickSideTorsoDrawing,
+  findTorsoRef,
   walkSetSlots,
   runFactoryJob,
   describeFactoryJob,

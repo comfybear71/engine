@@ -25,6 +25,10 @@ FULL_HEAD_HEIGHT_RATIO = 0.72
 LEGS_TOP_FRAC = 0.50
 BOOT_BAND_FRAC = 0.72
 BOOT_MIN_FRAC = 0.01
+GIANT_LEGS_CANVAS_FRAC = 0.82
+GIANT_LEGS_REF_RATIO = 2.4
+WALK_SCALE_TOLERANCE = 0.22
+LEGS_OF_FIGURE_FRAC = 0.42
 
 
 def _resize_uniform(piece: np.ndarray, scale: float) -> np.ndarray:
@@ -116,15 +120,62 @@ def looks_like_full_figure(piece: np.ndarray) -> bool:
     if not (height > width * 1.15 and top_px > 8 and bot_px > 8):
         return False
     # A head is one blob in the top third. Two thighs after a legs crop is not a figure.
+    # A cape sliver sitting beside the head is not a second head.
     num, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
         (top[:, :, 3] > 16).astype(np.uint8), connectivity=8
     )
-    top_blobs = sum(1 for i in range(1, num) if int(stats[i, cv2.CC_STAT_AREA]) >= 8)
-    return top_blobs <= 1
+    top_blobs = 0
+    for i in range(1, num):
+        if int(stats[i, cv2.CC_STAT_AREA]) < 8:
+            continue
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        if bw < width * 0.28 and bh > bw * 1.4:
+            continue
+        top_blobs += 1
+    return top_blobs == 1
 
 
-def extract_legs(piece: np.ndarray, top_frac: float = LEGS_TOP_FRAC) -> np.ndarray:
-    """Clear the head/torso so only the lower body remains on the same canvas."""
+def count_figures(piece: np.ndarray) -> int:
+    """Count separate bodies in a keyed cell (joined hat/cape/boots count as one)."""
+
+    src = _to_bgra(piece)
+    box = alpha_bbox(src)
+    if box is None:
+        return 0
+    x0, y0, x1, y1 = box
+    crop = src[y0:y1, x0:x1]
+    height, width = crop.shape[:2]
+    alpha = (crop[:, :, 3] > 16).astype(np.uint8)
+    kx = max(3, (width // 14) | 1)
+    ky = max(3, (height // 16) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kx, ky))
+    merged = cv2.dilate(alpha, kernel)
+    num, _labels, stats, _centroids = cv2.connectedComponentsWithStats(merged, connectivity=8)
+    min_area = max(24, int(height * width * 0.05))
+    min_w = max(8, int(width * 0.32))
+    min_h = max(12, int(height * 0.45))
+    figures = 0
+    for i in range(1, num):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        if area < min_area or bw < min_w or bh < min_h:
+            continue
+        figures += 1
+    return figures
+
+
+def extract_legs(
+    piece: np.ndarray,
+    top_frac: float = LEGS_TOP_FRAC,
+    ref: np.ndarray | None = None,
+) -> np.ndarray:
+    """Clear the head/torso so only the lower body remains on the same canvas.
+
+    When ``ref`` is a standing legs drawing, keep a band of that height up from
+    the feet (plus a small overlap) instead of scaling the leftover mass.
+    """
 
     src = _to_bgra(piece)
     if not looks_like_full_figure(src):
@@ -133,10 +184,179 @@ def extract_legs(piece: np.ndarray, top_frac: float = LEGS_TOP_FRAC) -> np.ndarr
     if box is None:
         return src
     x0, y0, x1, y1 = box
-    cut = y0 + int(round((y1 - y0) * float(top_frac)))
     out = src.copy()
+    ref_box = alpha_bbox(_to_bgra(ref)) if ref is not None else None
+    if ref_box is not None:
+        keep_h = max(8, int(ref_box[3] - ref_box[1]))
+        overlap = int(round(keep_h * 0.14))
+        cut = y1 - keep_h - overlap
+        out[: max(cut, 0), :, 3] = 0
+        return out
+    cut = y0 + int(round((y1 - y0) * float(top_frac)))
     out[: max(cut, 0), :, 3] = 0
     return out
+
+
+def rig_ground_and_height(
+    torso_ref: np.ndarray | None,
+    legs_ref: np.ndarray | None,
+    canvas_h: int,
+) -> tuple[int, int]:
+    """Standing feet y and full-figure height on the slot canvas."""
+
+    tbox = alpha_bbox(_to_bgra(torso_ref)) if torso_ref is not None else None
+    lbox = alpha_bbox(_to_bgra(legs_ref)) if legs_ref is not None else None
+    canvas_h = max(2, int(canvas_h))
+    if tbox is not None and lbox is not None:
+        top = min(tbox[1], lbox[1])
+        ground = max(tbox[3], lbox[3])
+        return int(ground), int(max(ground - top, 8))
+    if lbox is not None:
+        ground = int(lbox[3])
+        legs_h = max(1, lbox[3] - lbox[1])
+        height = int(round(legs_h / LEGS_OF_FIGURE_FRAC))
+        return ground, max(height, legs_h)
+    if tbox is not None:
+        torso_h = max(1, tbox[3] - tbox[1])
+        ground = int(tbox[3] + round(torso_h * 0.40))
+        height = int(round(torso_h / 0.62))
+        return min(ground, canvas_h - MARGIN), max(height, torso_h)
+    return canvas_h - MARGIN, int(canvas_h * 0.62)
+
+
+def _blit(dst: np.ndarray, src: np.ndarray, x: int, y: int) -> np.ndarray:
+    out = dst
+    sh, sw = src.shape[:2]
+    dh, dw = out.shape[:2]
+    x0 = max(0, x)
+    y0 = max(0, y)
+    x1 = min(dw, x + sw)
+    y1 = min(dh, y + sh)
+    if x1 <= x0 or y1 <= y0:
+        return out
+    sx0 = x0 - x
+    sy0 = y0 - y
+    out[y0:y1, x0:x1] = src[sy0 : sy0 + (y1 - y0), sx0 : sx0 + (x1 - x0)]
+    return out
+
+
+def fit_walk_piece(
+    src: np.ndarray,
+    canvas_w: int,
+    canvas_h: int,
+    *,
+    ref: np.ndarray | None = None,
+    torso_ref: np.ndarray | None = None,
+    extract: bool = True,
+    margin: int = MARGIN,
+    expect_face: str | None = "right",
+) -> tuple[np.ndarray, list[str]]:
+    """Scale the whole figure to the rig, plant feet, then extract legs in place.
+
+    Never scales a chopped legs island up to fill the canvas — that is what
+    produced giant boots behind a small standing Rodney on live Grok sheets.
+    """
+
+    src = _to_bgra(src)
+    canvas_w = max(2, int(canvas_w))
+    canvas_h = max(2, int(canvas_h))
+    problems = validate_walk_frame(src, expect_face=expect_face, require_full_figure=True)
+    out = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+    if problems:
+        return out, problems
+    box = alpha_bbox(src)
+    if box is None:
+        return out, ["blank drawing"]
+    x0, y0, x1, y1 = box
+    piece = src[y0:y1, x0:x1]
+    ph, pw = piece.shape[:2]
+    ground, target_h = rig_ground_and_height(torso_ref, ref, canvas_h)
+    inner_w = max(1, canvas_w - margin * 2)
+    inner_h = max(1, canvas_h - margin * 2)
+    scale = min(target_h / max(1, ph), inner_w / max(1, pw), inner_h / max(1, ph))
+    resized = _resize_uniform(piece, float(scale))
+    new_h, new_w = resized.shape[:2]
+    ref_box = alpha_bbox(_to_bgra(ref)) if ref is not None else None
+    torso_box = alpha_bbox(_to_bgra(torso_ref)) if torso_ref is not None else None
+    if ref_box is not None:
+        cx = (ref_box[0] + ref_box[2]) / 2.0
+    elif torso_box is not None:
+        cx = (torso_box[0] + torso_box[2]) / 2.0
+    else:
+        cx = canvas_w / 2.0
+    x = int(round(cx - new_w / 2.0))
+    y = int(round(ground - new_h))
+    x = max(margin, min(x, canvas_w - margin - new_w)) if new_w + margin * 2 <= canvas_w else max(0, min(x, canvas_w - new_w))
+    y = max(margin, min(y, canvas_h - margin - new_h)) if new_h + margin * 2 <= canvas_h else max(0, min(y, canvas_h - new_h))
+    _blit(out, resized, x, y)
+    if extract:
+        out = extract_legs(out, ref=ref)
+    fitted_box = alpha_bbox(out)
+    if fitted_box is None:
+        problems.append("blank drawing after walk fit")
+        return out, problems
+    fh = fitted_box[3] - fitted_box[1]
+    if fh > canvas_h * GIANT_LEGS_CANVAS_FRAC:
+        problems.append("giant legs (fill the canvas)")
+    if ref_box is not None:
+        rh = max(1, ref_box[3] - ref_box[1])
+        if fh > rh * GIANT_LEGS_REF_RATIO:
+            problems.append(f"giant legs ({fh}px vs ref {rh}px)")
+    return out, problems
+
+
+def normalize_walk_batch(frames: list[np.ndarray]) -> list[np.ndarray]:
+    """Re-scale and plant every frame so feet share one ground line."""
+
+    boxes = [alpha_bbox(frame) for frame in frames]
+    filled = [(i, box) for i, box in enumerate(boxes) if box is not None]
+    if len(filled) < 2:
+        return frames
+    heights = [box[3] - box[1] for _i, box in filled]
+    grounds = [box[3] for _i, box in filled]
+    target_h = float(np.median(np.asarray(heights, dtype=np.float32)))
+    target_ground = int(round(float(np.median(np.asarray(grounds, dtype=np.float32)))))
+    out = list(frames)
+    for i, box in filled:
+        frame = frames[i]
+        x0, y0, x1, y1 = box
+        piece = frame[y0:y1, x0:x1]
+        ph, pw = piece.shape[:2]
+        scale = target_h / max(1, ph)
+        if abs(scale - 1.0) > 0.04:
+            piece = _resize_uniform(piece, float(scale))
+            ph, pw = piece.shape[:2]
+        canvas = np.zeros_like(frame)
+        ch, cw = canvas.shape[:2]
+        cx = (x0 + x1) / 2.0
+        x = int(round(cx - pw / 2.0))
+        y = int(round(target_ground - ph))
+        x = max(0, min(x, cw - pw))
+        y = max(0, min(y, ch - ph))
+        _blit(canvas, piece, x, y)
+        out[i] = canvas
+    return out
+
+
+def walk_batch_problems(frames: list[np.ndarray], ref: np.ndarray | None = None) -> list[str]:
+    """Cross-frame checks: scale drift or feet that missed the ground line."""
+
+    boxes = [alpha_bbox(frame) for frame in frames if alpha_bbox(frame) is not None]
+    if len(boxes) < 2:
+        return []
+    heights = [box[3] - box[1] for box in boxes]
+    grounds = [box[3] for box in boxes]
+    median_h = float(np.median(np.asarray(heights, dtype=np.float32)))
+    median_g = float(np.median(np.asarray(grounds, dtype=np.float32)))
+    problems: list[str] = []
+    if median_h > 0 and (max(heights) / median_h > 1.0 + WALK_SCALE_TOLERANCE or min(heights) / median_h < 1.0 - WALK_SCALE_TOLERANCE):
+        problems.append("scale mismatch across walk frames")
+    if max(grounds) - min(grounds) > 16:
+        problems.append("feet missed the common ground line")
+    ref_box = alpha_bbox(_to_bgra(ref)) if ref is not None else None
+    if ref_box is not None and median_h > (ref_box[3] - ref_box[1]) * GIANT_LEGS_REF_RATIO:
+        problems.append("giant legs (batch vs ref)")
+    return problems
 
 
 def count_boots(piece: np.ndarray) -> int:
@@ -198,10 +418,18 @@ def validate_walk_frame(
     *,
     expect_face: str | None = "right",
     max_boots: int = 2,
+    require_full_figure: bool = False,
 ) -> list[str]:
-    """Reject a walk cell with extra boots or a torso facing the wrong way."""
+    """Reject extra figures, zoomed crops, extra boots, or a mismatched facing."""
 
     problems: list[str] = []
+    figures = count_figures(piece)
+    if figures > 1:
+        problems.append(f"extra figures ({figures} bodies in one cell)")
+    elif figures == 0:
+        problems.append("no figure")
+    if require_full_figure and figures <= 1 and not looks_like_full_figure(piece):
+        problems.append("zoomed crop (not a whole body)")
     boots = count_boots(piece)
     if boots > max_boots:
         problems.append(f"too many boots ({boots} > {max_boots})")
@@ -276,21 +504,28 @@ def main(argv: list[str] | None = None) -> int:
         help="Keep pixel placement (pad/crop to canvas) instead of refitting to feet/pivot",
     )
     parser.add_argument("--head-ref", type=Path, dest="head_ref")
+    parser.add_argument("--torso-ref", type=Path, dest="torso_ref")
     parser.add_argument(
         "--extract-legs",
         action="store_true",
-        help="Crop a full-figure cell down to the lower body before fitting",
+        help="After fitting the whole figure to the rig, clear the head/torso in place",
     )
     parser.add_argument(
         "--validate-walk",
         action="store_true",
-        help="Flag frames with more than two boots or a mismatched facing",
+        help="Reject extra figures, zoomed crops, extra boots, or a mismatched facing",
+    )
+    parser.add_argument(
+        "--fail-closed",
+        action="store_true",
+        help="Exit non-zero when any walk frame fails validation (do not keep broken output)",
     )
     parser.add_argument("--expect-face", default="right", help="Expected walk facing (right|left)")
     args = parser.parse_args(argv)
 
     ref = _load(args.ref) if args.ref else None
     head_ref = _load(args.head_ref) if args.head_ref else None
+    torso_ref = _load(args.torso_ref) if args.torso_ref else None
     jobs: list[tuple[Path, Path]] = []
     if args.src and args.out:
         jobs.append((args.src, args.out))
@@ -303,24 +538,42 @@ def main(argv: list[str] | None = None) -> int:
 
     written = []
     warnings: list[str] = []
+    fitted_frames: list[np.ndarray] = []
+    walk_mode = bool(args.validate_walk or args.extract_legs)
     for src_path, out_path in jobs:
         src = _load(src_path)
         walk_problems: list[str] = []
-        if args.validate_walk:
-            walk_problems.extend(validate_walk_frame(src, expect_face=args.expect_face))
-        if args.extract_legs:
-            src = extract_legs(src)
-        if args.keep_canvas:
-            fitted = keep_on_canvas(src, args.canvas_w, args.canvas_h)
+        if walk_mode and not args.keep_canvas:
+            fitted, walk_problems = fit_walk_piece(
+                src,
+                args.canvas_w,
+                args.canvas_h,
+                ref=ref,
+                torso_ref=torso_ref,
+                extract=bool(args.extract_legs),
+                expect_face=args.expect_face if args.validate_walk else None,
+            )
         else:
-            fitted = fit_piece_no_squash(src, args.canvas_w, args.canvas_h, ref=ref)
+            if args.validate_walk:
+                walk_problems.extend(
+                    validate_walk_frame(
+                        src, expect_face=args.expect_face, require_full_figure=True
+                    )
+                )
+            if args.extract_legs:
+                src = extract_legs(src, ref=ref)
+            if args.keep_canvas:
+                fitted = keep_on_canvas(src, args.canvas_w, args.canvas_h)
+            else:
+                fitted = fit_piece_no_squash(src, args.canvas_w, args.canvas_h, ref=ref)
         if args.check_head and looks_like_full_head(src, head_ref):
             warnings.append(f"{src_path.name}: looks like a full head (eyes/mouth must be overlays)")
-        problems = validate_piece(fitted, args.canvas_w, args.canvas_h)
-        problems.extend(walk_problems)
+        problems = list(walk_problems)
+        if not walk_mode:
+            problems.extend(validate_piece(fitted, args.canvas_w, args.canvas_h))
         if walk_problems:
             warnings.append(f"{src_path.name}: {'; '.join(walk_problems)}")
-        _write(out_path, fitted)
+        fitted_frames.append(fitted)
         written.append(
             {
                 "src": str(src_path),
@@ -330,6 +583,34 @@ def main(argv: list[str] | None = None) -> int:
                 "problems": problems,
             }
         )
+
+    if walk_mode and not args.keep_canvas:
+        good_idx = [i for i, row in enumerate(written) if not row["problems"]]
+        if len(good_idx) >= 2:
+            subset = [fitted_frames[i] for i in good_idx]
+            normalized = normalize_walk_batch(subset)
+            for i, frame in zip(good_idx, normalized):
+                fitted_frames[i] = frame
+            batch = walk_batch_problems(normalized, ref=ref)
+            if batch:
+                warnings.extend(batch)
+                for i in good_idx:
+                    written[i]["problems"] = list(written[i]["problems"]) + batch
+
+    for (_src_path, out_path), fitted, row in zip(jobs, fitted_frames, written):
+        if args.fail_closed and row["problems"]:
+            continue
+        _write(out_path, fitted)
+        row["width"] = int(fitted.shape[1])
+        row["height"] = int(fitted.shape[0])
+
+    fatal = [row for row in written if row["problems"]]
+    if args.fail_closed and fatal:
+        detail = "; ".join(
+            f"{Path(row['src']).name}: {'; '.join(row['problems'])}" for row in fatal[:6]
+        )
+        print(json.dumps({"ok": False, "error": detail, "written": written, "warnings": warnings}))
+        return 1
 
     print(json.dumps({"ok": True, "written": written, "warnings": warnings}))
     return 0

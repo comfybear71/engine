@@ -160,6 +160,9 @@ function spawnActionPreview(timelinePath, projectDir, outputPath, options = {}) 
     "--size",
     String(options.size || SIZE),
   ];
+  if (options.aspect) args.push("--aspect", String(options.aspect));
+  if (options.previewWidth) args.push("--width", String(options.previewWidth));
+  if (options.previewHeight) args.push("--height", String(options.previewHeight));
   return new Promise((resolve, reject) => {
     const child = spawn(pythonBin, args, {
       cwd: PYTHON_DIR,

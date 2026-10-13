@@ -31,6 +31,8 @@ describe("factory hidden prompt pack", () => {
     assert.match(pack.hiddenPrompt, /fedora|painted caricature/);
     assert.match(pack.hiddenPrompt, /#00FF00/);
     assert.match(pack.hiddenPrompt, /Only one head/);
+    assert.match(pack.hiddenPrompt, /Never zoom into legs/);
+    assert.match(pack.hiddenPrompt, /never a close-up of legs/);
     assert.equal(pack.greenScreen, "#00FF00");
     assert.equal(pack.references[0].rel, "characters/rodney/_reference/full.png");
     assert.equal(assembleHiddenPrompt({

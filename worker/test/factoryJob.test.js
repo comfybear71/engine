@@ -7,6 +7,7 @@ const os = require("os");
 const path = require("path");
 
 const { encodeRgbaPng } = require("../src/pngFlip");
+const { decodeRgbaFile, alphaBounds } = require("../src/factoryThumb");
 const { buildRodneyTestProject } = require("./helpers/rodneyTestProject");
 const { resolveActionDest, uniqueActionId, walkBob, runFactoryJob, tickFactoryJob, pickSideTorsoDrawing } = require("../src/factoryJob");
 const { createApp } = require("../src/server");
@@ -50,6 +51,47 @@ function walkSheetPng(frames = 8) {
     fillRect(rgba, width, x0 + 36 + stride, y0 + 42, 8, 18, 140, 70, 40, 255);
     fillRect(rgba, width, x0 + 20 + stride, y0 + 58, 10, 10, 70, 40, 24, 255);
     fillRect(rgba, width, x0 + 38 + stride, y0 + 58, 10, 10, 70, 40, 24, 255);
+  }
+  return encodeRgbaPng(width, height, rgba);
+}
+
+function paintFigure(rgba, width, x0, y0, stride) {
+  fillRect(rgba, width, x0 + 6, y0 + 10, 10, 36, 180, 20, 20, 255);
+  fillRect(rgba, width, x0 + 28 + stride, y0 + 6, 16, 14, 196, 140, 96, 255);
+  fillRect(rgba, width, x0 + 24 + stride, y0 + 20, 22, 22, 150, 28, 28, 255);
+  fillRect(rgba, width, x0 + 22 + stride, y0 + 42, 8, 18, 140, 70, 40, 255);
+  fillRect(rgba, width, x0 + 36 + stride, y0 + 42, 8, 18, 140, 70, 40, 255);
+  fillRect(rgba, width, x0 + 20 + stride, y0 + 58, 10, 10, 70, 40, 24, 255);
+  fillRect(rgba, width, x0 + 38 + stride, y0 + 58, 10, 10, 70, 40, 24, 255);
+}
+
+function grokBrokenWalkSheet() {
+  // Real Grok failure modes packed into one 4x2 sheet: extra bodies + a
+  // zoomed boot close-up that used to be scaled to fill the 1024 canvas.
+  const cols = 4;
+  const rows = 2;
+  const inner = 120;
+  const gutter = 12;
+  const width = cols * inner + (cols + 1) * gutter;
+  const height = rows * inner + (rows + 1) * gutter;
+  const rgba = Buffer.alloc(width * height * 4);
+  fillRect(rgba, width, 0, 0, width, height, 0, 255, 0, 255);
+  for (let i = 0; i < 8; i += 1) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x0 = gutter + col * (inner + gutter);
+    const y0 = gutter + row * (inner + gutter);
+    if (i === 6) {
+      paintFigure(rgba, width, x0 + 4, y0 + 20, 0);
+      paintFigure(rgba, width, x0 + 58, y0 + 20, 6);
+      continue;
+    }
+    if (i === 7) {
+      fillRect(rgba, width, x0 + 8, y0 + 10, 44, 100, 70, 40, 24, 255);
+      fillRect(rgba, width, x0 + 68, y0 + 10, 44, 100, 70, 40, 24, 255);
+      continue;
+    }
+    paintFigure(rgba, width, x0 + 24, y0 + 24, (i % 4) * 3);
   }
   return encodeRgbaPng(width, height, rgba);
 }
@@ -169,6 +211,48 @@ describe("factory pipeline with a fixture sheet", () => {
     assert.ok(fs.existsSync(oldWalk), "Tick adds new legs and does not delete the leftover file on disk");
     assert.ok(fs.readdirSync(liveDir).some((name) => name.startsWith(job.actionId) && name.endsWith(".png")));
     assert.equal(fs.existsSync(path.join(otherDir, "characters", "rodney")), false);
+
+    const alignedDir = path.join(projectDir, "characters", "rodney", "_factory", job.jobId, "aligned");
+    const aligned = fs.readdirSync(alignedDir).filter((name) => name.endsWith(".png"));
+    assert.ok(aligned.length >= 2);
+    for (const name of aligned) {
+      const decoded = decodeRgbaFile(path.join(alignedDir, name));
+      const box = alphaBounds(decoded.rgba, decoded.width, decoded.height);
+      assert.equal(box.empty, false);
+      assert.ok(box.h < 220, `legs ${name} should match the rig, not fill the canvas (${box.h}px)`);
+      assert.ok(box.y + box.h > 680, `feet of ${name} should sit on the rig ground line`);
+    }
+    const preview = path.join(projectDir, "characters", "rodney", "_factory", job.jobId, "preview.mp4");
+    if (fs.existsSync(preview)) {
+      const { execFileSync } = require("child_process");
+      const dims = execFileSync(
+        "ffprobe",
+        ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", preview],
+        { encoding: "utf8" }
+      ).trim();
+      assert.equal(dims, "854,480", "factory walk preview must be 16:9, not a cropped square");
+    }
+  });
+
+  test("real-like Grok extras and zoomed boots fail the walk job instead of compositing giant legs", async () => {
+    const factoryDir = path.join(projectDir, "characters", "rodney", "_factory");
+    const before = new Set(fs.existsSync(factoryDir) ? fs.readdirSync(factoryDir) : []);
+    await assert.rejects(
+      () =>
+        runFactoryJob(projectDir, null, {
+          characterId: "rodney",
+          prompt: "Rodney walking long stride",
+          frames: 8,
+          imageBase64: `data:image/png;base64,${grokBrokenWalkSheet().toString("base64")}`,
+        }),
+      /extra figures|zoomed crop|failed validation/i
+    );
+    const after = fs.existsSync(factoryDir) ? fs.readdirSync(factoryDir) : [];
+    for (const jobId of after) {
+      if (before.has(jobId)) continue;
+      const preview = path.join(factoryDir, jobId, "preview.mp4");
+      assert.equal(fs.existsSync(preview), false, "broken walk must not leave a preview");
+    }
   });
 
   test("POST /api/projects/:name/factory rejects a character from another project", async () => {
