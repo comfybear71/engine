@@ -232,6 +232,20 @@ function ensureStudioBuild(paths, env) {
   return { built: true, useDev: false };
 }
 
+function probeHttp(url, timeoutMs = 600) {
+  return new Promise((resolve) => {
+    const req = http.get(url, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on("error", () => resolve(false));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
 function waitForHttp(url, timeoutMs) {
   const started = Date.now();
   return new Promise((resolve) => {
@@ -253,6 +267,16 @@ function waitForHttp(url, timeoutMs) {
     };
     tryOnce();
   });
+}
+
+function planLaunch({ workerUp, studioUp }) {
+  return {
+    startWorker: !workerUp,
+    startStudio: !studioUp,
+    openBrowser: true,
+    workerPort: DEFAULTS.workerPort,
+    studioPort: DEFAULTS.studioPort,
+  };
 }
 
 function openBrowser(url) {
@@ -296,9 +320,11 @@ function createSupervisor(options) {
   const stopping = { value: false };
   const children = { worker: null, studio: null };
   const delays = { worker: 1000, studio: 1000 };
+  const workerHealth = `http://127.0.0.1:${baseEnv.WORKER_PORT || workerPort}/health`;
   let openedBrowser = false;
   let buildRetryTimer = null;
   let studioDevFallback = false;
+  let workerWatchTimer = null;
 
   function restartDelay(name) {
     const next = Math.min(delays[name] * 2, 8000);
@@ -307,20 +333,45 @@ function createSupervisor(options) {
     return current;
   }
 
-  function startWorker() {
+  function watchWorkerHealth() {
+    if (workerWatchTimer || stopping.value) return;
+    workerWatchTimer = setInterval(() => {
+      if (stopping.value || children.worker) return;
+      void probeHttp(workerHealth).then((up) => {
+        if (!up && !stopping.value && !children.worker) {
+          console.error("Engine is not responding. Starting it again…");
+          void startWorker();
+        }
+      });
+    }, 2500);
+  }
+
+  async function startWorker() {
     if (stopping.value) return;
+    if (await probeHttp(workerHealth)) {
+      console.log(`Engine already running on port ${baseEnv.WORKER_PORT || workerPort}.`);
+      watchWorkerHealth();
+      return;
+    }
     if (!fs.existsSync(paths.workerEntry)) {
       console.error("The engine files are missing. Ask whoever set this computer up to finish the Engine Studio install.");
       return;
     }
-    children.worker = spawnChild("engine", [paths.workerEntry], paths.workerDir, baseEnv, () => {
+    const workerEnv = {
+      ...baseEnv,
+      ENGINE_WORKER_PID_FILE: path.join(paths.root, ".engine-worker.pid"),
+    };
+    children.worker = spawnChild("engine", [paths.workerEntry], paths.workerDir, workerEnv, () => {
       children.worker = null;
       if (stopping.value) return;
       const wait = restartDelay("worker");
       console.error(`Engine stopped. Starting it again in ${Math.round(wait / 1000)}s…`);
-      setTimeout(startWorker, wait);
+      setTimeout(() => {
+        void startWorker();
+      }, wait);
     });
     delays.worker = 1000;
+    watchWorkerHealth();
   }
 
   function clearBuildRetryTimer() {
@@ -344,12 +395,16 @@ function createSupervisor(options) {
         children.studio.kill();
         return;
       }
-      startStudio();
+      void startStudio();
     }, BUILD_RETRY_MS);
   }
 
-  function startStudio() {
+  async function startStudio() {
     if (stopping.value) return;
+    if (await probeHttp(studioOrigin)) {
+      console.log(`Studio already running on port ${studioPort}.`);
+      return;
+    }
     if (!fs.existsSync(paths.nextBin)) {
       console.error("Studio isn't installed on this computer yet. Ask whoever set this computer up to finish the Engine Studio install.");
       return;
@@ -385,15 +440,17 @@ function createSupervisor(options) {
         if (stopping.value) return;
         const wait = restartDelay("studio");
         console.error(`Studio stopped. Starting it again in ${Math.round(wait / 1000)}s…`);
-        setTimeout(startStudio, wait);
+        setTimeout(() => {
+          void startStudio();
+        }, wait);
       }
     );
     delays.studio = 1000;
   }
 
   async function start() {
-    startWorker();
-    startStudio();
+    await startWorker();
+    await startStudio();
     const ready = await waitForHttp(studioOrigin, 90_000);
     if (!openedBrowser) {
       openedBrowser = true;
@@ -407,6 +464,10 @@ function createSupervisor(options) {
   function stop() {
     stopping.value = true;
     clearBuildRetryTimer();
+    if (workerWatchTimer) {
+      clearInterval(workerWatchTimer);
+      workerWatchTimer = null;
+    }
     for (const child of Object.values(children)) {
       if (child && !child.killed) child.kill();
     }
@@ -433,7 +494,9 @@ module.exports = {
   DEFAULTS,
   readEnvFile,
   resolveEnginePaths,
+  probeHttp,
   waitForHttp,
+  planLaunch,
   createSupervisor,
   isStudioDev,
   studioLaunchArgs,

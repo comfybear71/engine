@@ -484,7 +484,10 @@ describe("studio worker API", () => {
     assert.equal(await got.text(), alt);
 
     const scripts = await fetch(`${ctx.url}/api/projects/project/scripts`);
-    assert.deepEqual((await scripts.json()).scripts, ["script.txt", "script_mcd.txt"]);
+    const scriptBody = await scripts.json();
+    assert.deepEqual(scriptBody.scripts, ["script.txt", "script_mcd.txt"]);
+    assert.equal(scriptBody.default, "script_mcd.txt");
+    assert.ok(scriptBody.files.some((item) => item.name === "script_mcd.txt" && item.mtime > 0));
 
     const timelinePath = path.join(fixture.projectDir, "timeline.json");
     const sentinelTimeline = { sentinel: true, series: "keep-me" };
@@ -502,6 +505,91 @@ describe("studio worker API", () => {
 
     const bad = await fetch(`${ctx.url}/api/projects/project/script?script=../secret.txt`);
     assert.equal(bad.status, 400);
+
+    const created = await fetch(`${ctx.url}/api/projects/project/scripts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "walk" }),
+    });
+    const createdBody = await created.json();
+    assert.equal(created.status, 201, JSON.stringify(createdBody));
+    assert.equal(createdBody.script, "script_walk.txt");
+    assert.ok(createdBody.scripts.includes("script_walk.txt"));
+    assert.ok(fs.existsSync(path.join(fixture.projectDir, "script_walk.txt")));
+    const dup = await fetch(`${ctx.url}/api/projects/project/scripts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "walk" }),
+    });
+    assert.equal(dup.status, 409);
+    const unsafe = await fetch(`${ctx.url}/api/projects/project/scripts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "../secret.txt" }),
+    });
+    assert.equal(unsafe.status, 400);
+  });
+
+  test("PUT /script then GET /script and GET /lanes reparse that exact file", async () => {
+    const full = [
+      "[Scene: Act 1]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "Alice: Hello there friend.",
+      "[Scene: Act 2]",
+      "[Location: room_b]",
+      "[Cast: Alice]",
+      "Alice: Later scene that must disappear.",
+    ].join("\n");
+    const act1 = [
+      "[Scene: Act 1]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "Alice: Hello there friend.",
+    ].join("\n");
+    const altPath = path.join(fixture.projectDir, "script_full_test.txt");
+    const defaultPath = path.join(fixture.projectDir, "script.txt");
+    const originalDefault = fs.readFileSync(defaultPath, "utf8");
+    fs.writeFileSync(altPath, full);
+
+    const warm = await fetch(`${ctx.url}/api/projects/project/lanes?script=script_full_test.txt`);
+    assert.equal(warm.status, 200, await warm.clone().text());
+    const warmBody = await warm.json();
+    assert.ok(warmBody.blocks.some((block) => /Later scene that must disappear/.test(block.label)));
+
+    const put = await fetch(`${ctx.url}/api/projects/project/script?script=script_full_test.txt`, {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain" },
+      body: act1,
+    });
+    const putBody = await put.json();
+    assert.equal(put.status, 200, JSON.stringify(putBody));
+    assert.equal(putBody.saved, true);
+    assert.equal(putBody.script, "script_full_test.txt");
+    assert.equal(fs.readFileSync(altPath, "utf8"), act1);
+    assert.equal(fs.readFileSync(defaultPath, "utf8"), originalDefault);
+
+    const got = await fetch(`${ctx.url}/api/projects/project/script?script=script_full_test.txt`);
+    assert.equal(got.status, 200);
+    assert.match(String(got.headers.get("cache-control") || ""), /no-store/);
+    assert.equal(await got.text(), act1);
+
+    const lanes = await fetch(`${ctx.url}/api/projects/project/lanes?script=script_full_test.txt`);
+    const laneBody = await lanes.json();
+    assert.equal(lanes.status, 200, JSON.stringify(laneBody));
+    assert.match(String(lanes.headers.get("cache-control") || ""), /no-store/);
+    assert.ok(laneBody.blocks.some((block) => /Hello there friend/.test(block.label)));
+    assert.equal(
+      laneBody.blocks.some((block) => /Later scene that must disappear/.test(block.label)),
+      false
+    );
+    assert.equal(
+      laneBody.scenes.some((scene) => /act_2/i.test(scene.id)),
+      false
+    );
+
+    const fallback = await fetch(`${ctx.url}/api/projects/project/script`);
+    assert.equal(await fallback.text(), originalDefault);
   });
 
   test("path traversal and reserved names are rejected", async () => {
@@ -832,11 +920,21 @@ describe("studio worker API", () => {
     assert.equal(saved.lipsync.blinks, false);
     assert.equal(saved.lipsync.loud_threshold, 0.8);
     assert.equal(saved.independent, false, "lip-sync save must keep Independent");
+    const remember = await fetch(`${ctx.url}/api/projects/project/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activeScript: "script_mcd.txt" }),
+    });
+    const remembered = await remember.json();
+    assert.equal(remembered.activeScript, "script_mcd.txt");
+    assert.equal(remembered.lipSync, "manual", "script memory must keep lip-sync");
     await fetch(`${ctx.url}/api/projects/project/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ lipSync: "auto" }),
     });
+    const afterLip = await (await fetch(`${ctx.url}/api/projects/project/settings`)).json();
+    assert.equal(afterLip.activeScript, "script_mcd.txt");
 
     const missing = await fetch(`${ctx.url}/api/projects/project/lipsync`, {
       method: "POST",

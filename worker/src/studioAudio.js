@@ -74,6 +74,64 @@ function walkWavs(audioDir) {
   return out.sort((a, b) => toPosix(a).localeCompare(toPosix(b)));
 }
 
+function readWavPeaks(absPath, buckets = 48) {
+  const peaks = Array.from({ length: buckets }, () => 0);
+  let fd;
+  try {
+    fd = fs.openSync(absPath, "r");
+    const fileSize = fs.fstatSync(fd).size;
+    if (fileSize < 44) return peaks;
+    const head = Buffer.alloc(12);
+    fs.readSync(fd, head, 0, 12, 0);
+    if (head.toString("ascii", 0, 4) !== "RIFF" || head.toString("ascii", 8, 12) !== "WAVE") return peaks;
+    let offset = 12;
+    let channels = 1;
+    let bits = 16;
+    let dataOffset = 0;
+    let dataSize = 0;
+    const chunkHead = Buffer.alloc(8);
+    while (offset + 8 <= fileSize) {
+      fs.readSync(fd, chunkHead, 0, 8, offset);
+      const id = chunkHead.toString("ascii", 0, 4);
+      const size = chunkHead.readUInt32LE(4);
+      const payload = offset + 8;
+      if (id === "fmt " && size >= 16) {
+        const fmt = Buffer.alloc(16);
+        fs.readSync(fd, fmt, 0, 16, payload);
+        channels = fmt.readUInt16LE(2) || 1;
+        bits = fmt.readUInt16LE(14) || 16;
+      } else if (id === "data") {
+        dataOffset = payload;
+        dataSize = size;
+        break;
+      }
+      offset = payload + size + (size % 2);
+    }
+    if (!dataSize || !dataOffset) return peaks;
+    const bytesPerSample = Math.max(1, Math.round(bits / 8));
+    const frameSize = bytesPerSample * channels;
+    const frames = Math.floor(dataSize / frameSize);
+    if (frames <= 0) return peaks;
+    const maxRead = Math.min(dataSize, 512 * 1024);
+    const buf = Buffer.alloc(maxRead);
+    fs.readSync(fd, buf, 0, maxRead, dataOffset);
+    const usableFrames = Math.floor(buf.length / frameSize);
+    for (let i = 0; i < usableFrames; i += 1) {
+      const bucket = Math.min(buckets - 1, Math.floor((i / usableFrames) * buckets));
+      let amp = 0;
+      if (bits === 16) amp = Math.abs(buf.readInt16LE(i * frameSize)) / 32768;
+      else if (bits === 8) amp = Math.abs(buf[i * frameSize] - 128) / 128;
+      else amp = Math.abs(buf.readInt16LE(i * frameSize)) / 32768;
+      if (amp > peaks[bucket]) peaks[bucket] = amp;
+    }
+    return peaks.map((value) => Math.round(value * 1000) / 1000);
+  } catch {
+    return peaks;
+  } finally {
+    if (fd != null) fs.closeSync(fd);
+  }
+}
+
 function listProjectAudio(projectDir, globalAssetsDir) {
   const sceneIds = listSceneIds(projectDir);
   const names = characterIndex(projectDir, globalAssetsDir);
@@ -110,9 +168,10 @@ function listProjectAudio(projectDir, globalAssetsDir) {
       rel,
       durationSeconds,
       mtime,
+      peaks: readWavPeaks(abs),
     });
   }
   return files;
 }
 
-module.exports = { listProjectAudio, listSceneIds };
+module.exports = { listProjectAudio, listSceneIds, readWavPeaks };

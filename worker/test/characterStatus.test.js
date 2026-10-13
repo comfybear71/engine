@@ -16,6 +16,7 @@ const {
   standardForSlot,
   candidateDrawingsDirs,
   childRowLabel,
+  lookupStatusState,
 } = require("../src/factoryStandard");
 const {
   readStatus,
@@ -72,12 +73,17 @@ describe("factory standard catalog", () => {
     assert.equal(drawingBadge({ "eyes_front/surprised": "ticked" }, "eyes_front/surprised", true, true), "ticked");
     assert.equal(drawingBadge({}, "eyes_front/half", false, true), "missing");
     assert.equal(drawingBadge({}, "eyes_front/open", true, true), "draft");
+    assert.equal(drawingBadge({ "eyes/open": "ticked" }, "eyes_front/open", true, true), "ticked");
+    assert.equal(drawingBadge({ "mouth/A": "approved" }, "mouth_left_34/A", true, true), "ticked");
+    assert.equal(lookupStatusState({ "eyes/open": "ticked" }, "eyes_right_side/open"), "ticked");
   });
 
-  test("shirt and shorts overlays sit under Torso, not Arm rig", () => {
-    assert.equal(childRowLabel({ id: "shirt_overlay", asset: "parts/shirt.png" }), "Torso");
-    assert.equal(childRowLabel({ id: "shorts", asset: "overlays/shorts.png" }), "Torso");
-    assert.equal(childRowLabel({ id: "torso_rig", asset: "parts/torso_rig.png" }), "Torso");
+  test("shirt and shorts overlays sit under Overlays, not Torso", () => {
+    assert.equal(childRowLabel({ id: "shirt_overlay", asset: "parts/shirt.png" }), "Overlays");
+    assert.equal(childRowLabel({ id: "shorts", asset: "overlays/shorts.png" }), "Overlays");
+    assert.equal(childRowLabel({ id: "ov_shirt", asset: "parts/ov_shirt.png" }), "Overlays");
+    assert.equal(childRowLabel({ id: "torso_rig", asset: "parts/torso_rig.png" }), "Overlays");
+    assert.equal(childRowLabel({ id: "cape_overlay_L", asset: "parts/cape_overlay_L.png" }), "Overlays");
     assert.equal(childRowLabel({ id: "body", asset: "body.png" }), "Torso");
     assert.equal(childRowLabel({ id: "arm_upper_L", asset: "parts/arm_upper.png" }), "Arm rig L");
   });
@@ -145,6 +151,38 @@ describe("character status.json", () => {
 
   after(() => fixture.cleanup());
 
+  test("reads earlier slot-level ticks and migrates them onto view keys", () => {
+    const dir = path.join(fixture.projectDir, "characters", "legacy");
+    fixture.writePng(path.join(dir, "blank.png"));
+    fixture.writePng(path.join(dir, "eyes_front", "open.png"));
+    fixture.writePng(path.join(dir, "eyes_left_34", "open.png"));
+    fixture.writePng(path.join(dir, "mouth_front", "A.png"));
+    fixture.writeJson(path.join(dir, "character.json"), {
+      id: "legacy",
+      display_name: "Legacy",
+      aliases: ["Legacy"],
+      asset: "blank.png",
+      z: 10,
+      slots: {
+        eyes: { drawings_dir: "eyes", default_drawing: "open" },
+        mouth: { drawings_dir: "mouth" },
+      },
+    });
+    fixture.writeJson(path.join(dir, "status.json"), {
+      "eyes/open": "ticked",
+      "mouth/A": "approved",
+    });
+    const factory = describeFactoryCharacter(fixture.projectDir, fixture.globalAssetsDir, "legacy", "front");
+    const eyes = factory.rows.find((row) => row.slot === "eyes");
+    const mouth = factory.rows.find((row) => row.slot === "mouth");
+    assert.equal(eyes.drawings.find((d) => d.name === "open").badge, "ticked");
+    assert.equal(mouth.drawings.find((d) => d.name === "A").badge, "ticked");
+    assert.ok(factory.counts.ticked >= 2);
+    const written = JSON.parse(fs.readFileSync(path.join(dir, "status.json"), "utf8"));
+    assert.equal(written["eyes/open"], "ticked");
+    assert.equal(written["eyes_front/open"], "ticked");
+  });
+
   test("Approve writes ticked and Redo stores a note in status.json", () => {
     setDrawingState(fixture.projectDir, "rodney", "eyes_front/surprised", "ticked");
     setRedoNote(fixture.projectDir, "rodney", "eyes_front/open", "wider lids");
@@ -198,7 +236,7 @@ describe("character status.json", () => {
     assert.ok(front && front.count >= 4);
   });
 
-  test("torso, body, torso_rig and clothing overlays share one Torso row", () => {
+  test("torso and body share one Torso row; clothing overlays sit under Overlays", () => {
     const dir = path.join(fixture.projectDir, "characters", "riggy");
     fixture.writePng(path.join(dir, "blank.png"));
     fixture.writePng(path.join(dir, "torso", "neutral.png"));
@@ -228,10 +266,18 @@ describe("character status.json", () => {
     const names = torsoRows[0].drawings.map((item) => item.name);
     assert.ok(names.includes("neutral"));
     assert.ok(names.includes("walk"));
-    assert.ok(torsoRows[0].drawings.some((item) => /shirt/.test(item.rel || item.name)));
-    assert.ok(torsoRows[0].drawings.some((item) => /shorts/.test(item.rel || item.name)));
-    assert.ok(torsoRows[0].drawings.some((item) => /torso_rig/.test(item.rel || item.drawingsDir || "")));
-    assert.equal(factory.rows.filter((row) => /overlay/i.test(row.label)).length, 0);
+    assert.equal(names.filter((name) => name === "neutral").length, 1);
+    assert.equal(names.filter((name) => name === "walk").length, 1);
+    assert.equal(
+      torsoRows[0].drawings.filter((item) => /shirt|shorts|torso_rig|cape/.test(item.rel || item.name || item.drawingsDir || ""))
+        .length,
+      0
+    );
+    const overlays = factory.rows.filter((row) => row.label === "Overlays");
+    assert.equal(overlays.length, 1);
+    assert.ok(overlays[0].drawings.some((item) => /shirt/.test(item.rel || item.name)));
+    assert.ok(overlays[0].drawings.some((item) => /shorts/.test(item.rel || item.name)));
+    assert.ok(overlays[0].drawings.some((item) => /torso_rig/.test(item.rel || item.drawingsDir || "")));
     const side = describeFactoryCharacter(fixture.projectDir, fixture.globalAssetsDir, "riggy", "left_side");
     assert.equal(
       side.rows.some((row) => row.drawings.some((item) => /shirt|shorts/.test(item.rel || item.name))),
@@ -255,5 +301,31 @@ describe("character status.json", () => {
     const labels = actions.map((item) => item.label);
     assert.ok(labels.includes("shared/blink"));
     assert.ok(labels.includes("alice/walk_side"));
+  });
+
+  test("action shots use a representative drawing even when the view folder is missing", () => {
+    const dir = path.join(fixture.projectDir, "characters", "walker");
+    fixture.writePng(path.join(dir, "blank.png"));
+    fixture.writePng(path.join(dir, "torso", "walk.png"));
+    fixture.writeJson(path.join(dir, "character.json"), {
+      id: "walker",
+      display_name: "Walker",
+      aliases: ["Walker"],
+      asset: "blank.png",
+      z: 10,
+      slots: { torso: { drawings_dir: "torso", default_drawing: "walk" } },
+    });
+    fixture.writeJson(path.join(dir, "actions", "walk_side.json"), {
+      id: "walk_side",
+      view: "right_side",
+      fps: 12,
+      frames: 8,
+      set_slots: { torso: "walk" },
+    });
+    const actions = listProjectActions(fixture.projectDir, fixture.globalAssetsDir);
+    const walk = actions.find((item) => item.label === "walker/walk_side");
+    assert.ok(walk);
+    assert.equal(walk.thumbRel, "characters/walker/torso/walk.png");
+    assert.equal(walk.name, "walk_side");
   });
 });

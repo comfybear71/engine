@@ -210,16 +210,23 @@ function withShow(path: string): string {
   return `${path}${join}show=${encodeURIComponent(activeShowId)}`;
 }
 
-function withScript(path: string, script?: string | null): string {
-  if (!script) return path;
+export function requireScriptName(script?: string | null): string {
+  const name = (script || "").trim();
+  if (!name) throw new Error("No script selected");
+  return name;
+}
+
+export function withScript(path: string, script?: string | null): string {
+  const name = (script || "").trim();
+  if (!name) return path;
   const join = path.includes("?") ? "&" : "?";
-  return `${path}${join}script=${encodeURIComponent(script)}`;
+  return `${path}${join}script=${encodeURIComponent(name)}`;
 }
 
 export async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
   const next = path.startsWith("/api/projects/") ? withShow(path) : path;
   try {
-    return await fetch(`${WORKER_URL}${next}`, init);
+    return await fetch(`${WORKER_URL}${next}`, { ...init, cache: "no-store" });
   } catch (err) {
     if (init?.signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
       if (err instanceof Error && err.name === "AbortError") throw err;
@@ -267,11 +274,58 @@ export async function createProject(name: string): Promise<ProjectSummary> {
   return body.project;
 }
 
+export type ScriptFileInfo = { name: string; mtime?: number; birthtime?: number };
+export type ScriptCatalog = { scripts: string[]; files: ScriptFileInfo[]; newest: string };
+
 export async function loadScripts(name: string): Promise<string[]> {
+  const catalog = await loadScriptCatalog(name);
+  return catalog.scripts;
+}
+
+export async function loadScriptCatalog(name: string): Promise<ScriptCatalog> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/scripts`);
   if (!res.ok) throw new Error(await readError(res));
-  const body = (await res.json()) as { scripts: string[] };
-  return body.scripts;
+  const body = (await res.json()) as {
+    scripts?: string[];
+    files?: ScriptFileInfo[];
+    default?: string;
+  };
+  const scripts = Array.isArray(body.scripts) ? body.scripts : [];
+  const files = Array.isArray(body.files)
+    ? body.files
+    : scripts.map((scriptName) => ({ name: scriptName, mtime: 0 }));
+  return {
+    scripts,
+    files,
+    newest: body.default || files[0]?.name || "script.txt",
+  };
+}
+
+export async function createScript(name: string, scriptName?: string | null): Promise<{ script: string; catalog: ScriptCatalog }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/scripts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(scriptName ? { name: scriptName } : {}),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    script?: string;
+    scripts?: string[];
+    files?: ScriptFileInfo[];
+    default?: string;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `Create script failed (${res.status})`);
+  if (!body.script) throw new Error("Create script failed");
+  const scripts = Array.isArray(body.scripts) ? body.scripts : [body.script];
+  const files = Array.isArray(body.files) ? body.files : scripts.map((item) => ({ name: item, mtime: 0 }));
+  return {
+    script: body.script,
+    catalog: {
+      scripts,
+      files,
+      newest: body.default || files[0]?.name || body.script,
+    },
+  };
 }
 
 export async function loadLibrary(name: string): Promise<LibraryResponse> {
@@ -500,10 +554,12 @@ export type FactoryCharacter = {
 };
 export type ProjectAction = {
   id: string;
+  name?: string;
   characterId: string | null;
   label: string;
   source: string;
   rel: string;
+  thumbRel?: string | null;
 };
 
 export async function loadFactoryCharacter(
@@ -562,6 +618,7 @@ export type ProjectAudioFile = {
   rel: string;
   durationSeconds: number | null;
   mtime?: number | null;
+  peaks?: number[];
 };
 
 export async function loadProjectAudio(name: string): Promise<ProjectAudioFile[]> {
@@ -572,7 +629,7 @@ export async function loadProjectAudio(name: string): Promise<ProjectAudioFile[]
 }
 
 export async function loadStage(name: string, script?: string | null): Promise<StageInfo> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/stage`, script));
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/stage`, requireScriptName(script)));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<StageInfo>;
 }
@@ -732,7 +789,7 @@ export async function fetchPreviewFrame(
 }
 
 export async function loadScript(name: string, script?: string | null): Promise<string> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, script));
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, requireScriptName(script)));
   if (!res.ok) throw new Error(await readError(res));
   return res.text();
 }
@@ -779,7 +836,7 @@ export async function saveScript(
   script?: string | null,
   opts?: { parse?: boolean }
 ): Promise<LintResult> {
-  const path = withScript(`/api/projects/${encodeURIComponent(name)}/script`, script);
+  const path = withScript(`/api/projects/${encodeURIComponent(name)}/script`, requireScriptName(script));
   const url = opts?.parse === false ? `${path}${path.includes("?") ? "&" : "?"}parse=0` : path;
   const res = await workerFetch(url, {
     method: "PUT",
@@ -803,7 +860,7 @@ export async function lintScript(name: string, text?: string, script?: string | 
 }
 
 export async function loadLanes(name: string, script?: string | null): Promise<LanesResponse> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lanes`, script));
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lanes`, requireScriptName(script)));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<LanesResponse>;
 }
@@ -819,6 +876,7 @@ export type StudioSettings = {
   lipSync: "auto" | "manual";
   lipsync?: LipSyncNaturalSettings;
   independent?: boolean;
+  activeScript?: string;
 };
 
 export const DEFAULT_LIPSYNC_SETTINGS: LipSyncNaturalSettings = {
@@ -983,7 +1041,7 @@ export type PlaybackStatus = {
 };
 
 export async function loadPlayback(name: string, script?: string | null): Promise<PlaybackStatus> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/playback`, script));
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/playback`, requireScriptName(script)));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<PlaybackStatus>;
 }

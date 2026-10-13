@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from compositor.validate_assets import check_png, validate_character
+from compositor.validate_assets import check_png, is_intentional_blank, validate_character
 
 
 def _write_rgba(path: Path, w: int, h: int, inset: int = 2, alpha: int = 255) -> Path:
@@ -27,8 +27,18 @@ def test_check_png_reports_size_blank_and_edge(tmp_path: Path):
     size_issues = check_png(wrong, canvas, "wrong.png")
     assert any("expected 16x16 RGBA, got 8x8 RGBA" in line for line in size_issues)
 
-    blank = _write_rgba(tmp_path / "blank.png", 16, 16, inset=0, alpha=0)
-    assert any("blank PNG" in line for line in check_png(blank, canvas, "blank.png"))
+    empty = _write_rgba(tmp_path / "empty.png", 16, 16, inset=0, alpha=0)
+    assert any("blank PNG" in line for line in check_png(empty, canvas, "empty.png"))
+    for name in ("none.png", "rig.png", "blank.png"):
+        intentional = _write_rgba(tmp_path / name, 16, 16, inset=0, alpha=0)
+        assert check_png(intentional, canvas, name) == []
+    flagged = _write_rgba(tmp_path / "clear.png", 16, 16, inset=0, alpha=0)
+    assert check_png(flagged, canvas, "clear.png", allow_blank=True) == []
+    assert is_intentional_blank("none")
+    assert is_intentional_blank("rig")
+    assert is_intentional_blank("blank")
+    assert is_intentional_blank("clear", {"drawings": {"clear": {"blank": True}}})
+    assert not is_intentional_blank("empty")
 
     edge = _write_rgba(tmp_path / "edge.png", 16, 16, inset=0)
     assert any("touches the canvas edge" in line for line in check_png(edge, canvas, "edge.png"))
@@ -106,6 +116,42 @@ def test_validate_character_rejects_child_parent_cycle(tmp_path: Path):
     (char_dir / "character.json").write_text(json.dumps(config))
     issues = validate_character(char_dir, config, roots=[tmp_path])
     assert any("cycles" in line for line in issues)
+
+
+def test_validate_character_allows_intentional_blank_drawings(tmp_path: Path):
+    char_dir = tmp_path / "characters" / "rodney"
+    (char_dir / "legs_front").mkdir(parents=True)
+    (char_dir / "legs_back").mkdir()
+    (char_dir / "torso_left_side").mkdir(parents=True)
+    (char_dir / "torso_right_side").mkdir()
+    (char_dir / "torso").mkdir()
+    _write_rgba(char_dir / "legs_front" / "none.png", 16, 16, inset=0, alpha=0)
+    _write_rgba(char_dir / "legs_back" / "none.png", 16, 16, inset=0, alpha=0)
+    _write_rgba(char_dir / "torso_left_side" / "rig.png", 16, 16, inset=0, alpha=0)
+    _write_rgba(char_dir / "torso_right_side" / "rig.png", 16, 16, inset=0, alpha=0)
+    _write_rgba(char_dir / "torso" / "clear.png", 16, 16, inset=0, alpha=0)
+    _write_rgba(char_dir / "torso" / "walk.png", 16, 16, inset=0, alpha=0)
+    config = {
+        "id": "rodney",
+        "slots": {
+            "legs": {"drawings_dir": "legs", "views": True, "default_drawing": "none"},
+            "torso": {
+                "drawings_dir": "torso",
+                "views": True,
+                "default_drawing": "walk",
+                "drawings": {"clear": {"blank": True}},
+            },
+        },
+    }
+    (char_dir / "character.json").write_text(json.dumps(config))
+    issues = validate_character(char_dir, config, roots=[tmp_path])
+    joined = "\n".join(issues)
+    assert "legs_front/none.png" not in joined
+    assert "legs_back/none.png" not in joined
+    assert "torso_left_side/rig.png" not in joined
+    assert "torso_right_side/rig.png" not in joined
+    assert "torso/clear.png" not in joined
+    assert "torso/walk.png" in joined and "blank PNG" in joined
 
 
 def test_validate_character_scans_back_view_folder(tmp_path: Path):

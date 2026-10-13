@@ -42,6 +42,41 @@ function isSafeScriptName(name) {
   return SAFE_SCRIPT_NAME.test(name);
 }
 
+function normalizeNewScriptName(raw) {
+  let stem = String(raw || "").trim();
+  if (!stem) return null;
+  stem = stem.replace(/\.txt$/i, "");
+  if (!/^script(?:_|$)/i.test(stem)) stem = `script_${stem}`;
+  stem = stem.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+  const name = /\.txt$/i.test(stem) ? stem : `${stem}.txt`;
+  return isSafeScriptName(name) ? name : null;
+}
+
+function nextNewScriptName(existing) {
+  const used = new Set(existing || []);
+  if (!used.has("script_new.txt")) return "script_new.txt";
+  let n = 2;
+  while (used.has(`script_new_${n}.txt`)) n += 1;
+  return `script_new_${n}.txt`;
+}
+
+function createScriptFile(projectDir, requested) {
+  const existing = listScriptFiles(projectDir);
+  const name = requested ? normalizeNewScriptName(requested) : nextNewScriptName(existing);
+  if (!name) {
+    const err = new Error("Use a short name like walk or script_walk.txt");
+    err.code = "INVALID_SCRIPT";
+    throw err;
+  }
+  if (existing.includes(name)) {
+    const err = new Error(`${name} already exists`);
+    err.code = "SCRIPT_EXISTS";
+    throw err;
+  }
+  fs.writeFileSync(path.join(projectDir, name), EMPTY_SCRIPT_TEMPLATE);
+  return name;
+}
+
 function scriptStem(scriptName) {
   const base = path.basename(String(scriptName || DEFAULT_SCRIPT));
   return base.replace(/\.txt$/i, "") || "script";
@@ -62,16 +97,49 @@ function resolveScriptName(value) {
   return base;
 }
 
-function listScriptFiles(projectDir) {
+function listScriptRecords(projectDir) {
   if (!fs.existsSync(projectDir)) return [];
-  return fs
-    .readdirSync(projectDir)
-    .filter((name) => isSafeScriptName(name) && fs.statSync(path.join(projectDir, name)).isFile())
-    .sort((a, b) => {
-      if (a === DEFAULT_SCRIPT) return -1;
-      if (b === DEFAULT_SCRIPT) return 1;
-      return a.localeCompare(b);
+  const records = [];
+  for (const name of fs.readdirSync(projectDir)) {
+    if (!isSafeScriptName(name)) continue;
+    const abs = path.join(projectDir, name);
+    let stat;
+    try {
+      stat = fs.statSync(abs);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    records.push({
+      name,
+      mtime: Math.round(stat.mtimeMs),
+      birthtime: Math.round(stat.birthtimeMs || stat.ctimeMs || stat.mtimeMs),
     });
+  }
+  return records.sort((a, b) => {
+    if (a.name === DEFAULT_SCRIPT) return -1;
+    if (b.name === DEFAULT_SCRIPT) return 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function scriptRecency(record) {
+  return Math.max(Number(record && record.mtime) || 0, Number(record && record.birthtime) || 0);
+}
+
+function newestScriptName(records, fallback = DEFAULT_SCRIPT) {
+  if (!records || !records.length) return fallback;
+  let best = records[0];
+  for (const item of records) {
+    const age = scriptRecency(item);
+    const bestAge = scriptRecency(best);
+    if (age > bestAge || (age === bestAge && item.name.localeCompare(best.name) < 0)) best = item;
+  }
+  return best.name;
+}
+
+function listScriptFiles(projectDir) {
+  return listScriptRecords(projectDir).map((item) => item.name);
 }
 
 function emptyLibrary() {
@@ -842,7 +910,12 @@ module.exports = {
   renderOutputName,
   previewOutputName,
   resolveScriptName,
+  normalizeNewScriptName,
+  nextNewScriptName,
+  createScriptFile,
   listScriptFiles,
+  listScriptRecords,
+  newestScriptName,
   readLibrary,
   writeLibrary,
   collectUsedAssets,
