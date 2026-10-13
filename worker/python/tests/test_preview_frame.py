@@ -79,8 +79,51 @@ def test_compose_frame_can_preview_at_reduced_resolution(tmp_path):
 
 
 def test_preview_resize_matches_cli_scale_frame(tmp_path):
-    """Studio 960 preview must be the CLI frame after scale_frame, not a second compositor."""
+    """PNG / compose_frame(width) stays the CLI frame after scale_frame."""
     timeline = _two_scene_timeline(tmp_path)
     cli = compose_frame(timeline, 0)
     preview = compose_frame(timeline, 0, width=10, height=10)
     assert np.array_equal(preview, scale_frame(cli, 10, 10))
+
+
+def test_jpeg_preview_composes_at_output_size(tmp_path):
+    """Scrub JPEG is 480p-class compose, not a full-HD frame that is then scaled."""
+    from compositor.preview_server import handle
+
+    _two_scene_timeline(tmp_path)
+    raw = {
+        "series": "Test",
+        "episode": "1",
+        "fps": 24,
+        "canvas": {"width": 20, "height": 20},
+        "scenes": [
+            {
+                "id": "s1",
+                "duration": {"frames": 5},
+                "background": {"asset": "red.png"},
+                "layers": [],
+            }
+        ],
+    }
+    import json
+
+    (tmp_path / "timeline.json").write_text(json.dumps(raw))
+    out = tmp_path / "preview.jpg"
+    result = handle(
+        {
+            "id": 3,
+            "projectDir": str(tmp_path),
+            "timeline": str(tmp_path / "timeline.json"),
+            "frame": 0,
+            "format": "jpeg",
+            "width": 10,
+            "height": 10,
+            "output": str(out),
+        }
+    )
+    assert result["ok"] is True
+    assert result["preview"] == {"width": 10, "height": 10}
+    img = cv2.imread(str(out))
+    assert img is not None
+    assert img.shape[1] == 10
+    assert img.shape[0] == 10

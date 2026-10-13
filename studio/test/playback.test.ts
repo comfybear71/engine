@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   AUDIO_SYNC_SLACK_SEC,
+  PREVIEW_PREFETCH_SEC,
   PREVIEW_PROXY_SIZE,
   PROXY_SEGMENT_FIRST_SEC,
   PROXY_SEGMENT_SEC,
+  previewPrefetchWindow,
   audioClockDriftSec,
   bumpAudioGeneration,
   chooseVideoFile,
   clipDurationSec,
+  createFrameCache,
   frameFromElapsedMs,
   frameInSegment,
   isLiveAudioStart,
@@ -89,6 +92,36 @@ describe("stage playback helpers", () => {
     assert.equal(playSegmentDurationSec(false), PROXY_SEGMENT_SEC);
     assert.equal(PREVIEW_PROXY_SIZE.width, 854);
     assert.equal(PREVIEW_PROXY_SIZE.height, 480);
+  });
+
+  test("previewPrefetchWindow starts at the playhead, not frame 0", () => {
+    const fromClick = previewPrefetchWindow(48, 24, 24 * 30, PREVIEW_PREFETCH_SEC);
+    assert.equal(fromClick[0], 48);
+    assert.equal(fromClick[fromClick.length - 1], 48 + 24 * PREVIEW_PREFETCH_SEC);
+    assert.ok(!fromClick.includes(0));
+    const fromZero = previewPrefetchWindow(0, 24, 24 * 30);
+    assert.equal(fromZero[0], 0);
+    assert.ok(fromZero.length > 24);
+    const tail = previewPrefetchWindow(24 * 30 - 2, 24, 24 * 30);
+    assert.deepEqual(tail, [24 * 30 - 2, 24 * 30 - 1]);
+  });
+
+  test("frame cache returns a rendered frame on replay without calling the loader again", async () => {
+    const cache = createFrameCache();
+    let loads = 0;
+    const first = await cache.ensure(12, async () => {
+      loads += 1;
+      return "blob:frame-12";
+    });
+    const replay = await cache.ensure(12, async () => {
+      loads += 1;
+      return "blob:frame-12-again";
+    });
+    assert.equal(first, "blob:frame-12");
+    assert.equal(replay, "blob:frame-12");
+    assert.equal(loads, 1);
+    assert.equal(cache.get(12), "blob:frame-12");
+    cache.clear();
   });
 
   test("line audio waits for the picture and reseeks when it drifts", () => {

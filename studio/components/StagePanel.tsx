@@ -16,8 +16,8 @@ import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import { ASSET_DRAG_MIME, applyStagePlacement, parseAssetDrag } from "@/lib/stageAssets";
 import {
   AUDIO_SYNC_SLACK_SEC,
-  PREVIEW_PREFETCH_SEC,
   PREVIEW_PROXY_SIZE,
+  previewPrefetchWindow,
   PROXY_SEGMENT_PREFETCH_SEC,
   PROXY_SEGMENT_SEC,
   audioClockDriftSec,
@@ -175,6 +175,7 @@ export default function StagePanel({
   const segmentRef = useRef<typeof segment>(null);
   const nextSegmentRef = useRef<typeof segment>(null);
   const previewGraphRef = useRef<PreviewGraph | null>(null);
+  const prefetchGenRef = useRef(0);
 
   playingRef.current = playing;
   frameRef.current = frame;
@@ -717,22 +718,22 @@ export default function StagePanel({
   }
 
   function prefetchFromPlayhead(fromFrame: number) {
-    if (!project || previewGraphRef.current) return;
-    const ahead = Math.max(1, Math.round(PREVIEW_PREFETCH_SEC * Math.max(fpsRef.current, 1)));
-    const start = clampFrameIndex(fromFrame, totalFramesRef.current);
-    for (let i = 0; i <= ahead; i += 1) {
-      const requestFrame = start + i;
-      if (requestFrame >= totalFramesRef.current) break;
-      if (frameCacheRef.current.has(requestFrame)) continue;
-      void frameCacheRef.current.ensure(requestFrame, async () => {
-        const { blob } = await fetchPreviewFrame(project, requestFrame, undefined, script, PREVIEW_PROXY_SIZE);
-        return URL.createObjectURL(blob);
-      }).then((url) => {
-        if (url && !playingRef.current && frameRef.current === requestFrame) {
+    if (!project) return;
+    const gen = (prefetchGenRef.current += 1);
+    const frames = previewPrefetchWindow(fromFrame, fpsRef.current, totalFramesRef.current);
+    void (async () => {
+      for (const requestFrame of frames) {
+        if (gen !== prefetchGenRef.current) return;
+        const url = await frameCacheRef.current.ensure(requestFrame, async () => {
+          const { blob } = await fetchPreviewFrame(project, requestFrame, undefined, script, PREVIEW_PROXY_SIZE);
+          return URL.createObjectURL(blob);
+        });
+        if (gen !== prefetchGenRef.current) return;
+        if (url && frameRef.current === requestFrame && !previewGraphRef.current) {
           setPreviewUrl(url);
         }
-      });
-    }
+      }
+    })();
   }
 
   useEffect(() => {
@@ -879,8 +880,7 @@ export default function StagePanel({
           setSegment(upcoming);
         }
       } else if (remain <= 0 && next < maxFrame) {
-        pauseLineAudio();
-        void ensurePlaySegment(next);
+        prefetchFromPlayhead(next);
       }
     }
   }
@@ -1262,8 +1262,7 @@ export default function StagePanel({
                         setSegment(upcoming);
                         return;
                       }
-                      pauseLineAudio();
-                      void ensurePlaySegment(nextFrame);
+                      prefetchFromPlayhead(nextFrame);
                     }}
                     onError={() => {
                       setPlayback((current) =>
