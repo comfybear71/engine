@@ -362,6 +362,7 @@ function FactoryRowBlock({
   onSelect,
   onOpenSlot,
   onOpenDrawing,
+  onAdd,
 }: {
   project: string;
   row: FactoryRow;
