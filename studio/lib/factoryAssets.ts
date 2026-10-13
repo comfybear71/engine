@@ -78,3 +78,94 @@ export function groupAudioFolders(files: { label: string; rel: string }[]): Audi
   }
   return [...map.values()];
 }
+
+export const PINNED_SCRIPTS = ["script.txt", "script_full_test.txt", "script_showcase_v2.txt"] as const;
+
+export type ScriptGroups = { pinned: string[]; tests: string[] };
+
+export function groupScripts(names: string[]): ScriptGroups {
+  const pinned: string[] = [];
+  const seen = new Set<string>();
+  for (const name of PINNED_SCRIPTS) {
+    if (names.includes(name)) {
+      pinned.push(name);
+      seen.add(name);
+    }
+  }
+  const tests = names.filter((name) => !seen.has(name)).sort((a, b) => a.localeCompare(b));
+  return { pinned, tests };
+}
+
+export type ActionShot = {
+  id: string;
+  name: string;
+  label: string;
+  characterId: string | null;
+  characterName: string;
+  thumbRel?: string | null;
+  rel?: string;
+  source?: string;
+};
+
+export type ActionShotGroup = { characterId: string | null; characterName: string; actions: ActionShot[] };
+
+export function groupActionsByCharacter(
+  actions: Array<{
+    id: string;
+    name?: string;
+    label: string;
+    characterId: string | null;
+    thumbRel?: string | null;
+    rel?: string;
+    source?: string;
+  }>,
+  characters: Array<{ id: string; display_name: string }>
+): ActionShotGroup[] {
+  const names = new Map(characters.map((item) => [item.id, item.display_name]));
+  const groups = new Map<string, ActionShotGroup>();
+  for (const action of actions || []) {
+    const characterId = action.characterId || null;
+    const key = characterId || "shared";
+    const characterName = characterId ? names.get(characterId) || characterId : "Shared";
+    if (!groups.has(key)) groups.set(key, { characterId, characterName, actions: [] });
+    groups.get(key)!.actions.push({
+      id: action.label || `${characterId || "shared"}/${action.id}`,
+      name: action.name || action.id,
+      label: action.name || action.id,
+      characterId,
+      characterName,
+      thumbRel: action.thumbRel || null,
+      rel: action.rel,
+      source: action.source,
+    });
+  }
+  return [...groups.values()].sort((a, b) => {
+    if (!a.characterId) return 1;
+    if (!b.characterId) return -1;
+    return a.characterName.localeCompare(b.characterName);
+  });
+}
+
+export function visibleDrawings<T extends { missing?: boolean }>(drawings: T[], showMissing: boolean): T[] {
+  if (showMissing) return drawings;
+  return drawings.filter((item) => !item.missing);
+}
+
+export type AssetsSection = "characters" | "props" | "backgrounds" | "actions" | "sounds";
+
+export const ASSET_SECTIONS: { id: AssetsSection; label: string }[] = [
+  { id: "characters", label: "Characters" },
+  { id: "props", label: "Props" },
+  { id: "backgrounds", label: "Backgrounds" },
+  { id: "actions", label: "Action Shots" },
+  { id: "sounds", label: "Sounds" },
+];
+
+export function sectionLabel(id: AssetsSection | null | undefined): string {
+  return ASSET_SECTIONS.find((item) => item.id === id)?.label || "Assets";
+}
+
+export function soundDisplayName(file: { label: string; rel: string }, duplicates: boolean): string {
+  const base = file.rel.replace(/^audio\/[^/]+\//, "").replace(/\.wav$/i, "");
+  return duplicates ? `${file.label} ${base}` : file.label;
+}

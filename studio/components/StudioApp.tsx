@@ -9,6 +9,7 @@ import { LipSyncSettingsPage } from "@/components/LipSyncSettings";
 import ScriptPanel from "@/components/ScriptPanel";
 import StagePanel from "@/components/StagePanel";
 import StudioSettings from "@/components/StudioSettings";
+import { groupScripts } from "@/lib/factoryAssets";
 import {
   checkWorker,
   loadScripts,
@@ -116,6 +117,7 @@ export default function StudioApp({
 
   const active = TABS.find((item) => item.id === tab)!;
   const videoSrc = project && videoBust ? renderVideoUrl(project, videoBust, script) : null;
+  const scriptGroups = groupScripts(scripts);
 
   return (
     <div className="flex h-screen flex-col bg-studio-bg">
@@ -159,11 +161,20 @@ export default function StudioApp({
               data-testid="script-select"
             >
               {scripts.length === 0 ? <option value="script.txt">script.txt</option> : null}
-              {scripts.map((name) => (
+              {scriptGroups.pinned.map((name) => (
                 <option key={name} value={name}>
                   {name}
                 </option>
               ))}
+              {scriptGroups.tests.length ? (
+                <optgroup label="tests">
+                  {scriptGroups.tests.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
             </select>
           </label>
         </div>

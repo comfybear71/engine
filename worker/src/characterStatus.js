@@ -10,7 +10,15 @@
 const fs = require("fs");
 const path = require("path");
 
-const { loadCharacter, scanDrawingsDir, resolveAsset, listActionIds, listKnownCharacterIds } = require("./parser/assetLibrary");
+const {
+  loadCharacter,
+  loadAction,
+  scanDrawingsDir,
+  resolveAsset,
+  listActionIds,
+  listKnownCharacterIds,
+  isProjectIndependent,
+} = require("./parser/assetLibrary");
 const { isSafeFolderName } = require("./studioProjects");
 const { characterDir } = require("./characterLocal");
 const { discoverSlotViews, findDrawingUsages } = require("./assetEditor");
@@ -24,6 +32,8 @@ const {
   statusKey,
   parseStatusKey,
   isStatusState,
+  normalizeStatusState,
+  lookupStatusState,
   drawingBadge,
   childRowLabel,
   isFaceOverlaySlot,
@@ -63,15 +73,45 @@ function emptyStatus() {
   return { drawings: {}, redos: {} };
 }
 
+function addStatusEntry(drawings, key, value) {
+  const state = isStatusState(value) ? value : normalizeStatusState(value);
+  const parsed = parseStatusKey(key);
+  if (!state || !parsed) return;
+  const canonical = statusKey(parsed.slot, parsed.drawing);
+  if (!drawings[canonical]) drawings[canonical] = state;
+  if (!drawings[key]) drawings[key] = state;
+}
+
+function collectStatusMap(raw, drawings, redos, prefix) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === REDOS_KEY || key === "drawings" || key === "status" || key === "ticks") {
+      if (value && typeof value === "object" && !Array.isArray(value)) collectStatusMap(value, drawings, redos, prefix);
+      continue;
+    }
+    if (key === "redos" && value && typeof value === "object") {
+      for (const [redoKey, note] of Object.entries(value)) {
+        if (typeof note === "string" && parseStatusKey(redoKey)) redos[redoKey] = note;
+      }
+      continue;
+    }
+    const nextKey = prefix ? `${prefix}/${key}` : key;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nestedState = normalizeStatusState(value.state || value.status || value.badge);
+      if (nestedState) addStatusEntry(drawings, nextKey, nestedState);
+      else collectStatusMap(value, drawings, redos, nextKey);
+      continue;
+    }
+    addStatusEntry(drawings, nextKey, value);
+  }
+}
+
 function parseStatusFile(raw) {
   const drawings = {};
   const redos = {};
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { drawings, redos };
   const extraRedos = raw[REDOS_KEY] && typeof raw[REDOS_KEY] === "object" ? raw[REDOS_KEY] : {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (key === REDOS_KEY) continue;
-    if (isStatusState(value) && parseStatusKey(key)) drawings[key] = value;
-  }
+  collectStatusMap(raw, drawings, redos, "");
   for (const [key, value] of Object.entries(extraRedos)) {
     if (typeof value === "string" && parseStatusKey(key)) redos[key] = value;
   }
@@ -89,15 +129,62 @@ function serializeStatus(data) {
   return out;
 }
 
+function readJsonIfPresent(abs) {
+  if (!abs || !fs.existsSync(abs)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(abs, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function mergeStatusData(into, extra) {
+  if (!extra) return into;
+  for (const [key, value] of Object.entries(extra.drawings || {})) {
+    if (!into.drawings[key] && isStatusState(value)) into.drawings[key] = value;
+  }
+  for (const [key, value] of Object.entries(extra.redos || {})) {
+    if (!into.redos[key] && typeof value === "string") into.redos[key] = value;
+  }
+  return into;
+}
+
+function readCharacterJsonTicks(projectDir, characterId) {
+  const abs = path.join(characterDir(projectDir, characterId), "character.json");
+  const raw = readJsonIfPresent(abs);
+  const out = emptyStatus();
+  if (!raw || typeof raw !== "object") return out;
+  const slots = raw.slots && typeof raw.slots === "object" ? raw.slots : {};
+  for (const [slotName, spec] of Object.entries(slots)) {
+    const drawings = spec && spec.drawings && typeof spec.drawings === "object" ? spec.drawings : {};
+    for (const [drawingName, meta] of Object.entries(drawings)) {
+      if (!meta || typeof meta !== "object") continue;
+      const state =
+        normalizeStatusState(meta.status || meta.state || meta.badge) ||
+        (meta.approved === true || meta.ticked === true ? "ticked" : null);
+      if (state) addStatusEntry(out.drawings, statusKey(slotName, drawingName), state);
+    }
+  }
+  return out;
+}
+
 function readStatus(projectDir, characterId) {
   assertCharacterId(characterId);
-  const abs = statusPath(projectDir, characterId);
-  if (!fs.existsSync(abs)) return emptyStatus();
-  try {
-    return parseStatusFile(JSON.parse(fs.readFileSync(abs, "utf8")));
-  } catch {
-    return emptyStatus();
+  const dir = characterDir(projectDir, characterId);
+  const merged = emptyStatus();
+  const files = [
+    path.join(dir, STATUS_FILENAME),
+    path.join(dir, "review.json"),
+    path.join(dir, "approved.json"),
+    path.join(dir, "ticks.json"),
+    path.join(dir, "_review.json"),
+    path.join(dir, "_review", "status.json"),
+  ];
+  for (const abs of files) {
+    mergeStatusData(merged, parseStatusFile(readJsonIfPresent(abs)));
   }
+  mergeStatusData(merged, readCharacterJsonTicks(projectDir, characterId));
+  return merged;
 }
 
 function writeStatus(projectDir, characterId, data) {
@@ -374,7 +461,20 @@ function buildChildRows(projectDir, globalAssetsDir, characterId, character, vie
 }
 
 function rowSortKey(row) {
-  const order = ["Head", "Eyes", "Mouth", "Torso", "Arm rig", "Arm rig L", "Arm rig R", "Hands", "Legs", "Legs L", "Legs R"];
+  const order = [
+    "Head",
+    "Eyes",
+    "Mouth",
+    "Torso",
+    "Overlays",
+    "Arm rig",
+    "Arm rig L",
+    "Arm rig R",
+    "Hands",
+    "Legs",
+    "Legs L",
+    "Legs R",
+  ];
   const i = order.indexOf(row.label);
   return i >= 0 ? i : 50 + row.label.localeCompare("z");
 }
@@ -384,6 +484,7 @@ const CANONICAL_SLOT = {
   Eyes: "eyes",
   Mouth: "mouth",
   Torso: "torso",
+  Overlays: "overlay",
   "Arm rig": "arm",
   "Arm rig L": "arm_L",
   "Arm rig R": "arm_R",
@@ -393,25 +494,35 @@ const CANONICAL_SLOT = {
   "Legs R": "legs_R",
 };
 
+function mergeNamedPiece(existing, piece) {
+  const prior = existing.drawings.find((item) => item.name === piece.name);
+  if (prior) {
+    if (!prior.rel && piece.rel) {
+      const idx = existing.drawings.indexOf(prior);
+      existing.drawings[idx] = piece;
+    }
+    return;
+  }
+  if (existing.drawings.some((item) => item.key === piece.key)) return;
+  existing.drawings.push(piece);
+}
+
 function mergeFactoryRows(rows) {
   const byLabel = new Map();
   for (const row of rows || []) {
     const existing = byLabel.get(row.label);
     if (!existing) {
-      byLabel.set(row.label, {
+      const starter = {
         ...row,
         id: `group:${row.label}`,
         slot: CANONICAL_SLOT[row.label] || row.slot,
-        drawings: [...(row.drawings || [])],
-      });
+        drawings: [],
+      };
+      for (const piece of row.drawings || []) mergeNamedPiece(starter, piece);
+      byLabel.set(row.label, starter);
       continue;
     }
-    const seen = new Set(existing.drawings.map((item) => item.key));
-    for (const piece of row.drawings || []) {
-      if (seen.has(piece.key)) continue;
-      seen.add(piece.key);
-      existing.drawings.push(piece);
-    }
+    for (const piece of row.drawings || []) mergeNamedPiece(existing, piece);
   }
   return [...byLabel.values()];
 }
@@ -560,6 +671,7 @@ function describeFactoryCharacter(projectDir, globalAssetsDir, characterId, view
   });
 
   const canvas = defaultFactoryCanvas(character);
+  const migrated = migrateStatusOntoRows(projectDir, characterId, rows, status);
   const counts = sumCounts(rows);
   return {
     ok: true,
@@ -567,8 +679,8 @@ function describeFactoryCharacter(projectDir, globalAssetsDir, characterId, view
     displayName: character.display_name || characterId,
     view,
     views,
-    status: status.drawings,
-    redos: status.redos,
+    status: migrated.drawings,
+    redos: migrated.redos,
     counts,
     canvas,
     default_scale: character.default_scale == null ? 1 : character.default_scale,
@@ -576,6 +688,22 @@ function describeFactoryCharacter(projectDir, globalAssetsDir, characterId, view
     children: describeChildren(projectDir, globalAssetsDir, characterId, character, options),
     rows,
   };
+}
+
+function migrateStatusOntoRows(projectDir, characterId, rows, status) {
+  let changed = false;
+  for (const row of rows || []) {
+    for (const piece of row.drawings || []) {
+      if (!piece.rel || !piece.key) continue;
+      if (status.drawings[piece.key]) continue;
+      const found = lookupStatusState(status.drawings, piece.key);
+      if (!found) continue;
+      status.drawings[piece.key] = found;
+      changed = true;
+    }
+  }
+  if (changed) writeStatus(projectDir, characterId, status);
+  return status;
 }
 
 function inspectorForPiece(factory, key, ctx) {
@@ -615,19 +743,68 @@ function inspectorForPiece(factory, key, ctx) {
   return null;
 }
 
+function actionThumbRel(projectDir, globalAssetsDir, characterId, actionId, options) {
+  if (!characterId) return null;
+  const action = loadAction(projectDir, globalAssetsDir, characterId, actionId, options);
+  const view = action && action.view ? action.view : "front";
+  if (action && action.set_slots && typeof action.set_slots === "object") {
+    for (const [slotName, drawingName] of Object.entries(action.set_slots)) {
+      const dirs = candidateDrawingsDirs(slotName, view, slotName);
+      const hit = lookupDrawing(projectDir, globalAssetsDir, characterId, dirs, String(drawingName), options);
+      if (hit) return hit.rel;
+    }
+  }
+  const torso = lookupDrawing(
+    projectDir,
+    globalAssetsDir,
+    characterId,
+    candidateDrawingsDirs("torso", view, "torso"),
+    "neutral",
+    options
+  );
+  if (torso) return torso.rel;
+  const body = lookupDrawing(
+    projectDir,
+    globalAssetsDir,
+    characterId,
+    candidateDrawingsDirs("body", view, "body"),
+    "walk",
+    options
+  );
+  if (body) return body.rel;
+  const head = lookupDrawing(
+    projectDir,
+    globalAssetsDir,
+    characterId,
+    candidateDrawingsDirs("head_base", view, "head_base"),
+    "neutral",
+    options
+  );
+  return head ? head.rel : null;
+}
+
 function listProjectActions(projectDir, globalAssetsDir, options = {}) {
   const actions = [];
   const seen = new Set();
+  const includeGlobal = options.includeGlobal === true || !isProjectIndependent(projectDir);
 
-  function add(label, id, characterId, source, rel) {
+  function add(label, id, characterId, source, rel, thumbRel) {
     if (!id || seen.has(label)) return;
     seen.add(label);
-    actions.push({ id, characterId: characterId || null, label, source, rel });
+    actions.push({
+      id,
+      characterId: characterId || null,
+      label,
+      name: id,
+      source,
+      rel,
+      thumbRel: thumbRel || null,
+    });
   }
 
   const roots = [];
   if (projectDir) roots.push({ dir: projectDir, source: "project" });
-  if (globalAssetsDir) roots.push({ dir: globalAssetsDir, source: "global" });
+  if (includeGlobal && globalAssetsDir) roots.push({ dir: globalAssetsDir, source: "global" });
   for (const root of roots) {
     const dir = path.join(root.dir, "actions");
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
@@ -635,13 +812,20 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
       if (path.extname(file).toLowerCase() !== ".json") continue;
       const id = path.basename(file, ".json");
       if (!isSafeFolderName(id)) continue;
-      add(`shared/${id}`, id, null, root.source, `actions/${file}`);
+      add(`shared/${id}`, id, null, root.source, `actions/${file}`, null);
     }
   }
 
   for (const characterId of listKnownCharacterIds(projectDir, globalAssetsDir, options)) {
     for (const id of listActionIds(projectDir, globalAssetsDir, characterId, options)) {
-      add(`${characterId}/${id}`, id, characterId, "character", `characters/${characterId}/actions/${id}.json`);
+      add(
+        `${characterId}/${id}`,
+        id,
+        characterId,
+        "character",
+        `characters/${characterId}/actions/${id}.json`,
+        actionThumbRel(projectDir, globalAssetsDir, characterId, id, options)
+      );
     }
   }
   actions.sort((a, b) => a.label.localeCompare(b.label));

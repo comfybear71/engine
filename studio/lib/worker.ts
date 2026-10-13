@@ -500,10 +500,12 @@ export type FactoryCharacter = {
 };
 export type ProjectAction = {
   id: string;
+  name?: string;
   characterId: string | null;
   label: string;
   source: string;
   rel: string;
+  thumbRel?: string | null;
 };
 
 export async function loadFactoryCharacter(
@@ -562,6 +564,7 @@ export type ProjectAudioFile = {
   rel: string;
   durationSeconds: number | null;
   mtime?: number | null;
+  peaks?: number[];
 };
 
 export async function loadProjectAudio(name: string): Promise<ProjectAudioFile[]> {
