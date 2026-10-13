@@ -276,12 +276,16 @@ clobber the project's `timeline.json`.
   buttons, ~24px; play uses a small accent on the icon only; timecode on
   the left; **Import audio** then `frame N · fps · script` on the right),
   and **editable timeline lanes** at the bottom (Body/Move, Face, Props,
-  Dialogue, Mouth, Audio, SFX, Camera).
+  Dialogue, Mouth, Audio, SFX, Camera, Inserts).
   The old single Action lane is split so overlapping motion is visible:
   `[Move:]` / `[Swing:]` / `[Pose:]` / `[Do:]` / `body=` cycles on Body/Move,
   `face=` / `eyes=` expression pins on Face, synced mouth cues on Mouth
   (directly under Dialogue), `[Prop:]` on Props, and
-  `[Camera:]` stays on Camera. Occupied lanes default to ~30px per stacked
+  `[Camera:]` stays on Camera. `[Insert: image=…]` stills sit on
+  Inserts (a PNG held for a start/end frame range; drop a drawing onto
+  that lane to place one). The ruler shows the current frame under the
+  playhead while you drag; line audio reseeks on scrub and resumes when
+  the drag ends. Occupied lanes default to ~30px per stacked
   sub-row with the label vertically centred in a fixed-width left column;
   empty category lanes stay thin with a readable label that does not
   overlap its neighbours. A **Lanes** height slider (`+` / `−`) in the
@@ -312,9 +316,12 @@ clobber the project's `timeline.json`.
   Pause, stop, rewind, and effect cleanup cancel any pending start so
   only one WAV copy can play. A seek before Play does not restart
   audio on the first tick. The audio clock follows the proxy video
-  (reseek if it drifts). Scrub still uses `preview-frame`
-  (preview resolution, persisted asset cache). The orange playhead handle sits on the
-  time ruler; one vertical line continues down through every lane.
+  (reseek if it drifts). Dragging the playhead reseeks line audio (a
+  short preview tick while dragging; resume or seek-paused on release)
+  and shows the current frame number live under the handle. Scrub still
+  uses `preview-frame` (preview resolution, persisted asset cache). The
+  orange playhead handle sits on the time ruler; one vertical line
+  continues down through every lane.
   Click or drag the empty ruler area to seek. Pointer-down on a block
   selects it and starts a drag; Shift/Ctrl-click adds to the selection;
   drag a rubber-band on empty lane area selects several; Esc clears.

@@ -17,6 +17,9 @@
  * like [Pause], wait=false leaves it so following lines run during the motion.
  * [Do:] plays an actions/*.json cycle in place (no travel, no flip).
  * [Camera:] writes scene-level camera keyframes the same way.
+ * [Insert: image=<rel> at_time=<frame> for=<frames>|to=<last frame>] holds a
+ * still PNG over that range (a cutaway / insert shot). It does not advance
+ * the shared cursor.
  * [Audio: Name file=<label>] places an import-audio track (WAV + Rhubarb
  * cues + optional words.json) as that character's dialogue at the cursor
  * and advances by the real file duration.
@@ -91,8 +94,26 @@ const HOLD_KEYS = new Set(["over", "hold"]);
 const TRIM_KEYS = new Set(["trim_in", "trim_out"]);
 const AUDIO_KEYS = new Set(["file", "lines", "view", "at_time", "start", "trim_in", "trim_out"]);
 const DO_KEYS = new Set(["action", "for", "wait", "at_time", "start", "prop"]);
+const INSERT_KEYS = new Set(["image", "file", "src", "at_time", "start", "for", "over", "to", "z", "x", "y", "scale", "anchor"]);
 const BUILTIN_REST_ACTION = "rest";
 const PROP_PLACEHOLDER = "{prop}";
+
+function slugInsertId(text) {
+  return (
+    String(text || "")
+      .toLowerCase()
+      .replace(/\.[a-z0-9]+$/i, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 48) || "shot"
+  );
+}
+
+function insertDurationFrames(startFrame, endFrameInclusive) {
+  const start = Math.max(0, Math.floor(Number(startFrame) || 0));
+  const last = Math.max(start, Math.floor(Number(endFrameInclusive) || start));
+  return { startFrame: start, endFrame: last + 1, frames: last - start + 1, lastFrame: last };
+}
 
 function slugify(text) {
   return (
@@ -205,6 +226,7 @@ class SceneContext {
     this.lineCounter = 0; // for audio/<scene>/<nnn>_<char>.wav naming
     this.camera = { x: canvas.width / 2, y: canvas.height / 2, zoom: 1.0 };
     this.cameraKeyframes = [];
+    this.inserts = [];
   }
 }
 
@@ -603,6 +625,9 @@ class ScriptParser {
         return;
       case "view":
         this._handleView(token);
+        return;
+      case "insert":
+        this._handleInsert(token);
         return;
       case "dialogue":
         await this._handleDialogue(token);
@@ -2157,6 +2182,108 @@ class ScriptParser {
 
   // ---- [Camera: ...] -----------------------------------------------------
 
+  _parseInsertDurationFrames(kv, startFrame, lineNumber) {
+    if (kv.to !== undefined) {
+      const spec = parseAtTimeSpec(kv.to, lineNumber, "to");
+      const last = spec.frames !== undefined ? spec.frames : Math.max(0, Math.round(spec.seconds * this.fps));
+      const span = insertDurationFrames(startFrame, last);
+      if (span.frames < 1) {
+        throw new ScriptError(lineNumber, `[Insert: ...] to=${kv.to} is not after at_time=${startFrame}.`);
+      }
+      return span;
+    }
+    const raw = kv.for !== undefined ? kv.for : kv.over;
+    const label = kv.for !== undefined ? "for" : "over";
+    if (raw === undefined) {
+      throw new ScriptError(
+        lineNumber,
+        `[Insert: ...] needs for=<frames> (or for=1s) or to=<last frame>, e.g. at_time=942 for=11.`
+      );
+    }
+    if (/^\d+$/.test(String(raw))) {
+      const frames = parseInt(raw, 10);
+      if (frames < 1) throw new ScriptError(lineNumber, `Invalid ${label} "${raw}" -- must be at least 1 frame.`);
+      return insertDurationFrames(startFrame, startFrame + frames - 1);
+    }
+    const seconds = parseSecondsSpec(raw, lineNumber, label);
+    const frames = framesFromSeconds(seconds, this.fps);
+    if (frames < 1) {
+      throw new ScriptError(lineNumber, `Invalid ${label} "${raw}" -- duration rounds to 0 frames at ${this.fps} fps.`);
+    }
+    return insertDurationFrames(startFrame, startFrame + frames - 1);
+  }
+
+  _handleInsert(token) {
+    const scene = this._requireScene(token.lineNumber, "Insert");
+    const { kv, note } = parseKvTag(token.body);
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "Insert", note);
+    for (const key of Object.keys(kv)) {
+      if (!INSERT_KEYS.has(key)) {
+        throw new ScriptError(
+          token.lineNumber,
+          `Unknown [Insert: ...] argument "${key}". Allowed: image, file, at_time, start, for, over, to, z, x, y, scale, anchor.`
+        );
+      }
+    }
+    const image = kv.image || kv.file || kv.src;
+    if (!image) {
+      throw new ScriptError(token.lineNumber, `[Insert: ...] needs image=<path> to a PNG in this project.`);
+    }
+    const resolved = assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, image);
+    if (!resolved) {
+      throw new ScriptError(token.lineNumber, `Insert image "${image}" was not found in this project.`);
+    }
+    const eventStart = this._eventStartFrame(kv, scene, token.lineNumber);
+    const span = this._parseInsertDurationFrames(kv, eventStart, token.lineNumber);
+    const baseId = `insert_${slugInsertId(path.basename(image, path.extname(image)))}`;
+    let id = baseId;
+    let n = 2;
+    while (scene.inserts.some((item) => item.id === id)) {
+      id = `${baseId}_${n++}`;
+    }
+    const z = kv.z !== undefined ? Math.round(parseNumberValue(kv.z, token.lineNumber, "z")) : 1000;
+    const x = kv.x !== undefined ? parseNumberValue(kv.x, token.lineNumber, "x") : scene.canvas.width / 2;
+    const y = kv.y !== undefined ? parseNumberValue(kv.y, token.lineNumber, "y") : scene.canvas.height / 2;
+    const scale = kv.scale !== undefined ? parseNumberValue(kv.scale, token.lineNumber, "scale") : 1;
+    if (!(scale > 0)) throw new ScriptError(token.lineNumber, `Invalid scale "${kv.scale}" -- must be greater than 0.`);
+    const anchor = kv.anchor || "center";
+    const allowedAnchor = new Set([
+      "top-left",
+      "top-center",
+      "top-right",
+      "center-left",
+      "center",
+      "center-right",
+      "bottom-left",
+      "bottom-center",
+      "bottom-right",
+    ]);
+    if (!allowedAnchor.has(anchor)) {
+      throw new ScriptError(token.lineNumber, `Invalid anchor "${anchor}".`);
+    }
+    scene.inserts.push({
+      id,
+      asset: resolved.timelinePath,
+      startFrame: span.startFrame,
+      endFrame: span.endFrame,
+      z,
+      transform: { x, y, scale, anchor, flip_x: false },
+      lineNumber: token.lineNumber,
+    });
+    this._noteHorizon(scene, span.endFrame);
+    this._emitLane({
+      lane: "inserts",
+      token,
+      startFrame: span.startFrame,
+      endFrame: span.endFrame,
+      label: `insert ${path.basename(image, path.extname(image))}`,
+      subject: id,
+      rel: resolved.timelinePath,
+      keys: Object.keys(kv),
+      kv,
+    });
+  }
+
   _handleCamera(token) {
     const scene = this._requireScene(token.lineNumber, "Camera");
     const { kv, note } = parseKvTag(token.body, { bareFlags: ["reset"] });
@@ -3007,6 +3134,9 @@ class ScriptParser {
         layers.push(this._buildPropLayerJson(state, segment));
       }
     }
+    for (const insert of scene.inserts) {
+      layers.push(this._buildInsertLayerJson(insert));
+    }
 
     const endFrames = Math.max(scene.cursorFrames, scene.horizonFrames);
     const extraHold = Math.max(0, endFrames - scene.cursorFrames);
@@ -3034,6 +3164,17 @@ class ScriptParser {
     this.sceneLengths.push({ id: scene.sceneId, frames: sceneFrames });
 
     this.scene = null;
+  }
+
+  _buildInsertLayerJson(insert) {
+    return {
+      id: insert.id,
+      insert_id: insert.id,
+      asset: insert.asset,
+      z: insert.z,
+      transform: insert.transform,
+      timing: { start_frame: insert.startFrame, end_frame: insert.endFrame },
+    };
   }
 
   _buildPropLayerJson(state, segment) {

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  AUDIO_SCRUB_PREVIEW_MS,
   AUDIO_SYNC_SLACK_SEC,
+  audioAfterScrub,
   PREVIEW_PREFETCH_SEC,
   PREVIEW_PROXY_SIZE,
   PROXY_SEGMENT_FIRST_SEC,
@@ -131,6 +133,10 @@ describe("stage playback helpers", () => {
     assert.equal(shouldHoldLineAudio(false, true), false);
     assert.ok(audioClockDriftSec(1.2, 1.21) < AUDIO_SYNC_SLACK_SEC);
     assert.ok(audioClockDriftSec(1.2, 2.0) > AUDIO_SYNC_SLACK_SEC);
+    assert.equal(audioAfterScrub(true, true), "preview");
+    assert.equal(audioAfterScrub(true, false), "resume");
+    assert.equal(audioAfterScrub(false, false), "seek-paused");
+    assert.equal(AUDIO_SCRUB_PREVIEW_MS, 90);
   });
 
   test("clipDurationSec prefers the WAV header, else the lane span", () => {

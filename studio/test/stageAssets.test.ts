@@ -58,6 +58,29 @@ describe("stage asset drops", () => {
       ),
       false
     );
+    assert.equal(
+      scriptLineForAssetDrop(
+        {
+          kind: "drawing",
+          characterId: "rodney",
+          characterName: "Rodney",
+          slot: "mouth",
+          drawing: "tongue",
+          rel: "inserts/tongue_closeup.png",
+        },
+        24,
+        942,
+        "inserts"
+      ),
+      "[Insert: image=inserts/tongue_closeup.png at_time=942 for=11]"
+    );
+    assert.equal(
+      assetFitsLane(
+        { kind: "drawing", characterId: "rodney", characterName: "Rodney", slot: "mouth", drawing: "tongue" },
+        "inserts"
+      ),
+      true
+    );
   });
 
   test("timeline drop inserts the tag; background rewrites Location", () => {

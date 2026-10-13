@@ -4,6 +4,7 @@
  */
 
 import { findInsertAfterLine, insertLineAfter, slugifySceneName } from "./cameraTag.ts";
+import { drawingInsertRel, insertStillTag } from "./insertImage.ts";
 import { formatAtTime } from "./timelineEdit.ts";
 import type { LaneId } from "./worker";
 
@@ -16,6 +17,7 @@ export type AssetDrag =
       characterName: string;
       slot: string;
       drawing: string;
+      rel?: string | null;
     }
   | {
       kind: "cycle";
@@ -60,6 +62,9 @@ export function slotLane(slot: string): "face" | "body" | null {
 
 export function assetFitsLane(asset: AssetDrag, lane: LaneId | null | undefined): boolean {
   if (!lane) return asset.kind === "background";
+  if (lane === "inserts") {
+    return asset.kind === "drawing" || asset.kind === "cycle" || asset.kind === "prop";
+  }
   if (asset.kind === "background") return true;
   if (asset.kind === "prop") return lane === "props";
   if (asset.kind === "audio") return asset.audioKind === "imported" && (lane === "audio" || lane === "dialogue");
@@ -89,9 +94,31 @@ export function encodeAssetDrag(asset: AssetDrag): string {
 export function scriptLineForAssetDrop(
   asset: AssetDrag,
   fps: number,
-  sceneLocalFrame: number
+  sceneLocalFrame: number,
+  lane?: LaneId | null,
+  durationFrames = 11
 ): string | null {
-  const at = formatAtTime(Math.max(0, Math.round(sceneLocalFrame)), fps);
+  const local = Math.max(0, Math.round(sceneLocalFrame));
+  if (lane === "inserts") {
+    if (asset.kind === "drawing" || asset.kind === "cycle") {
+      const image = drawingInsertRel({
+        characterId: asset.characterId,
+        slot: asset.slot,
+        drawing: asset.kind === "drawing" ? asset.drawing : asset.cycle,
+        rel: asset.kind === "drawing" ? asset.rel : null,
+      });
+      return insertStillTag({ image, startFrame: local, durationFrames });
+    }
+    if (asset.kind === "prop") {
+      return insertStillTag({
+        image: `backgrounds/${asset.location}/props/${asset.propId}.png`,
+        startFrame: local,
+        durationFrames,
+      });
+    }
+    return null;
+  }
+  const at = formatAtTime(local, fps);
   if (asset.kind === "drawing") {
     if (slotLane(asset.slot) == null) return null;
     return `[Action: ${asset.characterName} ${asset.slot}=${asset.drawing} at_time=${at}]`;
@@ -166,7 +193,7 @@ export function applyAssetDropToScript(opts: {
   }
   if (!assetFitsLane(opts.asset, opts.lane)) return opts.script;
   const local = Math.max(0, Math.round(opts.frame - (scene?.startFrame ?? 0)));
-  const line = scriptLineForAssetDrop(opts.asset, opts.fps, local);
+  const line = scriptLineForAssetDrop(opts.asset, opts.fps, local, opts.lane);
   if (!line) return opts.script;
   const after = findInsertAfterLine(opts.script, opts.playheadLine, scene?.id ?? null);
   return insertLineAfter(opts.script, after, line);

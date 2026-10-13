@@ -114,7 +114,7 @@ export default function TransportBar({
             </span>
           ) : null}
           <span className="flex min-w-0 items-center justify-end gap-2 truncate">
-            <span>
+            <span data-testid="transport-frame">
               frame {frame} · {fps} fps
               {usingVideo ? <span className="ml-2 text-[10px] uppercase tracking-wide text-studio-accent">render</span> : null}
             </span>

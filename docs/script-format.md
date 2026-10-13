@@ -224,6 +224,23 @@ there (and a flipped new layer keeps the posed angle).
 [Pose: Rodney right_arm=40 over=1s]
 ```
 
+### `[Insert: image=<rel> at_time=<frame> for=<frames>|to=<last frame>]`
+
+Holds a still PNG over a start/end frame range — a cutaway / insert shot
+(close-up, title card, rude headshot). Does **not** advance the shared
+cursor. `at_time=` / `start=` is scene-local frames (or seconds like `2s`).
+`for=11` is 11 frames; `for=1s` is also accepted; `to=952` is the last
+inclusive frame. Optional `z=`, `x=`, `y=`, `scale=`, `anchor=` (default
+centre of the canvas, z 1000 so it sits on top).
+
+Place it from Studio by dropping a drawing onto the **Inserts** lane, or
+the Insert Action **Insert still** button.
+
+```text
+[Insert: image=inserts/tongue_closeup.png at_time=942 for=11]
+[Insert: image=inserts/tongue_closeup.png at_time=942 to=952]
+```
+
 ### `[Camera: zoom=<n> | pan=x,y | tilt=<dy> | to=x,y zoom=<n> | reset over=<secs>s ease=linear|inout wait=true|false]`
 
 Tweens the scene's **virtual camera** (pan/zoom folded into layer

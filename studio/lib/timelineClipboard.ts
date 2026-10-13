@@ -69,12 +69,13 @@ export function classifyClipboardLine(
   line: string,
   lane?: string | null,
   role?: string | null
-): "speech" | "face" | "body" | "prop" | "camera" | "sfx" | "other" {
+): "speech" | "face" | "body" | "prop" | "camera" | "sfx" | "insert" | "other" {
   if (role === "mouth" || lane === "dialogue" || lane === "audio") return "speech";
   const trimmed = line.trim();
   if (/^\[Audio:/i.test(trimmed)) return "speech";
   if (/^\[Prop:/i.test(trimmed)) return "prop";
   if (/^\[Camera:/i.test(trimmed)) return "camera";
+  if (/^\[Insert:/i.test(trimmed)) return "insert";
   if (/^\[(?:Move|Pose|Swing|Do):/i.test(trimmed)) return "body";
   if (/^\[Action:/i.test(trimmed)) {
     if (/\b(?:face|eyes|head)=/i.test(trimmed)) return "face";
@@ -96,6 +97,7 @@ const LANE_FIT: Record<string, readonly string[]> = {
   prop: ["props"],
   camera: ["camera"],
   sfx: ["sfx"],
+  insert: ["inserts"],
 };
 
 export function clipboardItemFitsLane(item: ClipboardLine, lane: LaneId | null | undefined): boolean {

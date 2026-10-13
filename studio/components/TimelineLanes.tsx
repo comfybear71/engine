@@ -90,6 +90,7 @@ const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
   { id: "audio", label: "Audio", bar: "bg-emerald-600/80", text: "text-emerald-50" },
   { id: "sfx", label: "SFX", bar: "bg-amber-500/80", text: "text-amber-50" },
   { id: "camera", label: "Camera", bar: "bg-violet-500/80", text: "text-violet-50" },
+  { id: "inserts", label: "Inserts", bar: "bg-fuchsia-500/80", text: "text-fuchsia-50" },
 ];
 
 const DRAG_THRESHOLD_PX = 3;
@@ -136,6 +137,7 @@ export default function TimelineLanes({
   frame,
   selectedLine,
   onSeek,
+  onScrubbing,
   totalFrames,
   playing = false,
   scriptText = "",
@@ -162,6 +164,7 @@ export default function TimelineLanes({
   frame: number;
   selectedLine: number | null;
   onSeek: (frame: number, scriptLine: number | null) => void;
+  onScrubbing?: (scrubbing: boolean) => void;
   totalFrames?: number;
   playing?: boolean;
   scriptText?: string;
@@ -269,7 +272,18 @@ export default function TimelineLanes({
     base: Set<string>;
   } | null>(null);
   const panRef = useRef<{ pointerId: number; startX: number; startScroll: number } | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
   zoomRef.current = zoom;
+
+  function beginScrub() {
+    setScrubbing(true);
+    onScrubbing?.(true);
+  }
+
+  function endScrub() {
+    setScrubbing(false);
+    onScrubbing?.(false);
+  }
 
   const rowPx = occupiedLaneRowPx(laneScale);
   const chipPx = chipHeightPx(laneScale);
@@ -388,6 +402,7 @@ export default function TimelineLanes({
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     followLockRef.current = true;
+    beginScrub();
     seekFromClientX(event.clientX);
   }
 
@@ -401,6 +416,7 @@ export default function TimelineLanes({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     followLockRef.current = false;
+    endScrub();
   }
 
   function emitSelectionRange(next: Set<string>) {
@@ -1316,8 +1332,15 @@ export default function TimelineLanes({
                   ) : null}
                 </div>
               ))}
-              <div className="pointer-events-none absolute top-0 z-10" style={{ left: playheadX }}>
+              <div className="pointer-events-none absolute top-0 z-20" style={{ left: playheadX }}>
                 <div className="studio-playhead-handle pointer-events-none" />
+                <span
+                  className="studio-playhead-frame"
+                  data-testid="timeline-playhead-frame"
+                  data-scrubbing={scrubbing ? "true" : "false"}
+                >
+                  {frame}
+                </span>
               </div>
               {snapGuide != null ? (
                 <div className="studio-snap-guide" style={{ left: snapGuide * ppf }} data-testid="timeline-snap-guide" />

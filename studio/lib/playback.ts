@@ -55,6 +55,15 @@ export const PROXY_SEGMENT_PREFETCH_SEC = 8;
 export const PREVIEW_PREFETCH_SEC = 3;
 /** Reseek line audio when it drifts this far from the picture clock. */
 export const AUDIO_SYNC_SLACK_SEC = 0.35;
+/** Brief audible tick while the playhead is dragged. */
+export const AUDIO_SCRUB_PREVIEW_MS = 90;
+
+/** What to do with line audio around a playhead scrub. */
+export function audioAfterScrub(playing: boolean, scrubbing: boolean): "preview" | "resume" | "seek-paused" {
+  if (scrubbing) return "preview";
+  if (playing) return "resume";
+  return "seek-paused";
+}
 
 export function playSegmentDurationSec(firstWindow: boolean): number {
   return firstWindow ? PROXY_SEGMENT_FIRST_SEC : PROXY_SEGMENT_SEC;
