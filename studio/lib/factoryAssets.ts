@@ -156,6 +156,9 @@ export type ActionShot = {
   thumbRel?: string | null;
   rel?: string;
   source?: string;
+  frames?: number;
+  drawings?: number;
+  still?: boolean;
 };
 
 export type ActionShotGroup = { characterId: string | null; characterName: string; actions: ActionShot[] };
@@ -169,6 +172,9 @@ export function groupActionsByCharacter(
     thumbRel?: string | null;
     rel?: string;
     source?: string;
+    frames?: number;
+    drawings?: number;
+    still?: boolean;
   }>,
   characters: Array<{ id: string; display_name: string }>
 ): ActionShotGroup[] {
@@ -188,6 +194,9 @@ export function groupActionsByCharacter(
       thumbRel: action.thumbRel || null,
       rel: action.rel,
       source: action.source,
+      frames: action.frames,
+      drawings: action.drawings,
+      still: action.still,
     });
   }
   return [...groups.values()].sort((a, b) => {

@@ -613,6 +613,9 @@ function collectFactoryRows(projectDir, globalAssetsDir, character, characterId,
   }
   rows.push(...buildChildRows(projectDir, globalAssetsDir, characterId, character, view, statusMap, options));
   const merged = mergeFactoryRows(rows);
+  for (const row of merged) {
+    if (row.label === "Arms") row.owner = null;
+  }
   merged.sort((a, b) => rowSortKey(a) - rowSortKey(b) || a.label.localeCompare(b.label));
   return merged;
 }

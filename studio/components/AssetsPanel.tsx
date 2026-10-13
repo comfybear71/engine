@@ -206,7 +206,7 @@ function ActionShotTile({
             loop
             playsInline
             preload="none"
-            poster={poster || fallback || undefined}
+            poster={fallback || poster || undefined}
             onError={() => setFailed(true)}
             onMouseEnter={(event) => {
               void event.currentTarget.play();
@@ -1623,6 +1623,11 @@ export default function AssetsPanel({
           </div>
         ) : nav.page === "section" && nav.section === "actions" ? (
           <div className="studio-factory-rows" data-testid="assets-section-actions">
+            {actionGroups.length === 0 ? (
+              <div className="studio-factory-thumbs">
+                <AddTile testId="assets-new-actions" onClick={() => onNew("actions")} />
+              </div>
+            ) : null}
             {actionGroups.map((group) => (
               <section key={group.characterId || "shared"} className="studio-factory-row">
                 <div className="studio-factory-row-head">

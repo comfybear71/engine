@@ -116,8 +116,8 @@ describe("factory Assets helpers", () => {
   test("action shots group under the character and hide missing tiles by default", () => {
     const groups = groupActionsByCharacter(
       [
-        { id: "walk_side", label: "rodney/walk_side", characterId: "rodney", name: "walk_side" },
-        { id: "nod", label: "rodney/nod", characterId: "rodney", name: "nod" },
+        { id: "walk_side", label: "rodney/walk_side", characterId: "rodney", name: "walk_side", frames: 8, drawings: 8, still: false },
+        { id: "nod", label: "rodney/nod", characterId: "rodney", name: "nod", frames: 1, drawings: 1, still: true },
         { id: "blink", label: "shared/blink", characterId: null, name: "blink" },
       ],
       [{ id: "rodney", display_name: "Rodney" }]
@@ -127,6 +127,9 @@ describe("factory Assets helpers", () => {
       groups[0].actions.map((item) => item.label),
       ["walk_side", "nod"]
     );
+    assert.equal(groups[0].actions[0].frames, 8);
+    assert.equal(groups[0].actions[0].still, false);
+    assert.equal(groups[0].actions[1].still, true);
     assert.equal(sectionLabel("actions"), "Action Shots");
     assert.deepEqual(
       ASSET_SECTIONS.map((item) => item.label),
