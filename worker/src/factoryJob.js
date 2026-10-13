@@ -499,14 +499,9 @@ async function renderJobPreview(projectDir, globalAssetsDir, character, job, opt
     ensureSlot(characterJson, job.dest);
     const spec = findSlotSpec(characterJson, job.dest.slot);
     if (spec && job.dest.drawings_dir) {
+      spec.drawings_dir = job.dest.drawings_dir;
       if (/_(left_side|right_side|left_34|right_34|back)$/.test(job.dest.drawings_dir)) {
         spec.views = true;
-        spec.drawings_dir = String(job.dest.drawings_dir).replace(
-          /_(left_side|right_side|left_34|right_34|back)$/,
-          ""
-        );
-      } else {
-        spec.drawings_dir = job.dest.drawings_dir;
       }
     }
     const walk = Boolean(job.action && job.action.hide_children);
@@ -540,10 +535,11 @@ async function renderJobPreview(projectDir, globalAssetsDir, character, job, opt
       aspect: "16:9",
       previewWidth: 854,
       previewHeight: 480,
-      seconds: cycleFrames / 12,
+      seconds: Number((cycleFrames / 12).toFixed(3)),
       sampleFps: 12,
       cycleFrames,
       dumpFramesDir: dumpDir,
+      allowStandingFallback: false,
     };
     await renderActionPreview(tmp, null, character.id, job.actionId, dest, previewOpts);
     return dest;

@@ -645,13 +645,21 @@ def validate_piece(bgra: np.ndarray, canvas_w: int, canvas_h: int) -> list[str]:
     return problems
 
 
+def _chroma_green(bgr: np.ndarray) -> np.ndarray:
+    b = bgr[:, :, 0].astype(np.int16)
+    g = bgr[:, :, 1].astype(np.int16)
+    r = bgr[:, :, 2].astype(np.int16)
+    return (g > 180) & (r < 60) & (b < 60) & (g - r > 80) & (g - b > 80)
+
+
 def _figure_mask(img: np.ndarray) -> np.ndarray:
     src = img
     if src.ndim == 3 and src.shape[2] == 4:
-        return src[:, :, 3] > 16
+        opaque = src[:, :, 3] > 16
+        return opaque & ~_chroma_green(src[:, :, :3])
     if src.ndim == 3:
         gray = cv2.cvtColor(src[:, :, :3], cv2.COLOR_BGR2GRAY)
-        return gray > 18
+        return (gray > 18) & ~_chroma_green(src[:, :, :3])
     return src > 18
 
 

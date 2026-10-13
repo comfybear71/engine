@@ -224,10 +224,10 @@ async function renderActionPreview(projectDir, globalAssetsDir, characterId, act
     Number(options.seconds) > 0 ? Number(options.seconds) : actionPreviewSeconds(action.frames, action.fps);
   const displayName = character.display_name || characterId;
   const bindProp = actionNeedsBoundProp(action) ? stage.prop : null;
-  const scripts = [
-    buildActionPreviewScript(displayName, stage.locationId, actionId, seconds, { prop: bindProp }),
-    buildStandingPreviewScript(displayName, stage.locationId),
-  ];
+  const scripts = [buildActionPreviewScript(displayName, stage.locationId, actionId, seconds, { prop: bindProp })];
+  if (options.allowStandingFallback !== false) {
+    scripts.push(buildStandingPreviewScript(displayName, stage.locationId));
+  }
   let lastError = null;
   for (const scriptText of scripts) {
     try {
