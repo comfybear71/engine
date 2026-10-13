@@ -72,7 +72,12 @@ function spawnSession(options = {}) {
 }
 
 async function ensurePool(pool, options = {}) {
-  if (pool.child && !pool.child.killed) return pool.child;
+  if (pool.child && !pool.child.killed && pool.child.stdin && !pool.child.stdin.destroyed) {
+    return pool.child;
+  }
+  if (pool.child) {
+    killPool(pool);
+  }
   if (pool.starting) return pool.starting;
   pool.starting = new Promise((resolve, reject) => {
     try {
@@ -108,10 +113,18 @@ function requestViaPool(pool, payload, options = {}) {
             reject(err);
           },
         });
+        if (!proc.stdin || proc.stdin.destroyed) {
+          pool.pending.delete(id);
+          clearTimeout(timer);
+          killPool(pool);
+          reject(new Error("preview session stdin closed"));
+          return;
+        }
         proc.stdin.write(`${JSON.stringify({ ...payload, id })}\n`, (err) => {
           if (err) {
             pool.pending.delete(id);
             clearTimeout(timer);
+            killPool(pool);
             reject(err);
           }
         });
