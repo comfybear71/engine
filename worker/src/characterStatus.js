@@ -750,24 +750,27 @@ function actionThumbRel(projectDir, globalAssetsDir, characterId, actionId, opti
   if (action && action.set_slots && typeof action.set_slots === "object") {
     for (const [slotName, drawingName] of Object.entries(action.set_slots)) {
       const dirs = candidateDrawingsDirs(slotName, view, slotName);
+      if (!dirs.includes(slotName)) dirs.push(slotName);
       const hit = lookupDrawing(projectDir, globalAssetsDir, characterId, dirs, String(drawingName), options);
       if (hit) return hit.rel;
     }
   }
+  const torsoDirs = [...candidateDrawingsDirs("torso", view, "torso"), "torso"];
   const torso = lookupDrawing(
     projectDir,
     globalAssetsDir,
     characterId,
-    candidateDrawingsDirs("torso", view, "torso"),
+    torsoDirs,
     "neutral",
     options
   );
   if (torso) return torso.rel;
+  const bodyDirs = [...candidateDrawingsDirs("body", view, "body"), "body"];
   const body = lookupDrawing(
     projectDir,
     globalAssetsDir,
     characterId,
-    candidateDrawingsDirs("body", view, "body"),
+    bodyDirs,
     "walk",
     options
   );

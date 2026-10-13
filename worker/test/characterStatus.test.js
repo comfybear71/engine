@@ -302,4 +302,30 @@ describe("character status.json", () => {
     assert.ok(labels.includes("shared/blink"));
     assert.ok(labels.includes("alice/walk_side"));
   });
+
+  test("action shots use a representative drawing even when the view folder is missing", () => {
+    const dir = path.join(fixture.projectDir, "characters", "walker");
+    fixture.writePng(path.join(dir, "blank.png"));
+    fixture.writePng(path.join(dir, "torso", "walk.png"));
+    fixture.writeJson(path.join(dir, "character.json"), {
+      id: "walker",
+      display_name: "Walker",
+      aliases: ["Walker"],
+      asset: "blank.png",
+      z: 10,
+      slots: { torso: { drawings_dir: "torso", default_drawing: "walk" } },
+    });
+    fixture.writeJson(path.join(dir, "actions", "walk_side.json"), {
+      id: "walk_side",
+      view: "right_side",
+      fps: 12,
+      frames: 8,
+      set_slots: { torso: "walk" },
+    });
+    const actions = listProjectActions(fixture.projectDir, fixture.globalAssetsDir);
+    const walk = actions.find((item) => item.label === "walker/walk_side");
+    assert.ok(walk);
+    assert.equal(walk.thumbRel, "characters/walker/torso/walk.png");
+    assert.equal(walk.name, "walk_side");
+  });
 });
