@@ -61,5 +61,31 @@ describe("factory hidden prompt pack", () => {
     });
     assert.match(hidden, /ONLY the eyes/i);
     assert.match(hidden, /Never draw a full head/i);
+    assert.equal(
+      factoryHint("slot", { slot: "arm", label: "Arms" }),
+      "Type a whole-arm pose, e.g. grip mic, point. Labelled L or R."
+    );
+    assert.equal(
+      factoryModeTitle({
+        mode: "slot",
+        character: { id: "rodney", display_name: "Rodney", style: "" },
+        slot: "arm",
+        view: "front",
+        label: "Arms",
+      }),
+      "Rodney / Front / Arms"
+    );
+    const arm = assembleHiddenPrompt({
+      mode: "slot",
+      character: { id: "rodney", display_name: "Rodney", style: "" },
+      userPrompt: "grip mic",
+      slot: "arm",
+      view: "front",
+      label: "Arms",
+    });
+    assert.match(arm, /whole arm/i);
+    assert.match(arm, /knuckles face OUT/i);
+    assert.match(arm, /thumb on top/i);
+    assert.doesNotMatch(arm, /two heads/i);
   });
 });

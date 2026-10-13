@@ -22,6 +22,7 @@ import {
   sourceLabel,
   visibleDrawings,
   pickVisibleProp,
+  actionShotCaption,
   actionPreviewSeconds,
   numberedActionPrefix,
   prettyActionFrameLabel,
@@ -143,6 +144,9 @@ describe("factory Assets helpers", () => {
     assert.equal(FACTORY_THUMB_PX, 256);
     assert.equal(FACTORY_THUMB_WIDE_PX, 256);
     assert.equal(FACTORY_THUMB_COMPACT_PX, 88);
+    assert.equal(actionShotCaption({ still: true, frames: 1 }), "still");
+    assert.equal(actionShotCaption({ frames: 4, drawings: 4 }), "4 frames");
+    assert.equal(actionShotCaption({ frames: 8, drawings: 4 }), "4 drawings · 8 frames");
   });
 
   test("numbered walk frames leave Torso as standalone poses and group under the action", () => {

@@ -498,6 +498,7 @@ export type FactoryPiece = {
   mtime?: number | null;
   compositeRel?: string | null;
   faceGroup?: string | null;
+  side?: "L" | "R" | string | null;
 };
 export type FactoryRow = {
   id: string;
@@ -560,6 +561,9 @@ export type ProjectAction = {
   source: string;
   rel: string;
   thumbRel?: string | null;
+  frames?: number;
+  drawings?: number;
+  still?: boolean;
 };
 
 export async function loadFactoryCharacter(
@@ -610,6 +614,11 @@ export function actionPreviewUrl(project: string, characterId: string | null | u
   )}`;
 }
 
+export function actionPosterUrl(project: string, characterId: string | null | undefined, actionId: string): string | null {
+  const preview = actionPreviewUrl(project, characterId, actionId);
+  return preview ? `${preview}?poster=1` : null;
+}
+
 export type FactoryJobDrawing = { name: string; imageBase64: string | null; problems: string[] };
 export type FactoryJob = {
   ok: boolean;
@@ -635,6 +644,8 @@ export type FactoryJob = {
   styleBlock: string;
   rigRules: string[];
   greenScreen: string | null;
+  walkSet?: boolean;
+  jobs?: FactoryJob[];
 };
 
 export function factoryPreviewUrl(project: string, characterId: string, jobId: string): string {
@@ -657,6 +668,7 @@ export async function startFactoryJob(
     advancedPrompt?: string;
     imageBase64?: string;
     dryRun?: boolean;
+    walkSet?: boolean;
   }
 ): Promise<FactoryJob> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(project)}/factory`, {

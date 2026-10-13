@@ -31,8 +31,12 @@ const SLOT_LABELS = {
   head: "Head",
   torso: "Torso",
   body: "Torso",
-  hand: "Hands",
-  hands: "Hands",
+  hand: "Arms",
+  hands: "Arms",
+  arm: "Arms",
+  arms: "Arms",
+  arm_l: "Arms",
+  arm_r: "Arms",
   legs: "Legs",
   overlay: "Overlays",
   overlays: "Overlays",
@@ -175,8 +179,7 @@ function slotKind(slot, label) {
   if (/\bmouth\b/.test(n) || n.startsWith("mouth")) return "mouth";
   if (/\bhead_base\b/.test(n) || /(^|\s)head(\s|$)/.test(n)) return "head";
   if (/\btorso\b|\bbody\b/.test(n)) return "torso";
-  if (/\bhand/.test(n) && !/\barm/.test(n)) return "hands";
-  if (/\barm\b|arm rig|mic_arm/.test(n)) return "arm";
+  if (/hand|\barm|mic_arm/.test(n)) return "arm";
   if (/\boverlay/.test(n) || /\bcape\b|\bshirt\b/.test(n)) return "overlay";
   if (/\blegs?\b/.test(n)) return "legs";
   return "slot";
@@ -198,8 +201,7 @@ function slotLabel(slot, label) {
   if (kind === "mouth") return "Mouth";
   if (kind === "head") return "Head";
   if (kind === "torso") return "Torso";
-  if (kind === "hands") return "Hands";
-  if (kind === "arm") return "Arm rig";
+  if (kind === "hands" || kind === "arm") return "Arms";
   if (kind === "overlay") return "Overlays";
   if (kind === "legs") return "Legs";
   return String(slot || "Slot").replace(/_/g, " ");
@@ -232,8 +234,7 @@ function factoryHint(mode, opts = {}) {
     if (slot === "eyes") return "Type an expression, e.g. angry, sleepy";
     if (slot === "mouth") return "Type a mouth shape, e.g. shout, smirk";
     if (slot === "torso") return "Type a torso pose, e.g. leaning, arms folded";
-    if (slot === "hands") return "Type a hand pose, e.g. fist, point, hold mic";
-    if (slot === "arm") return "Type an arm pose, e.g. raised, pointing";
+    if (slot === "arm" || slot === "hands") return "Type a whole-arm pose, e.g. grip mic, point. Labelled L or R.";
     if (slot === "overlay") return "Type the overlay, e.g. sweat, blush";
     if (slot === "head") return "Type a head pose, e.g. looking down";
     if (slot === "legs") return "Type a legs pose, e.g. standing, mid-step";
@@ -252,7 +253,7 @@ function factoryPlaceholder(mode, opts = {}) {
     const slot = slotKind(opts.slot, opts.label);
     if (slot === "eyes") return "angry, sleepy";
     if (slot === "mouth") return "shout";
-    if (slot === "hands") return "hold mic";
+    if (slot === "arm" || slot === "hands") return "grip mic L";
     return String(opts.slot || "pose").replace(/_/g, " ");
   }
   const name = (opts.character && (opts.character.display_name || opts.character.id)) || "Rodney";
@@ -283,16 +284,13 @@ function slotRules(slot, label) {
       `Flat ${GREEN} green background, no shadow, no text, no watermark.`,
     ];
   }
-  if (kind === "hands") {
+  if (kind === "arm" || kind === "hands") {
     return [
-      "Hand (and sleeve end) only, floating, not attached to a body.",
-      `Flat ${GREEN} green background. Same 1024 canvas. Do not crop fingertips.`,
-    ];
-  }
-  if (kind === "arm") {
-    return [
-      "Arm piece only, floating, not a full figure.",
-      `Flat ${GREEN} green background. Same 1024 canvas. Do not crop the shoulder end or fingertips.`,
+      "ONE whole arm as a single piece: shoulder + sleeve + forearm + hand in one pose.",
+      "Left or Right labelled (L or R). Never a split upper/lower/hand rig.",
+      "Never squash or stretch. Do not draw a head, torso, or the other arm. Only one head may ever show — so draw none.",
+      "If gripping a mic: knuckles face OUT toward camera, thumb on top of the grip, hand joined to the sleeve (not a backwards floating hand).",
+      `Flat ${GREEN} green background. Same 1024 canvas. Do not crop the shoulder or fingertips.`,
     ];
   }
   if (kind === "overlay") {

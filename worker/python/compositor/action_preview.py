@@ -21,8 +21,8 @@ from .timeline_loader import Timeline, load_timeline
 DEFAULT_SIZE = 256
 PROXY_WIDTH = 854
 PROXY_HEIGHT = 480
-CONTENT_THRESHOLD = 14
-PAD_RATIO = 0.28
+CONTENT_THRESHOLD = 8
+PAD_RATIO = 0.32
 
 
 def content_bbox(frame: np.ndarray, threshold: int = CONTENT_THRESHOLD) -> tuple[int, int, int, int] | None:
@@ -97,9 +97,13 @@ def render_action_preview(
     if bbox is None:
         bbox = (0, 0, PROXY_WIDTH - 1, PROXY_HEIGHT - 1)
     crop = square_crop_box(bbox, PROXY_WIDTH, PROXY_HEIGHT)
-    tiles = (crop_square(frame, crop, size) for frame in cache_frames)
-    write_preview_segment(tiles, Path(output_path), size, size, timeline.fps)
-    return Path(output_path)
+    tiles = [crop_square(frame, crop, size) for frame in cache_frames]
+    dest = Path(output_path)
+    write_preview_segment(iter(tiles), dest, size, size, timeline.fps)
+    if tiles:
+        poster = dest.with_suffix(".jpg")
+        cv2.imwrite(str(poster), tiles[0], [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    return dest
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -45,6 +45,8 @@ const {
   expectedDrawingsDir,
   defaultFactoryCanvas,
   normalizeView,
+  standardForSlot,
+  armSideFromName,
 } = require("./factoryStandard");
 const { renderActionPreview } = require("./actionPreview");
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
@@ -529,7 +531,14 @@ async function runContextFactoryJob(projectDir, globalAssetsDir, body, mode, opt
 
   let drawingPath = cell.path;
   const warnings = [...(cut.warnings || [])];
-  const drawingName = slugFactoryId(userPrompt, mode === "slot" ? slot || "drawing" : mode);
+  let drawingName = slugFactoryId(userPrompt, mode === "slot" ? slot || "drawing" : mode);
+  if (mode === "slot" && dest.slot && standardForSlot(dest.slot) && standardForSlot(dest.slot).slot === "arm") {
+    drawingName = drawingName.replace(/_l$/i, "_L").replace(/_r$/i, "_R");
+    const side =
+      armSideFromName(drawingName, dest.slot) ||
+      (/\bright\b/i.test(userPrompt) && !/\bleft\b/i.test(userPrompt) ? "R" : "L");
+    if (!/_[LR]$/.test(drawingName)) drawingName = `${drawingName}_${side}`;
+  }
 
   if (mode === "slot") {
     const writable = readWritableCharacter(projectDir, globalAssetsDir, character.id);
@@ -691,6 +700,20 @@ function tickStillJob(projectDir, globalAssetsDir, job) {
 
 async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   const mode = normalizeFactoryMode((body && body.mode) || ((body && body.slot) ? "slot" : "character"));
+  if (body && body.walkSet && !body._walkFrame) {
+    const jobs = [];
+    for (const frames of [8, 12, 16]) {
+      jobs.push(
+        await runFactoryJob(
+          projectDir,
+          globalAssetsDir,
+          { ...body, frames, walkSet: true, _walkFrame: frames, mode: "character" },
+          options
+        )
+      );
+    }
+    return { ok: true, walkSet: true, jobs };
+  }
   if (mode !== "character") {
     return runContextFactoryJob(projectDir, globalAssetsDir, body, mode, options);
   }
@@ -776,7 +799,9 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   }
   const fitted = await runFactoryFit(fitArgs, options);
 
-  const actionId = uniqueActionId(projectDir, character.id, pack.actionId);
+  const actionBase =
+    intent.kind === "walk" && body._walkFrame ? `${pack.actionId}_${frames}` : pack.actionId;
+  const actionId = uniqueActionId(projectDir, character.id, actionBase);
   const names = drawingNames(actionId, frames);
   const drawings = [];
   const warnings = [...(cut.warnings || []), ...((fitted && fitted.warnings) || [])];
@@ -896,7 +921,8 @@ function tickFactoryJob(projectDir, globalAssetsDir, characterId, jobId) {
     const abs = path.join(projectDir, target.rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.copyFileSync(drawing.path, abs);
-    setDrawingState(projectDir, characterId, `${job.dest.drawings_dir}/${target.name}`, "ticked");
+    const asDraft = Boolean((job.action && /walk/.test(String(job.actionId || ""))) || job.walkSet);
+    setDrawingState(projectDir, characterId, `${job.dest.drawings_dir}/${target.name}`, asDraft ? "draft" : "ticked");
     drawing.writtenName = target.name;
     drawing.writtenRel = target.rel;
   }

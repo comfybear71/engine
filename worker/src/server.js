@@ -26,7 +26,7 @@ const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = re
 const { describeFactoryCharacter, applyStatusBody, listProjectActions, inspectorForPiece } = require("./characterStatus");
 const { listProjectAudio } = require("./studioAudio");
 const { trashAsset } = require("./projectTrash");
-const { ensureActionPreview } = require("./actionPreview");
+const { ensureActionPreview, ensureActionPoster } = require("./actionPreview");
 const { renderFactoryThumb } = require("./factoryThumb");
 const { openProjectRel } = require("./factoryOpen");
 const { buildLaneBlocks, clampFrame } = require("./studioLanes");
@@ -1027,16 +1027,26 @@ function createApp(options = {}) {
     if (!projectDir) return;
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
-      const file = await ensureActionPreview(
-        projectDir,
-        globalAssetsDir,
-        req.params.characterId,
-        req.params.actionId,
-        options.pythonBin ? { pythonBin: options.pythonBin } : {}
-      );
+      const wantPoster = req.query.poster === "1" || req.query.poster === "true";
+      const file = wantPoster
+        ? await ensureActionPoster(
+            projectDir,
+            globalAssetsDir,
+            req.params.characterId,
+            req.params.actionId,
+            options.pythonBin ? { pythonBin: options.pythonBin } : {}
+          )
+        : await ensureActionPreview(
+            projectDir,
+            globalAssetsDir,
+            req.params.characterId,
+            req.params.actionId,
+            options.pythonBin ? { pythonBin: options.pythonBin } : {}
+          );
+      const type = /\.jpe?g$/i.test(file) ? "image/jpeg" : /\.png$/i.test(file) ? "image/png" : "video/mp4";
       res.setHeader("Cache-Control", "private, max-age=30");
       res.sendFile(path.resolve(file), {
-        headers: { "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
+        headers: { "Content-Type": type, "Accept-Ranges": "bytes" },
       });
     } catch (err) {
       if (!res.headersSent) res.status(500).json({ error: err.message || "Action preview failed" });

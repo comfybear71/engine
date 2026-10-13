@@ -8,6 +8,7 @@ import {
   factoryHint,
   factoryPlaceholder,
   factoryUsesFrames,
+  inferFactoryIntent,
   type FactoryFrames,
   type FactoryModeKind,
 } from "@/lib/factoryPrompt";
@@ -46,6 +47,7 @@ export default function FactoryPanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<FactoryJob | null>(null);
+  const [walkJobs, setWalkJobs] = useState<FactoryJob[]>([]);
 
   const showFrames = factoryUsesFrames(mode);
   const hint = factoryHint(mode, { character, slot, label });
@@ -97,8 +99,15 @@ export default function FactoryPanel({
         prompt: prompt.trim(),
         frames: showFrames ? frames : 1,
         advancedPrompt: advancedTouched ? advancedPrompt : undefined,
+        walkSet: mode === "character" && inferFactoryIntent(prompt.trim()).kind === "walk",
       });
-      setJob(result);
+      if (result.walkSet && result.jobs && result.jobs.length) {
+        setWalkJobs(result.jobs);
+        setJob(result.jobs[0]);
+      } else {
+        setWalkJobs([]);
+        setJob(result);
+      }
       if (result.warnings?.length) setError(result.warnings.join(" "));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generate failed");
@@ -112,8 +121,13 @@ export default function FactoryPanel({
     setBusy("Saving…");
     setError(null);
     try {
-      const result = await tickFactoryJob(project, jobOwner(job), job.jobId);
-      setJob(result);
+      const targets = walkJobs.length ? walkJobs : [job];
+      let last = job;
+      for (const item of targets) {
+        last = await tickFactoryJob(project, jobOwner(item), item.jobId);
+      }
+      setJob(last);
+      setWalkJobs(walkJobs.map((item) => ({ ...item, ticked: true })));
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Tick failed");
@@ -241,7 +255,21 @@ export default function FactoryPanel({
       <div className="min-h-[160px] rounded-md border border-studio-border bg-black/40 p-3" data-testid="factory-results">
         {job ? (
           <div className="space-y-3">
-            {preview && !job.ticked ? (
+            {walkJobs.length > 1 && !job.ticked ? (
+              <div className="studio-factory-walk-row" data-testid="factory-walk-set">
+                {walkJobs.map((item) => (
+                  <video
+                    key={item.jobId}
+                    src={factoryPreviewUrl(project, jobOwner(item), item.jobId)}
+                    muted
+                    loop
+                    playsInline
+                    autoPlay
+                    data-testid={`factory-preview-${item.frames}`}
+                  />
+                ))}
+              </div>
+            ) : preview && !job.ticked ? (
               previewIsImage ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img

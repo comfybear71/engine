@@ -30,10 +30,12 @@ import {
   sourceLabel,
   visibleDrawings,
   splitSlotActionFrames,
+  actionShotCaption,
   type AssetsSection,
 } from "@/lib/factoryAssets";
 import { alignableSlots } from "@/lib/headAlign";
 import {
+  actionPosterUrl,
   actionPreviewUrl,
   addLibraryCharacter,
   assetUrl,
@@ -175,19 +177,25 @@ function ActionShotTile({
     label: string;
     characterId: string | null;
     thumbRel?: string | null;
+    frames?: number;
+    drawings?: number;
+    still?: boolean;
   };
   many: boolean;
   onClick: () => void;
 }) {
   const preview = actionPreviewUrl(project, action.characterId, action.name || action.id);
+  const poster = actionPosterUrl(project, action.characterId, action.name || action.id);
   const fallback = assetUrl(project, action.thumbRel || null, { factory: true });
   const [failed, setFailed] = useState(false);
   const showVideo = Boolean(preview && !failed);
+  const caption = actionShotCaption(action);
   return (
     <button
       type="button"
       className="studio-factory-cell"
       data-testid={`assets-action-${action.name}`}
+      data-still={action.still ? "true" : "false"}
       onClick={onClick}
     >
       <span className="studio-factory-cell-thumb studio-checker">
@@ -197,18 +205,15 @@ function ActionShotTile({
             muted
             loop
             playsInline
-            preload="auto"
-            autoPlay={!many}
-            poster={fallback || undefined}
+            preload="none"
+            poster={poster || fallback || undefined}
             onError={() => setFailed(true)}
             onMouseEnter={(event) => {
-              if (many) void event.currentTarget.play();
+              void event.currentTarget.play();
             }}
             onMouseLeave={(event) => {
-              if (many) {
-                event.currentTarget.pause();
-                event.currentTarget.currentTime = 0;
-              }
+              event.currentTarget.pause();
+              event.currentTarget.currentTime = 0;
             }}
           />
         ) : fallback ? (
@@ -217,6 +222,11 @@ function ActionShotTile({
         ) : null}
       </span>
       <span className="studio-factory-cell-label">{action.label}</span>
+      {caption ? (
+        <span className="studio-factory-cell-meta" data-testid={`assets-action-meta-${action.name}`}>
+          {caption}
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -426,6 +436,11 @@ function FactoryCell({
             }
             alt={piece.name}
           />
+        ) : null}
+        {piece.side ? (
+          <span className="studio-factory-side" data-testid={`assets-side-${piece.side}`} title={piece.side === "L" ? "Left" : "Right"}>
+            {piece.side}
+          </span>
         ) : null}
         {badge ? (
           <span

@@ -11,6 +11,7 @@
  *   node src/cli.js render       <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
  *   node src/cli.js watch        <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
  *   node src/cli.js insert-tongue <projectDir> [--from 942] [--to 952] [--script script.txt]
+ *   node src/cli.js promote-arms  <projectDir> [--character rodney]
  *
  * `render` parses script.txt first (then renders) when --from-script is
  * given, or automatically when the project has a script.txt but no
@@ -61,6 +62,7 @@ function printUsageAndExit() {
       "  node src/cli.js render       <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
       "  node src/cli.js watch        <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
       "  node src/cli.js insert-tongue <projectDir> [--from 942] [--to 952] [--script script.txt]",
+      "  node src/cli.js promote-arms  <projectDir> [--character rodney]",
     ].join("\n")
   );
   process.exit(2);
@@ -166,6 +168,23 @@ async function cmdVoices(flags) {
   }
 }
 
+function cmdPromoteArms(flags) {
+  const projectDir = flags._[0];
+  if (!projectDir) printUsageAndExit();
+  const { promoteWholeArms, installLongStrideDrafts } = require("./wholeArms");
+  const characterId = flags.character || "rodney";
+  const result = promoteWholeArms(path.resolve(projectDir), { characterId });
+  const walks = installLongStrideDrafts(path.resolve(projectDir), characterId);
+  console.log(`Whole-arm drafts: ${result.drawings.length}`);
+  for (const rel of result.drawings) console.log(`  ${rel}`);
+  console.log("Overlays kept:");
+  for (const item of result.overlay.keep) console.log(`  ${item.id}: ${item.reason}`);
+  console.log("Overlays dropped:");
+  for (const item of result.overlay.drop) console.log(`  ${item.id}: ${item.reason}`);
+  if (result.approach && result.approach.trashed) console.log("Trashed unreferenced approach torso.");
+  console.log(`Long-stride walk drafts: ${walks.join(", ")}`);
+}
+
 function cmdInsertTongue(flags) {
   const projectDir = flags._[0];
   if (!projectDir) printUsageAndExit();
@@ -218,6 +237,8 @@ async function main() {
       return cmdImportAudio(flags);
     case "insert-tongue":
       return cmdInsertTongue(flags);
+    case "promote-arms":
+      return cmdPromoteArms(flags);
     default:
       printUsageAndExit();
   }

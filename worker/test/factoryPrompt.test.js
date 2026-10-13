@@ -86,5 +86,16 @@ describe("factory hidden prompt pack", () => {
     assert.match(eyes.hiddenPrompt, /ONLY the eyes/i);
     assert.match(eyes.hiddenPrompt, /Never draw a full head/i);
     assert.match(eyes.hiddenPrompt, /1024/);
+
+    const arms = buildFactoryPack({
+      mode: "slot",
+      slot: "arm",
+      view: "front",
+      label: "Arms",
+      character: { id: "rodney", display_name: "Rodney" },
+      userPrompt: "grip mic",
+    });
+    assert.match(arms.hiddenPrompt, /whole arm/i);
+    assert.match(arms.hiddenPrompt, /knuckles face OUT/i);
   });
 });

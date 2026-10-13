@@ -336,3 +336,18 @@ export function actionPreviewSeconds(frames: number, fps: number): number {
   const loops = Math.max(1, Math.round(2 / cycle));
   return Math.min(3, Math.max(1, Number((loops * cycle).toFixed(1))));
 }
+
+export function actionShotCaption(action: {
+  still?: boolean;
+  frames?: number;
+  drawings?: number;
+} | null | undefined): string {
+  if (!action) return "";
+  if (action.still || (action.frames != null && action.frames <= 1)) return "still";
+  const drawings = Number(action.drawings) || 0;
+  const frames = Number(action.frames) || 0;
+  if (drawings > 0 && drawings !== frames) return `${drawings} drawings · ${frames} frames`;
+  if (frames > 0) return `${frames} frames`;
+  if (drawings > 0) return `${drawings} drawings`;
+  return "";
+}
