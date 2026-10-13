@@ -44,6 +44,7 @@ export default function FactoryPanel({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advancedPrompt, setAdvancedPrompt] = useState("");
   const [advancedTouched, setAdvancedTouched] = useState(false);
+  const [useGrok, setUseGrok] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<FactoryJob | null>(null);
@@ -99,7 +100,8 @@ export default function FactoryPanel({
         prompt: prompt.trim(),
         frames: showFrames ? frames : 1,
         advancedPrompt: advancedTouched ? advancedPrompt : undefined,
-        walkSet: mode === "character" && inferFactoryIntent(prompt.trim()).kind === "walk",
+        walkSet: mode === "character" && inferFactoryIntent(prompt.trim()).kind === "walk" && !useGrok,
+        useGrok: mode === "character" && inferFactoryIntent(prompt.trim()).kind === "walk" && useGrok,
       });
       if (result.walkSet && result.jobs && result.jobs.length) {
         setWalkJobs(result.jobs);
@@ -137,7 +139,7 @@ export default function FactoryPanel({
   }
 
   async function onRedo() {
-    if (!job) {
+    if (!job || (walkJobs.length > 1 && !useGrok)) {
       void onGenerate();
       return;
     }
@@ -148,6 +150,7 @@ export default function FactoryPanel({
         prompt: prompt.trim() || job.prompt,
         frames: showFrames ? frames : 1,
         advancedPrompt: advancedTouched ? advancedPrompt : undefined,
+        useGrok,
       });
       setJob(result);
     } catch (err) {
@@ -236,8 +239,17 @@ export default function FactoryPanel({
           Advanced
         </summary>
         <p className="mt-2 text-[11px] text-studio-muted">
-          Hidden pack for this project only. You never have to open this.
+          Hidden pack for this project only. Walks use the existing side-walk drawings unless you turn Grok on.
         </p>
+        <label className="mt-2 flex items-center gap-2 text-xs text-neutral-200">
+          <input
+            type="checkbox"
+            checked={useGrok}
+            onChange={(event) => setUseGrok(event.target.checked)}
+            data-testid="factory-use-grok"
+          />
+          Use Grok Imagine for walks (costs credits)
+        </label>
         <textarea
           value={advancedTouched ? advancedPrompt : assembled}
           onChange={(event) => {
@@ -258,15 +270,17 @@ export default function FactoryPanel({
             {walkJobs.length > 1 && !job.ticked ? (
               <div className="studio-factory-walk-row" data-testid="factory-walk-set">
                 {walkJobs.map((item) => (
-                  <video
-                    key={item.jobId}
-                    src={factoryPreviewUrl(project, jobOwner(item), item.jobId)}
-                    muted
-                    loop
-                    playsInline
-                    autoPlay
-                    data-testid={`factory-preview-${item.frames}`}
-                  />
+                  <figure key={item.jobId} className="studio-factory-walk-card">
+                    <video
+                      src={factoryPreviewUrl(project, jobOwner(item), item.jobId)}
+                      muted
+                      loop
+                      playsInline
+                      autoPlay
+                      data-testid={`factory-preview-${item.frames}`}
+                    />
+                    <figcaption>{item.frames} frames</figcaption>
+                  </figure>
                 ))}
               </div>
             ) : preview && !job.ticked ? (

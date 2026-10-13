@@ -254,7 +254,7 @@ export function factoryHint(
     return `Type a ${slotLabel(opts.slot, opts.label)} drawing`;
   }
   const name = (opts.character && (opts.character.display_name || opts.character.id)) || "the character";
-  return `Type what ${name} should do. Style, references, and green screen are already packed in.`;
+  return `Type what ${name} should do. A walk builds 8/12/16 long-stride loops from the existing side walk — no Grok. Open Advanced to use Imagine.`;
 }
 
 export function factoryPlaceholder(

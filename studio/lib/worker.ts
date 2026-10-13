@@ -641,6 +641,8 @@ export type FactoryJob = {
   previewKind?: "image" | "video" | string | null;
   ticked: boolean;
   usedFixture: boolean;
+  usedRig?: boolean;
+  usedGrok?: boolean;
   styleBlock: string;
   rigRules: string[];
   greenScreen: string | null;
@@ -669,6 +671,7 @@ export async function startFactoryJob(
     imageBase64?: string;
     dryRun?: boolean;
     walkSet?: boolean;
+    useGrok?: boolean;
   }
 ): Promise<FactoryJob> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(project)}/factory`, {
@@ -695,7 +698,7 @@ export async function redoFactoryJob(
   project: string,
   characterId: string,
   jobId: string,
-  body: { prompt?: string; frames?: number; advancedPrompt?: string; imageBase64?: string } = {}
+  body: { prompt?: string; frames?: number; advancedPrompt?: string; imageBase64?: string; useGrok?: boolean } = {}
 ): Promise<FactoryJob> {
   const res = await workerFetch(
     `/api/projects/${encodeURIComponent(project)}/factory/${encodeURIComponent(characterId)}/${encodeURIComponent(jobId)}/redo`,

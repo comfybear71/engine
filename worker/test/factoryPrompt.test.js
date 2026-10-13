@@ -7,6 +7,7 @@ const {
   assembleWalkPhasePrompt,
   clampFactoryFrames,
   factoryGrid,
+  factoryHint,
   inferFactoryIntent,
   slugActionId,
   walkPhases,
@@ -21,6 +22,7 @@ describe("factory hidden prompt pack", () => {
     const intent = inferFactoryIntent("Rodney walking long stride");
     assert.equal(intent.kind, "walk");
     assert.equal(slugActionId("Rodney walking long stride", intent), "walk_side_long_stride");
+    assert.match(factoryHint("character", { character: { display_name: "Rodney" } }), /no Grok/);
   });
 
   test("silently adds locked style, green screen, and rig rules", () => {

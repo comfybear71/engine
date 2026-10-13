@@ -23,8 +23,8 @@ from .asset_cache import _to_bgra
 MARGIN = 8
 FULL_HEAD_HEIGHT_RATIO = 0.72
 LEGS_TOP_FRAC = 0.50
-BOOT_BAND_FRAC = 0.72
-BOOT_MIN_FRAC = 0.01
+BOOT_BAND_FRAC = 0.85
+BOOT_MIN_FRAC = 0.012
 GIANT_LEGS_CANVAS_FRAC = 0.82
 GIANT_LEGS_REF_RATIO = 2.4
 WALK_SCALE_TOLERANCE = 0.22
@@ -294,6 +294,7 @@ def fit_walk_piece(
     extract: bool = False,
     margin: int = MARGIN,
     expect_face: str | None = "right",
+    strict: bool = True,
 ) -> tuple[np.ndarray, list[str]]:
     """Scale the whole figure to the rig and plant feet on the ground line.
 
@@ -307,7 +308,7 @@ def fit_walk_piece(
     canvas_h = max(2, int(canvas_h))
     problems = validate_walk_frame(src, expect_face=expect_face, require_full_figure=True)
     out = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
-    if problems:
+    if problems and strict:
         return out, problems
     box = alpha_bbox(src)
     if box is None:

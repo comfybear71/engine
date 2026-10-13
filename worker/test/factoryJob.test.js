@@ -15,6 +15,7 @@ const {
   walkBob,
   walkSetSlots,
   findSideReferenceAbs,
+  findWalkSideSources,
   runFactoryJob,
   tickFactoryJob,
   pickSideTorsoDrawing,
@@ -214,6 +215,30 @@ describe("factory dest and names", () => {
       fs.writeFileSync(path.join(rodney, "torso_right_side", "neutral.png"), "side");
       const abs = findSideReferenceAbs(root, "rodney", "right_side");
       assert.ok(abs.endsWith(path.join("torso_right_side", "neutral.png")));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("walk_side sources prefer torso_right_side over a leftover legs drawing", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-walk-src-"));
+    try {
+      const rodney = path.join(root, "characters", "rodney");
+      fs.mkdirSync(path.join(rodney, "torso_right_side"), { recursive: true });
+      fs.mkdirSync(path.join(rodney, "torso"), { recursive: true });
+      fs.mkdirSync(path.join(rodney, "legs_right_side"), { recursive: true });
+      fs.writeFileSync(path.join(rodney, "torso_right_side", "walk_side_02.png"), "torso2");
+      fs.writeFileSync(path.join(rodney, "torso", "walk_side_07.png"), "torso7");
+      fs.writeFileSync(path.join(rodney, "torso", "walk_side_long_stride_8_01.png"), "draft");
+      fs.writeFileSync(path.join(rodney, "legs_right_side", "walk_side_01.png"), "legs");
+      const found = findWalkSideSources(root, "rodney", "right_side");
+      assert.equal(found.length, 2);
+      assert.ok(found[0].endsWith(path.join("torso_right_side", "walk_side_02.png")));
+      assert.ok(found[1].endsWith(path.join("torso", "walk_side_07.png")));
+      assert.equal(
+        found.some((item) => item.includes("legs_right_side") || item.includes("long_stride")),
+        false
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -505,5 +530,105 @@ describe("factory pipeline with a fixture sheet", () => {
     walk(path.join(projectDir, "backgrounds"));
     assert.ok(propPngs.length >= 1 || (ticked.written && ticked.written.rel));
     assert.equal(fs.existsSync(path.join(otherDir, "backgrounds")), false);
+  });
+});
+
+describe("factory walk from ticked walk_side frames (no Grok)", () => {
+  let root;
+  let projectDir;
+
+  before(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-rig-"));
+    projectDir = path.join(root, "rodney_test");
+    fs.mkdirSync(projectDir, { recursive: true });
+    buildRodneyTestProject(projectDir);
+    const realTorso = path.join("/workspace/projects/rodney_demo/characters/rodney/torso");
+    const dest = path.join(projectDir, "characters", "rodney", "torso_right_side");
+    const copied = [];
+    for (let i = 1; i <= 8; i += 1) {
+      const name = `walk_side_${String(i).padStart(2, "0")}.png`;
+      const src = path.join(realTorso, name);
+      if (!fs.existsSync(src)) continue;
+      fs.copyFileSync(src, path.join(dest, name));
+      copied.push(name);
+    }
+    if (copied.length >= 2) {
+      for (const name of fs.readdirSync(dest).filter((item) => /^walk_side_\d{2}\.png$/i.test(item))) {
+        if (!copied.includes(name)) fs.unlinkSync(path.join(dest, name));
+      }
+    }
+  });
+
+  after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test("missing walk_side frames fail without calling Grok", async () => {
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-no-walk-"));
+    try {
+      const dir = path.join(empty, "show");
+      fs.mkdirSync(dir, { recursive: true });
+      buildRodneyTestProject(dir);
+      const side = path.join(dir, "characters", "rodney", "torso_right_side");
+      for (const name of fs.readdirSync(side).filter((item) => /^walk_side_\d{2}\.png$/i.test(item))) {
+        fs.unlinkSync(path.join(side, name));
+      }
+      await assert.rejects(
+        () =>
+          runFactoryJob(dir, null, {
+            characterId: "rodney",
+            prompt: "Rodney walking long stride",
+            frames: 8,
+          }),
+        /Need at least two ticked walk_side/i
+      );
+    } finally {
+      fs.rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  test("walkSet builds 8/12/16 long-stride drafts from the rig with no API", { timeout: 180000 }, async () => {
+    const result = await runFactoryJob(projectDir, null, {
+      characterId: "rodney",
+      prompt: "Rodney walking long stride",
+      walkSet: true,
+    });
+    assert.equal(result.walkSet, true);
+    assert.equal(result.jobs.length, 3);
+    const frames = result.jobs.map((job) => job.frames);
+    assert.deepEqual(frames, [8, 12, 16]);
+    for (const job of result.jobs) {
+      assert.equal(job.usedRig, true);
+      assert.equal(job.usedGrok, false);
+      assert.equal(job.usedFixture, false);
+      assert.equal(job.dest.slot, "torso");
+      assert.equal(job.dest.drawings_dir, "torso_right_side");
+      assert.equal(job.actionId, `walk_side_long_${job.frames}`);
+      assert.equal(job.drawings.length, job.frames);
+      assert.equal(job.action.hide_children, true);
+      assert.ok(job.action.distance_per_cycle >= 96);
+      const preview = path.join(
+        projectDir,
+        "characters",
+        "rodney",
+        "_factory",
+        job.jobId,
+        "preview.mp4"
+      );
+      assert.equal(fs.existsSync(preview), true, `${job.actionId} must render a 16:9 loop`);
+      const ticked = tickFactoryJob(projectDir, null, "rodney", job.jobId);
+      assert.equal(ticked.ticked, true);
+      const status = JSON.parse(
+        fs.readFileSync(path.join(projectDir, "characters", "rodney", "status.json"), "utf8")
+      );
+      const draftKeys = Object.keys(status).filter(
+        (key) => key.includes(`walk_side_long_${job.frames}`) && status[key] === "draft"
+      );
+      assert.ok(draftKeys.length >= job.frames, `${job.actionId} drawings stay drafts`);
+      assert.equal(
+        fs.existsSync(path.join(projectDir, "characters", "rodney", "actions", `${job.actionId}.json`)),
+        true
+      );
+    }
   });
 });

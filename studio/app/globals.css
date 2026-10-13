@@ -1170,16 +1170,28 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 }
 
 .studio-factory-walk-row {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.studio-factory-walk-card {
+  margin: 0;
 }
 
 .studio-factory-walk-row video {
-  flex: 1 1 0;
-  min-width: 120px;
-  max-height: 180px;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
   object-fit: contain;
+  background: #000;
+}
+
+.studio-factory-walk-card figcaption {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #a3a3a3;
+  text-align: center;
 }
 
 .studio-factory-badge {

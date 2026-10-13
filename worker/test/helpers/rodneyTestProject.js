@@ -101,6 +101,22 @@ function torsoRgba(kind) {
   return rgba;
 }
 
+function walkSideRgba(phase) {
+  const rgba = Buffer.alloc(1024 * 1024 * 4);
+  const stride = (phase % 4) * 10 - 15;
+  const x = 470;
+  const y = 400;
+  fillRect(rgba, 1024, x + 4, y + 28, 16, 90, 180, 20, 20, 255);
+  fillRect(rgba, 1024, x + 38 + Math.min(stride, 8), y + 4, 28, 14, 40, 20, 16, 255);
+  fillRect(rgba, 1024, x + 42 + Math.min(stride, 8), y + 16, 22, 22, 196, 140, 96, 255);
+  fillRect(rgba, 1024, x + 30, y + 38, 36, 56, 150, 28, 28, 255);
+  fillRect(rgba, 1024, x + 24 + stride, y + 94, 12, 40, 140, 70, 40, 255);
+  fillRect(rgba, 1024, x + 50 - stride, y + 94, 12, 40, 140, 70, 40, 255);
+  fillRect(rgba, 1024, x + 20 + stride, y + 132, 16, 14, 70, 40, 24, 255);
+  fillRect(rgba, 1024, x + 48 - stride, y + 132, 16, 14, 70, 40, 24, 255);
+  return rgba;
+}
+
 function buildRodneyTestProject(projectDir) {
   const rodney = path.join(projectDir, "characters", "rodney");
   writeJson(path.join(projectDir, "studio.json"), { independent: true });
@@ -136,6 +152,9 @@ function buildRodneyTestProject(projectDir) {
     fillRect(rgba, 1024, 488, 620, 70, 70, 120, 24, 28, 255);
     return rgba;
   })());
+  for (let i = 1; i <= 8; i += 1) {
+    writePng(path.join(rodney, "torso_right_side", `walk_side_${String(i).padStart(2, "0")}.png`), walkSideRgba(i - 1));
+  }
   writePng(path.join(rodney, "body", "walk.png"), torsoRgba("walk"));
   writePng(path.join(rodney, "legs_right_side", "walk_side_01.png"), (() => {
     const rgba = Buffer.alloc(1024 * 1024 * 4);
