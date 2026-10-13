@@ -16,6 +16,7 @@ const {
   confirmAdd,
   renameDrawing,
   deleteDrawing,
+  cleanIslandsDrawing,
   saveDrawingFlags,
   realignSlotView,
   pickAlignReferenceName,
@@ -260,7 +261,39 @@ describe("asset editor", { concurrency: 1 }, () => {
     assert.equal(fs.existsSync(path.join(deeDir, "eyes", "extra.png")), false);
   });
 
-  test("delete refuses a script-used drawing, then moves an unused one to _trash", () => {
+  test("rename updates action JSON and script slot assignments, and rejects a clash", () => {
+    writePng(path.join(deeDir, "eyes", "glance.png"));
+    fs.mkdirSync(path.join(deeDir, "actions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(deeDir, "actions", "nod.json"),
+      `${JSON.stringify({
+        id: "nod",
+        frames: 2,
+        fps: 12,
+        set_slots: { eyes: "glance" },
+        slot_frames: { eyes: ["glance", "open"] },
+      })}\n`
+    );
+    const scriptPath = path.join(fixture.projectDir, "script.txt");
+    const previous = fs.readFileSync(scriptPath, "utf8");
+    fs.writeFileSync(scriptPath, `${previous}\n[Action: Dee eyes=glance]\n`);
+    const result = renameDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "eyes", "glance", {
+      name: "peek",
+    });
+    assert.equal(result.drawing, "peek");
+    const action = JSON.parse(fs.readFileSync(path.join(deeDir, "actions", "nod.json"), "utf8"));
+    assert.equal(action.set_slots.eyes, "peek");
+    assert.deepEqual(action.slot_frames.eyes, ["peek", "open"]);
+    assert.match(fs.readFileSync(scriptPath, "utf8"), /eyes=peek/);
+    assert.throws(
+      () =>
+        renameDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "eyes", "peek", { name: "open" }),
+      /already exists/
+    );
+    fs.writeFileSync(scriptPath, previous);
+  });
+
+  test("delete refuses a script-used drawing, then moves an unused one to .trash", () => {
     assert.throws(
       () =>
         deleteDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "eyes", "open", { confirm: true }),
@@ -270,9 +303,41 @@ describe("asset editor", { concurrency: 1 }, () => {
     const result = deleteDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "eyes", "spare", {
       confirm: true,
     });
-    assert.ok(result.trash.includes("_trash/"));
+    assert.ok(result.trash.includes(".trash/"));
     assert.ok(fs.existsSync(path.join(fixture.projectDir, result.trash)));
     assert.equal(fs.existsSync(path.join(deeDir, "eyes", "spare.png")), false);
+  });
+
+  test("unused approach torso is deletable and lands in project .trash", () => {
+    const json = JSON.parse(fs.readFileSync(path.join(deeDir, "character.json"), "utf8"));
+    json.slots.torso = { offset: { x: 0, y: 0 }, drawings_dir: "torso", default_drawing: "neutral" };
+    fs.writeFileSync(path.join(deeDir, "character.json"), `${JSON.stringify(json, null, 2)}\n`);
+    writePng(path.join(deeDir, "torso", "neutral.png"));
+    writePng(path.join(deeDir, "torso", "approach.png"));
+    fs.mkdirSync(path.join(deeDir, "actions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(deeDir, "actions", "walk.json"),
+      `${JSON.stringify({
+        id: "walk",
+        frames: 1,
+        fps: 12,
+        set_slots: { torso: "neutral" },
+      })}\n`
+    );
+    const usages = findDrawingUsages(fixture.projectDir, fixture.globalAssetsDir, "dee", "torso", "approach");
+    assert.equal(
+      usages.some((item) => item.kind === "action" || item.kind === "script" || item.kind === "rig"),
+      false
+    );
+    const result = deleteDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "torso", "approach", {
+      confirm: true,
+    });
+    assert.ok(result.trash.includes(".trash/"));
+    assert.ok(
+      fs.existsSync(path.join(fixture.projectDir, result.trash, "characters", "dee", "torso", "approach.png"))
+    );
+    assert.equal(fs.existsSync(path.join(deeDir, "torso", "approach.png")), false);
+    assert.equal(fs.existsSync(path.join(deeDir, "torso", "neutral.png")), true);
   });
 
   test("apply-all normalises every drawing to the default and does not compound", async () => {
@@ -475,6 +540,41 @@ describe("asset editor", { concurrency: 1 }, () => {
     const after = describeSlot(fixture.projectDir, fixture.globalAssetsDir, "alice", "mouth");
     assert.equal(after.drawings.some((d) => d.name === "A"), false);
     assert.equal(fs.existsSync(path.join(fixture.globalAssetsDir, "characters", "alice", "mouth", "A.png")), true);
+  });
+
+  test("clean stray bits drops disconnected islands and keeps a backup", async () => {
+    const width = 80;
+    const height = 80;
+    const rgba = Buffer.alloc(width * height * 4);
+    for (let y = 20; y < 60; y += 1) {
+      for (let x = 20; x < 60; x += 1) {
+        const o = (y * width + x) * 4;
+        rgba[o] = 150;
+        rgba[o + 1] = 28;
+        rgba[o + 2] = 28;
+        rgba[o + 3] = 255;
+      }
+    }
+    for (let y = 8; y < 16; y += 1) {
+      for (let x = 2; x < 8; x += 1) {
+        const o = (y * width + x) * 4;
+        rgba[o] = 180;
+        rgba[o + 1] = 20;
+        rgba[o + 2] = 20;
+        rgba[o + 3] = 255;
+      }
+    }
+    const dest = path.join(deeDir, "eyes", "crumb.png");
+    fs.writeFileSync(dest, encodeRgbaPng(width, height, rgba));
+    const result = await cleanIslandsDrawing(fixture.projectDir, fixture.globalAssetsDir, "dee", "eyes", "crumb", {});
+    assert.equal(result.ok, true);
+    assert.ok(result.replaced && result.replaced.includes("_replaced/"));
+    assert.ok(fs.existsSync(path.join(fixture.projectDir, result.replaced)));
+    const cleaned = decodePng(fs.readFileSync(dest));
+    const crumb = cleaned.pixels[(10 * width + 4) * cleaned.bpp + (cleaned.bpp - 1)];
+    const body = cleaned.pixels[(30 * width + 30) * cleaned.bpp + (cleaned.bpp - 1)];
+    assert.ok(crumb < 16, "stray island should be gone");
+    assert.ok(body > 200, "main body stays");
   });
 });
 

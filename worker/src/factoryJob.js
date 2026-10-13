@@ -224,19 +224,64 @@ function skipCopy(src) {
   return parts.some((part) => part === "_library" || part === "_trash" || part === "_factory" || part === "_replaced");
 }
 
-function copyCharacterForPreview(srcDir, destDir) {
+function copyCharacterForPreview(srcDir, destDir, options = {}) {
+  const replaceDirs = new Set(options.replaceDirs || []);
   fs.mkdirSync(destDir, { recursive: true });
   fs.cpSync(srcDir, destDir, {
     recursive: true,
-    filter: (src) => !skipCopy(src),
+    filter: (src) => {
+      if (skipCopy(src)) return false;
+      if (!replaceDirs.size) return true;
+      const rel = path.relative(srcDir, src);
+      if (!rel || rel === ".") return true;
+      const top = rel.split(path.sep)[0];
+      if (!replaceDirs.has(top)) return true;
+      // Keep the folder, drop existing drawings so new legs replace old ones.
+      return rel === top;
+    },
   });
+}
+
+function listPngNames(dir) {
+  if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((name) => /\.png$/i.test(name))
+    .map((name) => name.replace(/\.png$/i, ""))
+    .sort();
+}
+
+function pickSideTorsoDrawing(projectDir, characterId, view) {
+  const skip = /^(walk|run|approach)/i;
+  const preferred = ["neutral", "stand", "rig", "idle", "torso"];
+  const dirs = [`torso_${view}`, "torso"];
+  const root = characterDir(projectDir, characterId);
+  for (const dir of dirs) {
+    const names = listPngNames(path.join(root, dir)).filter((name) => !skip.test(name));
+    for (const want of preferred) {
+      if (names.includes(want)) return want;
+    }
+    if (names[0]) return names[0];
+  }
+  return null;
+}
+
+function walkSetSlots(character, projectDir, characterId, view) {
+  const names = collectSlotNames(character);
+  const setSlots = {};
+  if (names.has("body")) setSlots.body = "none";
+  const torso = pickSideTorsoDrawing(projectDir, characterId, view);
+  if (torso && names.has("torso")) setSlots.torso = torso;
+  return setSlots;
 }
 
 async function renderJobPreview(projectDir, globalAssetsDir, character, job, options = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-"));
   try {
     const tmpChar = path.join(tmp, "characters", character.id);
-    copyCharacterForPreview(characterDir(projectDir, character.id), tmpChar);
+    const replaceDirs = [];
+    if (job.dest && job.dest.drawings_dir) replaceDirs.push(job.dest.drawings_dir);
+    copyCharacterForPreview(characterDir(projectDir, character.id), tmpChar, { replaceDirs });
     const destDir = path.join(tmpChar, job.dest.drawings_dir);
     fs.mkdirSync(destDir, { recursive: true });
     for (const drawing of job.drawings || []) {
@@ -279,6 +324,7 @@ function summarizeJob(job, characterId) {
     frames: job.frames,
     grid: job.grid,
     dest: job.dest,
+    action: job.action || null,
     drawings: (job.drawings || []).map((item) => ({
       name: item.name,
       imageBase64: item.path && fs.existsSync(item.path) ? pngDataUrl(item.path) : null,
@@ -372,6 +418,9 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   ];
   if (refAbs) fitArgs.push("--ref", refAbs);
   if (isOverlayDest(dest)) fitArgs.push("--check-head");
+  if (intent.kind === "walk") {
+    fitArgs.push("--extract-legs", "--validate-walk", "--expect-face", intent.view === "left_side" ? "left" : "right");
+  }
   const fitted = await runFactoryFit(fitArgs, options);
 
   const actionId = uniqueActionId(projectDir, character.id, pack.actionId);
@@ -390,15 +439,22 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
     if (isOverlayDest(dest) && (fitted.warnings || []).some((line) => line.includes(alignedName))) {
       throw factoryError("Eyes and mouths must be overlays, never full heads.", "EINVAL");
     }
+    const problems = (row && row.problems) || [];
+    const rejected = problems.some((line) => /too many boots|facing /.test(String(line)));
+    if (rejected) {
+      warnings.push(`Frame ${i + 1} rejected: ${problems.join("; ")}`);
+      continue;
+    }
     drawings.push({
       name: names[i],
       path: alignedPath,
-      problems: (row && row.problems) || [],
+      problems,
     });
   }
   if (drawings.length < 2) throw factoryError("Cut-out did not produce enough frames. Try Redo.", "EINVAL");
 
   const cycleName = intent.kind === "walk" ? (intent.view === "left_side" ? "walk_left_side" : "walk_side") : actionId;
+  const setSlots = intent.kind === "walk" ? walkSetSlots(writable, projectDir, character.id, intent.view) : {};
   const action = {
     id: actionId,
     view: intent.view,
@@ -409,6 +465,7 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
     slot_frames: { [dest.slot]: drawings.map((item) => item.name) },
     bob: walkBob(drawings.length),
   };
+  if (Object.keys(setSlots).length) action.set_slots = setSlots;
   if (!action.distance_per_cycle) delete action.distance_per_cycle;
 
   const job = {
@@ -521,6 +578,8 @@ module.exports = {
   uniqueActionId,
   walkBob,
   drawingNames,
+  pickSideTorsoDrawing,
+  walkSetSlots,
   runFactoryJob,
   describeFactoryJob,
   resolveFactoryPreview,

@@ -4,7 +4,16 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import AlignHeadModal from "@/components/AlignHeadModal";
 import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
-import { needIdForSlot, slotViewGroups, type AssetFocus } from "@/lib/assetEditor";
+import {
+  cleanIslandsDrawing,
+  cleanIslandsSlot,
+  deleteEditorDrawing,
+  fileToImageBase64,
+  needIdForSlot,
+  renameEditorDrawing,
+  slotViewGroups,
+  type AssetFocus,
+} from "@/lib/assetEditor";
 import {
   FACTORY_THUMB_COMPACT_PX,
   FACTORY_THUMB_PX,
@@ -28,6 +37,7 @@ import {
   addLibraryCharacter,
   assetUrl,
   trashProjectAsset,
+  importStillAsset,
   loadCharacters,
   lintScript,
   loadFactoryCharacter,
@@ -370,26 +380,39 @@ function FactoryCell({
   selected,
   onSelect,
   onOpen,
+  onDelete,
+  onRename,
+  onClean,
 }: {
   project: string;
   piece: FactoryPiece;
   selected: boolean;
   onSelect: () => void;
   onOpen?: () => void;
+  onDelete?: () => void;
+  onRename?: (name: string) => void;
+  onClean?: () => void;
 }) {
   const badge = isFactoryBadge(piece.badge) ? piece.badge : piece.missing ? "missing" : null;
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(piece.name);
+  useEffect(() => {
+    setDraft(piece.name);
+  }, [piece.name]);
   return (
-    <button
-      type="button"
+    <div
       className="studio-factory-cell"
       data-testid={`assets-piece-${piece.key}`}
       data-selected={selected ? "true" : "false"}
       data-missing={piece.missing ? "true" : "false"}
       title={piece.key}
-      onClick={onSelect}
-      onDoubleClick={() => onOpen?.()}
     >
-      <span className={`studio-factory-cell-thumb ${piece.rel ? "studio-checker" : ""}`}>
+      <button
+        type="button"
+        className={`studio-factory-cell-thumb ${piece.rel ? "studio-checker" : ""}`}
+        onClick={onSelect}
+        onDoubleClick={() => onOpen?.()}
+      >
         {piece.rel ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -411,9 +434,98 @@ function FactoryCell({
             title={badge}
           />
         ) : null}
-      </span>
-      <span className="studio-factory-cell-label">{piece.name}</span>
-    </button>
+      </button>
+      {piece.rel && !piece.missing ? (
+        <span className="studio-factory-cell-tools">
+          {onClean ? (
+            <button
+              type="button"
+              className="studio-factory-cell-tool"
+              data-kind="clean"
+              data-testid={`assets-clean-${piece.key}`}
+              title="Clean stray bits"
+              onClick={(event) => {
+                event.stopPropagation();
+                onClean();
+              }}
+            >
+              ✂
+            </button>
+          ) : null}
+          {onRename ? (
+            <button
+              type="button"
+              className="studio-factory-cell-tool"
+              data-kind="rename"
+              data-testid={`assets-rename-${piece.key}`}
+              title="Rename"
+              onClick={(event) => {
+                event.stopPropagation();
+                setRenaming(true);
+              }}
+            >
+              ✎
+            </button>
+          ) : null}
+          {onDelete ? (
+            <button
+              type="button"
+              className="studio-factory-cell-tool"
+              data-kind="delete"
+              data-testid={`assets-delete-${piece.key}`}
+              title="Delete"
+              onClick={(event) => {
+                event.stopPropagation();
+                onDelete();
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M4.5 1h3l.3 1H10v1H2V2h2.2L4.5 1zm.2 3h1v5h-1V4zm2 0h1v5h-1V4zM3 3h6l-.4 7.2A1 1 0 0 1 7.6 11H4.4a1 1 0 0 1-1-.8L3 3z"
+                />
+              </svg>
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+      {renaming && onRename ? (
+        <input
+          className="studio-factory-cell-rename"
+          data-testid={`assets-rename-input-${piece.key}`}
+          value={draft}
+          autoFocus
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            const next = draft.trim();
+            setRenaming(false);
+            if (next && next !== piece.name) onRename(next);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+            if (event.key === "Escape") {
+              setDraft(piece.name);
+              setRenaming(false);
+            }
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          className="studio-factory-cell-label"
+          onClick={onSelect}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            if (onRename) setRenaming(true);
+            else onOpen?.();
+          }}
+        >
+          {piece.name}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -426,6 +538,10 @@ function FactoryRowBlock({
   onOpenSlot,
   onOpenDrawing,
   onAdd,
+  onDeleteDrawing,
+  onRenameDrawing,
+  onCleanDrawing,
+  onCleanRow,
 }: {
   project: string;
   row: FactoryRow;
@@ -435,6 +551,10 @@ function FactoryRowBlock({
   onOpenSlot?: () => void;
   onOpenDrawing: (piece: FactoryPiece) => void;
   onAdd?: () => void;
+  onDeleteDrawing?: (piece: FactoryPiece) => void;
+  onRenameDrawing?: (piece: FactoryPiece, name: string) => void;
+  onCleanDrawing?: (piece: FactoryPiece) => void;
+  onCleanRow?: () => void;
 }) {
   const counts = row.drawings.reduce(
     (acc, piece) => {
@@ -455,6 +575,19 @@ function FactoryRowBlock({
         <span className="studio-factory-row-meta">
           {row.drawings.length} drawing{row.drawings.length === 1 ? "" : "s"}
           {formatCountLine(counts) ? ` · ${formatCountLine(counts)}` : ""}
+          {onCleanRow ? (
+            <>
+              {" · "}
+              <button
+                type="button"
+                className="studio-header-textbtn"
+                data-testid={`assets-clean-row-${row.slot}`}
+                onClick={onCleanRow}
+              >
+                Clean stray bits
+              </button>
+            </>
+          ) : null}
         </span>
       </div>
       <div className="studio-factory-thumbs" data-testid={`assets-slot-row-${row.slot}`}>
@@ -466,6 +599,9 @@ function FactoryRowBlock({
             selected={piece.key === selectedKey}
             onSelect={() => onSelect(piece)}
             onOpen={piece.rel && row.kind === "slot" ? () => onOpenDrawing(piece) : undefined}
+            onDelete={piece.rel && row.kind === "slot" ? () => onDeleteDrawing?.(piece) : undefined}
+            onRename={piece.rel && row.kind === "slot" ? (name) => onRenameDrawing?.(piece, name) : undefined}
+            onClean={piece.rel && row.kind === "slot" ? () => onCleanDrawing?.(piece) : undefined}
           />
         ))}
         {onAdd ? <AddTile testId={`assets-new-slot-${row.slot}`} onClick={onAdd} /> : null}
@@ -738,6 +874,86 @@ export default function AssetsPanel({
     }
   }
 
+  async function onDeleteDrawing(slot: string, piece: FactoryPiece) {
+    if (!project || !selectedId) return;
+    if (!window.confirm(`Move ${piece.name} to .trash? The file is kept, not erased.`)) return;
+    try {
+      const result = await deleteEditorDrawing(project, selectedId, slot, piece.name, { confirm: true, view });
+      if ("used" in result && result.used) {
+        const hint = (result.usages || []).map((item) => item.text).slice(0, 6).join("; ");
+        if (!window.confirm(`${result.error || hint}\nMove it to .trash anyway?`)) return;
+        const forced = await deleteEditorDrawing(project, selectedId, slot, piece.name, {
+          confirm: true,
+          force: true,
+          view,
+        });
+        if ("used" in forced && forced.used) {
+          setError(forced.error);
+          return;
+        }
+      }
+      setReloadKey((n) => n + 1);
+      onLibraryChange?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete");
+    }
+  }
+
+  async function onRenameDrawing(slot: string, piece: FactoryPiece, name: string) {
+    if (!project || !selectedId) return;
+    try {
+      await renameEditorDrawing(project, selectedId, slot, piece.name, { name, view });
+      setReloadKey((n) => n + 1);
+      onLibraryChange?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not rename");
+    }
+  }
+
+  async function onCleanDrawing(slot: string, piece: FactoryPiece) {
+    if (!project || !selectedId) return;
+    try {
+      await cleanIslandsDrawing(project, selectedId, slot, piece.name, { view });
+      setReloadKey((n) => n + 1);
+      onLibraryChange?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not clean stray bits");
+    }
+  }
+
+  async function onCleanRow(slot: string) {
+    if (!project || !selectedId) return;
+    if (!window.confirm(`Clean stray bits on every drawing in ${slot}? Originals are kept in _replaced.`)) return;
+    try {
+      await cleanIslandsSlot(project, selectedId, slot, { view });
+      setReloadKey((n) => n + 1);
+      onLibraryChange?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not clean stray bits");
+    }
+  }
+
+  async function onImportStill(kind: "prop" | "background", file: File) {
+    if (!project) return;
+    try {
+      const imageBase64 = await fileToImageBase64(file);
+      const location = kind === "prop" ? staging?.props[0]?.location || staging?.backgrounds[0]?.id : undefined;
+      const result = await importStillAsset(project, { kind, name: file.name, location, imageBase64 });
+      setReloadKey((n) => n + 1);
+      onLibraryChange?.();
+      if (kind === "prop") {
+        const id = `${result.location}:${result.id}`;
+        setLibrarySel({ kind: "props", id });
+        setNav({ page: "prop", id });
+      } else {
+        setLibrarySel({ kind: "backgrounds", id: result.id });
+        setNav({ page: "background", id: result.id });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not import PNG");
+    }
+  }
+
   function togglePlay(rel: string) {
     if (!project) return;
     if (playingRel === rel) {
@@ -758,11 +974,22 @@ export default function AssetsPanel({
       setImportAudioOpen(true);
       return;
     }
-    if (kind === "characters" && !selectedId) {
+    if (kind === "characters") {
       setLibraryOpen(true);
       return;
     }
-    onOpenImagine?.(selectedId ? { characterId: selectedId } : undefined);
+    if (kind === "actions") {
+      onOpenImagine?.(selectedId ? { characterId: selectedId } : undefined);
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png,.png";
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      if (file) void onImportStill(kind === "backgrounds" ? "background" : "prop", file);
+    };
+    input.click();
   }
 
   if (!project) {
@@ -1433,6 +1660,10 @@ export default function AssetsPanel({
                         ? onOpenImagine({ characterId: selected.id, needId: needIdForSlot(row.slot) })
                         : setAssetFocus({ mode: "slot", characterId: selected.id, slot: row.slot, view })
                     }
+                    onDeleteDrawing={(piece) => void onDeleteDrawing(row.slot, piece)}
+                    onRenameDrawing={(piece, name) => void onRenameDrawing(row.slot, piece, name)}
+                    onCleanDrawing={(piece) => void onCleanDrawing(row.slot, piece)}
+                    onCleanRow={() => void onCleanRow(row.slot)}
                   />
                 ))
               ) : (

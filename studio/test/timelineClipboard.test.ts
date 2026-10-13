@@ -104,6 +104,34 @@ describe("timeline clipboard and delete", () => {
     assert.equal(clipboardItemFitsLane(speech.items[0], "body"), false);
   });
 
+  test("audio-only copy pastes at the playhead including an empty spot before the first line", () => {
+    const audioBlocks = [
+      {
+        id: "a0",
+        scriptLine: null,
+        sceneId: "intro",
+        startFrame: 0,
+        endFrame: 24,
+        lane: "audio",
+        rel: "audio/monologue/001_alice.wav",
+      },
+    ];
+    const clip = clipboardFromBlocks(script, audioBlocks, ["a0"]);
+    assert.equal(clip.items.length, 1);
+    assert.match(clip.items[0].lineText, /\[Audio: .* file=monologue lines=false\]/);
+    assert.equal(clipboardItemFitsLane(clip.items[0], "audio"), true);
+    const pasted = pasteClipboardInScript({
+      script,
+      clipboard: clip,
+      playhead: 0,
+      fps: 24,
+      scenes,
+      playheadLine: null,
+      lane: "audio",
+    });
+    assert.match(pasted, /\[Audio: .* file=monologue lines=false at_time=0s\]/);
+  });
+
   test("duplicate writes a copy at the end of the original span", () => {
     const next = duplicateBlocksInScript({
       script,

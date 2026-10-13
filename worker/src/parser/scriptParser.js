@@ -2740,7 +2740,7 @@ class ScriptParser {
     if (lineView) clip.view = lineView;
     if (window.inSec > 0) clip.trim_in = Math.round(window.inSec * 1000) / 1000;
     if (window.outSec + 1e-6 < sourceSeconds) clip.trim_out = Math.round(window.outSec * 1000) / 1000;
-    state.current.dialogue.push(clip);
+    if (emitSentenceLines) state.current.dialogue.push(clip);
 
     const mouthCues = this._readMouthCues(imported.cues);
     const marriedId = this._marriedId(token);
@@ -2776,7 +2776,7 @@ class ScriptParser {
           words,
         });
       }
-    } else {
+    } else if (emitSentenceLines) {
       this._emitLane({
         lane: "dialogue",
         token,

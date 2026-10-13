@@ -54,6 +54,27 @@ function decodeRgbaFile(absPath) {
   return toRgba(decodePng(fs.readFileSync(absPath)));
 }
 
+function lumaBounds(rgba, width, height, threshold = 22) {
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const o = (y * width + x) * 4;
+      if (rgba[o + 3] < 8) continue;
+      const lum = Math.max(rgba[o], rgba[o + 1], rgba[o + 2]);
+      if (lum <= threshold) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return { x: 0, y: 0, w: width, h: height, empty: true };
+  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1, empty: false };
+}
+
 function alphaBounds(rgba, width, height) {
   let minX = width;
   let minY = height;
@@ -143,7 +164,11 @@ function renderFactoryThumb({ piecePath, basePath, pad, keyGreen } = {}) {
     }
   }
   if (keyGreen) rgba = keyChromaGreen(rgba, width, height);
-  const bounds = alphaBounds(rgba, width, height);
+  let bounds = alphaBounds(rgba, width, height);
+  if (!bounds.empty && bounds.w * bounds.h > width * height * 0.55) {
+    const luma = lumaBounds(rgba, width, height);
+    if (!luma.empty && luma.w * luma.h < bounds.w * bounds.h * 0.9) bounds = luma;
+  }
   const box = padBox(bounds, width, height, pad);
   return {
     png: encodeRgbaPng(box.w, box.h, cropRgba(rgba, width, height, box)),
@@ -159,6 +184,7 @@ module.exports = {
   MIN_PAD,
   toRgba,
   decodeRgbaFile,
+  lumaBounds,
   alphaBounds,
   padBox,
   cropRgba,

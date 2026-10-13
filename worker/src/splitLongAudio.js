@@ -205,6 +205,36 @@ function spawnCommand(command, args) {
   });
 }
 
+function uniqueAudioLabel(projectDir, base) {
+  const cleaned =
+    String(base || "slice")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 48) || "slice";
+  if (!fs.existsSync(path.join(projectDir, "audio", cleaned))) return cleaned;
+  let n = 2;
+  while (fs.existsSync(path.join(projectDir, "audio", `${cleaned}_${n}`))) n += 1;
+  return `${cleaned}_${n}`;
+}
+
+async function saveAudioSlice(projectDir, opts = {}) {
+  const rel = String(opts.rel || "").replace(/\\/g, "/");
+  if (!rel.startsWith("audio/") || rel.includes("..")) throw new Error("rel must be audio/<label>/<file>.wav");
+  const srcAbs = path.join(projectDir, rel);
+  if (!fs.existsSync(srcAbs)) throw new Error(`Audio file not found: ${rel}`);
+  const characterId = String(opts.characterId || characterIdFromWavRel(rel) || "").trim();
+  if (!characterId) throw new Error("character is required to save a slice");
+  const inSec = Math.max(0, Number(opts.inSec) || 0);
+  const duration = Math.max(0.05, Number(opts.durationSec) || 0);
+  const label = uniqueAudioLabel(projectDir, opts.label || `${labelFromWavRel(rel) || "slice"}_slice`);
+  const destRel = `audio/${label}/001_${characterId}.wav`;
+  const destAbs = path.join(projectDir, destRel);
+  const extract = opts.extractWavSlice || extractWavSlice;
+  await extract(srcAbs, destAbs, inSec, duration);
+  return { ok: true, label, rel: destRel, characterId, durationSec: duration };
+}
+
 function extractWavSlice(srcAbs, destAbs, startSeconds, durationSeconds) {
   fs.mkdirSync(path.dirname(destAbs), { recursive: true });
   return spawnCommand("ffmpeg", [
@@ -368,6 +398,8 @@ module.exports = {
   splitExistingAudio,
   shouldSplitLongAudio,
   extractWavSlice,
+  saveAudioSlice,
+  uniqueAudioLabel,
   readWords,
   readCues,
 };

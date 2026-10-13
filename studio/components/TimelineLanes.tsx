@@ -79,7 +79,7 @@ import {
   zoomAroundCursor,
   zoomToSlider,
 } from "@/lib/timelineZoom";
-import type { LaneBlock, LaneId, LanesResponse } from "@/lib/worker";
+import { saveAudioSlice, type LaneBlock, type LaneId, type LanesResponse } from "@/lib/worker";
 
 const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
   { id: "body", label: "Body/Move", bar: "bg-orange-500/80", text: "text-orange-50" },
@@ -660,6 +660,21 @@ export default function TimelineLanes({
     };
   }
 
+  async function applySaveSlice() {
+    if (!project) return;
+    const block =
+      allBlocks.find((item) => selectedIds.has(item.id) && item.lane === "audio" && item.rel) ||
+      allBlocks.find((item) => selectedIds.has(item.id) && item.rel);
+    if (!block?.rel) return;
+    const inSec = (block.trim?.inFrames || 0) / fps;
+    const durationSec = Math.max(1, block.endFrame - block.startFrame) / fps;
+    try {
+      await saveAudioSlice(project, { rel: block.rel, inSec, durationSec });
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Could not save slice");
+    }
+  }
+
   function longSelectedAudio() {
     return allBlocks.find((block) => {
       if (!selectedIds.has(block.id) || block.lane !== "audio" || !block.rel) return false;
@@ -686,6 +701,8 @@ export default function TimelineLanes({
     } else if (action === "split-long-audio") {
       const block = longSelectedAudio();
       if (block) onSplitLongAudio?.(block);
+    } else if (action === "save-slice") {
+      void applySaveSlice();
     }
   }
 
@@ -1500,6 +1517,7 @@ export default function TimelineLanes({
           hasSelection={selectedIds.size > 0}
           mouthOnly={selectionIsMouthOnly(allBlocks, selectedIds)}
           showSplitLong={Boolean(onSplitLongAudio && longSelectedAudio())}
+          showSaveSlice={allBlocks.some((block) => block.lane === "audio" && selectedIds.has(block.id) && Boolean(block.rel))}
           showSync={allBlocks.some((block) => block.lane === "dialogue" && selectedIds.has(block.id))}
           syncLabel={
             allBlocks.find((block) => block.lane === "dialogue" && selectedIds.has(block.id))?.sync === "synced"

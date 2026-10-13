@@ -6,6 +6,8 @@ import {
   confirmAddDrawing,
   confirmReplaceDrawing,
   cueAtTime,
+  cleanIslandsDrawing,
+  cleanIslandsSlot,
   deleteEditorDrawing,
   fileToImageBase64,
   flipEditorDrawing,
@@ -345,6 +347,24 @@ export default function AssetEditorOverlay({
     }
   }
 
+  async function onCleanIslands(all = false) {
+    setBusy("Cleaning stray bits…");
+    setError(null);
+    try {
+      if (all) {
+        await cleanIslandsSlot(project, focus.characterId, focus.slot, { view });
+      } else if (focus.mode === "drawing") {
+        await cleanIslandsDrawing(project, focus.characterId, focus.slot, focus.drawing, { view });
+      }
+      onChanged();
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not clean stray bits");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function onPromoteView() {
     setBusy("Setting default…");
     setError(null);
@@ -638,6 +658,8 @@ export default function AssetEditorOverlay({
           onReplace={() => fileRef.current?.click()}
           onRename={() => setRenameTo(current.name)}
           onDelete={() => setDeleteState({ force: false, usages: detail?.usages || [] })}
+          onClean={() => void onCleanIslands(false)}
+          onCleanAll={() => void onCleanIslands(true)}
           project={project}
           canRealign={Boolean(slot?.canRealign)}
           overlayDefault={overlayDefault}
@@ -737,8 +759,8 @@ export default function AssetEditorOverlay({
         >
           <span className="text-[11px] text-neutral-300">
             {deleteState.force
-              ? "Used by a script — moves to _trash."
-              : "Move to _trash? The file is kept, not erased."}
+              ? "Used by a rig, action, or script — moves to .trash."
+              : "Move to .trash? The file is kept, not erased."}
           </span>
           {deleteState.usages.length > 0 ? (
             <ul className="max-h-16 overflow-auto text-[10px] text-amber-200" data-testid="asset-delete-usages">
@@ -789,6 +811,8 @@ function DrawingView({
   onReplace,
   onRename,
   onDelete,
+  onClean,
+  onCleanAll,
   project,
   canRealign,
   overlayDefault,
@@ -820,6 +844,8 @@ function DrawingView({
   onReplace: () => void;
   onRename: () => void;
   onDelete: () => void;
+  onClean: () => void;
+  onCleanAll: () => void;
   project: string;
   canRealign: boolean;
   overlayDefault: boolean;
@@ -1137,6 +1163,12 @@ function DrawingView({
           </button>
           <button type="button" className="studio-header-textbtn" onClick={onDelete} data-testid="asset-delete-open">
             Delete
+          </button>
+          <button type="button" className="studio-header-textbtn" onClick={onClean} data-testid="asset-clean-islands">
+            Clean stray bits
+          </button>
+          <button type="button" className="studio-header-textbtn" onClick={onCleanAll} data-testid="asset-clean-islands-all">
+            Clean all in this slot
           </button>
         </div>
         <p className="text-[10px] text-neutral-600">Drop or paste an image to replace. Old file goes to _replaced/.</p>

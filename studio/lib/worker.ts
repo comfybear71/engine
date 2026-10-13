@@ -699,6 +699,20 @@ export type TrashAssetBody = {
   force?: boolean;
 };
 
+export async function importStillAsset(
+  name: string,
+  body: { kind: "prop" | "background"; name?: string; location?: string; imageBase64: string }
+): Promise<{ ok: boolean; id: string; rel: string; location?: string }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/assets/import-still`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => ({}))) as { ok?: boolean; id?: string; rel?: string; location?: string; error?: string };
+  if (!res.ok) throw new Error(json.error || `Import failed (${res.status})`);
+  return { ok: true, id: json.id || "", rel: json.rel || "", location: json.location };
+}
+
 export async function trashProjectAsset(
   name: string,
   body: TrashAssetBody
@@ -1430,6 +1444,20 @@ export async function splitProjectAudio(
   const payload = (await res.json().catch(() => ({}))) as SplitAudioResponse & { error?: string };
   if (!res.ok) throw new Error(payload.error || `Split failed (${res.status})`);
   return payload;
+}
+
+export async function saveAudioSlice(
+  name: string,
+  body: { rel: string; characterId?: string; label?: string; inSec?: number; durationSec?: number }
+): Promise<{ ok: boolean; label: string; rel: string }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/audio/save-slice`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; label?: string; rel?: string; error?: string };
+  if (!res.ok) throw new Error(payload.error || `Save slice failed (${res.status})`);
+  return { ok: true, label: payload.label || "", rel: payload.rel || "" };
 }
 
 export async function importProjectAudio(

@@ -272,6 +272,46 @@ function runCutout(args, options = {}) {
   });
 }
 
+function runCleanIslands(args, options = {}) {
+  const pythonBin = options.pythonBin || resolvePythonBin();
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonBin, ["-m", "compositor.cutout", ...args], {
+      cwd: PYTHON_DIR,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => {
+      stdout += d;
+    });
+    child.stderr.on("data", (d) => {
+      stderr += d;
+    });
+    child.on("error", (err) => {
+      reject(new Error(`Failed to spawn island cleanup (${pythonBin}): ${err.message}`));
+    });
+    child.on("close", (code) => {
+      const trimmed = stdout.trim();
+      let parsed = null;
+      if (trimmed) {
+        try {
+          parsed = JSON.parse(trimmed.split("\n").pop());
+        } catch {
+          parsed = null;
+        }
+      }
+      if (code !== 0 || !parsed || parsed.ok === false) {
+        const detail =
+          (parsed && parsed.error) || (stderr || stdout).trim().split("\n").pop() || `exited ${code}`;
+        reject(new Error(`Island cleanup failed: ${detail}`));
+        return;
+      }
+      resolve(parsed);
+    });
+  });
+}
+
 function previewDir(projectDir, characterId, sid) {
   return path.join(characterDir(projectDir, characterId), "_library", "_preview", sid);
 }
@@ -640,6 +680,7 @@ module.exports = {
   DRAWING_NAME,
   SAFE_SESSION,
   runCutout,
+  runCleanIslands,
   decodeImageBuffer,
   previewDir,
   sessionId,

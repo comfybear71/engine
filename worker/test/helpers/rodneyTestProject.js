@@ -126,10 +126,23 @@ function buildRodneyTestProject(projectDir) {
   for (const name of ["A", "B", "C", "D", "X"]) {
     writePng(path.join(rodney, "mouth_front", `${name}.png`), mouthRgba(name));
   }
-  for (const name of ["neutral", "walk", "armless_L"]) {
+  for (const name of ["neutral", "walk", "armless_L", "approach"]) {
     writePng(path.join(rodney, "torso", `${name}.png`), torsoRgba(name));
   }
+  writePng(path.join(rodney, "torso_right_side", "neutral.png"), (() => {
+    const rgba = Buffer.alloc(1024 * 1024 * 4);
+    fillRect(rgba, 1024, 470, 470, 90, 220, 150, 28, 28, 255);
+    fillRect(rgba, 1024, 430, 500, 40, 90, 176, 92, 48, 255);
+    fillRect(rgba, 1024, 488, 620, 70, 70, 120, 24, 28, 255);
+    return rgba;
+  })());
   writePng(path.join(rodney, "body", "walk.png"), torsoRgba("walk"));
+  writePng(path.join(rodney, "legs_right_side", "walk_side_01.png"), (() => {
+    const rgba = Buffer.alloc(1024 * 1024 * 4);
+    fillRect(rgba, 1024, 450, 700, 30, 90, 40, 20, 10, 255);
+    fillRect(rgba, 1024, 520, 700, 30, 90, 40, 20, 10, 255);
+    return rgba;
+  })());
   writePng(path.join(rodney, "parts", "torso_rig.png"), torsoRgba("neutral"));
   writePng(path.join(rodney, "parts", "shirt.png"), (() => {
     const rgba = Buffer.alloc(1024 * 1024 * 4);

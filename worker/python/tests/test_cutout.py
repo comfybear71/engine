@@ -9,11 +9,14 @@ import numpy as np
 
 from compositor.cutout import (
     analyze_cells,
+    clean_islands_image,
     estimate_screen_bgr,
     is_empty,
     key_green,
     normalize_cells,
     process_image,
+    remove_stray_islands,
+    split_grid_robust,
 )
 
 # Grok Imagine green is RGB(16, 221, 31) ≈ 49 away from exact #00FF00.
@@ -274,3 +277,97 @@ def test_process_image_normalize_matches_median_head():
     assert len(filled) == 13
     shapes = {cell.shape[:2] for cell in cells}
     assert len(shapes) == 1
+
+
+def _walk_sheet_with_gutters(cols: int = 4, rows: int = 2) -> np.ndarray:
+    """Grok-shaped 4x2 / 4x4 sheet: full figures with green gutters."""
+    inner, gutter = 72, 10
+    width = cols * inner + (cols + 1) * gutter
+    height = rows * inner + (rows + 1) * gutter
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+    img[:] = GROK_GREEN_BGR
+    for row in range(rows):
+        for col in range(cols):
+            x0 = gutter + col * (inner + gutter)
+            y0 = gutter + row * (inner + gutter)
+            stride = (col % 4) * 3
+            img[y0 + 10 : y0 + 46, x0 + 6 : x0 + 16] = (20, 20, 180)  # cape
+            img[y0 + 6 : y0 + 20, x0 + 28 + stride : x0 + 44 + stride] = (96, 140, 196)  # head
+            img[y0 + 20 : y0 + 42, x0 + 24 + stride : x0 + 46 + stride] = (28, 28, 150)  # torso
+            img[y0 + 42 : y0 + 60, x0 + 22 + stride : x0 + 30 + stride] = (40, 70, 140)
+            img[y0 + 42 : y0 + 60, x0 + 36 + stride : x0 + 44 + stride] = (40, 70, 140)
+            img[y0 + 58 : y0 + 68, x0 + 20 + stride : x0 + 30 + stride] = (24, 40, 70)
+            img[y0 + 58 : y0 + 68, x0 + 38 + stride : x0 + 48 + stride] = (24, 40, 70)
+    return img
+
+
+def test_gap_grid_splits_guttered_4x2_walk_sheet():
+    sheet = _walk_sheet_with_gutters(4, 2)
+    cells = process_image(sheet, key=True, grid=(4, 2), split="grid", trim=True, detect_gaps=True)
+    assert len(cells) == 8
+    filled = [cell for cell in cells if not is_empty(cell)]
+    assert len(filled) == 8
+    for cell in filled:
+        assert cell.shape[0] < 80
+        assert cell.shape[1] < 80
+
+
+def test_robust_grid_falls_back_when_the_whole_sheet_is_one_blob():
+    # No gutters: eight figures packed into equal 4x2 slices of one green field.
+    img = np.zeros((144, 288, 3), dtype=np.uint8)
+    img[:] = GROK_GREEN_BGR
+    for i in range(8):
+        col, row = i % 4, i // 4
+        x0, y0 = col * 72 + 16, row * 72 + 12
+        img[y0 : y0 + 50, x0 : x0 + 28] = (28, 28, 150)
+    cells = split_grid_robust(cv2.cvtColor(img, cv2.COLOR_BGR2BGRA), 4, 2)
+    assert len(cells) == 8
+
+
+def _drawing_with_stray_bits() -> np.ndarray:
+    """Headless walk body plus a detached boot fragment and a cape sliver."""
+    img = np.zeros((160, 160, 4), dtype=np.uint8)
+    img[20:80, 50:110] = (28, 28, 150, 255)  # torso
+    img[80:130, 55:75] = (40, 70, 140, 255)  # legs
+    img[80:130, 85:105] = (40, 70, 140, 255)
+    img[130:148, 52:76] = (24, 40, 70, 255)  # boots
+    img[130:148, 84:108] = (24, 40, 70, 255)
+    img[40:90, 4:12] = (20, 20, 180, 255)  # cape sliver, disconnected
+    img[136:148, 8:20] = (24, 40, 70, 255)  # stray toe/boot
+    return img
+
+
+def test_remove_stray_islands_drops_cape_sliver_and_boot_crumb(tmp_path: Path):
+    before = _drawing_with_stray_bits()
+    after = remove_stray_islands(before)
+    before_path = tmp_path / "before.png"
+    after_path = tmp_path / "after.png"
+    assert cv2.imwrite(str(before_path), before)
+    assert cv2.imwrite(str(after_path), after)
+
+    def _sliver_pixels(img: np.ndarray) -> int:
+        return int(np.count_nonzero(img[40:90, 4:12, 3] > 16))
+
+    def _toe_pixels(img: np.ndarray) -> int:
+        return int(np.count_nonzero(img[136:148, 8:20, 3] > 16))
+
+    assert _sliver_pixels(before) > 20
+    assert _toe_pixels(before) > 10
+    assert _sliver_pixels(after) == 0
+    assert _toe_pixels(after) == 0
+    assert int(np.count_nonzero(after[20:80, 50:110, 3] > 16)) > 100
+
+    cleaned = clean_islands_image(before)
+    assert _sliver_pixels(cleaned) == 0
+    assert _toe_pixels(cleaned) == 0
+
+    from compositor.cutout import main as cutout_main
+
+    cli_in = tmp_path / "walk_side_02.png"
+    cli_out = tmp_path / "walk_side_02.clean.png"
+    cv2.imwrite(str(cli_in), before)
+    assert cutout_main(["--input", str(cli_in), "--clean-islands", "--out", str(cli_out)]) == 0
+    cli_img = cv2.imread(str(cli_out), cv2.IMREAD_UNCHANGED)
+    assert cli_img is not None
+    assert _sliver_pixels(cli_img) == 0
+    assert _toe_pixels(cli_img) == 0

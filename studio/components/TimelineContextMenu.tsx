@@ -12,7 +12,8 @@ export type TimelineContextAction =
   | "sync"
   | "redo-sync"
   | "clear-lipsync"
-  | "split-long-audio";
+  | "split-long-audio"
+  | "save-slice";
 
 export default function TimelineContextMenu({
   x,
@@ -24,6 +25,7 @@ export default function TimelineContextMenu({
   syncLabel,
   mouthOnly = false,
   showSplitLong = false,
+  showSaveSlice = false,
   onAction,
   onClose,
 }: {
@@ -36,6 +38,7 @@ export default function TimelineContextMenu({
   syncLabel: string;
   mouthOnly?: boolean;
   showSplitLong?: boolean;
+  showSaveSlice?: boolean;
   onAction: (action: TimelineContextAction) => void;
   onClose: () => void;
 }) {
@@ -96,6 +99,13 @@ export default function TimelineContextMenu({
               label="Split long audio"
               disabled={!canEdit}
               onClick={() => run("split-long-audio")}
+            />
+          ) : null}
+          {showSaveSlice ? (
+            <MenuItem
+              label="Save slice to Sounds"
+              disabled={!canEdit}
+              onClick={() => run("save-slice")}
             />
           ) : null}
         </>

@@ -220,6 +220,10 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     }
     const drawings = slotDrawingNames(projectDir, globalAssetsDir, characterId, slotName, slotConfig);
     const drawingName = String(drawing == null ? "" : drawing).trim();
+    if (drawingName.toLowerCase() === "none") {
+      setSlots[slotName] = "none";
+      continue;
+    }
     if (!drawingName || !drawings.has(drawingName)) {
       throw new ScriptError(
         lineNumber,
