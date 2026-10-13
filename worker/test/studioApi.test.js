@@ -507,6 +507,68 @@ describe("studio worker API", () => {
     assert.equal(bad.status, 400);
   });
 
+  test("PUT /script then GET /script and GET /lanes reparse that exact file", async () => {
+    const full = [
+      "[Scene: Act 1]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "Alice: Hello there friend.",
+      "[Scene: Act 2]",
+      "[Location: room_b]",
+      "[Cast: Alice]",
+      "Alice: Later scene that must disappear.",
+    ].join("\n");
+    const act1 = [
+      "[Scene: Act 1]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "Alice: Hello there friend.",
+    ].join("\n");
+    const altPath = path.join(fixture.projectDir, "script_full_test.txt");
+    const defaultPath = path.join(fixture.projectDir, "script.txt");
+    const originalDefault = fs.readFileSync(defaultPath, "utf8");
+    fs.writeFileSync(altPath, full);
+
+    const warm = await fetch(`${ctx.url}/api/projects/project/lanes?script=script_full_test.txt`);
+    assert.equal(warm.status, 200, await warm.clone().text());
+    const warmBody = await warm.json();
+    assert.ok(warmBody.blocks.some((block) => /Later scene that must disappear/.test(block.label)));
+
+    const put = await fetch(`${ctx.url}/api/projects/project/script?script=script_full_test.txt`, {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain" },
+      body: act1,
+    });
+    const putBody = await put.json();
+    assert.equal(put.status, 200, JSON.stringify(putBody));
+    assert.equal(putBody.saved, true);
+    assert.equal(putBody.script, "script_full_test.txt");
+    assert.equal(fs.readFileSync(altPath, "utf8"), act1);
+    assert.equal(fs.readFileSync(defaultPath, "utf8"), originalDefault);
+
+    const got = await fetch(`${ctx.url}/api/projects/project/script?script=script_full_test.txt`);
+    assert.equal(got.status, 200);
+    assert.match(String(got.headers.get("cache-control") || ""), /no-store/);
+    assert.equal(await got.text(), act1);
+
+    const lanes = await fetch(`${ctx.url}/api/projects/project/lanes?script=script_full_test.txt`);
+    const laneBody = await lanes.json();
+    assert.equal(lanes.status, 200, JSON.stringify(laneBody));
+    assert.match(String(lanes.headers.get("cache-control") || ""), /no-store/);
+    assert.ok(laneBody.blocks.some((block) => /Hello there friend/.test(block.label)));
+    assert.equal(
+      laneBody.blocks.some((block) => /Later scene that must disappear/.test(block.label)),
+      false
+    );
+    assert.equal(
+      laneBody.scenes.some((scene) => /act_2/i.test(scene.id)),
+      false
+    );
+
+    const fallback = await fetch(`${ctx.url}/api/projects/project/script`);
+    assert.equal(await fallback.text(), originalDefault);
+  });
+
   test("path traversal and reserved names are rejected", async () => {
     assert.equal(isSafeProjectName(".."), false);
     assert.equal(isSafeProjectName("_global_assets"), false);

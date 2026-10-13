@@ -210,16 +210,23 @@ function withShow(path: string): string {
   return `${path}${join}show=${encodeURIComponent(activeShowId)}`;
 }
 
-function withScript(path: string, script?: string | null): string {
-  if (!script) return path;
+export function requireScriptName(script?: string | null): string {
+  const name = (script || "").trim();
+  if (!name) throw new Error("No script selected");
+  return name;
+}
+
+export function withScript(path: string, script?: string | null): string {
+  const name = (script || "").trim();
+  if (!name) return path;
   const join = path.includes("?") ? "&" : "?";
-  return `${path}${join}script=${encodeURIComponent(script)}`;
+  return `${path}${join}script=${encodeURIComponent(name)}`;
 }
 
 export async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
   const next = path.startsWith("/api/projects/") ? withShow(path) : path;
   try {
-    return await fetch(`${WORKER_URL}${next}`, init);
+    return await fetch(`${WORKER_URL}${next}`, { ...init, cache: "no-store" });
   } catch (err) {
     if (init?.signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
       if (err instanceof Error && err.name === "AbortError") throw err;
@@ -595,7 +602,7 @@ export async function loadProjectAudio(name: string): Promise<ProjectAudioFile[]
 }
 
 export async function loadStage(name: string, script?: string | null): Promise<StageInfo> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/stage`, script));
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/stage`, requireScriptName(script)));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<StageInfo>;
 }
@@ -755,7 +762,7 @@ export async function fetchPreviewFrame(
 }
 
 export async function loadScript(name: string, script?: string | null): Promise<string> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, script));
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/script`, requireScriptName(script)));
   if (!res.ok) throw new Error(await readError(res));
   return res.text();
 }
@@ -802,7 +809,7 @@ export async function saveScript(
   script?: string | null,
   opts?: { parse?: boolean }
 ): Promise<LintResult> {
-  const path = withScript(`/api/projects/${encodeURIComponent(name)}/script`, script);
+  const path = withScript(`/api/projects/${encodeURIComponent(name)}/script`, requireScriptName(script));
   const url = opts?.parse === false ? `${path}${path.includes("?") ? "&" : "?"}parse=0` : path;
   const res = await workerFetch(url, {
     method: "PUT",
@@ -826,7 +833,7 @@ export async function lintScript(name: string, text?: string, script?: string | 
 }
 
 export async function loadLanes(name: string, script?: string | null): Promise<LanesResponse> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lanes`, script));
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/lanes`, requireScriptName(script)));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<LanesResponse>;
 }
@@ -1006,7 +1013,7 @@ export type PlaybackStatus = {
 };
 
 export async function loadPlayback(name: string, script?: string | null): Promise<PlaybackStatus> {
-  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/playback`, script));
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/playback`, requireScriptName(script)));
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<PlaybackStatus>;
 }

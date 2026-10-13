@@ -17,7 +17,7 @@ const express = require("express");
 
 const { renderProject, previewFrame, parseEstimatedSilent } = require("./render");
 const { parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
-const { getCachedParse } = require("./parser/parseCache");
+const { getCachedParse, invalidateParseCache } = require("./parser/parseCache");
 const { validateTimelineFile } = require("./parser/validateTimelineFile");
 const { explainTimelineError } = require("./parser/explainTimelineError");
 const { resolveAsset } = require("./parser/assetLibrary");
@@ -1476,6 +1476,7 @@ function createApp(options = {}) {
     if (!fs.existsSync(scriptPath)) {
       return res.status(404).json({ error: `${scriptName} not found` });
     }
+    res.setHeader("Cache-Control", "no-store");
     res.type("text/plain").send(fs.readFileSync(scriptPath, "utf8"));
   });
 
@@ -1496,6 +1497,7 @@ function createApp(options = {}) {
     const id = typeof body.id === "string" ? body.id : "";
     const restored = restoreScriptSnapshot(projectDir, scriptName, id);
     if (!restored.ok) return res.status(404).json({ error: restored.error || "Snapshot not found" });
+    invalidateParseCache(projectDir, scriptName);
 
     let result;
     let parseError = null;
@@ -1510,6 +1512,7 @@ function createApp(options = {}) {
         ok: lint.errors.length === 0,
         saved: true,
         restored: true,
+        script: scriptName,
         id: restored.id,
         text: restored.text,
         lint,
@@ -1527,6 +1530,7 @@ function createApp(options = {}) {
     const scriptText = readScriptBody(req);
     snapshotScriptWrite(projectDir, scriptName, scriptText);
     fs.writeFileSync(path.join(projectDir, scriptName), scriptText);
+    invalidateParseCache(projectDir, scriptName);
 
     const skipParse = req.query && (req.query.parse === "0" || req.query.parse === "false");
     if (skipParse) {
@@ -1534,6 +1538,7 @@ function createApp(options = {}) {
         ok: true,
         saved: true,
         parsed: false,
+        script: scriptName,
         lint: { errors: [], warnings: [] },
       });
     }
@@ -1550,6 +1555,7 @@ function createApp(options = {}) {
       res.json({
         ok: lint.errors.length === 0,
         saved: true,
+        script: scriptName,
         lint,
       });
     } finally {
@@ -1716,6 +1722,7 @@ function createApp(options = {}) {
       return res.status(400).json(parseErrorPayload(err));
     }
     try {
+      res.setHeader("Cache-Control", "no-store");
       res.json(buildLaneBlocks(result));
     } finally {
       cleanupTempParse(result);
@@ -1736,6 +1743,7 @@ function createApp(options = {}) {
     }
     try {
       const staging = listStaging(projectDir, globalAssetsDir);
+      res.setHeader("Cache-Control", "no-store");
       res.json({
         ...summarizeStage(result.timeline),
         marksByLocation: staging.marksByLocation,

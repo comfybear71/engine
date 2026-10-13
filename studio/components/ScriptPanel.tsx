@@ -25,7 +25,7 @@ function flattenLint(result: { lint: { errors: LintIssue[]; warnings: LintIssue[
 
 export default function ScriptPanel({
   project,
-  script = "script.txt",
+  script,
   workerUp,
   scriptEpoch = 0,
   selectedLine,
@@ -33,7 +33,7 @@ export default function ScriptPanel({
   onSaved,
 }: {
   project: string | null;
-  script?: string;
+  script: string;
   workerUp: boolean;
   scriptEpoch?: number;
   selectedLine: number | null;
@@ -54,13 +54,22 @@ export default function ScriptPanel({
   const [historyStatus, setHistoryStatus] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const gutterRef = useRef<HTMLDivElement | null>(null);
+  const skipReloadRef = useRef(false);
+  const loadedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!project || !workerUp) return;
+    if (!project || !workerUp || !script) return;
+    const fileKey = `${project}\0${script}`;
+    if (skipReloadRef.current && loadedKeyRef.current === fileKey) {
+      skipReloadRef.current = false;
+      return;
+    }
+    skipReloadRef.current = false;
     let cancelled = false;
     loadScript(project, script)
       .then((next) => {
         if (cancelled) return;
+        loadedKeyRef.current = fileKey;
         setText(next);
         setDirty(false);
         setIssues([]);
@@ -122,6 +131,8 @@ export default function ScriptPanel({
         setStatus(result.ok ? "Restored." : "Restored, with lint issues.");
         setHistoryOpen(false);
         setHistoryStatus(null);
+        skipReloadRef.current = true;
+        loadedKeyRef.current = `${project}\0${script}`;
         onSaved();
         void refreshHistory();
       } catch (err) {
@@ -134,14 +145,16 @@ export default function ScriptPanel({
   );
 
   const onSave = useCallback(async () => {
-    if (!project || saving) return;
+    if (!project || !script || saving) return;
     setSaving(true);
     setStatus("Saving…");
     try {
       const result = await saveScript(project, text, script);
       setIssues(flattenLint(result));
       setDirty(false);
-      setStatus(result.ok ? "Saved." : "Saved, with lint issues.");
+      setStatus(result.ok ? `Saved ${script}` : `Saved ${script}, with lint issues`);
+      skipReloadRef.current = true;
+      loadedKeyRef.current = `${project}\0${script}`;
       onSaved();
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Save failed");
@@ -201,6 +214,8 @@ export default function ScriptPanel({
       setIssues(flattenLint(result));
       setDirty(false);
       setStatus(result.ok ? "Inserted imported audio." : "Inserted, with lint issues.");
+      skipReloadRef.current = true;
+      loadedKeyRef.current = `${project}\0${script}`;
       onSaved();
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Save failed");
@@ -215,8 +230,12 @@ export default function ScriptPanel({
     gutterRef.current.scrollTop = textareaRef.current.scrollTop;
   }
 
-  if (!project) {
-    return <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">Pick a project to edit the script.</div>;
+  if (!project || !script) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">
+        {project ? "Loading script…" : "Pick a project to edit the script."}
+      </div>
+    );
   }
 
   return (
@@ -225,8 +244,19 @@ export default function ScriptPanel({
         <div className="flex items-center justify-between gap-2 border-b border-studio-border px-3 py-2">
           <div className="flex items-center gap-2 text-xs text-studio-muted">
             <span className="text-sm font-semibold text-white">{script}</span>
-            {dirty ? <span>· unsaved</span> : null}
-            {status ? <span className="text-neutral-400">{status}</span> : null}
+            {dirty ? <span data-testid="script-unsaved">· unsaved</span> : null}
+            {status ? (
+              <span
+                data-testid={/^Saved\b/.test(status) ? "script-saved" : "script-status"}
+                className={
+                  /^Saved\b/.test(status)
+                    ? "rounded-md bg-emerald-500/20 px-2 py-0.5 text-xs font-semibold text-emerald-300"
+                    : "text-neutral-400"
+                }
+              >
+                {status}
+              </span>
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -283,8 +313,9 @@ export default function ScriptPanel({
             </button>
             <button
               type="button"
+              data-testid="script-save"
               onClick={() => void onSave()}
-              disabled={!workerUp || saving}
+              disabled={!workerUp || saving || !script}
               className="rounded-md bg-studio-accent px-3 py-1 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
             >
               {saving ? "Saving…" : "Save"}

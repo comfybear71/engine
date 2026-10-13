@@ -171,6 +171,11 @@ async function getCachedParse(projectDir, options = {}) {
   inflight.set(key, gate);
   try {
     const result = await parseFresh(projectDir, options, fingerprint);
+    const latest = fingerprintParseInputs(projectDir, scriptName);
+    if (latest !== fingerprint) {
+      resolveInflight({ fingerprint: "", result: null });
+      return result;
+    }
     const entry = { fingerprint, result };
     cache.set(key, entry);
     resolveInflight(entry);
@@ -188,9 +193,16 @@ function resetParseCache() {
   inflight.clear();
 }
 
+function invalidateParseCache(projectDir, scriptName) {
+  const key = cacheKey(projectDir, scriptName || "script.txt");
+  dropEntry(key);
+  inflight.delete(key);
+}
+
 module.exports = {
   getCachedParse,
   resetParseCache,
+  invalidateParseCache,
   fingerprintParseInputs,
   fingerprintAssets,
   collectParseInputFiles,

@@ -86,7 +86,7 @@ import { explainTimelineError } from "@/lib/timelineError";
 
 export default function StagePanel({
   project,
-  script = "script.txt",
+  script,
   scriptIsOld = false,
   workerUp,
   scriptEpoch,
@@ -97,7 +97,7 @@ export default function StagePanel({
   onOpenImagine,
 }: {
   project: string | null;
-  script?: string;
+  script: string;
   scriptIsOld?: boolean;
   workerUp: boolean;
   scriptEpoch: number;
@@ -163,6 +163,7 @@ export default function StagePanel({
   const audioTimersRef = useRef<number[]>([]);
   const audioGenRef = useRef(0);
   const projectRef = useRef(project);
+  const scriptRef = useRef(script);
   const fpsRef = useRef(fps);
   const totalFramesRef = useRef(totalFrames);
   const previewStatusRef = useRef(previewStatus);
@@ -174,6 +175,7 @@ export default function StagePanel({
   playingRef.current = playing;
   frameRef.current = frame;
   projectRef.current = project;
+  scriptRef.current = script;
   segmentRef.current = segment;
   fpsRef.current = fps;
   totalFramesRef.current = totalFrames;
@@ -201,7 +203,7 @@ export default function StagePanel({
   }, [leftPool]);
 
   useEffect(() => {
-    if (!project || !workerUp) return;
+    if (!project || !workerUp || !script) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -249,7 +251,7 @@ export default function StagePanel({
   }, [project, script, workerUp, scriptEpoch]);
 
   useEffect(() => {
-    if (!project || !workerUp) {
+    if (!project || !workerUp || !script) {
       setPlayback(null);
       return;
     }
@@ -272,7 +274,7 @@ export default function StagePanel({
   }, [project, script, workerUp, renderNonce, scriptEpoch]);
 
   useEffect(() => {
-    if (!project || !workerUp) return;
+    if (!project || !workerUp || !script) return;
     if (playing && (videoSrc || previewStatus === "buffering")) return;
     if (skipPreviewRef.current || pendingScriptRef.current != null) return;
     const cached = frameCacheRef.current.get(frame);
@@ -530,8 +532,8 @@ export default function StagePanel({
     return () => {
       if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
       const text = pendingScriptRef.current;
-      if (text && projectRef.current) {
-        void saveScript(projectRef.current, text, script);
+      if (text && projectRef.current && scriptRef.current) {
+        void saveScript(projectRef.current, text, scriptRef.current);
       }
     };
   }, [script]);

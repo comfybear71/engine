@@ -266,7 +266,7 @@ export default function StudioApp({
             refreshToken={assetEpoch}
           />
         ) : null}
-        {tab === "stage" ? (
+        {tab === "stage" && script ? (
           <StagePanel
             project={project}
             script={script}
@@ -284,7 +284,7 @@ export default function StudioApp({
             }}
           />
         ) : null}
-        {tab === "script" ? (
+        {tab === "script" && script ? (
           <ScriptPanel
             project={project}
             script={script}
@@ -294,6 +294,9 @@ export default function StudioApp({
             onSelectLine={setSelectedScriptLine}
             onSaved={() => setScriptEpoch((n) => n + 1)}
           />
+        ) : null}
+        {(tab === "stage" || tab === "script") && !script ? (
+          <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">Loading script…</div>
         ) : null}
         {tab === "edit" || tab === "deliver" ? <LipSyncSettingsPage project={project} /> : null}
         {!active.ready ? <PlaceholderPage name={active.label} /> : null}

@@ -105,12 +105,12 @@ export function isOldScript(active: string | null | undefined, newest: string | 
 export function pickActiveScript(
   files: ScriptFileInfo[],
   current: string | null | undefined,
-  userPicked: boolean
+  userPicked = false
 ): string {
   const names = files.map((item) => item.name);
-  const newest = newestScriptName(files);
-  if (userPicked && current && names.includes(current)) return current;
-  return newest;
+  if (current && names.includes(current)) return current;
+  void userPicked;
+  return newestScriptName(files);
 }
 
 export function groupScripts(names: string[]): ScriptGroups {
