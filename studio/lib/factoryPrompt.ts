@@ -3,7 +3,7 @@
  * The owner types a plain line; Advanced can show the assembled text.
  */
 
-import { packForCharacter } from "./promptPacks";
+import { packForCharacter } from "./promptPacks.ts";
 import type { Character } from "./worker";
 
 export const GREEN = "#00FF00";
@@ -51,7 +51,7 @@ export function walkPoseNotes(frames: number): string {
 }
 
 export function lockedStyle(character: Pick<Character, "id" | "display_name" | "style"> | null | undefined): string {
-  const pack = packForCharacter(character);
+  const pack = packForCharacter(character ?? null);
   const fromPack = pack && String(pack.styleBlock || "").trim();
   if (fromPack) return fromPack;
   const style = String((character && character.style) || "").trim();

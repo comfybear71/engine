@@ -158,7 +158,13 @@ function ActionShotTile({
   onClick,
 }: {
   project: string;
-  action: ProjectAction;
+  action: {
+    id: string;
+    name?: string;
+    label: string;
+    characterId: string | null;
+    thumbRel?: string | null;
+  };
   many: boolean;
   onClick: () => void;
 }) {
