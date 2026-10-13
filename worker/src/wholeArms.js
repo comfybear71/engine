@@ -438,6 +438,9 @@ function promoteWholeArms(projectDir, options = {}) {
   );
   character.children = keptChildren;
   if (!character.slots) character.slots = {};
+  for (const name of ["hand", "hands", "hand_L", "hand_R", "left_hand", "right_hand", "mic_arm"]) {
+    if (character.slots[name]) delete character.slots[name];
+  }
   writeJson(jsonAbs, character);
 
   const actionsDir = path.join(charDir, "actions");
@@ -455,11 +458,22 @@ function promoteWholeArms(projectDir, options = {}) {
   installWalkAndLookActions(projectDir, characterId);
 
   const trashRels = [];
+  const leftoverHand = path.join(charDir, "hand");
+  if (fs.existsSync(leftoverHand)) {
+    for (const file of fs.readdirSync(leftoverHand)) {
+      if (!/\.png$/i.test(file)) continue;
+      const stem = path.basename(file, ".png");
+      const usages = findDrawingUsages(projectDir, globalAssetsDir, characterId, "hand", stem);
+      const used = (usages || []).some((item) => item.kind === "script" || item.kind === "action");
+      if (!used) trashRels.push(posixJoin("characters", characterId, "hand", file));
+    }
+  }
   for (const child of dropped) {
     if (!child.asset) continue;
     const rel = posixJoin("characters", characterId, String(child.asset).replace(/\\/g, "/"));
     const usages = findDrawingUsages(projectDir, globalAssetsDir, characterId, child.id, fileStem(child.asset));
     const used = (usages || []).some((item) => item.kind === "script" || item.kind === "action");
+    if (/\/arm\//.test(rel)) continue;
     if (!used && fs.existsSync(path.join(projectDir, rel))) trashRels.push(rel);
   }
   let trash = null;

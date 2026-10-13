@@ -108,6 +108,11 @@ describe("whole-arm rig", () => {
       assert.ok(!fs.existsSync(path.join(rodney, "torso", "approach.png")));
       const decoded = decodeRgbaFile(path.join(rodney, "arm", "grip_mic_L.png"));
       assert.equal(decoded.width, 1024);
+      promoteWholeArms(fixture.projectDir, {
+        characterId: "rodney",
+        globalAssetsDir: fixture.globalAssetsDir,
+      });
+      assert.ok(fs.existsSync(path.join(rodney, "arm", "rest_L.png")), "re-promote must not trash live arm drawings");
     } finally {
       fixture.cleanup();
     }
