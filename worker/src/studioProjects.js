@@ -62,16 +62,49 @@ function resolveScriptName(value) {
   return base;
 }
 
-function listScriptFiles(projectDir) {
+function listScriptRecords(projectDir) {
   if (!fs.existsSync(projectDir)) return [];
-  return fs
-    .readdirSync(projectDir)
-    .filter((name) => isSafeScriptName(name) && fs.statSync(path.join(projectDir, name)).isFile())
-    .sort((a, b) => {
-      if (a === DEFAULT_SCRIPT) return -1;
-      if (b === DEFAULT_SCRIPT) return 1;
-      return a.localeCompare(b);
+  const records = [];
+  for (const name of fs.readdirSync(projectDir)) {
+    if (!isSafeScriptName(name)) continue;
+    const abs = path.join(projectDir, name);
+    let stat;
+    try {
+      stat = fs.statSync(abs);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    records.push({
+      name,
+      mtime: Math.round(stat.mtimeMs),
+      birthtime: Math.round(stat.birthtimeMs || stat.ctimeMs || stat.mtimeMs),
     });
+  }
+  return records.sort((a, b) => {
+    if (a.name === DEFAULT_SCRIPT) return -1;
+    if (b.name === DEFAULT_SCRIPT) return 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function scriptRecency(record) {
+  return Math.max(Number(record && record.mtime) || 0, Number(record && record.birthtime) || 0);
+}
+
+function newestScriptName(records, fallback = DEFAULT_SCRIPT) {
+  if (!records || !records.length) return fallback;
+  let best = records[0];
+  for (const item of records) {
+    const age = scriptRecency(item);
+    const bestAge = scriptRecency(best);
+    if (age > bestAge || (age === bestAge && item.name.localeCompare(best.name) < 0)) best = item;
+  }
+  return best.name;
+}
+
+function listScriptFiles(projectDir) {
+  return listScriptRecords(projectDir).map((item) => item.name);
 }
 
 function emptyLibrary() {
@@ -843,6 +876,8 @@ module.exports = {
   previewOutputName,
   resolveScriptName,
   listScriptFiles,
+  listScriptRecords,
+  newestScriptName,
   readLibrary,
   writeLibrary,
   collectUsedAssets,

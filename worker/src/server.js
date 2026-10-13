@@ -34,6 +34,8 @@ const {
   previewOutputName,
   resolveScriptName,
   listScriptFiles,
+  listScriptRecords,
+  newestScriptName,
   collectUsedAssets,
   summarizeProjectCached,
   describeProjectContents,
@@ -927,7 +929,12 @@ function createApp(options = {}) {
   app.get("/api/projects/:name/scripts", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
-    res.json({ scripts: listScriptFiles(projectDir), default: DEFAULT_SCRIPT });
+    const files = listScriptRecords(projectDir);
+    res.json({
+      scripts: files.map((item) => item.name),
+      files,
+      default: newestScriptName(files),
+    });
   });
 
   app.get("/api/projects/:name/characters", (req, res) => {

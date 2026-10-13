@@ -267,11 +267,31 @@ export async function createProject(name: string): Promise<ProjectSummary> {
   return body.project;
 }
 
+export type ScriptFileInfo = { name: string; mtime?: number; birthtime?: number };
+export type ScriptCatalog = { scripts: string[]; files: ScriptFileInfo[]; newest: string };
+
 export async function loadScripts(name: string): Promise<string[]> {
+  const catalog = await loadScriptCatalog(name);
+  return catalog.scripts;
+}
+
+export async function loadScriptCatalog(name: string): Promise<ScriptCatalog> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/scripts`);
   if (!res.ok) throw new Error(await readError(res));
-  const body = (await res.json()) as { scripts: string[] };
-  return body.scripts;
+  const body = (await res.json()) as {
+    scripts?: string[];
+    files?: ScriptFileInfo[];
+    default?: string;
+  };
+  const scripts = Array.isArray(body.scripts) ? body.scripts : [];
+  const files = Array.isArray(body.files)
+    ? body.files
+    : scripts.map((scriptName) => ({ name: scriptName, mtime: 0 }));
+  return {
+    scripts,
+    files,
+    newest: body.default || files[0]?.name || "script.txt",
+  };
 }
 
 export async function loadLibrary(name: string): Promise<LibraryResponse> {

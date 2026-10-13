@@ -484,7 +484,10 @@ describe("studio worker API", () => {
     assert.equal(await got.text(), alt);
 
     const scripts = await fetch(`${ctx.url}/api/projects/project/scripts`);
-    assert.deepEqual((await scripts.json()).scripts, ["script.txt", "script_mcd.txt"]);
+    const scriptBody = await scripts.json();
+    assert.deepEqual(scriptBody.scripts, ["script.txt", "script_mcd.txt"]);
+    assert.equal(scriptBody.default, "script_mcd.txt");
+    assert.ok(scriptBody.files.some((item) => item.name === "script_mcd.txt" && item.mtime > 0));
 
     const timelinePath = path.join(fixture.projectDir, "timeline.json");
     const sentinelTimeline = { sentinel: true, series: "keep-me" };

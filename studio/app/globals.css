@@ -147,6 +147,41 @@ input[type="range"].studio-scrubber::-moz-range-thumb {
   justify-content: center;
 }
 
+.studio-script-id {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.studio-script-id strong {
+  overflow: hidden;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-script-id--sm strong {
+  font-size: 12px;
+}
+
+.studio-script-id em {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 2px;
+  background: #78350f;
+  color: #fbbf24;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
 .studio-header-textbtn {
   height: 18px;
   padding: 0 5px;

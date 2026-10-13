@@ -83,6 +83,36 @@ export const PINNED_SCRIPTS = ["script.txt", "script_full_test.txt", "script_sho
 
 export type ScriptGroups = { pinned: string[]; tests: string[] };
 
+export type ScriptFileInfo = { name: string; mtime?: number; birthtime?: number };
+
+export function scriptRecency(file: ScriptFileInfo): number {
+  return Math.max(Number(file && file.mtime) || 0, Number(file && file.birthtime) || 0);
+}
+
+export function newestScriptName(files: ScriptFileInfo[], fallback = "script.txt"): string {
+  if (!files.length) return fallback;
+  return [...files].sort((a, b) => {
+    const diff = scriptRecency(b) - scriptRecency(a);
+    if (diff !== 0) return diff;
+    return a.name.localeCompare(b.name);
+  })[0].name;
+}
+
+export function isOldScript(active: string | null | undefined, newest: string | null | undefined): boolean {
+  return Boolean(active && newest && active !== newest);
+}
+
+export function pickActiveScript(
+  files: ScriptFileInfo[],
+  current: string | null | undefined,
+  userPicked: boolean
+): string {
+  const names = files.map((item) => item.name);
+  const newest = newestScriptName(files);
+  if (userPicked && current && names.includes(current)) return current;
+  return newest;
+}
+
 export function groupScripts(names: string[]): ScriptGroups {
   const pinned: string[] = [];
   const seen = new Set<string>();

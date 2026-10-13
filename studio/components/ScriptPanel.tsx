@@ -223,9 +223,10 @@ export default function ScriptPanel({
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between gap-2 border-b border-studio-border px-3 py-2">
-          <div className="text-xs text-studio-muted">
-            {script} {dirty ? "· unsaved" : ""}
-            {status ? <span className="ml-2 text-neutral-400">{status}</span> : null}
+          <div className="flex items-center gap-2 text-xs text-studio-muted">
+            <span className="text-sm font-semibold text-white">{script}</span>
+            {dirty ? <span>· unsaved</span> : null}
+            {status ? <span className="text-neutral-400">{status}</span> : null}
           </div>
           <div className="flex items-center gap-2">
             <div className="relative">

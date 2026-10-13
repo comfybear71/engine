@@ -1,18 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import AssetsPanel from "@/components/AssetsPanel";
 import EngineStatus from "@/components/EngineStatus";
 import ImagineDock from "@/components/ImagineDock";
 import { LipSyncSettingsPage } from "@/components/LipSyncSettings";
+import ScriptIdentity from "@/components/ScriptIdentity";
 import ScriptPanel from "@/components/ScriptPanel";
 import StagePanel from "@/components/StagePanel";
 import StudioSettings from "@/components/StudioSettings";
-import { groupScripts } from "@/lib/factoryAssets";
+import { groupScripts, isOldScript, pickActiveScript } from "@/lib/factoryAssets";
 import {
   checkWorker,
-  loadScripts,
+  loadScriptCatalog,
   loadShow,
   renderVideoUrl,
   setActiveShowId,
@@ -45,7 +46,9 @@ export default function StudioApp({
     return next && TABS.some((item) => item.id === next) ? (next as TabId) : "stage";
   });
   const [scripts, setScripts] = useState<string[]>([]);
-  const [script, setScript] = useState<string>("script.txt");
+  const [script, setScript] = useState<string>("");
+  const [newestScript, setNewestScript] = useState<string>("");
+  const scriptPicked = useRef(false);
   const [workerUp, setWorkerUp] = useState<boolean | null>(null);
   const [rendering, setRendering] = useState(false);
   const [renderStatus, setRenderStatus] = useState<string | null>(null);
@@ -77,15 +80,19 @@ export default function StudioApp({
     setWorkerUp(up);
     if (!up) return;
     try {
-      const names = await loadScripts(project);
-      setScripts(names);
-      setScript((current) => {
-        if (current && names.includes(current)) return current;
-        return names.includes("script.txt") ? "script.txt" : names[0] ?? "script.txt";
-      });
+      const catalog = await loadScriptCatalog(project);
+      setScripts(catalog.scripts);
+      setNewestScript(catalog.newest);
+      setScript((current) => pickActiveScript(catalog.files, current, scriptPicked.current));
     } catch {
       setWorkerUp(false);
     }
+  }, [project]);
+
+  useEffect(() => {
+    scriptPicked.current = false;
+    setScript("");
+    setNewestScript("");
   }, [project]);
 
   useEffect(() => {
@@ -147,18 +154,20 @@ export default function StudioApp({
               project
             )}
           </span>
-          <label className="flex items-center gap-2 text-xs text-studio-muted">
-            Script
+          <label className="flex min-w-0 items-center gap-2">
+            <ScriptIdentity name={script} old={isOldScript(script, newestScript)} />
             <select
-              className="rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+              className="max-w-[220px] rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-white"
               value={script}
               onChange={(event) => {
+                scriptPicked.current = true;
                 setScript(event.target.value);
                 setSelectedScriptLine(null);
                 setScriptEpoch((n) => n + 1);
               }}
               disabled={!workerUp || scripts.length === 0}
               data-testid="script-select"
+              aria-label="Script"
             >
               {scripts.length === 0 ? <option value="script.txt">script.txt</option> : null}
               {scriptGroups.pinned.map((name) => (
@@ -219,16 +228,19 @@ export default function StudioApp({
           >
             Settings
           </button>
-          <button
-            type="button"
-            data-testid="studio-render"
-            onClick={() => void onRender()}
-            disabled={!project || !workerUp || rendering}
-            className="inline-flex items-center gap-2 rounded-md bg-studio-accent px-3 py-1.5 text-sm font-semibold text-black hover:bg-studio-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <span aria-hidden>▶</span>
-            {rendering ? "Rendering" : "Render"}
-          </button>
+          <div className="flex items-center gap-2">
+            <ScriptIdentity name={script} old={isOldScript(script, newestScript)} size="sm" />
+            <button
+              type="button"
+              data-testid="studio-render"
+              onClick={() => void onRender()}
+              disabled={!project || !workerUp || rendering || !script}
+              className="inline-flex items-center gap-2 rounded-md bg-studio-accent px-3 py-1.5 text-sm font-semibold text-black hover:bg-studio-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <span aria-hidden>▶</span>
+              {rendering ? "Rendering" : "Render"}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -258,6 +270,7 @@ export default function StudioApp({
           <StagePanel
             project={project}
             script={script}
+            scriptIsOld={isOldScript(script, newestScript)}
             workerUp={workerUp === true}
             scriptEpoch={scriptEpoch}
             selectedLine={selectedScriptLine}
@@ -312,7 +325,10 @@ export default function StudioApp({
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/70 p-6">
           <div className="w-full max-w-4xl rounded-md border border-studio-border bg-studio-panel p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-medium text-white">Render · {script}</h2>
+              <h2 className="flex items-center gap-2 text-sm font-medium text-white">
+                Render
+                <ScriptIdentity name={script} old={isOldScript(script, newestScript)} />
+              </h2>
               <button
                 type="button"
                 className="text-sm text-studio-muted hover:text-white"

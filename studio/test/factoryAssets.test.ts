@@ -10,6 +10,9 @@ import {
   groupActionsByCharacter,
   groupAudioFolders,
   groupScripts,
+  isOldScript,
+  newestScriptName,
+  pickActiveScript,
   isFactoryBadge,
   pivotPercent,
   sectionLabel,
@@ -61,6 +64,19 @@ describe("factory Assets helpers", () => {
         ["rodney_jepps", 1],
       ]
     );
+  });
+
+  test("newest script wins by mtime and old-script badge follows it", () => {
+    const files = [
+      { name: "script.txt", mtime: 10 },
+      { name: "script_full_test.txt", mtime: 40 },
+      { name: "script_old_walk.txt", mtime: 20 },
+    ];
+    assert.equal(newestScriptName(files), "script_full_test.txt");
+    assert.equal(pickActiveScript(files, "script.txt", false), "script_full_test.txt");
+    assert.equal(pickActiveScript(files, "script.txt", true), "script.txt");
+    assert.equal(isOldScript("script.txt", "script_full_test.txt"), true);
+    assert.equal(isOldScript("script_full_test.txt", "script_full_test.txt"), false);
   });
 
   test("script dropdown pins the three current scripts and groups the rest under tests", () => {
