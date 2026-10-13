@@ -23,6 +23,9 @@ import {
   visibleDrawings,
   pickVisibleProp,
   actionPreviewSeconds,
+  numberedActionPrefix,
+  prettyActionFrameLabel,
+  splitSlotActionFrames,
   FACTORY_THUMB_PX,
   FACTORY_THUMB_WIDE_PX,
   FACTORY_THUMB_COMPACT_PX,
@@ -140,5 +143,45 @@ describe("factory Assets helpers", () => {
     assert.equal(FACTORY_THUMB_PX, 256);
     assert.equal(FACTORY_THUMB_WIDE_PX, 256);
     assert.equal(FACTORY_THUMB_COMPACT_PX, 88);
+  });
+
+  test("numbered walk frames leave Torso as standalone poses and group under the action", () => {
+    assert.equal(numberedActionPrefix("walk_side_01"), "walk_side");
+    assert.equal(numberedActionPrefix("walk_front_08"), "walk_front");
+    assert.equal(numberedActionPrefix("walk_back_2"), "walk_back");
+    assert.equal(numberedActionPrefix("grab_mic_03"), "grab_mic");
+    assert.equal(numberedActionPrefix("neutral"), null);
+    assert.equal(numberedActionPrefix("walk"), null);
+    assert.equal(numberedActionPrefix("armless_L"), null);
+    assert.equal(prettyActionFrameLabel("walk_side", 8), "Walk side frames (8)");
+    const split = splitSlotActionFrames(
+      [
+        { name: "neutral" },
+        { name: "walk" },
+        { name: "armless_L" },
+        { name: "walk_side_02" },
+        { name: "walk_side_01" },
+        { name: "walk_side_08" },
+        { name: "walk_front_01" },
+        { name: "walk_front_02" },
+        { name: "approach" },
+      ],
+      [
+        { id: "walk_side", name: "walk_side", characterId: "rodney", label: "rodney/walk_side" },
+        { id: "walk_front", name: "walk_front", characterId: "rodney", label: "rodney/walk_front" },
+      ],
+      "rodney"
+    );
+    assert.deepEqual(
+      split.drawings.map((item) => item.name),
+      ["neutral", "walk", "armless_L", "approach"]
+    );
+    assert.deepEqual(
+      split.actionGroups.map((group) => [group.label, group.drawings.map((item) => item.name), group.actionId]),
+      [
+        ["Walk front frames (2)", ["walk_front_01", "walk_front_02"], "walk_front"],
+        ["Walk side frames (3)", ["walk_side_01", "walk_side_02", "walk_side_08"], "walk_side"],
+      ]
+    );
   });
 });

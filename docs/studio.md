@@ -276,12 +276,16 @@ clobber the project's `timeline.json`.
   buttons, ~24px; play uses a small accent on the icon only; timecode on
   the left; **Import audio** then `frame N · fps · script` on the right),
   and **editable timeline lanes** at the bottom (Body/Move, Face, Props,
-  Dialogue, Mouth, Audio, SFX, Camera).
+  Dialogue, Mouth, Audio, SFX, Camera, Inserts).
   The old single Action lane is split so overlapping motion is visible:
   `[Move:]` / `[Swing:]` / `[Pose:]` / `[Do:]` / `body=` cycles on Body/Move,
   `face=` / `eyes=` expression pins on Face, synced mouth cues on Mouth
   (directly under Dialogue), `[Prop:]` on Props, and
-  `[Camera:]` stays on Camera. Occupied lanes default to ~30px per stacked
+  `[Camera:]` stays on Camera. `[Insert: image=…]` stills sit on
+  Inserts (a PNG held for a start/end frame range; drop a drawing onto
+  that lane to place one). The ruler shows the current frame under the
+  playhead while you drag; line audio reseeks on scrub and resumes when
+  the drag ends. Occupied lanes default to ~30px per stacked
   sub-row with the label vertically centred in a fixed-width left column;
   empty category lanes stay thin with a readable label that does not
   overlap its neighbours. A **Lanes** height slider (`+` / `−`) in the
@@ -312,9 +316,12 @@ clobber the project's `timeline.json`.
   Pause, stop, rewind, and effect cleanup cancel any pending start so
   only one WAV copy can play. A seek before Play does not restart
   audio on the first tick. The audio clock follows the proxy video
-  (reseek if it drifts). Scrub still uses `preview-frame`
-  (preview resolution, persisted asset cache). The orange playhead handle sits on the
-  time ruler; one vertical line continues down through every lane.
+  (reseek if it drifts). Dragging the playhead reseeks line audio (a
+  short preview tick while dragging; resume or seek-paused on release)
+  and shows the current frame number live under the handle. Scrub still
+  uses `preview-frame` (preview resolution, persisted asset cache). The
+  orange playhead handle sits on the time ruler; one vertical line
+  continues down through every lane.
   Click or drag the empty ruler area to seek. Pointer-down on a block
   selects it and starts a drag; Shift/Ctrl-click adds to the selection;
   drag a rubber-band on empty lane area selects several; Esc clears.
@@ -520,7 +527,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/open-folder` | Opens a project-relative folder in the desktop file manager. JSON `{ "rel": "characters/rodney" }`. |
 | `GET` | `/api/projects/:name/actions` | Action JSON files: `shared/<id>` from a top-level `actions/` folder, plus `characters/<id>/actions/*.json` as `<character>/<action>`. |
 | `GET` | `/api/projects/:name/actions/:characterId/:actionId/preview` | Cached looping MP4 of that action, cropped to the character (no location props). |
-| `POST` | `/api/projects/:name/factory` | Factory v1. JSON `{ "characterId", "prompt", "frames"?: 8\|12\|16, "advancedPrompt"?, "imageBase64"?, "dryRun?" }`. Builds the hidden pack (locked style, project-local reference pictures, `#00FF00`, one-head / no-squash rules), calls xAI unless `imageBase64` is a fixture sheet, chroma-keys, splits, fits pieces to the character's existing slots without squashing, and renders a preview clip. Writes nothing into library slots until Tick. A project never reads another project's characters. |
+| `POST` | `/api/projects/:name/factory` | Factory v1. JSON `{ "mode"?: "character"\|"slot"\|"new-character"\|"prop"\|"background", "characterId"?, "slot"?, "view"?, "name"?, "prompt", "frames"?: 8\|12\|16, "advancedPrompt"?, "imageBase64"?, "dryRun?" }`. Character mode is the action sheet (locked style, project-local references, `#00FF00`). Slot mode saves one overlay/pose as a **draft** on Tick. New-character / prop / background modes skip existing character references; Tick writes a character folder, prop tile, or 16:9 background in this project only. |
 | `GET` | `/api/projects/:name/factory/:characterId/:jobId` | Draft job (drawings as data URLs, warnings, ticked). |
 | `GET` | `/api/projects/:name/factory/:characterId/:jobId/preview` | Looping preview MP4 for that draft. |
 | `POST` | `/api/projects/:name/factory/:characterId/:jobId/tick` | Save draft drawings into the character slots (`draft`→`ticked`) and write the Action Shot JSON. |

@@ -8,7 +8,7 @@ const path = require("path");
 
 const { encodeRgbaPng } = require("../src/pngFlip");
 const { buildRodneyTestProject } = require("./helpers/rodneyTestProject");
-const { resolveActionDest, uniqueActionId, walkBob, runFactoryJob, tickFactoryJob } = require("../src/factoryJob");
+const { resolveActionDest, uniqueActionId, walkBob, runFactoryJob, tickFactoryJob, pickSideTorsoDrawing } = require("../src/factoryJob");
 const { createApp } = require("../src/server");
 
 function fillRect(rgba, width, x, y, w, h, r, g, b, a) {
@@ -29,19 +29,27 @@ function fillRect(rgba, width, x, y, w, h, r, g, b, a) {
 
 function walkSheetPng(frames = 8) {
   const cols = 4;
-  const rows = frames / 4;
-  const cell = 96;
-  const width = cols * cell;
-  const height = rows * cell;
+  const rows = Math.max(1, frames / 4);
+  const inner = 72;
+  const gutter = 10;
+  const width = cols * inner + (cols + 1) * gutter;
+  const height = rows * inner + (rows + 1) * gutter;
   const rgba = Buffer.alloc(width * height * 4);
   fillRect(rgba, width, 0, 0, width, height, 0, 255, 0, 255);
   for (let i = 0; i < frames; i += 1) {
     const col = i % cols;
     const row = Math.floor(i / cols);
-    const x = col * cell + 28 + (i % 3) * 4;
-    const y = row * cell + 18;
-    fillRect(rgba, width, x, y, 22, 58, 140, 70, 40, 255);
-    fillRect(rgba, width, x - 8 + (i % 2) * 16, y + 48, 14, 22, 90, 50, 30, 255);
+    const x0 = gutter + col * (inner + gutter);
+    const y0 = gutter + row * (inner + gutter);
+    const stride = (i % 4) * 3;
+    // Cape behind (left), head, torso, two legs, two boots — one full figure per cell.
+    fillRect(rgba, width, x0 + 6, y0 + 10, 10, 36, 180, 20, 20, 255);
+    fillRect(rgba, width, x0 + 28 + stride, y0 + 6, 16, 14, 196, 140, 96, 255);
+    fillRect(rgba, width, x0 + 24 + stride, y0 + 20, 22, 22, 150, 28, 28, 255);
+    fillRect(rgba, width, x0 + 22 + stride, y0 + 42, 8, 18, 140, 70, 40, 255);
+    fillRect(rgba, width, x0 + 36 + stride, y0 + 42, 8, 18, 140, 70, 40, 255);
+    fillRect(rgba, width, x0 + 20 + stride, y0 + 58, 10, 10, 70, 40, 24, 255);
+    fillRect(rgba, width, x0 + 38 + stride, y0 + 58, 10, 10, 70, 40, 24, 255);
   }
   return encodeRgbaPng(width, height, rgba);
 }
@@ -68,6 +76,20 @@ describe("factory dest and names", () => {
     assert.equal(dest.slot, "legs");
     assert.equal(dest.drawings_dir, "legs_right_side");
     assert.deepEqual(walkBob(8).length, 8);
+  });
+
+  test("side torso skip list ignores walk/run/approach so a walk job uses a standing torso", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-torso-"));
+    try {
+      const dir = path.join(root, "characters", "rodney", "torso_right_side");
+      fs.mkdirSync(dir, { recursive: true });
+      for (const name of ["approach.png", "walk.png", "neutral.png"]) {
+        fs.writeFileSync(path.join(dir, name), "");
+      }
+      assert.equal(pickSideTorsoDrawing(root, "rodney", "right_side"), "neutral");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("action ids do not clobber an existing walk_side", () => {
@@ -116,14 +138,36 @@ describe("factory pipeline with a fixture sheet", () => {
     assert.ok(job.drawings.length >= 2);
     assert.equal(job.dest.drawings_dir, "legs_right_side");
     assert.match(job.actionId, /walk_side/);
+    assert.equal(job.action && job.action.set_slots && job.action.set_slots.body, "none");
+    assert.equal(job.action && job.action.set_slots && job.action.set_slots.torso, "neutral");
+    assert.equal(job.action && job.action.view, "right_side");
     const liveDir = path.join(projectDir, "characters", "rodney", "legs_right_side");
-    assert.equal(fs.existsSync(liveDir), false, "drawings stay out of the library until Tick");
+    const oldWalk = path.join(liveDir, "walk_side_01.png");
+    assert.equal(fs.existsSync(oldWalk), true, "existing walk_side legs stay on disk until Tick");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(projectDir, "characters", "rodney", "_factory", job.jobId, "manifest.json"), "utf8")
+    );
+    assert.ok(manifest.action.set_slots.body === "none");
+    assert.equal(
+      (manifest.action.slot_frames.legs || []).includes("walk_side_01"),
+      false,
+      "new action does not keep the old walk_side drawing"
+    );
+    assert.equal(
+      fs.readdirSync(liveDir).some((name) => name.startsWith(job.actionId)),
+      false,
+      "new drawings stay out of the library until Tick"
+    );
 
     const ticked = tickFactoryJob(projectDir, null, "rodney", job.jobId);
     assert.equal(ticked.ticked, true);
-    assert.ok(fs.existsSync(path.join(projectDir, "characters", "rodney", "actions", `${job.actionId}.json`)));
-    assert.ok(fs.existsSync(liveDir));
-    assert.ok(fs.readdirSync(liveDir).some((name) => name.endsWith(".png")));
+    const actionJson = JSON.parse(
+      fs.readFileSync(path.join(projectDir, "characters", "rodney", "actions", `${job.actionId}.json`), "utf8")
+    );
+    assert.equal(actionJson.set_slots.body, "none");
+    assert.equal(actionJson.view, "right_side");
+    assert.ok(fs.existsSync(oldWalk), "Tick adds new legs and does not delete the leftover file on disk");
+    assert.ok(fs.readdirSync(liveDir).some((name) => name.startsWith(job.actionId) && name.endsWith(".png")));
     assert.equal(fs.existsSync(path.join(otherDir, "characters", "rodney")), false);
   });
 
@@ -141,5 +185,116 @@ describe("factory pipeline with a fixture sheet", () => {
     } finally {
       await ctx.close();
     }
+  });
+
+  test("prop / background / new-character dry-run packs skip character references", async () => {
+    const prop = await runFactoryJob(projectDir, null, {
+      mode: "prop",
+      prompt: "bar stool",
+      dryRun: true,
+    });
+    assert.equal(prop.pack.skipReferences, true);
+    assert.equal(prop.pack.mode, "prop");
+    assert.match(prop.pack.hiddenPrompt, /isolated object/i);
+
+    const bg = await runFactoryJob(projectDir, null, {
+      mode: "background",
+      prompt: "smoky bar interior",
+      dryRun: true,
+    });
+    assert.equal(bg.pack.greenScreen, null);
+    assert.equal(bg.pack.aspectRatio, "16:9");
+
+    const newbie = await runFactoryJob(projectDir, null, {
+      mode: "new-character",
+      name: "Grumpy old barman",
+      prompt: "grumpy old barman",
+      dryRun: true,
+    });
+    assert.equal(newbie.pack.skipReferences, true);
+    assert.match(newbie.pack.hiddenPrompt, /Do not copy any existing character/);
+    assert.equal(fs.existsSync(path.join(otherDir, "characters", "grumpy_old_barman")), false);
+  });
+
+  test("slot eyes job ticks a draft overlay into this character only", async () => {
+    const width = 1024;
+    const height = 1024;
+    const rgba = Buffer.alloc(width * height * 4);
+    fillRect(rgba, width, 0, 0, width, height, 0, 255, 0, 255);
+    fillRect(rgba, width, 468, 318, 28, 14, 20, 18, 16, 255);
+    fillRect(rgba, width, 532, 318, 28, 14, 20, 18, 16, 255);
+    const sheet = encodeRgbaPng(width, height, rgba);
+    const job = await runFactoryJob(projectDir, null, {
+      mode: "slot",
+      characterId: "rodney",
+      slot: "eyes",
+      view: "front",
+      prompt: "sleepy",
+      imageBase64: `data:image/png;base64,${sheet.toString("base64")}`,
+    });
+    assert.equal(job.mode, "slot");
+    assert.equal(job.ticked, false);
+    assert.equal(job.dest.slot, "eyes");
+    const before = fs.existsSync(path.join(projectDir, "characters", "rodney", "eyes_front", "sleepy.png"));
+    assert.equal(before, false);
+    const ticked = tickFactoryJob(projectDir, null, "rodney", job.jobId);
+    assert.equal(ticked.ticked, true);
+    const status = JSON.parse(fs.readFileSync(path.join(projectDir, "characters", "rodney", "status.json"), "utf8"));
+    const draftKey = Object.keys(status).find((key) => key.includes("sleepy") && status[key] === "draft");
+    assert.ok(draftKey, "Tick stores the overlay as draft");
+    assert.equal(fs.existsSync(path.join(otherDir, "characters", "rodney", "eyes_front", "sleepy.png")), false);
+  });
+
+  test("new-character tick creates a project-local folder and reference", async () => {
+    const width = 64;
+    const height = 64;
+    const rgba = Buffer.alloc(width * height * 4);
+    fillRect(rgba, width, 0, 0, width, height, 0, 255, 0, 255);
+    fillRect(rgba, width, 20, 8, 24, 48, 180, 80, 40, 255);
+    const sheet = encodeRgbaPng(width, height, rgba);
+    const job = await runFactoryJob(projectDir, null, {
+      mode: "new-character",
+      name: "Barman",
+      prompt: "grumpy old barman",
+      imageBase64: `data:image/png;base64,${sheet.toString("base64")}`,
+    });
+    assert.equal(job.characterId, "project");
+    const ticked = tickFactoryJob(projectDir, null, "project", job.jobId);
+    assert.equal(ticked.ticked, true);
+    const dir = path.join(projectDir, "characters", "barman");
+    assert.equal(fs.existsSync(path.join(dir, "character.json")), true);
+    assert.equal(fs.existsSync(path.join(dir, "_reference", "full.png")), true);
+    assert.equal(fs.existsSync(path.join(otherDir, "characters", "barman")), false);
+    const json = JSON.parse(fs.readFileSync(path.join(dir, "character.json"), "utf8"));
+    assert.equal(json.display_name, "Barman");
+  });
+
+  test("prop tick saves a cut-out tile in this project", async () => {
+    const width = 48;
+    const height = 48;
+    const rgba = Buffer.alloc(width * height * 4);
+    fillRect(rgba, width, 0, 0, width, height, 0, 255, 0, 255);
+    fillRect(rgba, width, 12, 8, 24, 32, 90, 60, 30, 255);
+    const sheet = encodeRgbaPng(width, height, rgba);
+    const job = await runFactoryJob(projectDir, null, {
+      mode: "prop",
+      prompt: "bar stool",
+      imageBase64: `data:image/png;base64,${sheet.toString("base64")}`,
+    });
+    const ticked = tickFactoryJob(projectDir, null, "project", job.jobId);
+    assert.equal(ticked.ticked, true);
+    assert.ok(ticked.written || fs.existsSync(path.join(projectDir, "backgrounds")));
+    const propPngs = [];
+    const walk = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const abs = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(abs);
+        else if (entry.name.endsWith(".png") && /stool|prop/.test(abs)) propPngs.push(abs);
+      }
+    };
+    walk(path.join(projectDir, "backgrounds"));
+    assert.ok(propPngs.length >= 1 || (ticked.written && ticked.written.rel));
+    assert.equal(fs.existsSync(path.join(otherDir, "backgrounds")), false);
   });
 });

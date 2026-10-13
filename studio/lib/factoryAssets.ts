@@ -202,6 +202,101 @@ export function visibleDrawings<T extends { missing?: boolean }>(drawings: T[], 
   return drawings.filter((item) => !item.missing);
 }
 
+/** `walk_side_01` → `walk_side`. Leaves `neutral`, `walk`, `armless_L` alone. */
+export function numberedActionPrefix(name: string | null | undefined): string | null {
+  const match = String(name || "").trim().match(/^(.*)_(0*[0-9]+)$/);
+  if (!match || !match[1]) return null;
+  return match[1];
+}
+
+export function actionFrameIndex(name: string | null | undefined): number {
+  const match = String(name || "").trim().match(/_(\d+)$/);
+  return match ? Number(match[1]) : 0;
+}
+
+export function prettyActionFrameLabel(prefix: string, count: number): string {
+  const words = String(prefix || "")
+    .replace(/_/g, " ")
+    .trim();
+  const pretty = words ? words.charAt(0).toUpperCase() + words.slice(1) : "Action";
+  return `${pretty} frames (${count})`;
+}
+
+export type ActionFrameGroup<T extends { name: string }> = {
+  id: string;
+  prefix: string;
+  label: string;
+  drawings: T[];
+  actionId: string | null;
+  actionCharacterId: string | null;
+  actionLabel: string | null;
+};
+
+function matchActionShot<A extends { id: string; name?: string; characterId: string | null; label: string }>(
+  actions: A[] | null | undefined,
+  characterId: string | null | undefined,
+  prefix: string
+): A | null {
+  const pool = (actions || []).filter(
+    (item) => !characterId || !item.characterId || item.characterId === characterId
+  );
+  const exact = pool.find((item) => (item.name || item.id) === prefix);
+  if (exact) return exact;
+  const fuzzy = pool
+    .filter((item) => {
+      const id = String(item.name || item.id);
+      return id.startsWith(prefix) || prefix.startsWith(id);
+    })
+    .sort((a, b) => String(b.name || b.id).length - String(a.name || a.id).length);
+  return fuzzy[0] || null;
+}
+
+/**
+ * Display-only: pull numbered action frames (walk_side_01…) out of a slot
+ * row. Files and references stay where they are.
+ */
+export function splitSlotActionFrames<T extends { name: string }>(
+  drawings: T[] | null | undefined,
+  actions?: { id: string; name?: string; characterId: string | null; label: string }[] | null,
+  characterId?: string | null
+): { drawings: T[]; actionGroups: ActionFrameGroup<T>[] } {
+  const standalone: T[] = [];
+  const buckets = new Map<string, T[]>();
+  for (const piece of drawings || []) {
+    const prefix = numberedActionPrefix(piece.name);
+    if (!prefix) {
+      standalone.push(piece);
+      continue;
+    }
+    const list = buckets.get(prefix);
+    if (list) list.push(piece);
+    else buckets.set(prefix, [piece]);
+  }
+  const actionGroups: ActionFrameGroup<T>[] = [];
+  for (const [prefix, pieces] of buckets) {
+    const action = matchActionShot(actions, characterId, prefix);
+    if (pieces.length < 2 && !action) {
+      standalone.push(...pieces);
+      continue;
+    }
+    const sorted = [...pieces].sort((a, b) => {
+      const diff = actionFrameIndex(a.name) - actionFrameIndex(b.name);
+      return diff !== 0 ? diff : a.name.localeCompare(b.name);
+    });
+    actionGroups.push({
+      id: prefix,
+      prefix,
+      label: prettyActionFrameLabel(prefix, sorted.length),
+      drawings: sorted,
+      actionId: action ? action.name || action.id : null,
+      actionCharacterId: action ? action.characterId : characterId || null,
+      actionLabel: action ? action.label : null,
+    });
+  }
+  actionGroups.sort((a, b) => a.label.localeCompare(b.label));
+  return { drawings: standalone, actionGroups };
+}
+
 export type AssetsSection = "characters" | "props" | "backgrounds" | "actions" | "sounds";
 
 export const FACTORY_THUMB_PX = 256;

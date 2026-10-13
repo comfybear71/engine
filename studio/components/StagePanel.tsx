@@ -16,11 +16,13 @@ import type { AssetFocus } from "@/lib/assetEditor";
 import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import { ASSET_DRAG_MIME, applyStagePlacement, parseAssetDrag } from "@/lib/stageAssets";
 import {
+  AUDIO_SCRUB_PREVIEW_MS,
   AUDIO_SYNC_SLACK_SEC,
   PREVIEW_PROXY_SIZE,
   previewPrefetchWindow,
   PROXY_SEGMENT_PREFETCH_SEC,
   PROXY_SEGMENT_SEC,
+  audioAfterScrub,
   audioClockDriftSec,
   bumpAudioGeneration,
   chooseVideoFile,
@@ -169,6 +171,8 @@ export default function StagePanel({
   const audioElsRef = useRef<{ el: HTMLAudioElement; clip: PlaybackAudioInfo }[]>([]);
   const audioTimersRef = useRef<number[]>([]);
   const audioGenRef = useRef(0);
+  const scrubbingRef = useRef(false);
+  const scrubPreviewTimerRef = useRef<number | null>(null);
   const projectRef = useRef(project);
   const scriptRef = useRef(script);
   const fpsRef = useRef(fps);
@@ -408,9 +412,24 @@ export default function StagePanel({
         setSegment(null);
       }
       prefetchFromPlayhead(clamped);
+      if (scrubbingRef.current) seekAudioToFrame(clamped, "preview");
+      else if (playingRef.current) seekAudioToFrame(clamped, "resume");
     },
     [fps, videoSrc, playOriginFrame, fullVideoSrc, lanes, totalFrames, onSelectLine]
   );
+
+  function onScrubbing(next: boolean) {
+    const was = scrubbingRef.current;
+    scrubbingRef.current = next;
+    if (next) {
+      seekAudioToFrame(frameRef.current, "preview");
+      return;
+    }
+    clearScrubPreviewTimer();
+    if (was) {
+      seekAudioToFrame(frameRef.current, audioAfterScrub(playingRef.current, false));
+    }
+  }
 
   const canUndo = historyTick >= 0 && historyCanUndo(historyRef.current);
   const canRedo = historyTick >= 0 && historyCanRedo(historyRef.current);
@@ -608,9 +627,80 @@ export default function StagePanel({
     return Boolean(video && !video.paused && video.readyState >= 2);
   }
 
+  function clearScrubPreviewTimer() {
+    if (scrubPreviewTimerRef.current != null) {
+      window.clearTimeout(scrubPreviewTimerRef.current);
+      scrubPreviewTimerRef.current = null;
+    }
+  }
+
+  function seekAudioToFrame(fromFrame: number, mode: "preview" | "resume" | "seek-paused") {
+    const fpsNow = fpsRef.current;
+    const totalNow = totalFramesRef.current;
+    if (audioElsRef.current.length === 0) {
+      if (mode === "resume" && playbackRef.current && projectRef.current) {
+        ensureLineAudio(fromFrame);
+      }
+      return;
+    }
+    for (const handle of audioElsRef.current) {
+      const { el, clip } = handle;
+      const schedule = webAudioSchedule(
+        {
+          startFrame: clip.startFrame,
+          endFrame: clip.endFrame,
+          durationSec: clipDurationSec(clip, fpsNow),
+          trimInSec: clip.trimInSec,
+          trimOutSec: clip.trimOutSec,
+        },
+        fromFrame,
+        fpsNow,
+        totalNow
+      );
+      if (!schedule || schedule.delaySec > 0.05) {
+        try {
+          el.pause();
+        } catch {
+          /* ignore */
+        }
+        continue;
+      }
+      const apply = () => {
+        try {
+          el.currentTime = schedule.offsetSec;
+        } catch {
+          /* currentTime may be unset until metadata */
+        }
+        if (mode === "seek-paused") {
+          el.pause();
+          return;
+        }
+        void el.play().catch(() => undefined);
+        if (mode === "preview") {
+          clearScrubPreviewTimer();
+          scrubPreviewTimerRef.current = window.setTimeout(() => {
+            if (scrubbingRef.current) {
+              try {
+                el.pause();
+              } catch {
+                /* ignore */
+              }
+            }
+          }, AUDIO_SCRUB_PREVIEW_MS);
+        }
+      };
+      if (el.readyState >= 1) apply();
+      else el.addEventListener("loadedmetadata", apply, { once: true });
+    }
+  }
+
   function syncLineAudio(fromFrame: number) {
     const fpsNow = fpsRef.current;
     const totalNow = totalFramesRef.current;
+    if (scrubbingRef.current) {
+      seekAudioToFrame(fromFrame, "preview");
+      return;
+    }
     if (shouldHoldLineAudio(previewStatusRef.current === "buffering", pictureIsPlaying())) {
       pauseLineAudio();
       return;
@@ -779,6 +869,8 @@ export default function StagePanel({
         startFrame = frameRef.current;
         startedAt = now;
         prefetchFromPlayhead(startFrame);
+        if (scrubbingRef.current) seekAudioToFrame(startFrame, "preview");
+        else ensureLineAudio(startFrame);
       }
       const next = frameFromElapsedMs(now - startedAt, startFrame, fpsRef.current, totalFramesRef.current);
       const range = playRangeRef.current;
@@ -1248,6 +1340,7 @@ export default function StagePanel({
                       ensureLineAudio(frameRef.current);
                     }}
                     onPause={() => {
+                      if (userSeekRef.current || scrubbingRef.current) return;
                       if (!playingRef.current || previewStatusRef.current === "buffering") {
                         pauseLineAudio();
                       }
@@ -1411,6 +1504,7 @@ export default function StagePanel({
             frame={frame}
             selectedLine={selectedLine}
             onSeek={seekTo}
+            onScrubbing={onScrubbing}
             totalFrames={totalFrames}
             playing={playing}
             scriptText={scriptText}

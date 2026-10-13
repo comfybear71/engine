@@ -24,12 +24,13 @@ describe("tokenizer", () => {
         "[Audio: Alice file=monologue]",
         "[View: Alice view=left_side]",
         "[Do: Alice nod]",
+        "[Insert: image=inserts/shot.png at_time=12 for=8]",
         "Alice: Hello there.",
       ].join("\n")
     );
     assert.deepEqual(
       tokens.map((t) => t.kind),
-      ["scene", "location", "cast", "action", "prop", "layer", "move", "pose", "swing", "camera", "pause", "audio", "view", "do", "dialogue"]
+      ["scene", "location", "cast", "action", "prop", "layer", "move", "pose", "swing", "camera", "pause", "audio", "view", "do", "insert", "dialogue"]
     );
   });
 

@@ -358,6 +358,40 @@ export async function deleteEditorDrawing(
   return { ok: true };
 }
 
+export async function cleanIslandsDrawing(
+  project: string,
+  characterId: string,
+  slot: string,
+  drawing: string,
+  body: { view?: string } = {}
+): Promise<{ ok: boolean; drawing: string; replaced?: string | null }> {
+  const res = await workerFetch(
+    slotPath(project, characterId, slot, `/drawings/${encodeURIComponent(drawing)}/clean-islands`, body.view),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ ok: boolean; drawing: string; replaced?: string | null }>;
+}
+
+export async function cleanIslandsSlot(
+  project: string,
+  characterId: string,
+  slot: string,
+  body: { view?: string } = {}
+): Promise<{ ok: boolean; written: { drawing: string }[] }> {
+  const res = await workerFetch(slotPath(project, characterId, slot, "/clean-islands", body.view), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ ok: boolean; written: { drawing: string }[] }>;
+}
+
 export async function promoteSlotView(
   project: string,
   characterId: string,

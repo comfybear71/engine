@@ -10,6 +10,7 @@
  *   node src/cli.js import-audio <projectDir> <file> --character <id> [--name <label>] [--dry-run] [--no-transcribe] [--no-split]
  *   node src/cli.js render       <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
  *   node src/cli.js watch        <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]
+ *   node src/cli.js insert-tongue <projectDir> [--from 942] [--to 952] [--script script.txt]
  *
  * `render` parses script.txt first (then renders) when --from-script is
  * given, or automatically when the project has a script.txt but no
@@ -59,6 +60,7 @@ function printUsageAndExit() {
       "  node src/cli.js import-audio <projectDir> <file> --character <id> [--name <label>] [--dry-run] [--no-transcribe] [--no-split]",
       "  node src/cli.js render       <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
       "  node src/cli.js watch        <projectDir> [--codec h264|prores4444] [--output PATH] [--from-script] [--script script.txt]",
+      "  node src/cli.js insert-tongue <projectDir> [--from 942] [--to 952] [--script script.txt]",
     ].join("\n")
   );
   process.exit(2);
@@ -164,6 +166,20 @@ async function cmdVoices(flags) {
   }
 }
 
+function cmdInsertTongue(flags) {
+  const projectDir = flags._[0];
+  if (!projectDir) printUsageAndExit();
+  const { installRodneyTongueInsert } = require("./insertStill");
+  const result = installRodneyTongueInsert(path.resolve(projectDir), {
+    startFrame: flags.from != null ? Number(flags.from) : 942,
+    endFrame: flags.to != null ? Number(flags.to) : 952,
+    scriptName: flags.script || "script.txt",
+  });
+  console.log(`Draft mouth: ${result.mouthRel} (status=draft)`);
+  console.log(`Insert still: ${result.insertRel}`);
+  console.log(result.tag);
+}
+
 async function cmdImportAudio(flags) {
   const projectDir = flags._[0];
   const sourceFile = flags._[1];
@@ -200,6 +216,8 @@ async function main() {
       return cmdVoices(flags);
     case "import-audio":
       return cmdImportAudio(flags);
+    case "insert-tongue":
+      return cmdInsertTongue(flags);
     default:
       printUsageAndExit();
   }

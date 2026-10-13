@@ -454,6 +454,7 @@ function slotLeaves(
             characterName: character.display_name,
             slot: slot.name,
             drawing: drawing.name,
+            rel: drawing.rel,
           }}
         />
       );
@@ -501,6 +502,7 @@ function slotLeaves(
               characterName: character.display_name,
               slot: slot.name,
               drawing: drawing.name,
+              rel: drawing.rel,
             }}
           />
         );

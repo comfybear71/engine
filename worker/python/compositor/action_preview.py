@@ -22,7 +22,7 @@ DEFAULT_SIZE = 256
 PROXY_WIDTH = 854
 PROXY_HEIGHT = 480
 CONTENT_THRESHOLD = 14
-PAD_RATIO = 0.14
+PAD_RATIO = 0.28
 
 
 def content_bbox(frame: np.ndarray, threshold: int = CONTENT_THRESHOLD) -> tuple[int, int, int, int] | None:

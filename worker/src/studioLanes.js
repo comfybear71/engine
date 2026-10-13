@@ -14,7 +14,7 @@
  * Never writes timeline.json -- caller must use parseProjectToTemp.
  */
 
-const LANES = ["body", "face", "props", "dialogue", "mouth", "audio", "sfx", "camera"];
+const LANES = ["body", "face", "props", "dialogue", "mouth", "audio", "sfx", "camera", "inserts"];
 
 const FACE_KEYS = new Set(["face", "eyes", "head", "brow", "brows", "expression"]);
 const BODY_KEYS = new Set(["body", "at", "flip", "scale", "z"]);
@@ -53,13 +53,14 @@ function hasBodyKeys(keys, label) {
  */
 function assignActionLane(event) {
   const lane = event && event.lane;
-  if (lane === "dialogue" || lane === "audio" || lane === "sfx" || lane === "camera" || lane === "mouth") {
+  if (lane === "dialogue" || lane === "audio" || lane === "sfx" || lane === "camera" || lane === "mouth" || lane === "inserts") {
     return lane;
   }
   if (lane === "body" || lane === "face" || lane === "props") return lane;
 
   const tag = String((event && event.tag) || "").toLowerCase();
   if (tag === "camera") return "camera";
+  if (tag === "insert") return "inserts";
   if (tag === "dialogue") return "dialogue";
   if (tag === "audio") return "audio";
   if (tag === "prop" || (event && event.subjectKind === "prop")) return "props";

@@ -3,7 +3,7 @@
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
 const { encodeRgbaPng } = require("../src/pngFlip");
-const { alphaBounds, compositeRgba, keyChromaGreen, renderFactoryThumb } = require("../src/factoryThumb");
+const { alphaBounds, compositeRgba, keyChromaGreen, lumaBounds, renderFactoryThumb } = require("../src/factoryThumb");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -77,6 +77,25 @@ describe("factory thumbs", () => {
     const rendered = renderFactoryThumb({ piecePath: piece, pad: 2, keyGreen: true });
     assert.ok(rendered.width < 32);
     assert.ok(rendered.height < 32);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("opaque black canvases crop to the bright prop instead of the full square", () => {
+    const width = 128;
+    const height = 128;
+    const rgba = Buffer.alloc(width * height * 4);
+    fillRect(rgba, width, 0, 0, 128, 128, 0, 0, 0, 255);
+    fillRect(rgba, width, 50, 40, 12, 40, 200, 200, 200, 255);
+    const luma = lumaBounds(rgba, width, height);
+    assert.equal(luma.empty, false);
+    assert.ok(luma.w < 40);
+    assert.ok(luma.h < 60);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "factory-luma-"));
+    const piece = path.join(tmp, "mic.png");
+    fs.writeFileSync(piece, encodeRgbaPng(width, height, rgba));
+    const rendered = renderFactoryThumb({ piecePath: piece, pad: 4 });
+    assert.ok(rendered.width < 50);
+    assert.ok(rendered.height < 70);
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

@@ -329,7 +329,7 @@ describe("studio worker API", () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinelTimeline);
     assert.deepEqual(JSON.parse(fs.readFileSync(linesPath, "utf8")), sentinelLines);
     assert.ok(laneBody.totalFrames > 0);
-    assert.deepEqual(laneBody.lanes, ["body", "face", "props", "dialogue", "mouth", "audio", "sfx", "camera"]);
+    assert.deepEqual(laneBody.lanes, ["body", "face", "props", "dialogue", "mouth", "audio", "sfx", "camera", "inserts"]);
     const byLane = (name) => laneBody.blocks.filter((b) => b.lane === name);
     assert.ok(byLane("camera").some((b) => b.scriptLine === 4 && /zoom/.test(b.label)));
     assert.ok(byLane("dialogue").some((b) => b.scriptLine === 6 && /Hello there friend/.test(b.label)));

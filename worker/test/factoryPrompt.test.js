@@ -40,4 +40,51 @@ describe("factory hidden prompt pack", () => {
       advancedPrompt: "custom pack",
     }), "custom pack");
   });
+
+  test("prop, background, new-character, and slot packs stay project-local", () => {
+    const prop = buildFactoryPack({
+      mode: "prop",
+      character: { id: "rodney", display_name: "Rodney", style: "painted caricature" },
+      userPrompt: "guitar",
+      references: [{ kind: "reference", rel: "characters/rodney/_reference/full.png" }],
+    });
+    assert.equal(prop.skipReferences, true);
+    assert.match(prop.hiddenPrompt, /single isolated object/i);
+    assert.match(prop.hiddenPrompt, /#00FF00/);
+    assert.doesNotMatch(prop.hiddenPrompt, /characters\/rodney/);
+    assert.equal(prop.references.length, 1);
+
+    const bg = buildFactoryPack({
+      mode: "background",
+      character: { id: "rodney", display_name: "Rodney" },
+      userPrompt: "smoky bar",
+    });
+    assert.equal(bg.aspectRatio, "16:9");
+    assert.equal(bg.greenScreen, null);
+    assert.match(bg.hiddenPrompt, /16:9/);
+    assert.match(bg.hiddenPrompt, /No green screen/i);
+    assert.doesNotMatch(bg.hiddenPrompt, /#00FF00/);
+
+    const newbie = buildFactoryPack({
+      mode: "new-character",
+      name: "Grumpy old barman",
+      userPrompt: "grumpy old barman",
+      character: { id: "rodney", display_name: "Rodney" },
+    });
+    assert.equal(newbie.skipReferences, true);
+    assert.match(newbie.hiddenPrompt, /full-body standing reference/i);
+    assert.match(newbie.hiddenPrompt, /Do not copy any existing character/);
+
+    const eyes = buildFactoryPack({
+      mode: "slot",
+      slot: "eyes",
+      view: "front",
+      character: { id: "rodney", display_name: "Rodney" },
+      userPrompt: "angry",
+    });
+    assert.equal(eyes.attachHeadBase, true);
+    assert.match(eyes.hiddenPrompt, /ONLY the eyes/i);
+    assert.match(eyes.hiddenPrompt, /Never draw a full head/i);
+    assert.match(eyes.hiddenPrompt, /1024/);
+  });
 });

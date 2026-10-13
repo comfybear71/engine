@@ -116,7 +116,7 @@ export type RenderResponse = {
 };
 export type LintIssue = { level: "error" | "warning"; line: number | null; message: string };
 export type LintResult = { ok: boolean; lint: { errors: LintIssue[]; warnings: LintIssue[] }; saved?: boolean };
-export type LaneId = "body" | "face" | "props" | "dialogue" | "mouth" | "audio" | "sfx" | "camera";
+export type LaneId = "body" | "face" | "props" | "dialogue" | "mouth" | "audio" | "sfx" | "camera" | "inserts";
 export type LaneTimingKind = "over" | "for" | "pin" | "audio" | "dialogue";
 export type LaneTimingAttr = "over" | "for" | "hold" | "at_time" | "start" | null;
 export type LaneTiming = {
@@ -615,20 +615,26 @@ export type FactoryJob = {
   ok: boolean;
   jobId: string;
   characterId: string;
+  mode?: string;
+  slot?: string | null;
+  view?: string | null;
+  name?: string | null;
+  title?: string | null;
   actionId: string;
   prompt: string;
   hiddenPrompt: string;
   frames: number;
   grid: { cols: number; rows: number };
-  dest: { kind: string; slot: string; drawings_dir: string };
+  dest: { kind: string; slot?: string; drawings_dir?: string };
   drawings: FactoryJobDrawing[];
   warnings: string[];
   previewRel: string | null;
+  previewKind?: "image" | "video" | string | null;
   ticked: boolean;
   usedFixture: boolean;
   styleBlock: string;
   rigRules: string[];
-  greenScreen: string;
+  greenScreen: string | null;
 };
 
 export function factoryPreviewUrl(project: string, characterId: string, jobId: string): string {
@@ -640,7 +646,12 @@ export function factoryPreviewUrl(project: string, characterId: string, jobId: s
 export async function startFactoryJob(
   project: string,
   body: {
-    characterId: string;
+    mode?: string;
+    characterId?: string;
+    slot?: string;
+    view?: string;
+    label?: string;
+    name?: string;
     prompt: string;
     frames?: number;
     advancedPrompt?: string;
@@ -698,6 +709,20 @@ export type TrashAssetBody = {
   confirm: true;
   force?: boolean;
 };
+
+export async function importStillAsset(
+  name: string,
+  body: { kind: "prop" | "background"; name?: string; location?: string; imageBase64: string }
+): Promise<{ ok: boolean; id: string; rel: string; location?: string }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/assets/import-still`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => ({}))) as { ok?: boolean; id?: string; rel?: string; location?: string; error?: string };
+  if (!res.ok) throw new Error(json.error || `Import failed (${res.status})`);
+  return { ok: true, id: json.id || "", rel: json.rel || "", location: json.location };
+}
 
 export async function trashProjectAsset(
   name: string,
@@ -1430,6 +1455,20 @@ export async function splitProjectAudio(
   const payload = (await res.json().catch(() => ({}))) as SplitAudioResponse & { error?: string };
   if (!res.ok) throw new Error(payload.error || `Split failed (${res.status})`);
   return payload;
+}
+
+export async function saveAudioSlice(
+  name: string,
+  body: { rel: string; characterId?: string; label?: string; inSec?: number; durationSec?: number }
+): Promise<{ ok: boolean; label: string; rel: string }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/audio/save-slice`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; label?: string; rel?: string; error?: string };
+  if (!res.ok) throw new Error(payload.error || `Save slice failed (${res.status})`);
+  return { ok: true, label: payload.label || "", rel: payload.rel || "" };
 }
 
 export async function importProjectAudio(

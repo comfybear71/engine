@@ -88,6 +88,7 @@ function tokenize(scriptText) {
         "audio",
         "view",
         "do",
+        "insert",
       ];
       if (!knownTags.includes(tag)) {
         throw new ScriptError(

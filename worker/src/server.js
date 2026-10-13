@@ -68,6 +68,8 @@ const {
   cancelEdit,
   renameDrawing,
   deleteDrawing,
+  cleanIslandsDrawing,
+  cleanIslandsSlot,
   saveDrawingFlags,
   flipDrawing,
   restoreReplacedDrawing,
@@ -83,7 +85,8 @@ const {
 } = require("./studioPlayback");
 const { requestPreviewSegment, resolveSegmentFile, SEGMENT_SEC, SEGMENT_SIZE } = require("./previewSegments");
 const { runImportAudio, readImportAudioRequest, VoicesFatalError } = require("./importAudio");
-const { splitExistingAudio, formatChunkAtTime } = require("./splitLongAudio");
+const { importStill } = require("./importStill");
+const { splitExistingAudio, formatChunkAtTime, saveAudioSlice } = require("./splitLongAudio");
 const {
   collectDialogueTargets,
   syncDialogueLines,
@@ -1078,9 +1081,10 @@ function createApp(options = {}) {
     if (!projectDir) return;
     try {
       const file = resolveFactoryPreview(projectDir, req.params.characterId, req.params.jobId);
+      const type = /\.png$/i.test(file) ? "image/png" : /\.jpe?g$/i.test(file) ? "image/jpeg" : "video/mp4";
       res.setHeader("Cache-Control", "private, max-age=30");
       res.sendFile(path.resolve(file), {
-        headers: { "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
+        headers: { "Content-Type": type, "Accept-Ranges": "bytes" },
       });
     } catch (err) {
       sendFactoryError(res, err);
@@ -1116,6 +1120,17 @@ function createApp(options = {}) {
       res.json(result);
     } catch (err) {
       sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/assets/import-still", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(importStill(projectDir, globalAssetsDir, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
     }
   });
 
@@ -1469,6 +1484,50 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
       res.json(deleteDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/drawings/:drawingName/clean-islands", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const drawingName = drawingNameFromRequest(req, res);
+    if (!drawingName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const ingestOpts = options.pythonBin ? { pythonBin: options.pythonBin } : {};
+      res.json(
+        await cleanIslandsDrawing(
+          projectDir,
+          globalAssetsDir,
+          characterId,
+          slotName,
+          drawingName,
+          req.body || {},
+          ingestOpts
+        )
+      );
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/slots/:slotName/clean-islands", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const slotName = slotNameFromRequest(req, res);
+    if (!slotName) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const ingestOpts = options.pythonBin ? { pythonBin: options.pythonBin } : {};
+      res.json(await cleanIslandsSlot(projectDir, globalAssetsDir, characterId, slotName, req.body || {}, ingestOpts));
     } catch (err) {
       sendIngestError(res, err);
     }
@@ -2235,6 +2294,27 @@ function createApp(options = {}) {
       res.status(status).json({ error: err.message });
     } finally {
       if (parsed && parsed.cleanup) parsed.cleanup();
+    }
+  });
+
+  app.post("/api/projects/:name/audio/save-slice", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const rel = typeof body.rel === "string" ? body.rel.trim() : "";
+    if (!rel) return res.status(400).json({ error: "rel is required (audio/<label>/<file>.wav)" });
+    try {
+      const result = await saveAudioSlice(projectDir, {
+        rel,
+        characterId: body.character || body.characterId,
+        label: body.label,
+        inSec: body.inSec,
+        durationSec: body.durationSec,
+      });
+      res.json(result);
+    } catch (err) {
+      const status = /not found|required|rel must/i.test(err.message) ? 400 : 500;
+      res.status(status).json({ error: err.message });
     }
   });
 

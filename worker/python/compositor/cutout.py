@@ -30,6 +30,13 @@ MIN_SPECK_AREA = 32
 MIN_SCREEN_EXCESS = 24.0
 # Keep detached sunglasses/hat parts whose bbox sits this close to the main figure.
 MAIN_FIGURE_GAP = 8
+# Drop disconnected crumbs smaller than this fraction of the main body.
+ISLAND_AREA_FRAC = 0.04
+ISLAND_MIN_AREA = 24
+ISLAND_KEEP_FRAC = 0.08
+ISLAND_DILATE = 4
+# A gap-split cell this much larger than an equal-area cell is a merged pose.
+MERGED_CELL_AREA = 1.55
 
 
 def bgr_to_bgra(bgr: np.ndarray) -> np.ndarray:
@@ -212,6 +219,70 @@ def remove_watermark(
     return out
 
 
+def remove_stray_islands(
+    bgra: np.ndarray,
+    *,
+    min_frac: float = ISLAND_AREA_FRAC,
+    keep_frac: float = ISLAND_KEEP_FRAC,
+    gap: int = MAIN_FIGURE_GAP,
+    dilate: int = ISLAND_DILATE,
+) -> np.ndarray:
+    """Keep the main body plus attached / large nearby parts; drop small islands.
+
+    Cut-out sheets often leave a detached boot/toe from the neighbouring cell
+    or a cape sliver on the cell edge. Those are small and not touching the
+    figure. A hat brim or sunglasses sitting a few pixels off the head stay.
+    """
+    num, labels, stats, centroids = _label_alpha(bgra)
+    if num <= 2:
+        return bgra
+
+    largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    main_area = max(int(stats[largest, cv2.CC_STAT_AREA]), 1)
+    threshold = max(ISLAND_MIN_AREA, int(main_area * min_frac))
+    keep_large = max(threshold * 2, int(main_area * keep_frac))
+
+    main_mask = (labels == largest).astype(np.uint8)
+    k = max(1, int(dilate) * 2 + 1)
+    dilated = cv2.dilate(main_mask, np.ones((k, k), np.uint8), iterations=1)
+
+    mx = int(stats[largest, cv2.CC_STAT_LEFT])
+    my = int(stats[largest, cv2.CC_STAT_TOP])
+    mw = int(stats[largest, cv2.CC_STAT_WIDTH])
+    mh = int(stats[largest, cv2.CC_STAT_HEIGHT])
+    x0, y0, x1, y1 = mx - gap, my - gap, mx + mw + gap, my + mh + gap
+
+    keep = np.zeros(num, dtype=bool)
+    keep[largest] = True
+    for i in range(1, num):
+        if i == largest:
+            continue
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        attached = bool(np.any(dilated[labels == i]))
+        if attached:
+            keep[i] = True
+            continue
+        ix = int(stats[i, cv2.CC_STAT_LEFT])
+        iy = int(stats[i, cv2.CC_STAT_TOP])
+        iw = int(stats[i, cv2.CC_STAT_WIDTH])
+        ih = int(stats[i, cv2.CC_STAT_HEIGHT])
+        cx, cy = float(centroids[i][0]), float(centroids[i][1])
+        nearby = not (ix + iw <= x0 or ix >= x1 or iy + ih <= y0 or iy >= y1)
+        centre_inside = x0 <= cx < x1 and y0 <= cy < y1
+        if area >= keep_large and (nearby or centre_inside):
+            keep[i] = True
+            continue
+        if area < threshold:
+            continue
+        # Mid-size but not attached and not a real extra part — drop.
+
+    if bool(keep[1:].all()):
+        return bgra
+    out = bgra.copy()
+    out[~keep[labels], 3] = 0
+    return out
+
+
 def keep_main_figure(bgra: np.ndarray, gap: int = MAIN_FIGURE_GAP) -> np.ndarray:
     """Keep the largest alpha blob and nearby parts; drop other cell-edge junk.
 
@@ -381,6 +452,58 @@ def split_grid_from_gaps(bgra: np.ndarray, cols: int, rows: int) -> list[np.ndar
     return cells
 
 
+def _alpha_area(bgra: np.ndarray) -> int:
+    return int(np.count_nonzero(bgra[:, :, 3] > 8))
+
+
+def cell_looks_merged(cell: np.ndarray, expected_w: float, expected_h: float) -> bool:
+    """True when a cell is several poses stuck together (whole sheet / two cells).
+
+    Compare the opaque bbox, not the cell canvas: gap-split cells include
+    leftover margin/gutter, which made a fat left margin look like a merge
+    and knocked mouth sheets onto equal-area slices.
+    """
+    if cell.size == 0:
+        return False
+    ys, xs = np.where(cell[:, :, 3] > 8)
+    if xs.size == 0:
+        return False
+    w = int(xs.max() - xs.min() + 1)
+    h = int(ys.max() - ys.min() + 1)
+    if w > expected_w * MERGED_CELL_AREA or h > expected_h * MERGED_CELL_AREA:
+        if _alpha_area(cell) > 32:
+            return True
+    num, _labels, stats, _centroids = _label_alpha(cell)
+    if num <= 2:
+        return False
+    areas = sorted((int(stats[i, cv2.CC_STAT_AREA]) for i in range(1, num)), reverse=True)
+    if len(areas) < 2:
+        return False
+    # Two large, similar-sized bodies in one cell — several walk poses.
+    return areas[1] >= max(40, int(areas[0] * 0.45)) and areas[0] + areas[1] > 80
+
+
+def split_grid_robust(bgra: np.ndarray, cols: int, rows: int) -> list[np.ndarray]:
+    """Gap-split a sheet, falling back to equal-area when gutters fail.
+
+    Grok walk sheets are 4×2 / 4×4 cells with green gutters. Weak JPEG
+    gutters can merge two poses into one cell (or the whole sheet into one
+    'leg'). Prefer occupancy gutters, then equal slices if those cells look
+    like several figures.
+    """
+    equal = split_grid(bgra, cols, rows)
+    if cols * rows <= 1:
+        return equal
+    gap = split_grid_from_gaps(bgra, cols, rows)
+    height, width = bgra.shape[:2]
+    expected_w = width / max(cols, 1)
+    expected_h = height / max(rows, 1)
+    merged = sum(1 for cell in gap if cell_looks_merged(cell, expected_w, expected_h))
+    if merged >= max(1, (cols * rows) // 4):
+        return equal
+    return gap
+
+
 def analyze_cells(
     cells: list[np.ndarray],
     *,
@@ -488,10 +611,11 @@ def process_image(
             cells = [keyed]
     else:
         cols, rows = grid
-        cells = split_grid_from_gaps(keyed, cols, rows) if detect_gaps else split_grid(keyed, cols, rows)
+        cells = split_grid_robust(keyed, cols, rows) if detect_gaps else split_grid(keyed, cols, rows)
         if key:
             cells = [remove_watermark(cell) for cell in cells]
         cells = [keep_main_figure(cell) for cell in cells]
+        cells = [remove_stray_islands(cell) for cell in cells]
 
     if trim:
         cells = [trim_alpha(cell) for cell in cells]
@@ -513,10 +637,27 @@ def write_png(path: Path, bgra: np.ndarray) -> None:
         raise OSError(f"failed to write PNG: {path}")
 
 
+def has_alpha_channel(img: np.ndarray) -> bool:
+    return img.ndim == 3 and img.shape[2] == 4 and int(np.count_nonzero(img[:, :, 3] < 250)) > 8
+
+
+def clean_islands_image(img: np.ndarray) -> np.ndarray:
+    """Drop stray disconnected islands on an already-cut drawing (or a keyed cell)."""
+    if has_alpha_channel(img):
+        bgra = bgr_to_bgra(img)
+    else:
+        bgra = key_green(img)
+        bgra = despill(bgra)
+        bgra = remove_specks(bgra)
+        bgra = remove_watermark(bgra)
+    bgra = keep_main_figure(bgra)
+    return remove_stray_islands(bgra)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Key #00FF00, trim, and split a sheet into cells.")
     parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--out-dir", type=Path, required=False)
     parser.add_argument("--grid", default=None, help="COLSxROWS, e.g. 3x3")
     parser.add_argument("--components", action="store_true", help="Split by connected components instead of a grid")
     parser.add_argument(
@@ -531,9 +672,47 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--no-key", action="store_true", help="Skip chroma key (background plates)")
     parser.add_argument("--no-trim", action="store_true")
+    parser.add_argument(
+        "--clean-islands",
+        action="store_true",
+        help="Keep the main body and drop small disconnected islands (boot/cape crumbs)",
+    )
+    parser.add_argument("--out", type=Path, dest="out_file", help="Single output PNG (with --clean-islands)")
     args = parser.parse_args(argv)
 
     image = load_image(args.input)
+
+    if args.clean_islands and not args.grid:
+        jobs: list[tuple[Path, Path]] = []
+        if args.input.is_dir():
+            out_dir = (args.out_dir or args.out_file or args.input).resolve()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for src in sorted(args.input.glob("*.png")):
+                jobs.append((src, out_dir / src.name))
+        else:
+            dest = args.out_file or (args.out_dir / args.input.name if args.out_dir else None)
+            if dest is None:
+                print("error: --clean-islands needs --out or --out-dir", file=sys.stderr)
+                return 2
+            jobs.append((args.input, dest))
+        written = []
+        for src, dest in jobs:
+            cleaned = clean_islands_image(load_image(src) if src != args.input else image)
+            write_png(dest, cleaned)
+            written.append(
+                {
+                    "src": str(src),
+                    "out": str(dest),
+                    "width": int(cleaned.shape[1]),
+                    "height": int(cleaned.shape[0]),
+                    "empty": is_empty(cleaned),
+                }
+            )
+        print(json.dumps({"ok": True, "cleaned": written, "warnings": []}))
+        return 0
+    if args.out_dir is None:
+        print("error: --out-dir is required", file=sys.stderr)
+        return 2
     grid = None
     split = "components" if args.components else "grid"
     if args.grid:

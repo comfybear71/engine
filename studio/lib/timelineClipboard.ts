@@ -43,6 +43,7 @@ export type ClipboardBlock = {
   role?: string | null;
   marriedId?: string | null;
   movable?: boolean;
+  rel?: string | null;
 };
 
 export function selectionIsMouthOnly(blocks: ClipboardBlock[], seedIds: Iterable<string>): boolean {
@@ -68,12 +69,13 @@ export function classifyClipboardLine(
   line: string,
   lane?: string | null,
   role?: string | null
-): "speech" | "face" | "body" | "prop" | "camera" | "sfx" | "other" {
+): "speech" | "face" | "body" | "prop" | "camera" | "sfx" | "insert" | "other" {
   if (role === "mouth" || lane === "dialogue" || lane === "audio") return "speech";
   const trimmed = line.trim();
   if (/^\[Audio:/i.test(trimmed)) return "speech";
   if (/^\[Prop:/i.test(trimmed)) return "prop";
   if (/^\[Camera:/i.test(trimmed)) return "camera";
+  if (/^\[Insert:/i.test(trimmed)) return "insert";
   if (/^\[(?:Move|Pose|Swing|Do):/i.test(trimmed)) return "body";
   if (/^\[Action:/i.test(trimmed)) {
     if (/\b(?:face|eyes|head)=/i.test(trimmed)) return "face";
@@ -95,6 +97,7 @@ const LANE_FIT: Record<string, readonly string[]> = {
   prop: ["props"],
   camera: ["camera"],
   sfx: ["sfx"],
+  insert: ["inserts"],
 };
 
 export function clipboardItemFitsLane(item: ClipboardLine, lane: LaneId | null | undefined): boolean {
@@ -115,6 +118,26 @@ function primaryBlockForLine(blocks: ClipboardBlock[], scriptLine: number): Clip
   );
 }
 
+function audioFileLabel(rel: string | null | undefined): string | null {
+  const posix = String(rel || "").replace(/\\/g, "/");
+  const parts = posix.split("/").filter(Boolean);
+  if (parts[0] !== "audio" || parts.length < 2) return null;
+  return parts[1] || null;
+}
+
+function characterNameFromLine(line: string): string {
+  const trimmed = line.trim();
+  const tag = trimmed.match(/^\[Audio:\s*([^\s\]]+)/i);
+  if (tag) return tag[1];
+  const spoken = trimmed.match(/^([^[:\]]+):/);
+  return spoken ? spoken[1].trim() : "Name";
+}
+
+export function audioOnlyTag(opts: { characterName?: string; fileLabel: string }): string {
+  const name = String(opts.characterName || "Name").trim() || "Name";
+  return `[Audio: ${name} file=${opts.fileLabel} lines=false]`;
+}
+
 export function clipboardFromBlocks(
   script: string,
   blocks: ClipboardBlock[],
@@ -126,21 +149,30 @@ export function clipboardFromBlocks(
   const items: ClipboardLine[] = [];
   let origin = Number.POSITIVE_INFINITY;
   for (const block of blocks) {
-    if (!ids.has(block.id) || block.scriptLine == null || seen.has(block.scriptLine)) continue;
-    const primary = primaryBlockForLine(blocks, block.scriptLine);
-    if (!primary || primary.scriptLine == null) continue;
-    const text = lines[primary.scriptLine - 1];
-    if (!text || !isDeletableScriptLine(text)) continue;
-    seen.add(primary.scriptLine);
+    if (!ids.has(block.id)) continue;
+    if (block.scriptLine != null && seen.has(block.scriptLine)) continue;
+    const primary = block.scriptLine != null ? primaryBlockForLine(blocks, block.scriptLine) : block;
+    if (!primary) continue;
+    let text = primary.scriptLine != null ? lines[primary.scriptLine - 1] : "";
+    if (text && !isDeletableScriptLine(text)) text = "";
+    if (!text && (primary.lane === "audio" || block.lane === "audio")) {
+      const fileLabel = audioFileLabel(primary.rel) || audioFileLabel(block.rel);
+      if (!fileLabel) continue;
+      const who = characterNameFromLine(lines[(primary.scriptLine || 1) - 1] || "") || "Name";
+      text = audioOnlyTag({ characterName: who, fileLabel });
+    }
+    if (!text) continue;
+    if (primary.scriptLine != null) seen.add(primary.scriptLine);
     const start = primary.sourceStartFrame ?? primary.startFrame;
     origin = Math.min(origin, start);
+    const audioOnly = /^\[Audio:/i.test(text) && /\blines=false\b/i.test(text);
     items.push({
-      lineText: text,
-      lane: primary.lane || "body",
+      lineText: audioOnly ? text : text,
+      lane: primary.lane || block.lane || "body",
       tag: primary.tag || null,
       role: primary.role || null,
       offsetFrames: start,
-      durationFrames: Math.max(1, primary.endFrame - primary.startFrame),
+      durationFrames: Math.max(1, (primary.endFrame || block.endFrame) - start),
     });
   }
   if (!Number.isFinite(origin)) return { items: [] };

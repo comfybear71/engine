@@ -7,7 +7,8 @@ export type InsertActionId =
   | "move"
   | "do"
   | "propShow"
-  | "propHide";
+  | "propHide"
+  | "insertStill";
 
 export type InsertActionDef = {
   id: InsertActionId;
@@ -64,6 +65,11 @@ export const INSERT_ACTIONS: InsertActionDef[] = [
     id: "propHide",
     label: "Prop hide",
     template: () => `[Prop: name hide]`,
+  },
+  {
+    id: "insertStill",
+    label: "Insert still",
+    template: () => `[Insert: image=inserts/shot.png at_time=942 for=11]`,
   },
 ];
 

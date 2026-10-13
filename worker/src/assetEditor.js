@@ -3,7 +3,8 @@
 /**
  * Studio Assets viewer/editor: inspect, replace, add, rename, and delete
  * drawings under a project's characters/<id>/ folders. Never writes into
- * _global_assets. Replaced files go to _replaced/; deletes go to _trash/.
+ * _global_assets. Replaced files go to _replaced/; deletes go to the
+ * project .trash (not the character _trash folder).
  */
 
 const crypto = require("crypto");
@@ -26,6 +27,7 @@ const {
   DRAWING_NAME,
   SAFE_SESSION,
   runCutout,
+  runCleanIslands,
   runAlign,
   decodeImageBuffer,
   previewDir,
@@ -36,6 +38,8 @@ const {
   absFromProjectRel,
   posixJoin,
 } = require("./assetIngest");
+const { moveToProjectTrash } = require("./projectTrash");
+const { loadAction, listActionIds } = require("./parser/actionLibrary");
 const { flipPngHorizontal } = require("./pngFlip");
 
 const RHUBARB_SHAPES = ["X", "A", "B", "C", "D", "E", "F", "G", "H"];
@@ -394,6 +398,49 @@ function findDrawingUsages(projectDir, globalAssetsDir, characterId, slotName, d
       line: null,
       text: `${slotName} default drawing`,
     });
+  }
+
+  for (const child of character.children || []) {
+    const asset = String((child && child.asset) || "").replace(/\\/g, "/");
+    if (
+      asset === `${slotName}/${drawingName}.png` ||
+      asset.endsWith(`/${drawingName}.png`) ||
+      asset === `${drawingName}.png`
+    ) {
+      usages.push({
+        kind: "rig",
+        slot: slotName,
+        script: null,
+        line: null,
+        text: `rig child ${child.id}`,
+      });
+    }
+  }
+
+  for (const actionId of listActionIds(projectDir, globalAssetsDir, characterId) || []) {
+    const action = loadAction(projectDir, globalAssetsDir, characterId, actionId);
+    if (!action) continue;
+    if (action.set_slots && action.set_slots[slotName] === drawingName) {
+      usages.push({
+        kind: "action",
+        action: actionId,
+        slot: slotName,
+        script: null,
+        line: null,
+        text: `action ${actionId} set_slots ${slotName}`,
+      });
+    }
+    const frames = action.slot_frames && action.slot_frames[slotName];
+    if (Array.isArray(frames) && frames.includes(drawingName)) {
+      usages.push({
+        kind: "action",
+        action: actionId,
+        slot: slotName,
+        script: null,
+        line: null,
+        text: `action ${actionId} slot_frames ${slotName}`,
+      });
+    }
   }
 
   const mouth = isMouthSlot(slotName, spec && spec.drawings_dir);
@@ -1031,6 +1078,65 @@ function cancelEdit(projectDir, characterId, body) {
   return removeEditSession(projectDir, characterId, body && body.sessionId);
 }
 
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function rewriteActionDrawings(projectDir, characterId, slotName, fromName, toName) {
+  const actionsDir = path.join(characterDir(projectDir, characterId), "actions");
+  const changed = [];
+  if (!fs.existsSync(actionsDir) || !fs.statSync(actionsDir).isDirectory()) return changed;
+  for (const name of fs.readdirSync(actionsDir)) {
+    if (path.extname(name).toLowerCase() !== ".json") continue;
+    const abs = path.join(actionsDir, name);
+    let action;
+    try {
+      action = JSON.parse(fs.readFileSync(abs, "utf8"));
+    } catch {
+      continue;
+    }
+    if (!action || typeof action !== "object") continue;
+    let dirty = false;
+    if (action.set_slots && action.set_slots[slotName] === fromName) {
+      if (toName) action.set_slots[slotName] = toName;
+      else delete action.set_slots[slotName];
+      dirty = true;
+    }
+    if (action.slot_frames && Array.isArray(action.slot_frames[slotName])) {
+      action.slot_frames[slotName] = action.slot_frames[slotName].map((item) =>
+        item === fromName ? toName || "none" : item
+      );
+      dirty = true;
+    }
+    if (dirty) {
+      fs.writeFileSync(abs, `${JSON.stringify(action, null, 2)}\n`);
+      changed.push(`characters/${characterId}/actions/${name}`);
+    }
+  }
+  return changed;
+}
+
+function rewriteScriptDrawings(projectDir, _character, slotName, fromName, toName) {
+  const slotPat = escapeRegExp(slotName);
+  const fromPat = escapeRegExp(fromName);
+  const assign = new RegExp(`(\\b${slotPat}=)${fromPat}\\b`, "g");
+  const changed = [];
+  for (const script of listScriptFiles(projectDir)) {
+    const abs = path.join(projectDir, script);
+    let text;
+    try {
+      text = fs.readFileSync(abs, "utf8");
+    } catch {
+      continue;
+    }
+    const next = text.replace(assign, `$1${toName}`);
+    if (next === text) continue;
+    fs.writeFileSync(abs, next);
+    changed.push(script);
+  }
+  return changed;
+}
+
 function renameDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, body) {
   const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
   assertDrawingName(drawingName);
@@ -1082,7 +1188,11 @@ function renameDrawing(projectDir, globalAssetsDir, characterId, slotName, drawi
     }
   }
   if (jsonDirty) writeCharacterJson(projectDir, characterId, character, null);
-  return { ok: true, drawing: next, rel: destRel, renamed: true };
+  const refs = [
+    ...rewriteActionDrawings(projectDir, characterId, slotName, drawingName, next),
+    ...rewriteScriptDrawings(projectDir, character, slotName, drawingName, next),
+  ];
+  return { ok: true, drawing: next, rel: destRel, renamed: true, refs };
 }
 
 function deleteDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, body) {
@@ -1098,12 +1208,14 @@ function deleteDrawing(projectDir, globalAssetsDir, characterId, slotName, drawi
     throw editorError("This drawing is from the shared library and can't be deleted from this project.");
   }
   const usages = findDrawingUsages(projectDir, globalAssetsDir, characterId, slotName, drawingName);
-  const scriptUsages = usages.filter((item) => item.script);
-  if (scriptUsages.length && body.force !== true) {
+  const blocking = usages.filter(
+    (item) => item.kind === "script" || item.kind === "action" || item.kind === "rig" || item.script
+  );
+  if (blocking.length && body.force !== true) {
     const err = editorError(
-      `This drawing is used by a script. ${scriptUsages
+      `This drawing is used by a rig, action, or script. ${blocking
         .slice(0, 6)
-        .map((item) => `${item.script}:${item.line}`)
+        .map((item) => item.text || `${item.script}:${item.line}`)
         .join(", ")}`,
       "EUSED"
     );
@@ -1112,8 +1224,8 @@ function deleteDrawing(projectDir, globalAssetsDir, characterId, slotName, drawi
   }
   const srcAbs = absFromProjectRel(projectDir, current.rel);
   assertInsideCharacterAssets(projectDir, characterId, current.rel);
-  const historyRel = writeHistoryCopy(projectDir, characterId, "trash", current.rel, srcAbs);
-  fs.unlinkSync(srcAbs);
+  const trashed = moveToProjectTrash(projectDir, [current.rel]);
+  const historyRel = trashed.trash;
 
   const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
   const live = findSlotSpec(character, slotName);
@@ -1144,7 +1256,45 @@ function deleteDrawing(projectDir, globalAssetsDir, characterId, slotName, drawi
     }
   }
   if (jsonDirty) writeCharacterJson(projectDir, characterId, character, null);
+  rewriteActionDrawings(projectDir, characterId, slotName, drawingName, null);
   return { ok: true, drawing: drawingName, trash: historyRel, usages };
+}
+
+async function cleanIslandsDrawing(projectDir, globalAssetsDir, characterId, slotName, drawingName, body, options = {}) {
+  assertDrawingName(drawingName);
+  const { spec } = loadSlotContext(projectDir, globalAssetsDir, characterId, slotName);
+  const view = resolveViewDir(projectDir, globalAssetsDir, characterId, slotName, spec, body && body.view);
+  const current = describeDrawingFile(projectDir, globalAssetsDir, characterId, view.drawingsDir, drawingName);
+  if (!current) throw editorError(`Unknown drawing: ${drawingName}`, "ENOTFOUND");
+  if (current.source !== "project") {
+    throw editorError("This drawing is from the shared library and can't be edited from this project.");
+  }
+  const destRel = posixJoin("characters", characterId, view.drawingsDir, `${drawingName}.png`);
+  assertInsideCharacterAssets(projectDir, characterId, destRel);
+  const destAbs = absFromProjectRel(projectDir, destRel);
+  const existing = resolveAsset(projectDir, globalAssetsDir, current.rel);
+  const srcAbs = existing ? existing.absPath : destAbs;
+  if (!srcAbs || !fs.existsSync(srcAbs)) throw editorError(`Unknown drawing: ${drawingName}`, "ENOTFOUND");
+  const historyRel = writeHistoryCopy(projectDir, characterId, "replaced", destRel, srcAbs);
+  const tmpOut = `${destAbs}.clean.png`;
+  await runCleanIslands(["--input", srcAbs, "--out", tmpOut, "--clean-islands"], options);
+  if (!fs.existsSync(tmpOut)) throw editorError("Island cleanup wrote nothing");
+  fs.mkdirSync(path.dirname(destAbs), { recursive: true });
+  fs.copyFileSync(tmpOut, destAbs);
+  fs.rmSync(tmpOut, { force: true });
+  return { ok: true, drawing: drawingName, rel: destRel, replaced: historyRel };
+}
+
+async function cleanIslandsSlot(projectDir, globalAssetsDir, characterId, slotName, body, options = {}) {
+  const slot = describeSlot(projectDir, globalAssetsDir, characterId, slotName, body && body.view);
+  const written = [];
+  for (const drawing of slot.drawings || []) {
+    if (drawing.source !== "project") continue;
+    written.push(
+      await cleanIslandsDrawing(projectDir, globalAssetsDir, characterId, slotName, drawing.name, body, options)
+    );
+  }
+  return { ok: true, slot: slotName, view: slot.view, written };
 }
 
 function saveDrawingFlags(projectDir, globalAssetsDir, characterId, slotName, drawingName, body) {
@@ -1295,6 +1445,8 @@ module.exports = {
   cancelEdit,
   renameDrawing,
   deleteDrawing,
+  cleanIslandsDrawing,
+  cleanIslandsSlot,
   saveDrawingFlags,
   flipDrawing,
   restoreReplacedDrawing,
