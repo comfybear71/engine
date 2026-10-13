@@ -151,29 +151,6 @@ def _sample_pair(sources: list[np.ndarray], index: int, count: int) -> tuple[np.
     return sources[a], sources[b], frac, phase
 
 
-def morph_legs_only(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
-    """Blend the legs; keep the nearest source's head and torso.
-
-    A full-body cross-dissolve of two contact poses ghosts a second head.
-    """
-
-    a = _to_bgra(a)
-    b = _to_bgra(b)
-    if t <= 0.02:
-        return a.copy()
-    if t >= 0.98:
-        return b.copy()
-    blended = morph_frames(a, b, t)
-    nearest = a if t < 0.5 else b
-    box = alpha_bbox(nearest)
-    if box is None:
-        return blended
-    hip_y = box[1] + int((box[3] - box[1]) * HIP_FRAC)
-    out = nearest.copy()
-    out[hip_y:] = blended[hip_y:]
-    return _to_bgra(out)
-
-
 def _inbetween(a: np.ndarray, b: np.ndarray, frac: float, n_sources: int) -> np.ndarray:
     """Morph adjacent keys when we have a real cycle. Two contact poses
     keep the nearest key and rely on the leg warp for in-betweens — a
