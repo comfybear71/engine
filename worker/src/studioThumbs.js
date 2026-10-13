@@ -13,6 +13,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const THUMB_WIDTH = 480;
+const PREVIEW_TEXTURE_MAX = 512;
 
 function cacheDir() {
   const dir = path.join(os.tmpdir(), "engine-studio-thumbs");
@@ -75,4 +76,58 @@ async function cachedBackgroundThumb(absPath) {
   }
 }
 
-module.exports = { cachedBackgroundThumb, THUMB_WIDTH };
+function previewCachePathFor(absPath, stat) {
+  const key = crypto.createHash("sha1").update(`preview512|${absPath}|${stat.mtimeMs}|${stat.size}`).digest("hex");
+  return path.join(cacheDir(), `${key}.png`);
+}
+
+function generatePngPreview(src, dest) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      "-y",
+      "-i",
+      src,
+      "-vf",
+      `scale='min(${PREVIEW_TEXTURE_MAX}\\,iw)':-2`,
+      "-frames:v",
+      "1",
+      "-update",
+      "1",
+      dest,
+    ];
+    const proc = spawn("ffmpeg", args);
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => (stderr += chunk));
+    proc.on("error", (err) => reject(new Error(`Failed to spawn ffmpeg: ${err.message}`)));
+    proc.on("close", (code) => {
+      if (code !== 0 || !fs.existsSync(dest) || fs.statSync(dest).size === 0) {
+        reject(new Error(stderr.trim() || `ffmpeg exited ${code}`));
+        return;
+      }
+      resolve(dest);
+    });
+  });
+}
+
+async function cachedPreviewTexture(absPath) {
+  if (!absPath || !fs.existsSync(absPath)) return null;
+  const stat = fs.statSync(absPath);
+  if (stat.size > 0 && stat.size < 80 * 1024) return absPath;
+  const dest = previewCachePathFor(absPath, stat);
+  if (fs.existsSync(dest) && fs.statSync(dest).size > 0) return dest;
+  const tmp = `${dest}.${process.pid}.tmp.png`;
+  try {
+    await generatePngPreview(absPath, tmp);
+    fs.renameSync(tmp, dest);
+    return dest;
+  } catch {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+    return absPath;
+  }
+}
+
+module.exports = { cachedBackgroundThumb, cachedPreviewTexture, THUMB_WIDTH, PREVIEW_TEXTURE_MAX };

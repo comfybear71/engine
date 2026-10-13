@@ -15,7 +15,8 @@ const { fingerprintParseInputs, fingerprintAssets } = require("./parser/parseCac
 const { segmentViaSession } = require("./previewSession");
 
 const SEGMENT_SEC = 25;
-const SEGMENT_SIZE = { width: 960, height: 540 };
+const SEGMENT_SIZE = { width: 854, height: 480 };
+const PREVIEW_COMPOSE_V = "cli-scale-480-v1";
 
 const jobs = new Map();
 
@@ -30,7 +31,7 @@ function segmentCacheKey(projectDir, scriptName, startFrame, frames, width, heig
   const assetFp = fingerprintAssets(projectDir);
   return crypto
     .createHash("sha1")
-    .update(`${parseFp}|${assetFp}|${startFrame}|${frames}|${width}|${height}`)
+    .update(`${PREVIEW_COMPOSE_V}|${parseFp}|${assetFp}|${startFrame}|${frames}|${width}|${height}`)
     .digest("hex");
 }
 

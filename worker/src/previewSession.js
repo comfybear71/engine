@@ -72,7 +72,12 @@ function spawnSession(options = {}) {
 }
 
 async function ensurePool(pool, options = {}) {
-  if (pool.child && !pool.child.killed) return pool.child;
+  if (pool.child && !pool.child.killed && pool.child.stdin && !pool.child.stdin.destroyed) {
+    return pool.child;
+  }
+  if (pool.child) {
+    killPool(pool);
+  }
   if (pool.starting) return pool.starting;
   pool.starting = new Promise((resolve, reject) => {
     try {
@@ -108,10 +113,18 @@ function requestViaPool(pool, payload, options = {}) {
             reject(err);
           },
         });
+        if (!proc.stdin || proc.stdin.destroyed) {
+          pool.pending.delete(id);
+          clearTimeout(timer);
+          killPool(pool);
+          reject(new Error("preview session stdin closed"));
+          return;
+        }
         proc.stdin.write(`${JSON.stringify({ ...payload, id })}\n`, (err) => {
           if (err) {
             pool.pending.delete(id);
             clearTimeout(timer);
+            killPool(pool);
             reject(err);
           }
         });
@@ -148,10 +161,22 @@ function segmentViaSession(projectDir, options = {}) {
       frames: options.frames,
       output: path.resolve(options.output),
       progressPath: options.progressPath ? path.resolve(options.progressPath) : null,
-      width: options.width || 960,
-      height: options.height || 540,
+      width: options.width || 854,
+      height: options.height || 480,
     },
     { ...options, timeoutMs: options.timeoutMs || 10 * 60 * 1000 }
+  );
+}
+
+function graphViaSession(projectDir, options = {}) {
+  return requestViaPool(
+    framePool,
+    {
+      cmd: "graph",
+      projectDir: path.resolve(projectDir),
+      timeline: options.timeline ? path.resolve(options.timeline) : null,
+    },
+    { ...options, timeoutMs: options.timeoutMs || 60_000 }
   );
 }
 
@@ -176,6 +201,7 @@ function closePreviewSession() {
 module.exports = {
   previewViaSession,
   segmentViaSession,
+  graphViaSession,
   closePreviewSession,
   ensureSession: (options) => ensurePool(framePool, options),
 };

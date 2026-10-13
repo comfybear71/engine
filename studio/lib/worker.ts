@@ -643,6 +643,7 @@ export function assetUrl(
     over?: string | null;
     v?: number | string | null;
     library?: boolean;
+    preview?: boolean;
   }
 ): string | null {
   if (!rel) return null;
@@ -651,6 +652,7 @@ export function assetUrl(
   if (opts?.factory) params.set("factory", "1");
   if (opts?.over) params.set("over", opts.over);
   if (opts?.library) params.set("library", "1");
+  if (opts?.preview) params.set("preview", "1");
   if (opts?.v != null && opts.v !== "") params.set("v", String(opts.v));
   return `${WORKER_URL}${withShow(`/api/projects/${encodeURIComponent(project)}/asset?${params.toString()}`)}`;
 }
@@ -767,12 +769,17 @@ export async function fetchPreviewFrame(
   name: string,
   frame: number,
   signal?: AbortSignal,
-  script?: string | null
+  script?: string | null,
+  size?: { width?: number; height?: number }
 ): Promise<{ blob: Blob; meta: PreviewMeta }> {
   const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/preview-frame`, script), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ frame }),
+    body: JSON.stringify({
+      frame,
+      ...(size?.width ? { width: size.width } : {}),
+      ...(size?.height ? { height: size.height } : {}),
+    }),
     signal,
   });
   if (!res.ok) throw new Error(await readError(res));
@@ -786,6 +793,35 @@ export async function fetchPreviewFrame(
     sceneId: res.headers.get("X-Engine-Scene-Id"),
   };
   return { blob, meta };
+}
+
+export type PreviewGraph = {
+  fps: number;
+  canvas: { width: number; height: number };
+  totalFrames: number;
+  scenes: unknown[];
+};
+
+export async function loadPreviewGraph(
+  name: string,
+  script?: string | null
+): Promise<{ graph: PreviewGraph; fps: number; totalFrames: number; canvas: { width: number; height: number } }> {
+  const res = await workerFetch(withScript(`/api/projects/${encodeURIComponent(name)}/preview-graph`, script));
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as {
+    graph?: PreviewGraph;
+    fps?: number;
+    totalFrames?: number;
+    canvas?: { width: number; height: number };
+    error?: string;
+  };
+  if (!body.graph) throw new Error(body.error || "Preview graph missing");
+  return {
+    graph: body.graph,
+    fps: body.fps || body.graph.fps || 24,
+    totalFrames: body.totalFrames || body.graph.totalFrames || 1,
+    canvas: body.canvas || body.graph.canvas || { width: 1920, height: 1080 },
+  };
 }
 
 export async function loadScript(name: string, script?: string | null): Promise<string> {
@@ -1069,7 +1105,7 @@ export async function requestPreviewSegment(
 
 export async function waitForPreviewSegment(
   name: string,
-  body: { startFrame: number; durationSec?: number; frames?: number },
+  body: { startFrame: number; durationSec?: number; frames?: number; width?: number; height?: number },
   script?: string | null,
   onProgress?: (status: PreviewSegmentStatus) => void
 ): Promise<PreviewSegmentStatus> {

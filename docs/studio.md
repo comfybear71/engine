@@ -292,14 +292,17 @@ clobber the project's `timeline.json`.
   `output.mp4` (mtime ≥ the script) in the viewport with sound and a
   synced playhead / lane highlight — line audio is stopped so the
   video's own soundtrack is the only sound; (b) otherwise the next ~25 s
-  as a 960×540 proxy *segment* from the persistent compositor (in-process
-  frame loop, cached by script/asset fingerprint). Stage shows
-  **Buffering preview…** with a progress hint. The first window is ~6 s
-  so the mouth can start without a 30 s wait; later windows are ~25 s
-  and render ahead. Line audio is held until that picture is actually
-  playing and is paused again if Stage has to buffer — it does not run
-  ahead of the mouth. There is no 120 s cap — a 9-minute shot plays
-  from any start the same way. Line audio is streamed with
+  as a client-side canvas from the preview graph (timeline + drawing
+  pieces, downscaled cached textures, same placement math as the CLI).
+  Play starts at the playhead in real time — it does not wait on a 25 s
+  encode. If the graph cannot load, Stage falls back to cached 480p
+  worker frames from the playhead, prefetching a couple of seconds
+  ahead so playback continues as frames fill. The old 960×540 proxy
+  segment path remains as a last resort at 854×480. Line audio is held
+  until that picture is actually playing and is paused again if Stage
+  has to buffer — it does not run ahead of the mouth. There is no
+  120 s cap — a 9-minute shot plays from any start the same way. Line
+  audio is streamed with
   `HTMLAudioElement` (range requests from `/media`) so a long WAV never
   decodes on the main thread; timeline edits never wait on audio.
   Pause, stop, rewind, and effect cleanup cancel any pending start so
@@ -543,7 +546,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/generate-image` | JSON `{ "project", "characterId", "needId", "n?", "prompt?", "frames?", "dryRun?" }`. `prompt` is the edited Imagine textarea (required for `needId: "custom"`). Dry-run returns a credit note (published xAI prices when known, else “uses xAI credits”) and writes nothing. Otherwise calls `https://api.x.ai/v1/images/generations` or `/images/edits` (Bearer `XAI_API_KEY`, model `XAI_IMAGE_MODEL` / `grok-imagine-image-2.0`) with `n` variants, auto-attaches the character full-body reference and body when present, saves each raw sheet under `characters/<id>/_library/`, and returns image URLs/base64. Plain-language errors for a missing key, rate limits, and content refusals. Never logs the key. |
 | `GET` | `/api/projects/:name/staging` | Backgrounds, props, and marks for locations this project uses. |
 | `GET` | `/api/projects/:name/audio` | WAV files under `audio/`: imported `audio/<label>/001_<character>.wav` and generated `audio/<scene>/<nnn>_<character>.wav`, with `kind`, `label`, `characterId`, `durationSeconds`. |
-| `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`) using the project's Independent setting (episode → show; global skipped when Independent is on). `?library=1` still serves a shared-library preview for the Library drawer. `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for Assets-list character / background / prop cards. Pass `?v=<mtime>` (Studio does this) for `Cache-Control: public, max-age=31536000, immutable`. |
+| `GET` | `/api/projects/:name/asset?rel=` | Serve a library-relative image (`characters/hicks/body.png`) using the project's Independent setting (episode → show; global skipped when Independent is on). `?library=1` still serves a shared-library preview for the Library drawer. `?thumb=1` returns a cached ~480px JPEG (mtime-invalidated) for Assets-list character / background / prop cards. `?preview=1` returns a cached PNG (max ~512px, alpha kept) for the Stage canvas. Pass `?v=<mtime>` (Studio does this) for `Cache-Control: public, max-age=31536000, immutable`. |
 | `GET` | `/api/projects/:name/script?script=` | Raw selected script file. |
 | `PUT` | `/api/projects/:name/script?script=` | Snapshot the previous file into `.history/<script>/`, write that file, then lint via a **temp** parse. Does **not** write `timeline.json`. Body is `text/plain` or JSON `{ "text": "..." }`. Returns `{ ok, saved, lint }`. |
 | `GET` | `/api/projects/:name/script-history?script=` | List on-disk snapshots `{ id, createdAt, bytes, preview }` newest first. |
@@ -557,9 +560,10 @@ other media durations are cached by path + mtime + size.
 | `GET` | `/api/projects/:name/stage?script=` | Parse the selected script in a temp timeline; return canvas/fps, scene layers, marks. Does **not** write `timeline.json`. |
 | `GET` | `/api/projects/:name/playback?script=` | Render/proxy freshness (`renders/<stem>.mp4` or `output.mp4`, plus `<stem>_preview.mp4`) vs the script mtime, and audio-lane clips with `exists` and RIFF `durationSeconds`. Temp parse only. |
 | `GET` | `/api/projects/:name/media?rel=` | Stream a project-local line WAV (`audio/<scene>/<file>.wav` only). Supports HTTP range requests. |
-| `POST`/`GET` | `/api/projects/:name/preview-segment?script=` | Render or poll a ~25 s 960×540 H.264 play window from `{ startFrame, durationSec?, frames? }`. Cached by script/asset fingerprint. Does not block the UI or write `timeline.json`. |
+| `GET` | `/api/projects/:name/preview-graph?script=` | Temp-parse the selected script and return the Stage canvas graph (placements, slot drawings, sizes). Same loaded Timeline the CLI uses, including lip-sync. Does not write `timeline.json`. |
+| `POST`/`GET` | `/api/projects/:name/preview-segment?script=` | Render or poll a ~25 s 854×480 H.264 play window from `{ startFrame, durationSec?, frames? }`. Starts at the requested playhead. Cached by script/asset fingerprint. Does not block the UI or write `timeline.json`. Stage prefers the canvas graph and only uses this as a last resort. |
 | `GET` | `/api/projects/:name/preview-segments/:file` | Stream a cached preview segment (`<sha1>.mp4`). |
-| `POST` | `/api/projects/:name/preview-frame?script=` | Parse the selected script to a temp timeline (shared cache), compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`), return a JPEG (quality 85) for scrubbing. `{ "format": "png" }` keeps exact pixels. Frames are cached on disk/memory by script fingerprint + asset mtimes + frame. `Cache-Control: private, max-age=3600`. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. A persistent Python compositor process stays warm so numpy/cv2 are not re-imported per frame. |
+| `POST` | `/api/projects/:name/preview-frame?script=` | Parse the selected script to a temp timeline (shared cache), compose **one** frame (`{ "frame": N }` or `{ "time": seconds }`) with the same compositor as CLI `render` (full canvas, then `scale_frame` if the request asks for a size; JPEG defaults to 854×480). JPEG quality 85 for scrubbing. `{ "format": "png" }` keeps exact pixels. Frames are cached on disk/memory by script fingerprint + asset mtimes + frame. `Cache-Control: private, max-age=3600`. Metadata is in `X-Engine-*` headers. Never overwrites the project's `timeline.json`. A persistent Python compositor process stays warm so numpy/cv2 are not re-imported per frame. |
 | `POST` | `/api/projects/:name/render?script=` | Parse the selected script to a temp timeline (never `timeline.json`), run the compositor with `--output renders/<script-stem>.mp4`. Same `--script` choice as the CLI. One render at a time. |
 | `POST` | `/api/projects/:name/preview-render?script=` | Same temp parse as Render, but writes a 960×540 H.264 proxy to `renders/<script-stem>_preview.mp4` for Stage playback. Shares the one-at-a-time render lock. |
 | `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). Studio **Import audio** sends multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe` / `splitLong`); JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?", "splitLong?" }` still works. Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Takes longer than 60 s are split into 30–60 s clips at silences (default; `splitLong=false` keeps one file). Dry-run returns length + the STT credit note and writes nothing. |

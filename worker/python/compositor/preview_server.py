@@ -15,15 +15,16 @@ from pathlib import Path
 import cv2
 
 from .asset_cache import AssetCache
-from .compositor import clamp_preview_frame, compose_frame, scene_at_frame
+from .compositor import clamp_preview_frame, compose_frame, compose_scene_frame, scene_at_frame
 from .ffmpeg_writer import write_preview_segment
+from .preview_graph import dump_preview_graph
 from .schema_validate import TimelineValidationError
 from .timeline_loader import load_timeline
 
 _loaded: dict = {"path": None, "mtime": None, "settings_mtime": None, "timeline": None, "cache": None}
 
-PREVIEW_WIDTH = 960
-PREVIEW_HEIGHT = 540
+PREVIEW_WIDTH = 854
+PREVIEW_HEIGHT = 480
 
 
 def _settings_mtime(project_dir: Path) -> float:
@@ -93,7 +94,22 @@ def handle_frame(req: dict, timeline, cache) -> dict:
     fmt = "jpeg" if str(req.get("format") or "png").lower() in {"jpg", "jpeg"} else "png"
     quality = int(req.get("quality") or 85)
     width, height = _preview_size(req, fmt)
-    canvas = compose_frame(timeline, frame_index, cache=cache, width=width, height=height)
+    # JPEG / sized preview composes at the output size (480p default) so
+    # scrubbing the first seconds does not allocate 1920×1080 per frame.
+    # PNG with no size still uses compose_frame (full canvas, CLI match).
+    if width and height:
+        canvas = compose_scene_frame(
+            scene,
+            local_frame,
+            timeline.canvas.width,
+            timeline.canvas.height,
+            timeline.fps,
+            cache,
+            out_width=width,
+            out_height=height,
+        )
+    else:
+        canvas = compose_frame(timeline, frame_index, cache=cache)
 
     output_path = Path(req["output"]).resolve()
     _write_image(canvas, output_path, fmt, quality)
@@ -129,7 +145,17 @@ def handle_segment(req: dict, timeline, cache) -> dict:
     def frames():
         for i in range(count):
             idx = clamp_preview_frame(timeline, start + i)
-            frame = compose_frame(timeline, idx, cache=cache, width=width, height=height)
+            scene, local_frame = scene_at_frame(timeline, idx)
+            frame = compose_scene_frame(
+                scene,
+                local_frame,
+                timeline.canvas.width,
+                timeline.canvas.height,
+                timeline.fps,
+                cache,
+                out_width=width,
+                out_height=height,
+            )
             if progress_path is not None and (i % 12 == 0 or i + 1 == count):
                 _write_progress(
                     progress_path,
@@ -161,6 +187,18 @@ def handle_segment(req: dict, timeline, cache) -> dict:
     }
 
 
+def handle_graph(req: dict, timeline) -> dict:
+    return {
+        "id": req.get("id"),
+        "ok": True,
+        "cmd": "graph",
+        "graph": dump_preview_graph(timeline),
+        "totalFrames": timeline.total_frames,
+        "fps": timeline.fps,
+        "canvas": {"width": timeline.canvas.width, "height": timeline.canvas.height},
+    }
+
+
 def handle(req: dict) -> dict:
     project_dir = Path(req["projectDir"]).resolve()
     timeline_path = Path(req["timeline"]).resolve() if req.get("timeline") else project_dir / "timeline.json"
@@ -168,7 +206,10 @@ def handle(req: dict) -> dict:
         return {"id": req.get("id"), "ok": False, "error": f"timeline file not found: {timeline_path}"}
 
     timeline, cache = _load(timeline_path, project_dir)
-    if str(req.get("cmd") or "") == "segment" or req.get("frames"):
+    cmd = str(req.get("cmd") or "")
+    if cmd == "graph":
+        return handle_graph(req, timeline)
+    if cmd == "segment" or req.get("frames"):
         return handle_segment(req, timeline, cache)
     return handle_frame(req, timeline, cache)
 

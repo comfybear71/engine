@@ -46,9 +46,13 @@ export function frameFromElapsedMs(elapsedMs: number, startFrame: number, fps: n
 export const PROXY_SEGMENT_SEC = 25;
 /** First window after Play — short so the mouth can start without a 30s wait. */
 export const PROXY_SEGMENT_FIRST_SEC = 6;
-export const PROXY_SEGMENT_SIZE = { width: 960, height: 540 };
+/** Worker fallback / scrub size. 480p is the default so Play does not encode HD. */
+export const PREVIEW_PROXY_SIZE = { width: 854, height: 480 };
+export const PROXY_SEGMENT_SIZE = PREVIEW_PROXY_SIZE;
 /** Start the next window when this much of the current segment remains. */
 export const PROXY_SEGMENT_PREFETCH_SEC = 8;
+/** How far ahead of the playhead to prefetch cached 480p frames. */
+export const PREVIEW_PREFETCH_SEC = 3;
 /** Reseek line audio when it drifts this far from the picture clock. */
 export const AUDIO_SYNC_SLACK_SEC = 0.35;
 
@@ -71,6 +75,26 @@ export function segmentWindow(
   const start = Math.max(0, Math.min(Math.floor(startFrame) || 0, Math.max(0, totalFrames - 1)));
   const frames = Math.max(1, Math.min(Math.round(durationSec * safeFps), Math.max(1, totalFrames - start)));
   return { startFrame: start, frames, endFrame: start + frames };
+}
+
+/** Frames to buffer from the playhead (or a click), not from zero. */
+export function previewPrefetchWindow(
+  playhead: number,
+  fps: number,
+  totalFrames: number,
+  aheadSec = PREVIEW_PREFETCH_SEC
+): number[] {
+  const safeFps = Math.max(fps, 1);
+  const total = Math.max(1, Math.floor(Number(totalFrames) || 1));
+  const start = Math.max(0, Math.min(Math.floor(playhead) || 0, total - 1));
+  const count = Math.max(1, Math.round(Math.max(0, aheadSec) * safeFps));
+  const frames: number[] = [];
+  for (let i = 0; i <= count; i += 1) {
+    const next = start + i;
+    if (next >= total) break;
+    frames.push(next);
+  }
+  return frames;
 }
 
 export function frameInSegment(

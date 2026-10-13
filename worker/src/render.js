@@ -10,7 +10,7 @@ const { spawn } = require("child_process");
 const path = require("path");
 
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
-const { previewViaSession } = require("./previewSession");
+const { previewViaSession, graphViaSession } = require("./previewSession");
 
 const ESTIMATED_SILENT_RE = /(\d+) of (\d+) lines are estimated\/silent/;
 
@@ -146,4 +146,57 @@ async function previewFrame(projectDir, frame, outputPath, options = {}) {
   return { ...result, meta };
 }
 
-module.exports = { renderProject, previewFrame, parseEstimatedSilent };
+function dumpGraphOnce(projectDir, options = {}) {
+  return new Promise((resolve, reject) => {
+    const pythonBin = options.pythonBin || resolvePythonBin();
+    const proc = spawn(pythonBin, ["-m", "compositor.preview_server"], {
+      cwd: PYTHON_DIR,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      try {
+        const line = stdout.trim().split("\n").pop();
+        const msg = JSON.parse(line || "{}");
+        if (msg.ok && msg.graph) {
+          resolve(msg.graph);
+          return;
+        }
+        reject(new Error(msg.error || stderr.trim() || `preview graph exited ${code}`));
+      } catch (err) {
+        reject(new Error(stderr.trim() || err.message || "preview graph failed"));
+      }
+    });
+    proc.stdin.write(
+      `${JSON.stringify({
+        cmd: "graph",
+        projectDir: path.resolve(projectDir),
+        timeline: options.timeline ? path.resolve(options.timeline) : null,
+      })}\n`,
+      (err) => {
+        if (err) reject(err);
+        else proc.stdin.end();
+      }
+    );
+  });
+}
+
+async function previewGraph(projectDir, options = {}) {
+  try {
+    const msg = await graphViaSession(projectDir, options);
+    return msg.graph;
+  } catch {
+    return dumpGraphOnce(projectDir, options);
+  }
+}
+
+module.exports = { renderProject, previewFrame, previewGraph, parseEstimatedSilent };
