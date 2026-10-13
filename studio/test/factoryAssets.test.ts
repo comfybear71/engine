@@ -12,6 +12,8 @@ import {
   groupScripts,
   isOldScript,
   newestScriptName,
+  nextNewScriptName,
+  normalizeNewScriptName,
   pickActiveScript,
   isFactoryBadge,
   pivotPercent,
@@ -81,7 +83,7 @@ describe("factory Assets helpers", () => {
     assert.equal(isOldScript("script_full_test.txt", "script_full_test.txt"), false);
   });
 
-  test("script dropdown pins the three current scripts and groups the rest under tests", () => {
+  test("script list pins the three current scripts and groups the rest under tests", () => {
     assert.deepEqual(
       groupScripts([
         "script_old_walk.txt",
@@ -95,6 +97,11 @@ describe("factory Assets helpers", () => {
         tests: ["script_mouth_check.txt", "script_old_walk.txt"],
       }
     );
+    assert.equal(normalizeNewScriptName("walk"), "script_walk.txt");
+    assert.equal(normalizeNewScriptName("script_walk.txt"), "script_walk.txt");
+    assert.equal(normalizeNewScriptName("../secret"), null);
+    assert.equal(nextNewScriptName(["script.txt"]), "script_new.txt");
+    assert.equal(nextNewScriptName(["script.txt", "script_new.txt"]), "script_new_2.txt");
   });
 
   test("action shots group under the character and hide missing tiles by default", () => {

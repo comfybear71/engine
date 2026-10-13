@@ -11,9 +11,10 @@ import ScriptPanel from "@/components/ScriptPanel";
 import StagePanel from "@/components/StagePanel";
 import StudioSettings from "@/components/StudioSettings";
 import { readRememberedScript, writeRememberedScript } from "@/lib/activeScript";
-import { groupScripts, isOldScript, pickActiveScript } from "@/lib/factoryAssets";
+import { isOldScript, pickActiveScript } from "@/lib/factoryAssets";
 import {
   checkWorker,
+  createScript,
   loadScriptCatalog,
   loadShow,
   loadStudioSettings,
@@ -88,11 +89,7 @@ export default function StudioApp({
       const remembered = readRememberedScript(project) || settings?.activeScript || "";
       setScripts(catalog.scripts);
       setNewestScript(catalog.newest);
-      setScript((current) => {
-        const next = pickActiveScript(catalog.files, current, remembered);
-        if (next && next !== current) writeRememberedScript(project, next);
-        return next;
-      });
+      setScript((current) => pickActiveScript(catalog.files, current, remembered));
     } catch {
       setWorkerUp(false);
     }
@@ -131,9 +128,27 @@ export default function StudioApp({
     }
   }
 
+  function openScript(name: string) {
+    if (!name || name === script) return;
+    scriptPicked.current = true;
+    setScript(name);
+    writeRememberedScript(project, name);
+    void saveStudioSettings(project, { activeScript: name }).catch(() => {
+      /* localStorage already has it */
+    });
+    setSelectedScriptLine(null);
+    setScriptEpoch((n) => n + 1);
+  }
+
+  async function onCreateScript(name: string) {
+    const created = await createScript(project, name);
+    setScripts(created.catalog.scripts);
+    setNewestScript(created.catalog.newest);
+    openScript(created.script);
+  }
+
   const active = TABS.find((item) => item.id === tab)!;
   const videoSrc = project && videoBust ? renderVideoUrl(project, videoBust, script) : null;
-  const scriptGroups = groupScripts(scripts);
 
   return (
     <div className="flex h-screen flex-col bg-studio-bg">
@@ -163,43 +178,7 @@ export default function StudioApp({
               project
             )}
           </span>
-          <label className="flex min-w-0 items-center gap-2">
-            <ScriptIdentity name={script} old={isOldScript(script, newestScript)} />
-            <select
-              className="max-w-[220px] rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-white"
-              value={script}
-              onChange={(event) => {
-                const next = event.target.value;
-                scriptPicked.current = true;
-                setScript(next);
-                writeRememberedScript(project, next);
-                void saveStudioSettings(project, { activeScript: next }).catch(() => {
-                  /* localStorage already has it */
-                });
-                setSelectedScriptLine(null);
-                setScriptEpoch((n) => n + 1);
-              }}
-              disabled={!workerUp || scripts.length === 0}
-              data-testid="script-select"
-              aria-label="Script"
-            >
-              {scripts.length === 0 ? <option value="script.txt">script.txt</option> : null}
-              {scriptGroups.pinned.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-              {scriptGroups.tests.length ? (
-                <optgroup label="tests">
-                  {scriptGroups.tests.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null}
-            </select>
-          </label>
+          <ScriptIdentity name={script} />
         </div>
 
         <nav className="flex items-end gap-1">
@@ -244,7 +223,7 @@ export default function StudioApp({
             Settings
           </button>
           <div className="flex items-center gap-2">
-            <ScriptIdentity name={script} old={isOldScript(script, newestScript)} size="sm" />
+            <ScriptIdentity name={script} size="sm" />
             <button
               type="button"
               data-testid="studio-render"
@@ -297,19 +276,24 @@ export default function StudioApp({
             }}
           />
         ) : null}
-        {tab === "script" && script ? (
+        {tab === "script" ? (
           <ScriptPanel
             project={project}
             script={script}
+            scripts={scripts}
             workerUp={workerUp === true}
             scriptEpoch={scriptEpoch}
             selectedLine={selectedScriptLine}
             onSelectLine={setSelectedScriptLine}
             onSaved={() => setScriptEpoch((n) => n + 1)}
+            onOpenScript={openScript}
+            onCreateScript={onCreateScript}
           />
         ) : null}
-        {(tab === "stage" || tab === "script") && !script ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">Loading script…</div>
+        {tab === "stage" && !script ? (
+          <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">
+            Open a script on the Script page.
+          </div>
         ) : null}
         {tab === "edit" || tab === "deliver" ? <LipSyncSettingsPage project={project} /> : null}
         {!active.ready ? <PlaceholderPage name={active.label} /> : null}
@@ -343,7 +327,7 @@ export default function StudioApp({
             <div className="mb-3 flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-sm font-medium text-white">
                 Render
-                <ScriptIdentity name={script} old={isOldScript(script, newestScript)} />
+                <ScriptIdentity name={script} />
               </h2>
               <button
                 type="button"

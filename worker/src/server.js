@@ -46,6 +46,7 @@ const {
   renameProject,
   duplicateProject,
   createEmptyProject,
+  createScriptFile,
   addLibraryCharacter,
   makeProjectIndependent,
   readLibrary,
@@ -935,6 +936,27 @@ function createApp(options = {}) {
       files,
       default: newestScriptName(files),
     });
+  });
+
+  app.post("/api/projects/:name/scripts", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const requested = typeof body.name === "string" ? body.name : "";
+    try {
+      const scriptName = createScriptFile(projectDir, requested);
+      const files = listScriptRecords(projectDir);
+      res.status(201).json({
+        script: scriptName,
+        scripts: files.map((item) => item.name),
+        files,
+        default: newestScriptName(files),
+      });
+    } catch (err) {
+      if (err && err.code === "SCRIPT_EXISTS") return res.status(409).json({ error: err.message });
+      if (err && err.code === "INVALID_SCRIPT") return res.status(400).json({ error: err.message });
+      res.status(400).json({ error: err.message || "Could not create script" });
+    }
   });
 
   app.get("/api/projects/:name/characters", (req, res) => {

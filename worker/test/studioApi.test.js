@@ -505,6 +505,29 @@ describe("studio worker API", () => {
 
     const bad = await fetch(`${ctx.url}/api/projects/project/script?script=../secret.txt`);
     assert.equal(bad.status, 400);
+
+    const created = await fetch(`${ctx.url}/api/projects/project/scripts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "walk" }),
+    });
+    const createdBody = await created.json();
+    assert.equal(created.status, 201, JSON.stringify(createdBody));
+    assert.equal(createdBody.script, "script_walk.txt");
+    assert.ok(createdBody.scripts.includes("script_walk.txt"));
+    assert.ok(fs.existsSync(path.join(fixture.projectDir, "script_walk.txt")));
+    const dup = await fetch(`${ctx.url}/api/projects/project/scripts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "walk" }),
+    });
+    assert.equal(dup.status, 409);
+    const unsafe = await fetch(`${ctx.url}/api/projects/project/scripts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "../secret.txt" }),
+    });
+    assert.equal(unsafe.status, 400);
   });
 
   test("PUT /script then GET /script and GET /lanes reparse that exact file", async () => {

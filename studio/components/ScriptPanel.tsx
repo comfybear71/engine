@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
 import InsertActionPanel from "@/components/InsertActionPanel";
+import ScriptFileList from "@/components/ScriptFileList";
 import { insertSnippetAtCursor } from "@/lib/scriptTags";
 import {
   lintScript,
@@ -26,19 +27,25 @@ function flattenLint(result: { lint: { errors: LintIssue[]; warnings: LintIssue[
 export default function ScriptPanel({
   project,
   script,
+  scripts = [],
   workerUp,
   scriptEpoch = 0,
   selectedLine,
   onSelectLine,
   onSaved,
+  onOpenScript,
+  onCreateScript,
 }: {
   project: string | null;
   script: string;
+  scripts?: string[];
   workerUp: boolean;
   scriptEpoch?: number;
   selectedLine: number | null;
   onSelectLine: (line: number | null) => void;
   onSaved: () => void;
+  onOpenScript?: (name: string) => void;
+  onCreateScript?: (name: string) => Promise<void> | void;
 }) {
   const [text, setText] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -230,16 +237,38 @@ export default function ScriptPanel({
     gutterRef.current.scrollTop = textareaRef.current.scrollTop;
   }
 
-  if (!project || !script) {
+  function openListed(name: string) {
+    if (!onOpenScript || name === script) return;
+    if (dirty && !window.confirm("Discard unsaved changes?")) return;
+    onOpenScript(name);
+  }
+
+  if (!project) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">
-        {project ? "Loading script…" : "Pick a project to edit the script."}
+        Pick a project to edit the script.
       </div>
     );
   }
 
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
+      <ScriptFileList
+        scripts={scripts}
+        selected={script}
+        disabled={!workerUp}
+        onOpen={openListed}
+        onCreate={async (name) => {
+          if (dirty && !window.confirm("Discard unsaved changes?")) return;
+          if (!onCreateScript) return;
+          await onCreateScript(name);
+        }}
+      />
+      {!script ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">
+          Open a script from the list, or click + New.
+        </div>
+      ) : (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between gap-2 border-b border-studio-border px-3 py-2">
           <div className="flex items-center gap-2 text-xs text-studio-muted">
@@ -392,6 +421,7 @@ export default function ScriptPanel({
           onImportAudio={() => setImportOpen(true)}
         />
       </div>
+      )}
       {importOpen && project ? (
         <ImportAudioDialog
           project={project}

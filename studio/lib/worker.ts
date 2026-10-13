@@ -301,6 +301,33 @@ export async function loadScriptCatalog(name: string): Promise<ScriptCatalog> {
   };
 }
 
+export async function createScript(name: string, scriptName?: string | null): Promise<{ script: string; catalog: ScriptCatalog }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/scripts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(scriptName ? { name: scriptName } : {}),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    script?: string;
+    scripts?: string[];
+    files?: ScriptFileInfo[];
+    default?: string;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `Create script failed (${res.status})`);
+  if (!body.script) throw new Error("Create script failed");
+  const scripts = Array.isArray(body.scripts) ? body.scripts : [body.script];
+  const files = Array.isArray(body.files) ? body.files : scripts.map((item) => ({ name: item, mtime: 0 }));
+  return {
+    script: body.script,
+    catalog: {
+      scripts,
+      files,
+      newest: body.default || files[0]?.name || body.script,
+    },
+  };
+}
+
 export async function loadLibrary(name: string): Promise<LibraryResponse> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/library`);
   if (!res.ok) throw new Error(await readError(res));

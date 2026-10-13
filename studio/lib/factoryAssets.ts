@@ -126,6 +126,27 @@ export function groupScripts(names: string[]): ScriptGroups {
   return { pinned, tests };
 }
 
+const SAFE_NEW_SCRIPT = /^script(?:_[A-Za-z0-9][A-Za-z0-9._-]*)?\.txt$/;
+
+export function normalizeNewScriptName(raw: string | null | undefined): string | null {
+  let stem = String(raw || "").trim();
+  if (!stem) return null;
+  stem = stem.replace(/\.txt$/i, "");
+  if (!/^script(?:_|$)/i.test(stem)) stem = `script_${stem}`;
+  stem = stem.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+  const name = stem.toLowerCase().endsWith(".txt") ? stem : `${stem}.txt`;
+  if (name.includes("..") || name.includes("/") || name.includes("\\")) return null;
+  return SAFE_NEW_SCRIPT.test(name) ? name : null;
+}
+
+export function nextNewScriptName(existing: string[]): string {
+  const used = new Set(existing);
+  if (!used.has("script_new.txt")) return "script_new.txt";
+  let n = 2;
+  while (used.has(`script_new_${n}.txt`)) n += 1;
+  return `script_new_${n}.txt`;
+}
+
 export type ActionShot = {
   id: string;
   name: string;
