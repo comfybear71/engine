@@ -20,6 +20,17 @@ const VIEW_TAB_LABELS = {
 const HEAD_OVERLAY_VIEWS = ["front", "left_34", "right_34", "left_side", "right_side"];
 
 const STATUS_STATES = new Set(["ticked", "locked", "draft"]);
+const STATUS_STATE_ALIASES = {
+  ticked: "ticked",
+  locked: "locked",
+  draft: "draft",
+  approved: "ticked",
+  ok: "ticked",
+  yes: "ticked",
+  reviewed: "ticked",
+  tick: "ticked",
+  done: "ticked",
+};
 
 const STANDARD_SLOTS = [
   {
@@ -128,20 +139,78 @@ function statusKey(slotOrDir, drawing) {
   return `${String(slotOrDir || "").replace(/\\/g, "/")}/${String(drawing || "")}`;
 }
 
+function stripDrawingExt(name) {
+  return String(name || "").replace(/\.(png|webp|jpe?g|gif)$/i, "");
+}
+
 function parseStatusKey(key) {
-  const raw = String(key || "").replace(/\\/g, "/");
+  const raw = String(key || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
   const parts = raw.split("/").filter(Boolean);
   if (parts.length < 2) return null;
-  return { slot: parts.slice(0, -1).join("/"), drawing: parts[parts.length - 1] };
+  const drawing = stripDrawingExt(parts[parts.length - 1]);
+  if (!drawing) return null;
+  let slot = parts.slice(0, -1).join("/");
+  if (slot.startsWith("characters/")) {
+    const rest = slot.split("/").slice(2).join("/");
+    if (rest) slot = rest;
+  }
+  return { slot, drawing };
 }
 
 function isStatusState(value) {
   return STATUS_STATES.has(value);
 }
 
+function normalizeStatusState(value) {
+  if (value === true) return "ticked";
+  if (typeof value !== "string") return null;
+  const mapped = STATUS_STATE_ALIASES[value.trim().toLowerCase()];
+  return mapped || null;
+}
+
+function statusKeyAliases(key) {
+  const parsed = parseStatusKey(key);
+  const out = new Set();
+  const raw = String(key || "").replace(/\\/g, "/");
+  if (raw) out.add(raw);
+  if (!parsed) return [...out];
+  const drawing = parsed.drawing;
+  const slot = parsed.slot;
+  const base = stripViewSuffix(slot);
+  out.add(`${slot}/${drawing}`);
+  out.add(`${base}/${drawing}`);
+  for (const view of FACTORY_VIEWS) {
+    out.add(`${base}_${view}/${drawing}`);
+    out.add(`${base}/${view}/${drawing}`);
+  }
+  return [...out];
+}
+
+function lookupStatusState(statusMap, key) {
+  if (!statusMap || !key) return null;
+  if (isStatusState(statusMap[key])) return statusMap[key];
+  for (const alias of statusKeyAliases(key)) {
+    const raw = statusMap[alias];
+    if (isStatusState(raw)) return raw;
+    const normalized = normalizeStatusState(raw);
+    if (normalized) return normalized;
+  }
+  const parsed = parseStatusKey(key);
+  if (!parsed) return null;
+  const base = stripViewSuffix(parsed.slot);
+  for (const [stored, value] of Object.entries(statusMap)) {
+    const hit = parseStatusKey(stored);
+    if (!hit || hit.drawing !== parsed.drawing) continue;
+    if (stripViewSuffix(hit.slot) !== base) continue;
+    const state = isStatusState(value) ? value : normalizeStatusState(value);
+    if (state) return state;
+  }
+  return null;
+}
+
 function drawingBadge(statusMap, key, hasFile, expected) {
   if (!hasFile) return expected ? "missing" : null;
-  const raw = statusMap && statusMap[key];
+  const raw = lookupStatusState(statusMap, key);
   if (isStatusState(raw)) return raw;
   return "draft";
 }
@@ -161,14 +230,19 @@ function isClothingOverlay(text) {
   return /shirt|shorts|clothing|tie|belt|cape|skirt|jacket|vest/.test(text);
 }
 
+function isOverlayPiece(child) {
+  const text = childText(child);
+  if (/arm|hand|leg|sleeve|shoulder|thigh|shin/.test(text)) return false;
+  return /torso_rig|ov_|overlay|cape/.test(text) || isClothingOverlay(text);
+}
+
 function childRowLabel(child) {
   const text = childText(child);
   const side = childSideSuffix(child);
   if (/hand/.test(text) && !/arm/.test(text)) return "Hands";
   if (/leg|thigh|shin|boot/.test(text) && !/arm/.test(text)) return `Legs${side}`.trimEnd();
+  if (isOverlayPiece(child)) return "Overlays";
   if (/torso_rig|\btorso\b|\bbody\b/.test(text) && !/arm|hand|leg/.test(text)) return "Torso";
-  if (isClothingOverlay(text) && !/arm|hand|leg|sleeve|shoulder/.test(text)) return "Torso";
-  if (/overlay/.test(text) && !/arm|hand|leg|sleeve|shoulder/.test(text)) return "Torso";
   if (/arm|forearm|sleeve|shoulder/.test(text)) return `Arm rig${side}`.trimEnd();
   if (/head/.test(text)) return "Head";
   return (child && (child.id || child.asset)) || "Piece";
@@ -245,6 +319,7 @@ module.exports = {
   STANDARD_SLOTS,
   FRONT_ARM_PIECES,
   STATUS_STATES,
+  STATUS_STATE_ALIASES,
   normalizeView,
   viewTabLabel,
   stripViewSuffix,
@@ -255,7 +330,11 @@ module.exports = {
   statusKey,
   parseStatusKey,
   isStatusState,
+  normalizeStatusState,
+  statusKeyAliases,
+  lookupStatusState,
   drawingBadge,
+  isOverlayPiece,
   childRowLabel,
   isFaceOverlaySlot,
   rowGroupLabel,

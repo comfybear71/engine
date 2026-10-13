@@ -4,9 +4,12 @@ import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   ENGINE_NOT_ON_THIS_COMPUTER,
+  ENGINE_RESTART_FAILED,
   ENGINE_START_FAILED,
   isHostedStudio,
+  resolveEngineRoot,
   resolveWorkerDir,
+  resolveWorkerPidFile,
   workerHealthUrl,
 } from "../lib/startLocalWorker.ts";
 
@@ -23,7 +26,12 @@ describe("startLocalWorker", () => {
     assert.equal(workerHealthUrl(4100), "http://127.0.0.1:4100/health");
     assert.equal(isHostedStudio(), false);
     assert.match(ENGINE_START_FAILED, /desktop shortcut/);
-    assert.doesNotMatch(ENGINE_START_FAILED, /npm|cd worker|terminal/i);
-    assert.doesNotMatch(ENGINE_NOT_ON_THIS_COMPUTER, /npm|cd worker/i);
+    assert.doesNotMatch(ENGINE_START_FAILED, /npm|cd worker|terminal|PowerShell|powershell/i);
+    assert.doesNotMatch(ENGINE_NOT_ON_THIS_COMPUTER, /npm|cd worker|PowerShell|powershell/i);
+    assert.doesNotMatch(ENGINE_RESTART_FAILED, /npm|cd worker|terminal|PowerShell|powershell/i);
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const root = resolveEngineRoot(path.join(here, ".."));
+    assert.ok(root);
+    assert.equal(resolveWorkerPidFile(path.join(here, "..")), path.join(root, ".engine-worker.pid"));
   });
 });

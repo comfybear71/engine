@@ -10,6 +10,7 @@ import PanelSplitter from "@/components/PanelSplitter";
 import { LayersInspector, MarksInspector, ScriptInspector } from "@/components/StageInspectors";
 import { LeftIconRail, RightIconRail, type LeftPoolId, type RightDrawerId } from "@/components/StageRails";
 import TimelineLanes from "@/components/TimelineLanes";
+import ScriptIdentity from "@/components/ScriptIdentity";
 import TransportBar from "@/components/TransportBar";
 import type { AssetFocus } from "@/lib/assetEditor";
 import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
@@ -91,7 +92,8 @@ import { explainTimelineError } from "@/lib/timelineError";
 
 export default function StagePanel({
   project,
-  script = "script.txt",
+  script,
+  scriptIsOld = false,
   workerUp,
   scriptEpoch,
   selectedLine,
@@ -101,7 +103,8 @@ export default function StagePanel({
   onOpenImagine,
 }: {
   project: string | null;
-  script?: string;
+  script: string;
+  scriptIsOld?: boolean;
   workerUp: boolean;
   scriptEpoch: number;
   selectedLine: number | null;
@@ -167,6 +170,7 @@ export default function StagePanel({
   const audioTimersRef = useRef<number[]>([]);
   const audioGenRef = useRef(0);
   const projectRef = useRef(project);
+  const scriptRef = useRef(script);
   const fpsRef = useRef(fps);
   const totalFramesRef = useRef(totalFrames);
   const previewStatusRef = useRef(previewStatus);
@@ -180,6 +184,7 @@ export default function StagePanel({
   playingRef.current = playing;
   frameRef.current = frame;
   projectRef.current = project;
+  scriptRef.current = script;
   segmentRef.current = segment;
   fpsRef.current = fps;
   totalFramesRef.current = totalFrames;
@@ -209,7 +214,7 @@ export default function StagePanel({
   }, [leftPool]);
 
   useEffect(() => {
-    if (!project || !workerUp) return;
+    if (!project || !workerUp || !script) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -258,7 +263,7 @@ export default function StagePanel({
   }, [project, script, workerUp, scriptEpoch]);
 
   useEffect(() => {
-    if (!project || !workerUp) {
+    if (!project || !workerUp || !script) {
       setPlayback(null);
       return;
     }
@@ -281,7 +286,7 @@ export default function StagePanel({
   }, [project, script, workerUp, renderNonce, scriptEpoch]);
 
   useEffect(() => {
-    if (!project || !workerUp) return;
+    if (!project || !workerUp || !script) return;
     let cancelled = false;
     loadPreviewGraph(project, script)
       .then((next) => {
@@ -303,7 +308,7 @@ export default function StagePanel({
   }, [project, script, workerUp, scriptEpoch, lanesEpoch]);
 
   useEffect(() => {
-    if (!project || !workerUp) return;
+    if (!project || !workerUp || !script) return;
     if (previewGraph) return;
     if (playing && (videoSrc || previewStatus === "buffering")) return;
     if (skipPreviewRef.current || pendingScriptRef.current != null) return;
@@ -563,8 +568,8 @@ export default function StagePanel({
     return () => {
       if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
       const text = pendingScriptRef.current;
-      if (text && projectRef.current) {
-        void saveScript(projectRef.current, text, script);
+      if (text && projectRef.current && scriptRef.current) {
+        void saveScript(projectRef.current, text, scriptRef.current);
       }
     };
   }, [script]);
@@ -1183,6 +1188,10 @@ export default function StagePanel({
           ) : null}
 
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-black/40">
+            <div className="flex items-center gap-2 border-b border-studio-border bg-studio-panel px-3 py-1.5" data-testid="stage-script-banner">
+              <span className="text-[10px] uppercase tracking-wide text-studio-muted">Script</span>
+              <ScriptIdentity name={script} old={scriptIsOld} />
+            </div>
             <div className="relative flex min-h-0 flex-1 items-center justify-center p-3">
             {assetFocus && project ? (
               <AssetEditorOverlay
@@ -1304,6 +1313,7 @@ export default function StagePanel({
               maxFrame={maxFrame}
               fps={fps}
               script={script}
+              scriptIsOld={scriptIsOld}
               playing={playing}
               usingVideo={Boolean(showVideo && videoChoice?.kind === "render")}
               previewStatus={previewStatus}

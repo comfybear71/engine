@@ -15,6 +15,8 @@ const {
   ensureStudioBuild,
   launcherErrLogPath,
   sourceUnchangedSinceBuildFailure,
+  planLaunch,
+  probeHttp,
 } = require("../../launcher.js");
 
 describe("launcher", () => {
@@ -81,5 +83,19 @@ describe("launcher", () => {
     assert.equal(env.WORKER_PORT, "4100");
     assert.equal(env.STUDIO_ORIGIN, "http://localhost:3001");
     assert.equal(env["# hi"], undefined);
+  });
+
+  test("reuses worker 4100 and Studio 3001 when they are already up, never port 3000", () => {
+    const reuse = planLaunch({ workerUp: true, studioUp: true });
+    assert.equal(reuse.startWorker, false);
+    assert.equal(reuse.startStudio, false);
+    assert.equal(reuse.openBrowser, true);
+    assert.equal(reuse.workerPort, 4100);
+    assert.equal(reuse.studioPort, 3001);
+    const fresh = planLaunch({ workerUp: false, studioUp: false });
+    assert.equal(fresh.startWorker, true);
+    assert.equal(fresh.startStudio, true);
+    assert.equal(fresh.studioPort, 3001);
+    assert.doesNotMatch(JSON.stringify(fresh), /3000/);
   });
 });

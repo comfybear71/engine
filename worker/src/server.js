@@ -17,7 +17,7 @@ const express = require("express");
 
 const { renderProject, previewFrame, previewGraph, parseEstimatedSilent } = require("./render");
 const { parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
-const { getCachedParse } = require("./parser/parseCache");
+const { getCachedParse, invalidateParseCache } = require("./parser/parseCache");
 const { validateTimelineFile } = require("./parser/validateTimelineFile");
 const { explainTimelineError } = require("./parser/explainTimelineError");
 const { resolveAsset } = require("./parser/assetLibrary");
@@ -34,6 +34,8 @@ const {
   previewOutputName,
   resolveScriptName,
   listScriptFiles,
+  listScriptRecords,
+  newestScriptName,
   collectUsedAssets,
   summarizeProjectCached,
   describeProjectContents,
@@ -44,6 +46,7 @@ const {
   renameProject,
   duplicateProject,
   createEmptyProject,
+  createScriptFile,
   addLibraryCharacter,
   makeProjectIndependent,
   readLibrary,
@@ -927,7 +930,33 @@ function createApp(options = {}) {
   app.get("/api/projects/:name/scripts", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
-    res.json({ scripts: listScriptFiles(projectDir), default: DEFAULT_SCRIPT });
+    const files = listScriptRecords(projectDir);
+    res.json({
+      scripts: files.map((item) => item.name),
+      files,
+      default: newestScriptName(files),
+    });
+  });
+
+  app.post("/api/projects/:name/scripts", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const requested = typeof body.name === "string" ? body.name : "";
+    try {
+      const scriptName = createScriptFile(projectDir, requested);
+      const files = listScriptRecords(projectDir);
+      res.status(201).json({
+        script: scriptName,
+        scripts: files.map((item) => item.name),
+        files,
+        default: newestScriptName(files),
+      });
+    } catch (err) {
+      if (err && err.code === "SCRIPT_EXISTS") return res.status(409).json({ error: err.message });
+      if (err && err.code === "INVALID_SCRIPT") return res.status(400).json({ error: err.message });
+      res.status(400).json({ error: err.message || "Could not create script" });
+    }
   });
 
   app.get("/api/projects/:name/characters", (req, res) => {
@@ -1481,6 +1510,7 @@ function createApp(options = {}) {
     if (!fs.existsSync(scriptPath)) {
       return res.status(404).json({ error: `${scriptName} not found` });
     }
+    res.setHeader("Cache-Control", "no-store");
     res.type("text/plain").send(fs.readFileSync(scriptPath, "utf8"));
   });
 
@@ -1501,6 +1531,7 @@ function createApp(options = {}) {
     const id = typeof body.id === "string" ? body.id : "";
     const restored = restoreScriptSnapshot(projectDir, scriptName, id);
     if (!restored.ok) return res.status(404).json({ error: restored.error || "Snapshot not found" });
+    invalidateParseCache(projectDir, scriptName);
 
     let result;
     let parseError = null;
@@ -1515,6 +1546,7 @@ function createApp(options = {}) {
         ok: lint.errors.length === 0,
         saved: true,
         restored: true,
+        script: scriptName,
         id: restored.id,
         text: restored.text,
         lint,
@@ -1532,6 +1564,7 @@ function createApp(options = {}) {
     const scriptText = readScriptBody(req);
     snapshotScriptWrite(projectDir, scriptName, scriptText);
     fs.writeFileSync(path.join(projectDir, scriptName), scriptText);
+    invalidateParseCache(projectDir, scriptName);
 
     const skipParse = req.query && (req.query.parse === "0" || req.query.parse === "false");
     if (skipParse) {
@@ -1539,6 +1572,7 @@ function createApp(options = {}) {
         ok: true,
         saved: true,
         parsed: false,
+        script: scriptName,
         lint: { errors: [], warnings: [] },
       });
     }
@@ -1555,6 +1589,7 @@ function createApp(options = {}) {
       res.json({
         ok: lint.errors.length === 0,
         saved: true,
+        script: scriptName,
         lint,
       });
     } finally {
@@ -1603,6 +1638,7 @@ function createApp(options = {}) {
     if (body.lipSync === "auto" || body.lipSync === "manual") patch.lipSync = body.lipSync;
     if (body.lipsync && typeof body.lipsync === "object") patch.lipsync = body.lipsync;
     if (body.independent === true || body.independent === false) patch.independent = body.independent;
+    if (typeof body.activeScript === "string") patch.activeScript = body.activeScript;
     res.json(writeStudioSettings(projectDir, patch));
   });
 
@@ -1721,6 +1757,7 @@ function createApp(options = {}) {
       return res.status(400).json(parseErrorPayload(err));
     }
     try {
+      res.setHeader("Cache-Control", "no-store");
       res.json(buildLaneBlocks(result));
     } finally {
       cleanupTempParse(result);
@@ -1741,6 +1778,7 @@ function createApp(options = {}) {
     }
     try {
       const staging = listStaging(projectDir, globalAssetsDir);
+      res.setHeader("Cache-Control", "no-store");
       res.json({
         ...summarizeStage(result.timeline),
         marksByLocation: staging.marksByLocation,
@@ -2223,6 +2261,13 @@ const app = createApp();
 if (require.main === module) {
   const port = Number(process.env.WORKER_PORT || 4100);
   app.listen(port, "127.0.0.1", () => {
+    const pidFile =
+      process.env.ENGINE_WORKER_PID_FILE || path.resolve(__dirname, "..", "..", ".engine-worker.pid");
+    try {
+      fs.writeFileSync(pidFile, `${process.pid}\n`);
+    } catch {
+      /* restart-from-Studio can still try start if the pid file is missing */
+    }
     console.log(`Render worker listening on http://127.0.0.1:${port} (localhost only)`);
   });
 }

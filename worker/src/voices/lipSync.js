@@ -52,6 +52,14 @@ function normalizeLipsync(raw) {
   };
 }
 
+const SAFE_ACTIVE_SCRIPT = /^script(?:_[A-Za-z0-9][A-Za-z0-9._-]*)?\.txt$/;
+
+function isSafeActiveScript(name) {
+  if (typeof name !== "string" || !name) return false;
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  return SAFE_ACTIVE_SCRIPT.test(name);
+}
+
 function readStudioSettings(projectDir) {
   const filePath = studioSettingsPath(projectDir);
   let data = {};
@@ -62,10 +70,12 @@ function readStudioSettings(projectDir) {
       data = {};
     }
   }
+  const activeScript = isSafeActiveScript(data.activeScript) ? data.activeScript : "";
   return {
     lipSync: data.lipSync === "manual" ? "manual" : "auto",
     lipsync: normalizeLipsync(data.lipsync),
     independent: data.independent !== false,
+    activeScript: activeScript || undefined,
   };
 }
 
@@ -85,6 +95,14 @@ function writeStudioSettings(projectDir, patch) {
   };
   next.lipSync = next.lipSync === "manual" ? "manual" : "auto";
   next.independent = next.independent !== false;
+  const incomingScript = incoming.activeScript;
+  const script =
+    incomingScript === ""
+      ? ""
+      : isSafeActiveScript(incomingScript)
+        ? incomingScript
+        : current.activeScript || "";
+  if (script) next.activeScript = script;
   fs.writeFileSync(studioSettingsPath(projectDir), `${JSON.stringify(next, null, 2)}\n`);
   return next;
 }

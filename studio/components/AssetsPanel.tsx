@@ -1,19 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import AlignHeadModal from "@/components/AlignHeadModal";
 import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
 import { slotViewGroups, type AssetFocus } from "@/lib/assetEditor";
 import {
   FACTORY_VIEW_TABS,
-  formatBounds,
   formatCountLine,
   formatPivot,
-  groupAudioFolders,
+  groupActionsByCharacter,
   isFactoryBadge,
   pivotPercent,
+  sectionLabel,
+  soundDisplayName,
   sourceLabel,
+  visibleDrawings,
+  type AssetsSection,
 } from "@/lib/factoryAssets";
 import { alignableSlots } from "@/lib/headAlign";
 import {
@@ -28,6 +31,7 @@ import {
   loadStaging,
   loadStudioSettings,
   makeProjectIndependent,
+  mediaUrl,
   openProjectFolder,
   saveFactoryStatus,
   saveStudioSettings,
@@ -41,6 +45,15 @@ import {
   type ProjectAudioFile,
   type Staging,
 } from "@/lib/worker";
+
+type AssetsNav =
+  | { page: "home" }
+  | { page: "section"; section: AssetsSection }
+  | { page: "character"; id: string }
+  | { page: "prop"; id: string }
+  | { page: "background"; id: string }
+  | { page: "action"; id: string }
+  | { page: "sound"; id: string };
 
 type LibraryKind = "characters" | "props" | "backgrounds" | "actions" | "sounds";
 type LibrarySel =
@@ -297,6 +310,7 @@ function FactoryRowBlock({
   project,
   row,
   selectedKey,
+  showMissing,
   onSelect,
   onOpenSlot,
   onOpenDrawing,
@@ -304,6 +318,7 @@ function FactoryRowBlock({
   project: string;
   row: FactoryRow;
   selectedKey: string | null;
+  showMissing: boolean;
   onSelect: (piece: FactoryPiece) => void;
   onOpenSlot?: () => void;
   onOpenDrawing: (piece: FactoryPiece) => void;
@@ -330,7 +345,7 @@ function FactoryRowBlock({
         </span>
       </div>
       <div className="studio-factory-thumbs" data-testid={`assets-slot-row-${row.slot}`}>
-        {row.drawings.map((piece) => (
+        {visibleDrawings(row.drawings, showMissing).map((piece) => (
           <FactoryCell
             key={piece.key}
             project={project}
@@ -400,6 +415,11 @@ export default function AssetsPanel({
   const [lintNote, setLintNote] = useState<string | null>(null);
   const [lintBusy, setLintBusy] = useState(false);
   const [openBusy, setOpenBusy] = useState(false);
+  const [nav, setNav] = useState<AssetsNav>({ page: "home" });
+  const [showMissing, setShowMissing] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [playingRel, setPlayingRel] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (!project || !workerUp) return;
@@ -460,10 +480,12 @@ export default function AssetsPanel({
     };
   }, [project, workerUp, libraryOpen, reloadKey]);
 
-  const selected = useMemo(
-    () => characters.find((c) => c.id === selectedId) || libraryChars.find((c) => c.id === selectedId) || null,
-    [characters, libraryChars, selectedId]
-  );
+  const selected = useMemo(() => {
+    const local = characters.find((c) => c.id === selectedId) || null;
+    if (local && (local.source !== "global" || !independent)) return local;
+    if (independent) return local && local.source !== "global" ? local : null;
+    return libraryChars.find((c) => c.id === selectedId) || local;
+  }, [characters, libraryChars, selectedId, independent]);
 
   useEffect(() => {
     if (!project || !workerUp || !selectedId || pool) return;
@@ -486,6 +508,7 @@ export default function AssetsPanel({
     setAlignOpen(false);
     setSelectedKey(null);
     setRedoNote("");
+    setDetailOpen(false);
   }, [selectedId]);
 
   useEffect(() => {
@@ -564,6 +587,32 @@ export default function AssetsPanel({
   function selectCharacter(id: string) {
     setSelectedId(id);
     setLibrarySel({ kind: "characters", id });
+    setNav({ page: "character", id });
+  }
+
+  function goHome() {
+    setNav({ page: "home" });
+    setLibrarySel(null);
+  }
+
+  function goSection(section: AssetsSection) {
+    setNav({ page: "section", section });
+    setLibrarySel(null);
+  }
+
+  function togglePlay(rel: string) {
+    if (!project) return;
+    if (playingRel === rel) {
+      audioRef.current?.pause();
+      setPlayingRel(null);
+      return;
+    }
+    if (!audioRef.current) audioRef.current = new Audio();
+    audioRef.current.pause();
+    audioRef.current.src = mediaUrl(project, rel);
+    void audioRef.current.play();
+    audioRef.current.onended = () => setPlayingRel(null);
+    setPlayingRel(rel);
   }
 
   function onNew(kind: LibraryKind) {
@@ -594,12 +643,20 @@ export default function AssetsPanel({
   const selectedProp = librarySel?.kind === "props" ? (staging?.props || []).find((p) => `${p.location}:${p.id}` === librarySel.id) : null;
   const selectedBg = librarySel?.kind === "backgrounds" ? (staging?.backgrounds || []).find((b) => b.id === librarySel.id) : null;
   const selectedAction = librarySel?.kind === "actions" ? actions.find((a) => a.label === librarySel.id) : null;
-  const soundFolders = useMemo(() => groupAudioFolders(audio), [audio]);
-  const selectedSound = librarySel?.kind === "sounds" ? soundFolders.find((a) => a.label === librarySel.id) : null;
-  const showCharacterMain = !librarySel || librarySel.kind === "characters";
-  const libraryOnlyChars = libraryChars.filter((character) => !characters.some((item) => item.id === character.id));
+  const visibleCharacters = independent
+    ? characters.filter((character) => character.source !== "global")
+    : characters;
   const factoryTabs = factory?.views?.length ? factory.views : FACTORY_VIEW_TABS;
   const factoryCounts = factory?.counts || { ticked: 0, locked: 0, draft: 0, missing: 0 };
+  const actionGroups = useMemo(
+    () => groupActionsByCharacter(actions, visibleCharacters),
+    [actions, visibleCharacters]
+  );
+  const soundCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const file of audio) map.set(file.label, (map.get(file.label) || 0) + 1);
+    return map;
+  }, [audio]);
 
   async function onValidate() {
     if (!project || lintBusy) return;
@@ -633,14 +690,16 @@ export default function AssetsPanel({
     <div className={pool ? "flex shrink-0 flex-wrap items-center justify-end gap-2" : "studio-factory-actions"}>
       {!pool ? (
         <>
-          <div className="studio-factory-pills" data-testid="assets-status-pills">
-            {(["ticked", "locked", "draft", "missing"] as const).map((badge) => (
-              <span key={badge} className="studio-factory-pill" data-badge={badge} data-testid={`assets-pill-${badge}`}>
-                <i />
-                {factoryCounts[badge]} {badge}
-              </span>
-            ))}
-          </div>
+          {nav.page === "character" ? (
+            <div className="studio-factory-pills" data-testid="assets-status-pills">
+              {(["ticked", "locked", "draft", "missing"] as const).map((badge) => (
+                <span key={badge} className="studio-factory-pill" data-badge={badge} data-testid={`assets-pill-${badge}`}>
+                  <i />
+                  {factoryCounts[badge]} {badge}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <button
             type="button"
             className="studio-header-textbtn"
@@ -660,25 +719,36 @@ export default function AssetsPanel({
             {openBusy ? "Opening…" : "Open folder"}
           </button>
         </>
-      ) : null}
-      <label className="flex items-center gap-1.5 text-[11px] text-neutral-300" data-testid="independent-toggle">
-        <input
-          type="checkbox"
-          checked={independent}
-          disabled={independentBusy}
-          onChange={(event) => void onToggleIndependent(event.target.checked)}
-        />
-        Independent: never read shared library
-      </label>
-      <button
-        type="button"
-        data-testid="make-independent"
-        disabled={makeIndepBusy}
-        onClick={() => void onMakeIndependent()}
-        className={pool ? "rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white disabled:opacity-40" : "studio-header-textbtn"}
-      >
-        {makeIndepBusy ? "Copying…" : "Make independent"}
-      </button>
+      ) : (
+        <>
+          <label className="flex items-center gap-1.5 text-[11px] text-neutral-300" data-testid="independent-toggle">
+            <input
+              type="checkbox"
+              checked={independent}
+              disabled={independentBusy}
+              onChange={(event) => void onToggleIndependent(event.target.checked)}
+            />
+            Independent
+          </label>
+          <button
+            type="button"
+            data-testid="make-independent"
+            disabled={makeIndepBusy}
+            onClick={() => void onMakeIndependent()}
+            className="rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white disabled:opacity-40"
+          >
+            {makeIndepBusy ? "Copying…" : "Make independent"}
+          </button>
+          <button
+            type="button"
+            data-testid="library-open"
+            onClick={() => setLibraryOpen(true)}
+            className="rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white"
+          >
+            Library
+          </button>
+        </>
+      )}
       {onOpenImagine ? (
         <button
           type="button"
@@ -689,18 +759,16 @@ export default function AssetsPanel({
           Grok Imagine
         </button>
       ) : null}
-      <button
-        type="button"
-        data-testid="library-open"
-        onClick={() => setLibraryOpen(true)}
-        className={pool ? "rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white" : "studio-header-textbtn"}
-      >
-        Library
-      </button>
       {!pool && selected && alignableSlots(selected.slots).length > 0 ? (
         <button type="button" data-testid="align-head" onClick={() => setAlignOpen(true)} className="studio-header-textbtn">
           Align head
         </button>
+      ) : null}
+      {!pool && nav.page === "character" ? (
+        <label className="studio-factory-toggle" data-testid="assets-show-missing">
+          <input type="checkbox" checked={showMissing} onChange={(event) => setShowMissing(event.target.checked)} />
+          Show missing
+        </label>
       ) : null}
     </div>
   ) : null;
@@ -878,22 +946,66 @@ export default function AssetsPanel({
     );
   }
 
+  const homeCards = [
+    {
+      id: "characters" as const,
+      label: "Characters",
+      count: visibleCharacters.length,
+      src: visibleCharacters[0]
+        ? assetUrl(project, visibleCharacters[0].thumbRel, { thumb: true, v: visibleCharacters[0].mtime })
+        : null,
+    },
+    {
+      id: "props" as const,
+      label: "Props",
+      count: (staging?.props || []).length,
+      src: staging?.props[0]
+        ? assetUrl(project, staging.props[0].thumbRel, { thumb: true, v: staging.props[0].mtime })
+        : null,
+    },
+    {
+      id: "backgrounds" as const,
+      label: "Backgrounds",
+      count: (staging?.backgrounds || []).length,
+      src: staging?.backgrounds[0]
+        ? assetUrl(project, staging.backgrounds[0].thumbRel, { thumb: true, v: staging.backgrounds[0].mtime })
+        : null,
+    },
+    {
+      id: "actions" as const,
+      label: "Action Shots",
+      count: actions.length,
+      src: actions.find((item) => item.thumbRel)
+        ? assetUrl(project, actions.find((item) => item.thumbRel)?.thumbRel || null, { thumb: true })
+        : visibleCharacters[0]
+          ? assetUrl(project, visibleCharacters[0].thumbRel, { thumb: true, v: visibleCharacters[0].mtime })
+          : null,
+    },
+    {
+      id: "sounds" as const,
+      label: "Sounds",
+      count: audio.length,
+      src: null,
+    },
+  ];
+
   return (
     <div className="studio-factory-page" data-testid="assets-factory">
       <aside className="studio-factory-library" data-testid="assets-library">
         <LibraryGroup
           kind="characters"
           label="Characters"
-          count={characters.length + libraryOnlyChars.length}
+          count={visibleCharacters.length}
+          onOpen={() => goSection("characters")}
           onNew={() => onNew("characters")}
         >
-          {characters.map((character) => (
+          {visibleCharacters.map((character) => (
             <button
               key={character.id}
               type="button"
               className="studio-asset-leaf"
               data-testid={`assets-tree-character-${character.id}`}
-              data-selected={librarySel?.kind === "characters" && librarySel.id === character.id ? "true" : "false"}
+              data-selected={nav.page === "character" && nav.id === character.id ? "true" : "false"}
               onClick={() => selectCharacter(character.id)}
             >
               <TinyThumb
@@ -901,28 +1013,16 @@ export default function AssetsPanel({
                 label={character.display_name}
               />
               <span className="min-w-0 flex-1 truncate">{character.display_name}</span>
-              <span className="studio-asset-count">{character.slots?.length || 0}</span>
-            </button>
-          ))}
-          {libraryOnlyChars.map((character) => (
-            <button
-              key={`lib-${character.id}`}
-              type="button"
-              className="studio-asset-leaf"
-              data-testid={`assets-tree-library-${character.id}`}
-              data-selected={librarySel?.kind === "characters" && librarySel.id === character.id ? "true" : "false"}
-              onClick={() => selectCharacter(character.id)}
-            >
-              <TinyThumb
-                src={assetUrl(project, character.thumbRel, { thumb: true, v: character.mtime, library: true })}
-                label={character.display_name}
-              />
-              <span className="min-w-0 flex-1 truncate">{character.display_name}</span>
-              <span className="studio-asset-count">library</span>
             </button>
           ))}
         </LibraryGroup>
-        <LibraryGroup kind="props" label="Props" count={(staging?.props || []).length} onNew={() => onNew("props")}>
+        <LibraryGroup
+          kind="props"
+          label="Props"
+          count={(staging?.props || []).length}
+          onOpen={() => goSection("props")}
+          onNew={() => onNew("props")}
+        >
           {(staging?.props || []).map((prop) => {
             const id = `${prop.location}:${prop.id}`;
             return (
@@ -931,8 +1031,11 @@ export default function AssetsPanel({
                 type="button"
                 className="studio-asset-leaf"
                 data-testid={`assets-tree-prop-${prop.id}`}
-                data-selected={librarySel?.kind === "props" && librarySel.id === id ? "true" : "false"}
-                onClick={() => setLibrarySel({ kind: "props", id })}
+                data-selected={nav.page === "prop" && nav.id === id ? "true" : "false"}
+                onClick={() => {
+                  setLibrarySel({ kind: "props", id });
+                  setNav({ page: "prop", id });
+                }}
               >
                 <TinyThumb src={assetUrl(project, prop.thumbRel, { thumb: true, v: prop.mtime })} label={prop.id} />
                 <span className="min-w-0 flex-1 truncate">{prop.id}</span>
@@ -944,6 +1047,7 @@ export default function AssetsPanel({
           kind="backgrounds"
           label="Backgrounds"
           count={(staging?.backgrounds || []).length}
+          onOpen={() => goSection("backgrounds")}
           onNew={() => onNew("backgrounds")}
         >
           {(staging?.backgrounds || []).map((bg) => (
@@ -952,41 +1056,69 @@ export default function AssetsPanel({
               type="button"
               className="studio-asset-leaf"
               data-testid={`assets-tree-background-${bg.id}`}
-              data-selected={librarySel?.kind === "backgrounds" && librarySel.id === bg.id ? "true" : "false"}
-              onClick={() => setLibrarySel({ kind: "backgrounds", id: bg.id })}
+              data-selected={nav.page === "background" && nav.id === bg.id ? "true" : "false"}
+              onClick={() => {
+                setLibrarySel({ kind: "backgrounds", id: bg.id });
+                setNav({ page: "background", id: bg.id });
+              }}
             >
               <TinyThumb src={assetUrl(project, bg.thumbRel, { thumb: true, v: bg.mtime })} label={bg.id} />
               <span className="min-w-0 flex-1 truncate">{bg.id}</span>
             </button>
           ))}
         </LibraryGroup>
-        <LibraryGroup kind="actions" label="Actions" count={actions.length} onNew={() => onNew("actions")}>
-          {actions.map((action) => (
-            <button
-              key={action.label}
-              type="button"
-              className="studio-asset-leaf"
-              data-testid={`assets-tree-action-${action.id}`}
-              data-selected={librarySel?.kind === "actions" && librarySel.id === action.label ? "true" : "false"}
-              onClick={() => setLibrarySel({ kind: "actions", id: action.label })}
-            >
-              <span className="min-w-0 flex-1 truncate">{action.label}</span>
-              <span className="studio-asset-count">1</span>
-            </button>
+        <LibraryGroup
+          kind="actions"
+          label="Action Shots"
+          count={actions.length}
+          onOpen={() => goSection("actions")}
+          onNew={() => onNew("actions")}
+        >
+          {actionGroups.map((group) => (
+            <div key={group.characterId || "shared"} className="studio-factory-tree-group">
+              <p className="studio-factory-tree-sub">{group.characterName}</p>
+              {group.actions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  className="studio-asset-leaf"
+                  data-testid={`assets-tree-action-${action.name}`}
+                  data-selected={nav.page === "action" && nav.id === action.id ? "true" : "false"}
+                  onClick={() => {
+                    setLibrarySel({ kind: "actions", id: action.id });
+                    setNav({ page: "action", id: action.id });
+                  }}
+                >
+                  <TinyThumb
+                    src={assetUrl(project, action.thumbRel || null, { thumb: true })}
+                    label={action.label}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                </button>
+              ))}
+            </div>
           ))}
         </LibraryGroup>
-        <LibraryGroup kind="sounds" label="Sounds" count={soundFolders.length} onNew={() => onNew("sounds")}>
-          {soundFolders.map((folder) => (
+        <LibraryGroup
+          kind="sounds"
+          label="Sounds"
+          count={audio.length}
+          onOpen={() => goSection("sounds")}
+          onNew={() => onNew("sounds")}
+        >
+          {audio.map((file) => (
             <button
-              key={folder.label}
+              key={file.rel}
               type="button"
               className="studio-asset-leaf"
-              data-testid={`assets-tree-sound-${folder.label}`}
-              data-selected={librarySel?.kind === "sounds" && librarySel.id === folder.label ? "true" : "false"}
-              onClick={() => setLibrarySel({ kind: "sounds", id: folder.label })}
+              data-testid={`assets-tree-sound-${file.rel}`}
+              data-selected={nav.page === "sound" && nav.id === file.rel ? "true" : "false"}
+              onClick={() => {
+                setLibrarySel({ kind: "sounds", id: file.label });
+                setNav({ page: "sound", id: file.rel });
+              }}
             >
-              <span className="min-w-0 flex-1 truncate">{folder.label}</span>
-              <span className="studio-asset-count">{folder.count}</span>
+              <span className="min-w-0 flex-1 truncate">{soundDisplayName(file, (soundCounts.get(file.label) || 0) > 1)}</span>
             </button>
           ))}
         </LibraryGroup>
@@ -998,26 +1130,181 @@ export default function AssetsPanel({
         {makeIndepNote ? <p className="px-2 py-1 text-[11px] text-emerald-300">{makeIndepNote}</p> : null}
 
         <div className="studio-factory-toolbar">
-          {showCharacterMain && selected ? (
-            <div className="studio-factory-meta" data-testid="assets-character-meta">
-              <strong>{selected.display_name}</strong>
-              <span>{sourceLabel(selected.source)}</span>
-              <span>canvas {factory?.canvas.w || selected.canvas?.w || 1024}</span>
-              <span>scale {factory?.default_scale ?? selected.default_scale ?? 1}</span>
-              <span>{FACTORY_VIEW_TABS.length} views</span>
-              {factory ? <span>{formatCountLine(factory.counts) || "no review yet"}</span> : null}
-            </div>
-          ) : (
-            <div className="studio-factory-meta">
-              <strong>
-                {selectedProp?.id || selectedBg?.id || selectedAction?.label || selectedSound?.label || "Library"}
-              </strong>
-            </div>
-          )}
+          <nav className="studio-factory-crumb" data-testid="assets-breadcrumb">
+            <button type="button" onClick={goHome}>
+              Assets
+            </button>
+            {nav.page !== "home" ? (
+              <>
+                <span>/</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    goSection(
+                      nav.page === "section"
+                        ? nav.section
+                        : nav.page === "character"
+                          ? "characters"
+                          : nav.page === "prop"
+                            ? "props"
+                            : nav.page === "background"
+                              ? "backgrounds"
+                              : nav.page === "action"
+                                ? "actions"
+                                : "sounds"
+                    )
+                  }
+                >
+                  {nav.page === "section" ? sectionLabel(nav.section) : sectionLabel(
+                    nav.page === "character"
+                      ? "characters"
+                      : nav.page === "prop"
+                        ? "props"
+                        : nav.page === "background"
+                          ? "backgrounds"
+                          : nav.page === "action"
+                            ? "actions"
+                            : "sounds"
+                  )}
+                </button>
+              </>
+            ) : null}
+            {nav.page === "character" || nav.page === "prop" || nav.page === "background" || nav.page === "action" || nav.page === "sound" ? (
+              <>
+                <span>/</span>
+                <strong>
+                  {nav.page === "character"
+                    ? selected?.display_name || nav.id
+                    : nav.page === "prop"
+                      ? selectedProp?.id || nav.id
+                      : nav.page === "background"
+                        ? selectedBg?.id || nav.id
+                        : nav.page === "action"
+                          ? selectedAction?.name || selectedAction?.id || nav.id
+                          : soundDisplayName(
+                              audio.find((file) => file.rel === nav.id) || { label: nav.id, rel: nav.id },
+                              false
+                            )}
+                </strong>
+              </>
+            ) : null}
+          </nav>
           {toolbar}
         </div>
 
-        {showCharacterMain ? (
+        {nav.page === "home" ? (
+          <div className="studio-factory-home" data-testid="assets-home">
+            {homeCards.map((card) => (
+              <button
+                key={card.id}
+                type="button"
+                className="studio-factory-home-card"
+                data-testid={`assets-home-${card.id}`}
+                onClick={() => goSection(card.id)}
+              >
+                <span className={`studio-factory-home-thumb ${card.src ? "studio-checker" : ""}`}>
+                  {card.src ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={card.src} alt="" />
+                  ) : (
+                    <span>{card.count}</span>
+                  )}
+                </span>
+                <span className="studio-factory-home-copy">
+                  <strong>{card.label}</strong>
+                  <em>{card.count}</em>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : nav.page === "section" && nav.section === "characters" ? (
+          <div className="studio-factory-grid" data-testid="assets-section-characters">
+            {visibleCharacters.map((character) => (
+              <Thumb
+                key={character.id}
+                src={assetUrl(project, character.thumbRel, { thumb: true, v: character.mtime })}
+                label={character.display_name}
+                fit="contain"
+                onClick={() => selectCharacter(character.id)}
+              />
+            ))}
+          </div>
+        ) : nav.page === "section" && nav.section === "props" ? (
+          <div className="studio-factory-grid" data-testid="assets-section-props">
+            {(staging?.props || []).map((prop) => {
+              const id = `${prop.location}:${prop.id}`;
+              return (
+                <Thumb
+                  key={id}
+                  src={assetUrl(project, prop.thumbRel, { thumb: true, v: prop.mtime })}
+                  label={prop.id}
+                  fit="contain"
+                  onClick={() => {
+                    setLibrarySel({ kind: "props", id });
+                    setNav({ page: "prop", id });
+                  }}
+                />
+              );
+            })}
+          </div>
+        ) : nav.page === "section" && nav.section === "backgrounds" ? (
+          <div className="studio-factory-grid" data-testid="assets-section-backgrounds">
+            {(staging?.backgrounds || []).map((bg) => (
+              <Thumb
+                key={bg.id}
+                src={assetUrl(project, bg.thumbRel, { thumb: true, v: bg.mtime })}
+                label={bg.id}
+                fit="contain"
+                onClick={() => {
+                  setLibrarySel({ kind: "backgrounds", id: bg.id });
+                  setNav({ page: "background", id: bg.id });
+                }}
+              />
+            ))}
+          </div>
+        ) : nav.page === "section" && nav.section === "actions" ? (
+          <div className="studio-factory-rows" data-testid="assets-section-actions">
+            {actionGroups.map((group) => (
+              <section key={group.characterId || "shared"} className="studio-factory-row">
+                <div className="studio-factory-row-head">
+                  <h4 className="studio-factory-row-title">{group.characterName}</h4>
+                  <span className="studio-factory-row-meta">{group.actions.length}</span>
+                </div>
+                <div className="studio-factory-thumbs">
+                  {group.actions.map((action) => (
+                    <Thumb
+                      key={action.id}
+                      src={assetUrl(project, action.thumbRel || null, { thumb: true })}
+                      label={action.label}
+                      fit="contain"
+                      compact
+                      onClick={() => {
+                        setLibrarySel({ kind: "actions", id: action.id });
+                        setNav({ page: "action", id: action.id });
+                      }}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        ) : nav.page === "section" && nav.section === "sounds" ? (
+          <div className="studio-factory-sounds" data-testid="assets-section-sounds">
+            {audio.map((file) => (
+              <SoundTile
+                key={file.rel}
+                name={soundDisplayName(file, (soundCounts.get(file.label) || 0) > 1)}
+                peaks={file.peaks || []}
+                playing={playingRel === file.rel}
+                onPlay={() => togglePlay(file.rel)}
+                onOpen={() => {
+                  setLibrarySel({ kind: "sounds", id: file.label });
+                  setNav({ page: "sound", id: file.rel });
+                }}
+              />
+            ))}
+          </div>
+        ) : nav.page === "character" ? (
           <>
             <div className="studio-factory-tabs" data-testid="assets-view-tabs">
               {factoryTabs.map((tab) => (
@@ -1038,7 +1325,7 @@ export default function AssetsPanel({
             </div>
             <div className="studio-factory-rows">
               {!selected ? (
-                <p className="text-[11px] text-studio-muted">None in this project yet. Open Library or + New to add a character.</p>
+                <p className="text-[11px] text-studio-muted">No character in this project yet.</p>
               ) : factory ? (
                 factory.rows.map((row) => (
                   <FactoryRowBlock
@@ -1046,9 +1333,11 @@ export default function AssetsPanel({
                     project={project}
                     row={row}
                     selectedKey={selectedKey}
+                    showMissing={showMissing}
                     onSelect={(piece) => {
                       setSelectedKey(piece.key);
                       setRedoNote(factory.redos[piece.key] || "");
+                      setDetailOpen(false);
                     }}
                     onOpenSlot={() => setAssetFocus({ mode: "slot", characterId: selected.id, slot: row.slot, view })}
                     onOpenDrawing={(piece) =>
@@ -1076,33 +1365,42 @@ export default function AssetsPanel({
             </div>
           </>
         ) : (
-          <div className="studio-factory-rows">
-            {selectedProp ? (
-              <Thumb
+          <div className="studio-factory-fit-pane" data-testid="assets-fit-preview">
+            {nav.page === "prop" && selectedProp ? (
+              <FitPreview
                 src={assetUrl(project, selectedProp.thumbRel, { thumb: true, v: selectedProp.mtime })}
-                label={`${selectedProp.id} · ${selectedProp.location}`}
-                fit="contain"
+                label={selectedProp.id}
               />
             ) : null}
-            {selectedBg ? (
-              <Thumb
+            {nav.page === "background" && selectedBg ? (
+              <FitPreview
                 src={assetUrl(project, selectedBg.thumbRel, { thumb: true, v: selectedBg.mtime })}
                 label={selectedBg.id}
-                fit="contain"
               />
             ) : null}
-            {selectedAction ? <p className="text-[11px] text-neutral-300">{selectedAction.rel}</p> : null}
-            {selectedSound ? (
-              <p className="text-[11px] text-neutral-300">
-                {selectedSound.label} · {selectedSound.count} file{selectedSound.count === 1 ? "" : "s"}
-              </p>
+            {nav.page === "action" && selectedAction ? (
+              <FitPreview
+                src={assetUrl(project, selectedAction.thumbRel || null, { thumb: true })}
+                label={selectedAction.name || selectedAction.id}
+              />
+            ) : null}
+            {nav.page === "sound" ? (
+              <SoundTile
+                name={soundDisplayName(
+                  audio.find((file) => file.rel === nav.id) || { label: nav.id, rel: nav.id },
+                  false
+                )}
+                peaks={audio.find((file) => file.rel === nav.id)?.peaks || []}
+                playing={playingRel === nav.id}
+                onPlay={() => togglePlay(nav.id)}
+              />
             ) : null}
           </div>
         )}
       </div>
 
       <aside className="studio-factory-inspector" data-testid="assets-inspector">
-        {showCharacterMain && inspector ? (
+        {nav.page === "character" && inspector ? (
           <div>
             <h2 className="studio-factory-inspector-title">
               {inspector.label} / {inspector.drawing}
@@ -1127,27 +1425,31 @@ export default function AssetsPanel({
                 <div className="studio-factory-pivot" style={{ left: `${pivotAt.left}%`, top: `${pivotAt.top}%` }} />
               ) : null}
             </div>
-            <dl className="studio-factory-fields">
+            <button
+              type="button"
+              className="studio-factory-details"
+              data-testid="assets-drawing-details"
+              data-open={detailOpen ? "true" : "false"}
+              onClick={() => setDetailOpen((open) => !open)}
+            >
+              {detailOpen ? "Hide details" : "Details"}
+            </button>
+            {detailOpen ? (
+            <dl className="studio-factory-fields" data-testid="assets-drawing-detail-panel">
               <dt>Slot</dt>
               <dd>{inspector.slot}</dd>
               <dt>View</dt>
               <dd>{inspector.view}</dd>
-              <dt>Canvas</dt>
-              <dd>
-                {inspector.canvas.w} × {inspector.canvas.h}
-              </dd>
+              <dt>Offset</dt>
+              <dd>{inspector.offset ? `${inspector.offset.x}, ${inspector.offset.y}` : "—"}</dd>
+              <dt>Scale</dt>
+              <dd>{factory?.default_scale ?? selected?.default_scale ?? 1}</dd>
               <dt>Pivot</dt>
               <dd>
                 {formatPivot(inspector.pivot)}
                 {inspector.offset ? ` + ${inspector.offset.x},${inspector.offset.y}` : ""}
               </dd>
-              <dt>Anchor</dt>
-              <dd>{inspector.anchor}</dd>
-              <dt>Source</dt>
-              <dd title={inspector.rel || undefined}>{inspector.rel || "—"}</dd>
-              <dt>Bounds</dt>
-              <dd data-testid="assets-inspector-bounds">{formatBounds(inspector.bounds)}</dd>
-              <dt>Used-by</dt>
+              <dt>Used by</dt>
               <dd data-testid="assets-inspector-usages">
                 {(inspector.usages || []).length
                   ? (inspector.usages || [])
@@ -1158,6 +1460,7 @@ export default function AssetsPanel({
                   : "—"}
               </dd>
             </dl>
+            ) : null}
             <div className="studio-factory-btns">
               <button
                 type="button"
@@ -1207,36 +1510,13 @@ export default function AssetsPanel({
               </p>
             )}
           </div>
-        ) : showCharacterMain && selected ? (
+        ) : nav.page === "character" && selected ? (
           <div className="studio-factory-summary" data-testid="assets-character-summary">
-            <p className="studio-factory-redo-label">Character</p>
             <h2 className="studio-factory-inspector-title">{selected.display_name}</h2>
-            <dl className="studio-factory-fields">
-              <dt>Id</dt>
-              <dd>{selected.id}</dd>
-              <dt>Source</dt>
-              <dd>{sourceLabel(selected.source)}</dd>
-              <dt>Canvas</dt>
-              <dd>
-                {factory?.canvas.w || selected.canvas?.w || 1024} × {factory?.canvas.h || selected.canvas?.h || 1024}
-              </dd>
-              <dt>Scale</dt>
-              <dd>{factory?.default_scale ?? selected.default_scale ?? 1}</dd>
-              <dt>Review</dt>
-              <dd>{formatCountLine(factoryCounts) || "no review yet"}</dd>
-            </dl>
-            <ul className="studio-factory-summary-rows">
-              {(factory?.rows || []).map((row) => (
-                <li key={row.id}>
-                  {row.label}
-                  <span>{row.drawings.length}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="text-[10px] text-studio-muted">Click a drawing for bounds, used-by, and Approve / Redo.</p>
+            <p className="text-[10px] text-studio-muted">Click a drawing to approve it.</p>
           </div>
         ) : (
-          <p className="text-[11px] text-studio-muted">Select a library item.</p>
+          <p className="text-[11px] text-studio-muted">Pick a card or a name in the list.</p>
         )}
       </aside>
 
@@ -1250,19 +1530,23 @@ function LibraryGroup({
   label,
   count,
   onNew,
+  onOpen,
   children,
 }: {
   kind: LibraryKind;
   label: string;
   count?: number;
   onNew: () => void;
+  onOpen?: () => void;
   children: ReactNode;
 }) {
   return (
     <section className="studio-factory-group">
       <div className="studio-factory-group-head">
         <h3 className="studio-factory-group-title">
-          {label}
+          <button type="button" onClick={onOpen}>
+            {label}
+          </button>
           {count != null ? <span className="studio-asset-count">{count}</span> : null}
         </h3>
         <button type="button" className="studio-factory-new" data-testid={`assets-new-${kind}`} onClick={onNew}>
@@ -1271,6 +1555,57 @@ function LibraryGroup({
       </div>
       {children}
     </section>
+  );
+}
+
+function FitPreview({ src, label }: { src: string | null; label: string }) {
+  return (
+    <div className="studio-factory-fit">
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt={label} />
+      ) : (
+        <p className="text-[11px] text-studio-muted">No picture</p>
+      )}
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function Waveform({ peaks }: { peaks: number[] }) {
+  const bars = peaks.length ? peaks : Array.from({ length: 24 }, () => 0.12);
+  return (
+    <span className="studio-factory-wave" aria-hidden="true">
+      {bars.map((value, i) => (
+        <i key={i} style={{ height: `${Math.max(8, Math.round(value * 100))}%` }} />
+      ))}
+    </span>
+  );
+}
+
+function SoundTile({
+  name,
+  peaks,
+  playing,
+  onPlay,
+  onOpen,
+}: {
+  name: string;
+  peaks: number[];
+  playing: boolean;
+  onPlay: () => void;
+  onOpen?: () => void;
+}) {
+  return (
+    <div className="studio-factory-sound" data-testid={`assets-sound-${name}`} data-playing={playing ? "true" : "false"}>
+      <button type="button" className="studio-factory-sound-main" onClick={onOpen}>
+        <span className="studio-factory-sound-name">{name}</span>
+        <Waveform peaks={peaks} />
+      </button>
+      <button type="button" className="studio-factory-sound-play" data-testid={`assets-sound-play-${name}`} onClick={onPlay}>
+        {playing ? "Stop" : "Play"}
+      </button>
+    </div>
   );
 }
 

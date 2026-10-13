@@ -3,7 +3,7 @@
 const { test, describe, after } = require("node:test");
 const assert = require("node:assert/strict");
 
-const { getCachedParse, resetParseCache, fingerprintParseInputs } = require("../src/parser/parseCache");
+const { getCachedParse, resetParseCache, invalidateParseCache, fingerprintParseInputs } = require("../src/parser/parseCache");
 const { createFixtureLibrary } = require("./helpers/fixtureLibrary");
 const { writeSilentWav } = require("./helpers/wav");
 const fs = require("fs");
@@ -44,5 +44,23 @@ describe("parse cache", () => {
     const mid = fingerprintParseInputs(fixture.projectDir, "script.txt");
     fs.utimesSync(wav, later, new Date(later.getTime() + 1000));
     assert.notEqual(fingerprintParseInputs(fixture.projectDir, "script.txt"), mid);
+  });
+
+  test("invalidate after a rewrite drops the cached parse of that file", async () => {
+    resetParseCache();
+    const first = await getCachedParse(fixture.projectDir, { script: "script.txt" });
+    assert.ok(first.timeline);
+    const rewritten = [
+      "[Scene: Act 1 only]",
+      "[Location: room_a]",
+      "[Cast: Alice]",
+      "Alice: Hello there friend.",
+    ].join("\n");
+    fs.writeFileSync(path.join(fixture.projectDir, "script.txt"), rewritten);
+    invalidateParseCache(fixture.projectDir, "script.txt");
+    const next = await getCachedParse(fixture.projectDir, { script: "script.txt" });
+    assert.notEqual(next, first);
+    assert.ok(JSON.stringify(next.timeline).includes("Act 1 only") || JSON.stringify(next.sceneLengths).includes("act_1_only"));
+    assert.equal(JSON.stringify(next.sceneLengths).includes("intro"), false);
   });
 });

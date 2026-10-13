@@ -23,7 +23,11 @@ copy/paste, asset drops) rewrite the matching script line(s) with
 `at_time=` / duration / `trim_in=` / `trim_out=`, then re-parse; they
 never write `timeline.json`. Save, lint, preview, lanes, and Render
 still parse the selected script to a temp timeline (the same `--script`
-option as the CLI). Render writes `renders/<script-stem>.mp4`.
+option as the CLI). Render writes `renders/<script-stem>.mp4`. The last
+selected script is remembered per project in `localStorage`
+(`engine.studio.activeScript.v1`) and in `studio.json` (`activeScript`),
+so a browser refresh restores that file instead of falling back to
+`script.txt`.
 
 ## Starting Engine Studio
 
@@ -52,10 +56,17 @@ Studio (minimised) when you sign in.
 
 **If the page opens but the engine is not ready yet**
 
-Studio shows **Engine is starting…** and checks again every 2 seconds.
-Press **Start engine** if it stays that way — that asks Studio to start
-the engine on this PC (no terminal). If that cannot, it says so in
-plain English; try the desktop shortcut again.
+The header shows a small worker status dot. Green means the engine on
+port `4100` is up. Press **Restart worker** if preview is stuck on
+**Buffering preview** — Studio stops the old engine (if it can) and
+starts it again. If the dot is red, **Start engine** asks Studio to
+start it on this PC (no terminal). If that cannot, it says so in plain
+English; try the desktop shortcut again.
+
+A second double-click of the shortcut reuses the engine and Studio if
+they are already running, then opens the browser. It does not start a
+second copy on those ports. The launcher restarts the engine if it
+stops. Port `3000` is left alone.
 
 The browser talks to `http://localhost:4100` (or `NEXT_PUBLIC_WORKER_URL`)
 directly. The Studio UI never shows shell commands.
@@ -126,13 +137,17 @@ show.
 Inside an episode (or a flat experiment) the default tab is **Stage**
 (Resolve-style workspace). Top tabs stay **Assets**, **Stage**,
 **Script**, **Edit**, **Deliver** for the full pages, with a back link,
-the project name, and a **script picker**. **Edit** and **Deliver** open
-a slim **Lip sync** settings popover (smoothing, head bob, blinks, loud
-threshold) that writes project `studio.json`. Stage preview uses the same
-compositor path. A project may hold several `script*.txt` files
-(`script.txt`, `script_mcd.txt`, …). Stage, lanes, the Script page,
-preview, and Render all use the selected file. The orange **Render**
-button parses that script (temp files only) and writes
+the project name, and the **active script as plain read-only text**.
+Pick and edit scripts only on the **Script** page: a left-hand list
+(current scripts at the top, older files under a collapsed **tests**
+group, and **+ New**). Stage, Edit, and Render always use the script
+last opened on that page. That choice is remembered per project across
+refreshes (`localStorage` and `studio.json` `activeScript`). **Edit**
+and **Deliver** open a slim **Lip sync** settings popover (smoothing,
+head bob, blinks, loud threshold) that writes project `studio.json`.
+Stage preview uses the same compositor path. A project may hold several
+`script*.txt` files (`script.txt`, `script_mcd.txt`, …). The orange
+**Render** button parses that script (temp files only) and writes
 `renders/<script-name>.mp4` so two scripts never overwrite each other's
 movie. Equivalent CLI:
 
@@ -493,6 +508,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/trash/:id/restore` | Move that trash folder back to `projects/<originalName>`. 409 if that name exists. |
 | `POST` | `/api/trash/empty` | Permanently delete everything in `_trash`. JSON `{ "confirm": "empty" }`. |
 | `GET` | `/api/projects/:name/scripts` | `script*.txt` files in that folder. |
+| `POST` | `/api/projects/:name/scripts` | Create a new `script_*.txt` (`{ "name": "walk" }` → `script_walk.txt`). 409 if it exists. |
 | `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`, `drawingsDir`, per-view `views[]`, and optional `canvas`), **project-local** drawings, cycles, thumbnail paths, `style`, `reference` / `referenceRel`, `default_scale`, `groups`, and `children` (rig pieces). |
 | `GET` | `/api/projects/:name/characters/:id/status` | Factory Assets payload for one character. Query `?view=` (`front`, `left_34`, `right_34`, `left_side`, `right_side`, `back`) and optional `?key=` for the inspector. Rows are `character.json` slots + children, padded with standard-rig drawings. Each drawing has `key` (`<slot>/<drawing>`, usually the drawings folder + name), `rel` when a file exists, and `badge` `ticked` / `locked` / `draft` / `missing`. `missing` is computed (expected by the standard, no file) and is never stored. Also returns `status`, `redos`, `counts`, `canvas`, and `inspector` (pivot, anchor, path). |
 | `PUT` | `/api/projects/:name/characters/:id/status` | Writes project-local `characters/<id>/status.json`. JSON `{ "key": "eyes_front/surprised", "state": "ticked" }` (Approve) or `{ "key", "redo": "wider lids" }` (stores the note under `_redos` and sets `draft`). Values on the file are only `ticked` / `locked` / `draft`. Never writes `_global_assets`. Returns the same factory payload as GET. |

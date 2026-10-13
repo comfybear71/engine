@@ -853,6 +853,7 @@ function DrawingView({
   const realignOpts = { cropToHead, collarY: cropToHead ? collarY : undefined, autoScale };
 
   const [confirmApplyAll, setConfirmApplyAll] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const applyCount = slot?.drawings.length || 0;
 
   function applyAutoFit() {
@@ -914,11 +915,19 @@ function DrawingView({
           value={current.width && current.height ? `${current.width} × ${current.height}` : "—"}
         />
         <MetaRow label="Slot" value={slot?.slot || ""} />
-        <MetaRow
-          label="Offset"
-          value={slot ? `${slot.offset.x}, ${slot.offset.y}` : "—"}
-        />
-        <MetaRow label="Scale" value={slot ? String(slot.scale) : "—"} />
+        <button
+          type="button"
+          className="studio-header-textbtn"
+          data-testid="asset-drawing-details"
+          data-open={detailsOpen ? "true" : "false"}
+          onClick={() => setDetailsOpen((open) => !open)}
+        >
+          {detailsOpen ? "Hide details" : "Details"}
+        </button>
+        {detailsOpen ? (
+          <div data-testid="asset-drawing-detail-panel">
+            <MetaRow label="Offset" value={slot ? `${slot.offset.x}, ${slot.offset.y}` : "—"} />
+            <MetaRow label="Scale" value={slot ? String(slot.scale) : "—"} />
         {current.shape ? <MetaRow label="Shape" value={`${current.shape} · ${mouthSound(current.name) || ""}`} /> : null}
         {onExcludeFromLipSync ? (
           <label className="flex items-center gap-1 text-[10px] text-neutral-400">
@@ -966,6 +975,8 @@ function DrawingView({
             <p className="text-[11px] text-neutral-600">No script lines yet.</p>
           )}
         </div>
+          </div>
+        ) : null}
         <div className="flex flex-wrap gap-1 pt-1">
           {(["checker", "black", "white", "gray"] as const).map((kind) => (
             <button
