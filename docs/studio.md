@@ -23,7 +23,11 @@ copy/paste, asset drops) rewrite the matching script line(s) with
 `at_time=` / duration / `trim_in=` / `trim_out=`, then re-parse; they
 never write `timeline.json`. Save, lint, preview, lanes, and Render
 still parse the selected script to a temp timeline (the same `--script`
-option as the CLI). Render writes `renders/<script-stem>.mp4`.
+option as the CLI). Render writes `renders/<script-stem>.mp4`. The last
+selected script is remembered per project in `localStorage`
+(`engine.studio.activeScript.v1`) and in `studio.json` (`activeScript`),
+so a browser refresh restores that file instead of falling back to
+`script.txt`.
 
 ## Starting Engine Studio
 
@@ -52,10 +56,17 @@ Studio (minimised) when you sign in.
 
 **If the page opens but the engine is not ready yet**
 
-Studio shows **Engine is starting…** and checks again every 2 seconds.
-Press **Start engine** if it stays that way — that asks Studio to start
-the engine on this PC (no terminal). If that cannot, it says so in
-plain English; try the desktop shortcut again.
+The header shows a small worker status dot. Green means the engine on
+port `4100` is up. Press **Restart worker** if preview is stuck on
+**Buffering preview** — Studio stops the old engine (if it can) and
+starts it again. If the dot is red, **Start engine** asks Studio to
+start it on this PC (no terminal). If that cannot, it says so in plain
+English; try the desktop shortcut again.
+
+A second double-click of the shortcut reuses the engine and Studio if
+they are already running, then opens the browser. It does not start a
+second copy on those ports. The launcher restarts the engine if it
+stops. Port `3000` is left alone.
 
 The browser talks to `http://localhost:4100` (or `NEXT_PUBLIC_WORKER_URL`)
 directly. The Studio UI never shows shell commands.

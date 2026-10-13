@@ -897,11 +897,21 @@ describe("studio worker API", () => {
     assert.equal(saved.lipsync.blinks, false);
     assert.equal(saved.lipsync.loud_threshold, 0.8);
     assert.equal(saved.independent, false, "lip-sync save must keep Independent");
+    const remember = await fetch(`${ctx.url}/api/projects/project/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activeScript: "script_mcd.txt" }),
+    });
+    const remembered = await remember.json();
+    assert.equal(remembered.activeScript, "script_mcd.txt");
+    assert.equal(remembered.lipSync, "manual", "script memory must keep lip-sync");
     await fetch(`${ctx.url}/api/projects/project/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ lipSync: "auto" }),
     });
+    const afterLip = await (await fetch(`${ctx.url}/api/projects/project/settings`)).json();
+    assert.equal(afterLip.activeScript, "script_mcd.txt");
 
     const missing = await fetch(`${ctx.url}/api/projects/project/lipsync`, {
       method: "POST",

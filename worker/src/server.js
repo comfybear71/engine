@@ -1604,6 +1604,7 @@ function createApp(options = {}) {
     if (body.lipSync === "auto" || body.lipSync === "manual") patch.lipSync = body.lipSync;
     if (body.lipsync && typeof body.lipsync === "object") patch.lipsync = body.lipsync;
     if (body.independent === true || body.independent === false) patch.independent = body.independent;
+    if (typeof body.activeScript === "string") patch.activeScript = body.activeScript;
     res.json(writeStudioSettings(projectDir, patch));
   });
 
@@ -2194,6 +2195,13 @@ const app = createApp();
 if (require.main === module) {
   const port = Number(process.env.WORKER_PORT || 4100);
   app.listen(port, "127.0.0.1", () => {
+    const pidFile =
+      process.env.ENGINE_WORKER_PID_FILE || path.resolve(__dirname, "..", "..", ".engine-worker.pid");
+    try {
+      fs.writeFileSync(pidFile, `${process.pid}\n`);
+    } catch {
+      /* restart-from-Studio can still try start if the pid file is missing */
+    }
     console.log(`Render worker listening on http://127.0.0.1:${port} (localhost only)`);
   });
 }

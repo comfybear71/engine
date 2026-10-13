@@ -849,6 +849,7 @@ export type StudioSettings = {
   lipSync: "auto" | "manual";
   lipsync?: LipSyncNaturalSettings;
   independent?: boolean;
+  activeScript?: string;
 };
 
 export const DEFAULT_LIPSYNC_SETTINGS: LipSyncNaturalSettings = {

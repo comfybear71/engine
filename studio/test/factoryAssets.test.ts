@@ -73,9 +73,10 @@ describe("factory Assets helpers", () => {
       { name: "script_old_walk.txt", mtime: 20 },
     ];
     assert.equal(newestScriptName(files), "script_full_test.txt");
-    assert.equal(pickActiveScript(files, "", false), "script_full_test.txt");
-    assert.equal(pickActiveScript(files, "script.txt", false), "script.txt");
-    assert.equal(pickActiveScript(files, "script.txt", true), "script.txt");
+    assert.equal(pickActiveScript(files, "", ""), "script_full_test.txt");
+    assert.equal(pickActiveScript(files, "script.txt", "script_full_test.txt"), "script.txt");
+    assert.equal(pickActiveScript(files, "", "script.txt"), "script.txt");
+    assert.equal(pickActiveScript(files, "", "script_old_walk.txt"), "script_old_walk.txt");
     assert.equal(isOldScript("script.txt", "script_full_test.txt"), true);
     assert.equal(isOldScript("script_full_test.txt", "script_full_test.txt"), false);
   });

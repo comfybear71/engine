@@ -185,9 +185,8 @@ export default function HomeScreen() {
           </span>
           <span className="text-sm font-semibold tracking-wide text-white">Engine Studio</span>
         </div>
+        <EngineStatus workerUp={workerUp} onRetry={() => void refresh()} />
       </header>
-
-      <EngineStatus workerUp={workerUp} onRetry={() => void refresh()} />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
         {error ? <p className="mb-4 text-sm text-red-400">{error}</p> : null}

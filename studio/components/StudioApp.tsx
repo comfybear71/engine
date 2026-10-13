@@ -10,12 +10,15 @@ import ScriptIdentity from "@/components/ScriptIdentity";
 import ScriptPanel from "@/components/ScriptPanel";
 import StagePanel from "@/components/StagePanel";
 import StudioSettings from "@/components/StudioSettings";
+import { readRememberedScript, writeRememberedScript } from "@/lib/activeScript";
 import { groupScripts, isOldScript, pickActiveScript } from "@/lib/factoryAssets";
 import {
   checkWorker,
   loadScriptCatalog,
   loadShow,
+  loadStudioSettings,
   renderVideoUrl,
+  saveStudioSettings,
   setActiveShowId,
   startRender,
   type RenderResponse,
@@ -81,9 +84,15 @@ export default function StudioApp({
     if (!up) return;
     try {
       const catalog = await loadScriptCatalog(project);
+      const settings = await loadStudioSettings(project).catch(() => null);
+      const remembered = readRememberedScript(project) || settings?.activeScript || "";
       setScripts(catalog.scripts);
       setNewestScript(catalog.newest);
-      setScript((current) => pickActiveScript(catalog.files, current, scriptPicked.current));
+      setScript((current) => {
+        const next = pickActiveScript(catalog.files, current, remembered);
+        if (next && next !== current) writeRememberedScript(project, next);
+        return next;
+      });
     } catch {
       setWorkerUp(false);
     }
@@ -91,7 +100,7 @@ export default function StudioApp({
 
   useEffect(() => {
     scriptPicked.current = false;
-    setScript("");
+    setScript(readRememberedScript(project));
     setNewestScript("");
   }, [project]);
 
@@ -160,8 +169,13 @@ export default function StudioApp({
               className="max-w-[220px] rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-white"
               value={script}
               onChange={(event) => {
+                const next = event.target.value;
                 scriptPicked.current = true;
-                setScript(event.target.value);
+                setScript(next);
+                writeRememberedScript(project, next);
+                void saveStudioSettings(project, { activeScript: next }).catch(() => {
+                  /* localStorage already has it */
+                });
                 setSelectedScriptLine(null);
                 setScriptEpoch((n) => n + 1);
               }}
@@ -207,6 +221,7 @@ export default function StudioApp({
         </nav>
 
         <div className="flex items-center justify-end gap-3">
+          <EngineStatus workerUp={workerUp} onRetry={() => void refresh()} />
           {renderStatus ? (
             <span className="hidden max-w-[280px] truncate text-xs text-studio-muted lg:inline" title={renderStatus}>
               {renderStatus}
@@ -243,8 +258,6 @@ export default function StudioApp({
           </div>
         </div>
       </header>
-
-      <EngineStatus workerUp={workerUp} onRetry={() => void refresh()} />
 
       <main className="flex min-h-0 flex-1 flex-col">
         {tab === "assets" ? (

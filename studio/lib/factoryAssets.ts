@@ -105,11 +105,11 @@ export function isOldScript(active: string | null | undefined, newest: string | 
 export function pickActiveScript(
   files: ScriptFileInfo[],
   current: string | null | undefined,
-  userPicked = false
+  remembered?: string | null
 ): string {
   const names = files.map((item) => item.name);
   if (current && names.includes(current)) return current;
-  void userPicked;
+  if (remembered && names.includes(remembered)) return remembered;
   return newestScriptName(files);
 }
 

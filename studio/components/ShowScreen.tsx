@@ -153,9 +153,10 @@ export default function ShowScreen({ showId }: { showId: string }) {
             </button>
           ))}
         </nav>
+        <div className="ml-auto">
+          <EngineStatus workerUp={workerUp} onRetry={() => void refresh()} />
+        </div>
       </header>
-
-      <EngineStatus workerUp={workerUp} onRetry={() => void refresh()} />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-6">
         {error ? <p className="mb-4 text-sm text-red-400">{error}</p> : null}
