@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from compositor.compositor import compose_frame, scale_frame
-from compositor.preview_graph import dump_preview_graph, evaluate_draw_ops, rasterize_commands
+from compositor.preview_graph import background_dest_rect, dump_preview_graph, evaluate_draw_ops, rasterize_commands
 from compositor.preview_server import handle
 from compositor.slots import Slot, SlotKeyframe
 from compositor.timeline_loader import Background, Canvas, Child, Layer, Scene, Timeline, Transform
@@ -160,3 +160,51 @@ def test_480p_preview_is_cli_scale_frame(tmp_path):
     cli = compose_frame(timeline, 0)
     preview = compose_frame(timeline, 0, width=20, height=20)
     assert np.array_equal(preview, scale_frame(cli, 20, 20))
+
+
+def test_background_dest_rect_matches_js_cover_and_contain(tmp_path):
+    bg = _png(tmp_path / "wide_bg.png", 80, 40, (10, 20, 30))
+    timeline = Timeline(
+        series="Test",
+        episode="1",
+        fps=24,
+        canvas=Canvas(width=40, height=40),
+        scenes=[
+            Scene(
+                id="s1",
+                total_frames=8,
+                background=Background(asset=bg, fit="cover"),
+                layers=[],
+            )
+        ],
+        project_dir=tmp_path,
+    )
+    graph = dump_preview_graph(timeline)
+    js = js_evaluate(graph, [0])[0]
+    py = evaluate_draw_ops(timeline, 0)
+    js_bg = next(cmd for cmd in js["commands"] if cmd["kind"] == "bg")
+    py_bg = next(cmd for cmd in py["commands"] if cmd["kind"] == "bg")
+
+    script = (
+        "import { readFileSync } from 'fs';"
+        "import { backgroundDestRect } from './placement.js';"
+        "const {cmd, w, h} = JSON.parse(readFileSync(0, 'utf8'));"
+        "process.stdout.write(JSON.stringify(backgroundDestRect(cmd, w, h)));"
+    )
+    import subprocess as _sp
+
+    result = _sp.run(
+        ["node", "--input-type=module", "-e", script],
+        input=json.dumps({"cmd": js_bg, "w": 40, "h": 40}),
+        cwd=str(SHARED.parent),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    js_box = json.loads(result.stdout)
+    py_box = background_dest_rect(py_bg, 40, 40)
+    assert [round(js_box[k], 3) for k in ("x", "y", "w", "h")] == [round(py_box[k], 3) for k in ("x", "y", "w", "h")]
+    assert py_box["w"] == 80
+    assert py_box["h"] == 40
+    assert py_box["x"] == -20

@@ -220,3 +220,20 @@ export function soundDisplayName(file: { label: string; rel: string }, duplicate
   const base = file.rel.replace(/^audio\/[^/]+\//, "").replace(/\.wav$/i, "");
   return duplicates ? `${file.label} ${base}` : file.label;
 }
+
+export const PREFERRED_PROP_IDS = ["mic_stand", "microphone", "mic", "speaker"];
+
+export function pickVisibleProp<T extends { id: string }>(props: T[] | null | undefined): T | null {
+  if (!props || !props.length) return null;
+  for (const id of PREFERRED_PROP_IDS) {
+    const hit = props.find((item) => item.id === id || item.id.includes(id));
+    if (hit) return hit;
+  }
+  return props[0];
+}
+
+export function actionPreviewSeconds(frames: number, fps: number): number {
+  const cycle = Math.max(1, Number(frames) || 1) / Math.max(1, Number(fps) || 12);
+  const loops = Math.max(1, Math.round(2 / cycle));
+  return Math.min(3, Math.max(1, Number((loops * cycle).toFixed(1))));
+}

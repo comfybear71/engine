@@ -1,6 +1,8 @@
 import {
   anchorOffset,
+  backgroundDestRect as backgroundDestRectJs,
   collectRels as collectRelsJs,
+  evaluateBackgroundRect as evaluateBackgroundRectJs,
   evaluateFrame as evaluateFrameJs,
   rotateOffsetClockwise,
 } from "../../shared/placement.js";
@@ -41,6 +43,20 @@ export function evaluateFrame(graph: unknown, frame: number): EvaluatedFrame {
 
 export function collectRels(graph: unknown): string[] {
   return collectRelsJs(graph);
+}
+
+export type BackgroundDestRect = { x: number; y: number; w: number; h: number };
+
+export function backgroundDestRect(
+  cmd: PreviewCommand,
+  canvasW: number,
+  canvasH: number
+): BackgroundDestRect {
+  return backgroundDestRectJs(cmd, canvasW, canvasH);
+}
+
+export function evaluateBackgroundRect(graph: unknown, frame: number): BackgroundDestRect | null {
+  return evaluateBackgroundRectJs(graph, frame);
 }
 
 export function spriteDrawOffset(cmd: PreviewCommand): { dx: number; dy: number } {

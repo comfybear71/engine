@@ -603,6 +603,46 @@ export async function loadProjectActions(name: string): Promise<ProjectAction[]>
   return body.actions || [];
 }
 
+export function actionPreviewUrl(project: string, characterId: string | null | undefined, actionId: string): string | null {
+  if (!project || !characterId || !actionId) return null;
+  return `${WORKER_URL}${withShow(
+    `/api/projects/${encodeURIComponent(project)}/actions/${encodeURIComponent(characterId)}/${encodeURIComponent(actionId)}/preview`
+  )}`;
+}
+
+export type TrashUsage = { script: string; line: number; text?: string };
+export type TrashAssetBody = {
+  kind: "sound" | "background" | "prop" | "action";
+  id?: string;
+  label?: string;
+  characterId?: string | null;
+  location?: string;
+  rel?: string;
+  confirm: true;
+  force?: boolean;
+};
+
+export async function trashProjectAsset(
+  name: string,
+  body: TrashAssetBody
+): Promise<{ ok: boolean; trash?: string; usages?: TrashUsage[]; error?: string; code?: string }> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/assets/trash`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    trash?: string;
+    usages?: TrashUsage[];
+    error?: string;
+    code?: string;
+  };
+  if (res.status === 409) return { ok: false, code: json.code || "EUSED", error: json.error, usages: json.usages || [] };
+  if (!res.ok) throw new Error(json.error || `Delete failed (${res.status})`);
+  return { ok: true, trash: json.trash, usages: json.usages || [] };
+}
+
 export async function loadStaging(name: string): Promise<Staging> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/staging`);
   if (!res.ok) throw new Error(await readError(res));
@@ -640,6 +680,7 @@ export function assetUrl(
   opts?: {
     thumb?: boolean;
     factory?: boolean;
+    key?: boolean;
     over?: string | null;
     v?: number | string | null;
     library?: boolean;
@@ -650,6 +691,7 @@ export function assetUrl(
   const params = new URLSearchParams({ rel });
   if (opts?.thumb) params.set("thumb", "1");
   if (opts?.factory) params.set("factory", "1");
+  if (opts?.key) params.set("key", "1");
   if (opts?.over) params.set("over", opts.over);
   if (opts?.library) params.set("library", "1");
   if (opts?.preview) params.set("preview", "1");

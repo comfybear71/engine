@@ -112,7 +112,23 @@ function sameSize(a, b) {
   return a && b && a.width === b.width && a.height === b.height;
 }
 
-function renderFactoryThumb({ piecePath, basePath, pad } = {}) {
+function keyChromaGreen(rgba, width, height) {
+  const out = Buffer.from(rgba);
+  const n = width * height;
+  for (let i = 0; i < n; i += 1) {
+    const o = i * 4;
+    const r = out[o];
+    const g = out[o + 1];
+    const b = out[o + 2];
+    const excess = g - Math.max(r, b);
+    if (excess <= 36 || g < 70) continue;
+    const t = Math.min(1, (excess - 36) / 70);
+    out[o + 3] = Math.round(out[o + 3] * (1 - t));
+  }
+  return out;
+}
+
+function renderFactoryThumb({ piecePath, basePath, pad, keyGreen } = {}) {
   if (!piecePath || !fs.existsSync(piecePath)) {
     throw new Error("Factory thumb is missing a piece file");
   }
@@ -126,6 +142,7 @@ function renderFactoryThumb({ piecePath, basePath, pad } = {}) {
       rgba = compositeRgba(base.rgba, piece.rgba, width, height);
     }
   }
+  if (keyGreen) rgba = keyChromaGreen(rgba, width, height);
   const bounds = alphaBounds(rgba, width, height);
   const box = padBox(bounds, width, height, pad);
   return {
@@ -146,5 +163,6 @@ module.exports = {
   padBox,
   cropRgba,
   compositeRgba,
+  keyChromaGreen,
   renderFactoryThumb,
 };
