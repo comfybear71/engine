@@ -65,6 +65,25 @@ function paintFigure(rgba, width, x0, y0, stride) {
   fillRect(rgba, width, x0 + 38 + stride, y0 + 58, 10, 10, 70, 40, 24, 255);
 }
 
+function identicalWalkSheetPng() {
+  const cols = 4;
+  const rows = 2;
+  const inner = 72;
+  const gutter = 10;
+  const width = cols * inner + (cols + 1) * gutter;
+  const height = rows * inner + (rows + 1) * gutter;
+  const rgba = Buffer.alloc(width * height * 4);
+  fillRect(rgba, width, 0, 0, width, height, 0, 255, 0, 255);
+  for (let i = 0; i < 8; i += 1) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x0 = gutter + col * (inner + gutter);
+    const y0 = gutter + row * (inner + gutter);
+    paintFigure(rgba, width, x0, y0, 0);
+  }
+  return encodeRgbaPng(width, height, rgba);
+}
+
 function grokBrokenWalkSheet() {
   // Real Grok failure modes packed into one 4x2 sheet: extra bodies + a
   // zoomed boot close-up that used to be scaled to fill the 1024 canvas.
@@ -110,14 +129,29 @@ function listen(app) {
 }
 
 describe("factory dest and names", () => {
-  test("walk jobs land on legs_side when the character has legs", () => {
+  test("walk jobs land on torso for whole-body frames, never legs", () => {
+    const dest = resolveActionDest(
+      {
+        slots: {
+          torso: { drawings_dir: "torso" },
+          legs: { drawings_dir: "legs" },
+          body: { drawings_dir: "body" },
+        },
+      },
+      { kind: "walk", view: "right_side" }
+    );
+    assert.equal(dest.slot, "torso");
+    assert.equal(dest.drawings_dir, "torso");
+    assert.deepEqual(walkBob(8).length, 8);
+  });
+
+  test("walk jobs fall back to body when the character has no torso slot", () => {
     const dest = resolveActionDest(
       { slots: { legs: { drawings_dir: "legs" }, body: { drawings_dir: "body" } } },
       { kind: "walk", view: "right_side" }
     );
-    assert.equal(dest.slot, "legs");
-    assert.equal(dest.drawings_dir, "legs_right_side");
-    assert.deepEqual(walkBob(8).length, 8);
+    assert.equal(dest.slot, "body");
+    assert.equal(dest.drawings_dir, "body");
   });
 
   test("side torso skip list ignores walk/run/approach so a walk job uses a standing torso", () => {
@@ -178,22 +212,26 @@ describe("factory pipeline with a fixture sheet", () => {
     assert.equal(job.usedFixture, true);
     assert.equal(job.ticked, false);
     assert.ok(job.drawings.length >= 2);
-    assert.equal(job.dest.drawings_dir, "legs_right_side");
+    assert.equal(job.dest.slot, "torso");
+    assert.equal(job.dest.drawings_dir, "torso");
     assert.match(job.actionId, /walk_side/);
     assert.equal(job.action && job.action.set_slots && job.action.set_slots.body, "none");
-    assert.equal(job.action && job.action.set_slots && job.action.set_slots.torso, "neutral");
+    assert.equal(job.action && job.action.set_slots && job.action.set_slots.legs, "none");
+    assert.equal(job.action && job.action.set_slots && job.action.set_slots.torso, undefined);
+    assert.ok(job.action && job.action.slot_frames && job.action.slot_frames.torso);
     assert.equal(job.action && job.action.view, "right_side");
-    const liveDir = path.join(projectDir, "characters", "rodney", "legs_right_side");
-    const oldWalk = path.join(liveDir, "walk_side_01.png");
-    assert.equal(fs.existsSync(oldWalk), true, "existing walk_side legs stay on disk until Tick");
+    const liveDir = path.join(projectDir, "characters", "rodney", "torso");
+    const oldTorso = path.join(liveDir, "neutral.png");
+    assert.equal(fs.existsSync(oldTorso), true, "existing standing torso stays on disk until Tick");
     const manifest = JSON.parse(
       fs.readFileSync(path.join(projectDir, "characters", "rodney", "_factory", job.jobId, "manifest.json"), "utf8")
     );
     assert.ok(manifest.action.set_slots.body === "none");
+    assert.ok(manifest.action.set_slots.legs === "none");
     assert.equal(
-      (manifest.action.slot_frames.legs || []).includes("walk_side_01"),
+      (manifest.action.slot_frames.torso || []).includes("neutral"),
       false,
-      "new action does not keep the old walk_side drawing"
+      "new action does not keep the standing torso drawing"
     );
     assert.equal(
       fs.readdirSync(liveDir).some((name) => name.startsWith(job.actionId)),
@@ -207,8 +245,9 @@ describe("factory pipeline with a fixture sheet", () => {
       fs.readFileSync(path.join(projectDir, "characters", "rodney", "actions", `${job.actionId}.json`), "utf8")
     );
     assert.equal(actionJson.set_slots.body, "none");
+    assert.equal(actionJson.set_slots.legs, "none");
     assert.equal(actionJson.view, "right_side");
-    assert.ok(fs.existsSync(oldWalk), "Tick adds new legs and does not delete the leftover file on disk");
+    assert.ok(fs.existsSync(oldTorso), "Tick adds new whole-body frames and does not delete the leftover file on disk");
     assert.ok(fs.readdirSync(liveDir).some((name) => name.startsWith(job.actionId) && name.endsWith(".png")));
     assert.equal(fs.existsSync(path.join(otherDir, "characters", "rodney")), false);
 
@@ -219,7 +258,8 @@ describe("factory pipeline with a fixture sheet", () => {
       const decoded = decodeRgbaFile(path.join(alignedDir, name));
       const box = alphaBounds(decoded.rgba, decoded.width, decoded.height);
       assert.equal(box.empty, false);
-      assert.ok(box.h < 220, `legs ${name} should match the rig, not fill the canvas (${box.h}px)`);
+      assert.ok(box.h > 250, `whole-body ${name} should match the rig height, not a waist-down crop (${box.h}px)`);
+      assert.ok(box.h < 450, `whole-body ${name} should match the rig, not fill the canvas (${box.h}px)`);
       assert.ok(box.y + box.h > 680, `feet of ${name} should sit on the rig ground line`);
     }
     const preview = path.join(projectDir, "characters", "rodney", "_factory", job.jobId, "preview.mp4");
@@ -232,6 +272,19 @@ describe("factory pipeline with a fixture sheet", () => {
       ).trim();
       assert.equal(dims, "854,480", "factory walk preview must be 16:9, not a cropped square");
     }
+  });
+
+  test("near-identical mid-stride cells fail instead of accepting a frozen walk", async () => {
+    await assert.rejects(
+      () =>
+        runFactoryJob(projectDir, null, {
+          characterId: "rodney",
+          prompt: "Rodney walking long stride",
+          frames: 8,
+          imageBase64: `data:image/png;base64,${identicalWalkSheetPng().toString("base64")}`,
+        }),
+      /near-identical|failed validation/i
+    );
   });
 
   test("real-like Grok extras and zoomed boots fail the walk job instead of compositing giant legs", async () => {

@@ -105,24 +105,18 @@ function collectSlotNames(character) {
 
 function resolveActionDest(character, intent) {
   const names = collectSlotNames(character);
-  const view = (intent && intent.view) || "right_side";
   if (intent && intent.kind === "walk") {
-    if (names.has("legs_side")) {
-      const spec = findSlotSpec(character, "legs_side");
-      return { kind: "slot", slot: "legs_side", drawings_dir: (spec && spec.drawings_dir) || "legs_side" };
-    }
-    if (names.has("legs")) {
-      return {
-        kind: "slot",
-        slot: "legs",
-        drawings_dir: view === "left_side" ? "legs_left_side" : "legs_right_side",
-      };
+    // Whole-body walk frames, like the painted walk_side_01..08 set. Never
+    // dest to legs — extracting legs onto a standing torso is the live bug.
+    if (names.has("torso")) {
+      const spec = findSlotSpec(character, "torso");
+      return { kind: "slot", slot: "torso", drawings_dir: (spec && spec.drawings_dir) || "torso" };
     }
     if (names.has("body")) {
       const spec = findSlotSpec(character, "body");
       return { kind: "slot", slot: "body", drawings_dir: (spec && spec.drawings_dir) || "body" };
     }
-    return { kind: "slot", slot: "legs", drawings_dir: "legs_side" };
+    return { kind: "slot", slot: "torso", drawings_dir: "torso" };
   }
   if (names.has("body")) {
     const spec = findSlotSpec(character, "body");
@@ -212,8 +206,35 @@ function findTorsoRef(projectDir, characterId, view) {
   return null;
 }
 
+function findFirstPng(root, dirs, options = {}) {
+  const skipWalk = Boolean(options.skipWalk);
+  const skipNone = options.skipNone !== false;
+  for (const dirName of dirs) {
+    const dir = path.join(root, dirName);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+    let names = fs
+      .readdirSync(dir)
+      .filter((name) => /\.png$/i.test(name))
+      .sort();
+    if (skipNone) names = names.filter((name) => !/^none\.png$/i.test(name));
+    if (skipWalk) names = names.filter((name) => !/^(walk|run|approach)/i.test(name.replace(/\.png$/i, "")));
+    const pick = names[0];
+    if (pick) return path.join(dir, pick);
+  }
+  return null;
+}
+
+function findLegsRef(projectDir, characterId, view) {
+  const root = characterDir(projectDir, characterId);
+  const side = view === "left_side" ? "left_side" : "right_side";
+  return (
+    findFirstPng(root, [`legs_${side}`, "legs", "legs_side"], { skipWalk: true, skipNone: true }) ||
+    findFirstPng(root, [`legs_${side}`, "legs", "legs_side"], { skipWalk: false, skipNone: true })
+  );
+}
+
 function isWalkValidationFailure(err) {
-  return /extra figures|zoomed crop|giant legs|too many boots|scale mismatch|ground line|Factory fit failed/i.test(
+  return /extra figures|zoomed crop|giant legs|too many boots|scale mismatch|ground line|near-identical|duplicated|rig base|Factory fit failed/i.test(
     String((err && err.message) || "")
   );
 }
@@ -294,7 +315,7 @@ function copyCharacterForPreview(srcDir, destDir, options = {}) {
       if (!rel || rel === ".") return true;
       const top = rel.split(path.sep)[0];
       if (!replaceDirs.has(top)) return true;
-      // Keep the folder, drop existing drawings so new legs replace old ones.
+      // Keep the folder, drop existing drawings so new walk frames replace old ones.
       return rel === top;
     },
   });
@@ -324,12 +345,15 @@ function pickSideTorsoDrawing(projectDir, characterId, view) {
   return null;
 }
 
-function walkSetSlots(character, projectDir, characterId, view) {
+function walkSetSlots(character, dest) {
   const names = collectSlotNames(character);
   const setSlots = {};
-  if (names.has("body")) setSlots.body = "none";
-  const torso = pickSideTorsoDrawing(projectDir, characterId, view);
-  if (torso && names.has("torso")) setSlots.torso = torso;
+  const destSlot = dest && dest.slot;
+  const hide = new Set(["body", "legs", "head_base", "head", "eyes", "mouth"]);
+  for (const name of names) {
+    if (name === destSlot) continue;
+    if (hide.has(name) || /^(arm|hand)/i.test(name)) setSlots[name] = "none";
+  }
   return setSlots;
 }
 
@@ -794,6 +818,7 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   const canvas = slotCanvas(writable, dest);
   const refAbs = findAlignRef(projectDir, character.id, dest);
   const torsoRefAbs = intent.kind === "walk" ? findTorsoRef(projectDir, character.id, intent.view) : null;
+  const legsRefAbs = intent.kind === "walk" ? findLegsRef(projectDir, character.id, intent.view) : null;
   const maxAttempts = fixture || options.skipWalkRetry ? 1 : intent.kind === "walk" ? 2 : 1;
   let cut = null;
   let fitted = null;
@@ -851,17 +876,19 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
         "--canvas-h",
         String(canvas.h),
       ];
-      if (refAbs) fitArgs.push("--ref", refAbs);
-      if (torsoRefAbs) fitArgs.push("--torso-ref", torsoRefAbs);
-      if (isOverlayDest(dest)) fitArgs.push("--check-head");
       if (intent.kind === "walk") {
+        if (legsRefAbs) fitArgs.push("--ref", legsRefAbs);
+        else if (refAbs) fitArgs.push("--ref", refAbs);
+        if (torsoRefAbs) fitArgs.push("--torso-ref", torsoRefAbs);
         fitArgs.push(
-          "--extract-legs",
           "--validate-walk",
           "--fail-closed",
           "--expect-face",
           intent.view === "left_side" ? "left" : "right"
         );
+      } else {
+        if (refAbs) fitArgs.push("--ref", refAbs);
+        if (isOverlayDest(dest)) fitArgs.push("--check-head");
       }
       fitted = await runFactoryFit(fitArgs, options);
       lastWalkError = null;
@@ -872,7 +899,7 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
       if (!retryable || attempt + 1 >= maxAttempts) {
         if (intent.kind === "walk" && isWalkValidationFailure(err)) {
           throw factoryError(
-            `Walk sheet failed validation (${String(err.message || err).replace(/^Factory fit failed: /, "")}). Extra figures and zoomed crops are rejected automatically — hit Redo.`,
+            `Walk sheet failed validation (${String(err.message || err).replace(/^Factory fit failed: /, "")}). Extra figures, cropped legs, identical poses, and scale mismatches are rejected automatically — hit Redo.`,
             err.code || "EINVAL"
           );
         }
@@ -907,7 +934,9 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
     }
     const problems = (row && row.problems) || [];
     const rejected = problems.some((line) =>
-      /too many boots|facing |extra figures|zoomed crop|giant legs|scale mismatch|ground line/.test(String(line))
+      /too many boots|facing |extra figures|zoomed crop|giant legs|scale mismatch|ground line|near-identical|duplicated|rig base/.test(
+        String(line)
+      )
     );
     if (rejected) {
       warnings.push(`Frame ${i + 1} rejected: ${problems.join("; ")}`);
@@ -922,7 +951,7 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   }
   if (intent.kind === "walk" && fatalWalk.length) {
     throw factoryError(
-      `Walk sheet failed validation (${fatalWalk.slice(0, 4).join("; ")}). Extra figures and zoomed crops are rejected automatically — hit Redo.`,
+      `Walk sheet failed validation (${fatalWalk.slice(0, 4).join("; ")}). Extra figures, cropped legs, identical poses, and scale mismatches are rejected automatically — hit Redo.`,
       "EINVAL"
     );
   }
@@ -935,7 +964,7 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   }
 
   const cycleName = intent.kind === "walk" ? (intent.view === "left_side" ? "walk_left_side" : "walk_side") : actionId;
-  const setSlots = intent.kind === "walk" ? walkSetSlots(writable, projectDir, character.id, intent.view) : {};
+  const setSlots = intent.kind === "walk" ? walkSetSlots(writable, dest) : {};
   const action = {
     id: actionId,
     view: intent.view,
@@ -1076,6 +1105,7 @@ module.exports = {
   drawingNames,
   pickSideTorsoDrawing,
   findTorsoRef,
+  findLegsRef,
   walkSetSlots,
   runFactoryJob,
   describeFactoryJob,

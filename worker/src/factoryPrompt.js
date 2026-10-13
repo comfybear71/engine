@@ -102,22 +102,26 @@ function inferFactoryIntent(prompt) {
 function walkPoseNotes(frames) {
   const n = clampFactoryFrames(frames);
   const lead =
-    "Side view. Front leg reaches out ahead of the body with the heel landing first — legs must not trail behind the body.";
+    "WALK CYCLE. Side view, same direction in every cell. Each cell is the WHOLE BODY from hat to boots — never crop to the waist or legs. " +
+    "Legs alternate. Do not repeat the same mid-stride pose. Front leg reaches ahead, heel first — legs must not trail behind the body.";
   if (n === 8) {
     return (
-      `${lead} Eight frames, left to right: 1 contact (heel lands ahead), 2 down/knee bend, ` +
-      `3 passing, 4 push-off-toe, then 5–8 the same four poses on the other leg. Slight body bob.`
+      `${lead} Eight DISTINCT phases, left to right: ` +
+      `1 contact (right heel lands ahead), 2 down (right knee bends, weight over the front foot), ` +
+      `3 passing (left leg swings past the right), 4 up/push-off (right toe pushes, left reaches ahead), ` +
+      `5 contact (left heel lands ahead), 6 down (left knee bends), ` +
+      `7 passing (right leg swings past the left), 8 up/push-off (left toe pushes, right reaches ahead). Slight body bob.`
     );
   }
   if (n === 12) {
     return (
-      `${lead} Twelve frames: contact, down/knee bend, passing, and push-off-toe on each leg, ` +
-      `with one in-between after each of those poses. Slight body bob.`
+      `${lead} Twelve DISTINCT frames: contact, down, passing, and up/push-off on each leg, ` +
+      `with one in-between after each of those poses. Legs alternate. Slight body bob.`
     );
   }
   return (
-    `${lead} Sixteen frames: contact, down/knee bend, passing, and push-off-toe on each leg, ` +
-    `with two in-betweens after each of those poses. Slight body bob.`
+    `${lead} Sixteen DISTINCT frames: contact, down, passing, and up/push-off on each leg, ` +
+    `with two in-betweens after each of those poses. Legs alternate. Slight body bob.`
   );
 }
 

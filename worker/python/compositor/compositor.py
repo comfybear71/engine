@@ -20,6 +20,7 @@ painted first and stays behind every layer.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterator, NamedTuple
 
@@ -72,6 +73,28 @@ def _visible_when_matches(visible_when: dict[str, list[str]], drawings: dict[str
         if drawings.get(other_name) not in allowed:
             return False
     return True
+
+
+_WALK_DRAWING = re.compile(r"^(walk|run)", re.I)
+
+
+def is_walk_cycle_drawing(drawings: dict[str, str | None] | None) -> bool:
+    """True when the body piece on screen is a whole-body walk/run frame.
+
+    Factory walks (and the painted ``walk_side_*`` set) replace torso/body
+    with a hat-to-boots drawing. Overlay children — standing torso_rig,
+    shirt, shorts, separate arms — must not composite on top of that.
+    """
+
+    if not drawings:
+        return False
+    torso = drawings.get("torso")
+    if torso:
+        return bool(_WALK_DRAWING.match(str(torso).strip()))
+    body = drawings.get("body")
+    if body:
+        return bool(_WALK_DRAWING.match(str(body).strip()))
+    return False
 
 
 def _place_child_on_parent(parent: _Placed, child: Child, local_frame: int) -> _Placed:
@@ -129,7 +152,11 @@ def _resolve_layer_placements(
     # world rotation so the whole rig turns about the layer anchor. Children
     # are placed parent-before-child so chains of any depth accumulate.
     layer_space = root._replace(slots={})
+    hide_rig_base = is_walk_cycle_drawing(drawings)
     for child in _children_parent_before_child(layer.children):
+        if hide_rig_base:
+            # Whole-body walk frames already include body, legs, cape, arms.
+            continue
         if drawings is not None and not _visible_when_matches(child.visible_when, drawings):
             continue
         if child.parent:

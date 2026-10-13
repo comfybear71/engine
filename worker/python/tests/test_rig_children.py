@@ -323,3 +323,45 @@ class TestPixelPivotAndVisibleWhen:
         shown_canvas = np.full((40, 40, 3), 255, dtype=np.uint8)
         _draw_layer(shown_canvas, layer, AssetCache(), 10, fps=24)
         assert tuple(shown_canvas[20, 20]) == (255, 0, 0)
+
+    def test_walk_torso_hides_standing_overlay_children(self, tmp_path):
+        root = tmp_path / "root.png"
+        overlay = tmp_path / "shirt.png"
+        stand = tmp_path / "stand.png"
+        walk = tmp_path / "walk_side_01.png"
+        _write_solid_png(root, 8, (0, 0, 0))
+        _write_solid_png(overlay, 40, (255, 0, 0))
+        _write_solid_png(stand, 8, (0, 255, 0))
+        _write_solid_png(walk, 8, (0, 255, 0))
+
+        torso = Slot(
+            images={"neutral": stand, "walk_side_01": walk},
+            keyframes=[
+                SlotKeyframe(frame=0, drawing="neutral"),
+                SlotKeyframe(frame=10, drawing="walk_side_01"),
+            ],
+        )
+        child = Child(
+            id="shirt_overlay",
+            asset=overlay,
+            z=1,
+            offset_x=0,
+            offset_y=0,
+            pivot="top-left",
+        )
+        layer = Layer(
+            id="rig",
+            asset=root,
+            z=0,
+            transform=Transform(x=0, y=0, anchor="top-left"),
+            slots={"torso": torso},
+            children=[child],
+        )
+
+        standing = np.full((40, 40, 3), 255, dtype=np.uint8)
+        _draw_layer(standing, layer, AssetCache(), 0, fps=24)
+        assert tuple(standing[20, 20]) == (255, 0, 0)
+
+        walking = np.full((40, 40, 3), 255, dtype=np.uint8)
+        _draw_layer(walking, layer, AssetCache(), 10, fps=24)
+        assert tuple(walking[20, 20]) != (255, 0, 0)

@@ -18,7 +18,9 @@ from compositor.factory_fit import (
     looks_like_walk_body,
     normalize_walk_batch,
     validate_piece,
+    validate_walk_composite,
     validate_walk_frame,
+    walk_pose_problems,
 )
 
 
@@ -135,16 +137,47 @@ def test_headless_walk_body_is_accepted_and_not_scaled_to_canvas():
     assert not any("zoomed crop" in item or "extra figures" in item for item in problems)
     torso, legs = _rig_refs()
     fitted, problems = fit_walk_piece(
-        src, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face=None
+        src, 1024, 1024, ref=legs, torso_ref=torso, extract=False, expect_face=None
     )
     assert problems == []
     box = alpha_bbox(fitted)
     assert box is not None
-    assert box[3] - box[1] < 200
+    assert 250 < box[3] - box[1] < 420
     assert box[3] > 680
 
 
 REAL_WALK = Path("/workspace/projects/rodney_demo/characters/rodney/torso/walk_side_02.png")
+
+
+@pytest.mark.skipif(not REAL_WALK.exists(), reason="no live Rodney Grok walk drawing on disk")
+def test_real_whole_body_sheet_fits_at_rig_scale_without_extracting_legs():
+    """Regression: live Grok cells are hat-to-boots. Fit the whole cell, never chop at the waist."""
+
+    import cv2
+
+    src = cv2.imread(str(REAL_WALK), cv2.IMREAD_UNCHANGED)
+    assert src is not None
+    torso, legs = _rig_refs()
+    frames = []
+    for i in range(8):
+        shift = (i % 4) * 8 - 12
+        cell = np.zeros_like(src)
+        if shift >= 0:
+            cell[:, shift:] = src[:, : src.shape[1] - shift]
+        else:
+            cell[:, : src.shape[1] + shift] = src[:, -shift:]
+        fitted, problems = fit_walk_piece(
+            cell, 1024, 1024, ref=legs, torso_ref=torso, extract=False, expect_face=None
+        )
+        assert problems == []
+        box = alpha_bbox(fitted)
+        assert box is not None
+        assert 250 < box[3] - box[1] < 450
+        assert 760 <= box[3] <= 810
+        frames.append(fitted)
+    assert walk_pose_problems(frames) == []
+    for frame in frames:
+        assert validate_walk_composite(frame, [torso, legs]) == []
 
 
 @pytest.mark.skipif(not REAL_WALK.exists(), reason="no live Rodney Grok walk drawing on disk")
@@ -159,13 +192,14 @@ def test_real_grok_walk_drawing_is_not_scaled_to_fill_the_canvas():
     assert old_box[3] - old_box[1] > 800
     torso, legs = _rig_refs()
     fitted, problems = fit_walk_piece(
-        src, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face=None
+        src, 1024, 1024, ref=legs, torso_ref=torso, extract=False, expect_face=None
     )
     assert problems == []
     box = alpha_bbox(fitted)
     assert box is not None
-    assert box[3] - box[1] < 220
+    assert 250 < box[3] - box[1] < 450
     assert 760 <= box[3] <= 810
+    assert looks_like_walk_body(fitted) is True
 
 
 def test_validate_walk_rejects_extra_figures_and_zoomed_boots():
@@ -188,15 +222,16 @@ def test_fit_walk_matches_rig_scale_and_plants_feet():
     src = _full_figure_facing_right()
     torso, legs = _rig_refs()
     fitted, problems = fit_walk_piece(
-        src, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face="right"
+        src, 1024, 1024, ref=legs, torso_ref=torso, extract=False, expect_face="right"
     )
     assert problems == []
     box = alpha_bbox(fitted)
     assert box is not None
     height = box[3] - box[1]
-    assert 70 <= height <= 160
+    assert 250 <= height <= 420
     assert 760 <= box[3] <= 810
-    assert height < 1024 * 0.4
+    assert height < 1024 * 0.5
+    assert looks_like_walk_body(fitted) is True
 
 
 def test_fit_walk_rejects_extra_figures_instead_of_compositing_them():
@@ -222,8 +257,8 @@ def test_normalize_walk_batch_shares_a_ground_line():
     small = _full_figure_facing_right()
     big = np.zeros((180, 120, 4), dtype=np.uint8)
     big[10:170, 20:100] = _resize_like(small, 160, 80)
-    a, _p = fit_walk_piece(small, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face="right")
-    b, _q = fit_walk_piece(big, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face="right")
+    a, _p = fit_walk_piece(small, 1024, 1024, ref=legs, torso_ref=torso, extract=False, expect_face="right")
+    b, _q = fit_walk_piece(big, 1024, 1024, ref=legs, torso_ref=torso, extract=False, expect_face="right")
     out = normalize_walk_batch([a, b])
     grounds = [alpha_bbox(frame)[3] for frame in out]
     heights = [alpha_bbox(frame)[3] - alpha_bbox(frame)[1] for frame in out]
@@ -235,3 +270,41 @@ def _resize_like(src: np.ndarray, h: int, w: int) -> np.ndarray:
     import cv2
 
     return cv2.resize(src, (w, h), interpolation=cv2.INTER_NEAREST)
+
+
+def _stride_figure(offset: int) -> np.ndarray:
+    img = _full_figure_facing_right()
+    shifted = np.zeros_like(img)
+    if offset >= 0:
+        shifted[:, offset:] = img[:, : img.shape[1] - offset]
+    else:
+        shifted[:, : img.shape[1] + offset] = img[:, -offset:]
+    return shifted
+
+
+def test_walk_pose_rejects_identical_cells_and_accepts_a_cycle():
+    same = [_full_figure_facing_right() for _ in range(8)]
+    assert any("near-identical" in item for item in walk_pose_problems(same))
+    cycle = [_stride_figure((i % 4) * 4 - 4) for i in range(8)]
+    assert walk_pose_problems(cycle) == []
+
+
+def test_extract_then_standing_torso_is_duplicated_boots():
+    src = _full_figure_facing_right()
+    torso, legs = _rig_refs()
+    chopped, _problems = fit_walk_piece(
+        src, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face="right"
+    )
+    problems = validate_walk_composite(chopped, [torso, legs])
+    assert any("duplicated" in item or "rig base" in item for item in problems)
+
+
+def test_whole_body_walk_covers_standing_rig():
+    src = _full_figure_facing_right()
+    torso, legs = _rig_refs()
+    fitted, problems = fit_walk_piece(
+        src, 1024, 1024, ref=legs, torso_ref=torso, extract=False, expect_face="right"
+    )
+    assert problems == []
+    extra = validate_walk_composite(fitted, [torso, legs])
+    assert extra == []

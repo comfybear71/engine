@@ -29,6 +29,8 @@ GIANT_LEGS_CANVAS_FRAC = 0.82
 GIANT_LEGS_REF_RATIO = 2.4
 WALK_SCALE_TOLERANCE = 0.22
 LEGS_OF_FIGURE_FRAC = 0.42
+POSE_DIFF_MIN = 0.028
+WALK_BOOT_X_MIN_STD = 2.5
 
 
 def _resize_uniform(piece: np.ndarray, scale: float) -> np.ndarray:
@@ -288,14 +290,15 @@ def fit_walk_piece(
     *,
     ref: np.ndarray | None = None,
     torso_ref: np.ndarray | None = None,
-    extract: bool = True,
+    extract: bool = False,
     margin: int = MARGIN,
     expect_face: str | None = "right",
 ) -> tuple[np.ndarray, list[str]]:
-    """Scale the whole figure to the rig, plant feet, then extract legs in place.
+    """Scale the whole figure to the rig and plant feet on the ground line.
 
-    Never scales a chopped legs island up to fill the canvas — that is what
-    produced giant boots behind a small standing Rodney on live Grok sheets.
+    Walks use the whole cell as the frame (hat-to-boots). Never extract legs
+    onto a standing torso — that cropped live Grok sheets at the waist and
+    composited a second pair of boots.
     """
 
     src = _to_bgra(src)
@@ -339,7 +342,12 @@ def fit_walk_piece(
     fh = fitted_box[3] - fitted_box[1]
     if fh > canvas_h * GIANT_LEGS_CANVAS_FRAC:
         problems.append("giant legs (fill the canvas)")
-    if ref_box is not None:
+    if not extract:
+        if abs(fh - target_h) / max(1.0, float(target_h)) > WALK_SCALE_TOLERANCE:
+            problems.append("scale mismatch vs rig")
+        if not looks_like_walk_body(out):
+            problems.append("zoomed crop (not a whole body)")
+    elif ref_box is not None:
         rh = max(1, ref_box[3] - ref_box[1])
         if fh > rh * GIANT_LEGS_REF_RATIO:
             problems.append(f"giant legs ({fh}px vs ref {rh}px)")
@@ -379,8 +387,12 @@ def normalize_walk_batch(frames: list[np.ndarray]) -> list[np.ndarray]:
     return out
 
 
-def walk_batch_problems(frames: list[np.ndarray], ref: np.ndarray | None = None) -> list[str]:
-    """Cross-frame checks: scale drift or feet that missed the ground line."""
+def walk_batch_problems(
+    frames: list[np.ndarray],
+    ref: np.ndarray | None = None,
+    torso_ref: np.ndarray | None = None,
+) -> list[str]:
+    """Cross-frame checks: scale drift, feet on the ground, scale vs the rig."""
 
     boxes = [alpha_bbox(frame) for frame in frames if alpha_bbox(frame) is not None]
     if len(boxes) < 2:
@@ -388,16 +400,126 @@ def walk_batch_problems(frames: list[np.ndarray], ref: np.ndarray | None = None)
     heights = [box[3] - box[1] for box in boxes]
     grounds = [box[3] for box in boxes]
     median_h = float(np.median(np.asarray(heights, dtype=np.float32)))
-    median_g = float(np.median(np.asarray(grounds, dtype=np.float32)))
     problems: list[str] = []
     if median_h > 0 and (max(heights) / median_h > 1.0 + WALK_SCALE_TOLERANCE or min(heights) / median_h < 1.0 - WALK_SCALE_TOLERANCE):
         problems.append("scale mismatch across walk frames")
     if max(grounds) - min(grounds) > 16:
         problems.append("feet missed the common ground line")
-    ref_box = alpha_bbox(_to_bgra(ref)) if ref is not None else None
-    if ref_box is not None and median_h > (ref_box[3] - ref_box[1]) * GIANT_LEGS_REF_RATIO:
-        problems.append("giant legs (batch vs ref)")
+    canvas_h = int(frames[0].shape[0]) if frames else 1024
+    _ground, target_h = rig_ground_and_height(torso_ref, ref, canvas_h)
+    if target_h > 0 and (
+        max(heights) / float(target_h) > 1.0 + WALK_SCALE_TOLERANCE
+        or min(heights) / float(target_h) < 1.0 - WALK_SCALE_TOLERANCE
+    ):
+        problems.append("scale mismatch vs rig")
     return problems
+
+
+def _alpha_over(dst: np.ndarray, src: np.ndarray) -> np.ndarray:
+    dst = _to_bgra(dst)
+    src = _to_bgra(src)
+    if src.shape[:2] != dst.shape[:2]:
+        return dst
+    out = dst.copy()
+    a = src[:, :, 3:4].astype(np.float32) / 255.0
+    out[:, :, :3] = (
+        src[:, :, :3].astype(np.float32) * a + out[:, :, :3].astype(np.float32) * (1.0 - a)
+    ).astype(np.uint8)
+    out[:, :, 3] = np.maximum(out[:, :, 3], src[:, :, 3])
+    return out
+
+
+def validate_walk_composite(walk: np.ndarray, standing_layers: list[np.ndarray | None]) -> list[str]:
+    """Fail when a waist-down walk would leave the standing torso/legs on screen.
+
+    Live Grok sheets were whole-body, then chopped at the waist and composited
+    under the rig's own standing body — two pairs of legs / four boots.
+    """
+
+    walk = _to_bgra(walk)
+    problems: list[str] = []
+    walk_box = alpha_bbox(walk)
+    if walk_box is None:
+        return ["blank drawing"]
+    torso = standing_layers[0] if standing_layers else None
+    legs = standing_layers[1] if len(standing_layers) > 1 else None
+    torso_box = alpha_bbox(_to_bgra(torso)) if torso is not None else None
+    waist_down = False
+    if torso_box is not None:
+        torso_mid = (torso_box[1] + torso_box[3]) / 2.0
+        if walk_box[1] > torso_mid:
+            waist_down = True
+    if not waist_down and torso_box is not None:
+        target_h = max(8, (torso_box[3] - torso_box[1]))
+        if legs is not None:
+            lbox = alpha_bbox(_to_bgra(legs))
+            if lbox is not None:
+                target_h = max(lbox[3], torso_box[3]) - min(lbox[1], torso_box[1])
+        if (walk_box[3] - walk_box[1]) < target_h * 0.55:
+            waist_down = True
+    if waist_down:
+        problems.append("rig base parts visible beneath walk frames")
+        stacked = np.zeros_like(walk)
+        for layer in standing_layers:
+            if layer is None:
+                continue
+            layer = _to_bgra(layer)
+            if layer.shape[:2] != walk.shape[:2]:
+                continue
+            stacked = _alpha_over(stacked, layer)
+        combined = _alpha_over(stacked, walk)
+        boots = count_boots(combined)
+        if boots > 2:
+            problems.append(f"duplicated legs/boots in composite ({boots} boots)")
+        else:
+            problems.append("duplicated legs/boots in composite")
+    return problems
+
+
+def _boot_xs(frame: np.ndarray) -> list[float]:
+    src = _to_bgra(frame)
+    box = alpha_bbox(src)
+    if box is None:
+        return []
+    x0, y0, x1, y1 = box
+    height = max(1, y1 - y0)
+    band_y0 = y0 + int(height * BOOT_BAND_FRAC)
+    band = np.zeros(src.shape[:2], dtype=np.uint8)
+    band[band_y0:y1, x0:x1] = np.where(src[band_y0:y1, x0:x1, 3] > 16, 255, 0)
+    num, _labels, stats, centroids = cv2.connectedComponentsWithStats(band, connectivity=8)
+    xs: list[float] = []
+    min_area = max(8, int((x1 - x0) * height * BOOT_MIN_FRAC))
+    for i in range(1, num):
+        if int(stats[i, cv2.CC_STAT_AREA]) >= min_area:
+            xs.append(float(centroids[i][0]))
+    return xs
+
+
+def walk_pose_problems(frames: list[np.ndarray]) -> list[str]:
+    """Reject a sheet of near-identical mid-stride copies with no gait change."""
+
+    samples: list[np.ndarray] = []
+    lead_xs: list[float] = []
+    for frame in frames:
+        src = _to_bgra(frame)
+        box = alpha_bbox(src)
+        if box is None:
+            continue
+        x0, y0, x1, y1 = box
+        crop = src[y0:y1, x0:x1, 3]
+        small = cv2.resize(crop, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+        samples.append(small)
+        xs = _boot_xs(frame)
+        if xs:
+            lead_xs.append(max(xs))
+    if len(samples) < 2:
+        return []
+    diffs = [float(np.mean(np.abs(samples[i] - samples[i - 1]))) for i in range(1, len(samples))]
+    mean_diff = float(np.mean(diffs)) if diffs else 0.0
+    boot_std = float(np.std(np.asarray(lead_xs, dtype=np.float32))) if len(lead_xs) >= 2 else 0.0
+    if mean_diff < POSE_DIFF_MIN and boot_std < WALK_BOOT_X_MIN_STD:
+        return ["near-identical cells (walk cycle poses do not change)"]
+    return []
 
 
 def count_boots(piece: np.ndarray) -> int:
@@ -549,7 +671,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--extract-legs",
         action="store_true",
-        help="After fitting the whole figure to the rig, clear the head/torso in place",
+        help="Legacy: chop the fitted figure to a legs island. Walks must NOT use this.",
     )
     parser.add_argument(
         "--validate-walk",
@@ -632,7 +754,15 @@ def main(argv: list[str] | None = None) -> int:
             normalized = normalize_walk_batch(subset)
             for i, frame in zip(good_idx, normalized):
                 fitted_frames[i] = frame
-            batch = walk_batch_problems(normalized, ref=ref)
+            batch = walk_batch_problems(normalized, ref=ref, torso_ref=torso_ref)
+            pose = walk_pose_problems(normalized)
+            standing = [item for item in (torso_ref, ref) if item is not None]
+            extra: list[str] = []
+            for frame in normalized:
+                extra.extend(validate_walk_composite(frame, standing))
+            # Deduplicate composite messages (same standing rig on every cell).
+            extra = list(dict.fromkeys(extra))
+            batch = batch + pose + extra
             if batch:
                 warnings.extend(batch)
                 for i in good_idx:

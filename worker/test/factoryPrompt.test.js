@@ -33,6 +33,10 @@ describe("factory hidden prompt pack", () => {
     assert.match(pack.hiddenPrompt, /Only one head/);
     assert.match(pack.hiddenPrompt, /Never zoom into legs/);
     assert.match(pack.hiddenPrompt, /never a close-up of legs/);
+    assert.match(pack.hiddenPrompt, /WALK CYCLE/);
+    assert.match(pack.hiddenPrompt, /Eight DISTINCT phases/);
+    assert.match(pack.hiddenPrompt, /contact \(right heel/);
+    assert.match(pack.hiddenPrompt, /passing \(left leg swings/);
     assert.equal(pack.greenScreen, "#00FF00");
     assert.equal(pack.references[0].rel, "characters/rodney/_reference/full.png");
     assert.equal(assembleHiddenPrompt({

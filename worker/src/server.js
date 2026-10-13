@@ -8,7 +8,8 @@
  * `/api/projects/:name/import-audio` (ElevenLabs Speech-to-Text + Rhubarb).
  */
 
-require("dotenv").config({ path: require("path").resolve(__dirname, "..", "..", ".env") });
+const { loadDotenv } = require("./engineSettings");
+loadDotenv();
 
 const fs = require("fs");
 const os = require("os");

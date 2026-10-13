@@ -23,7 +23,8 @@
 const fs = require("fs");
 const path = require("path");
 
-require("dotenv").config({ path: path.resolve(__dirname, "..", "..", ".env") });
+const { loadDotenv } = require("./engineSettings");
+loadDotenv();
 
 const { renderProject } = require("./render");
 const { watchProject } = require("./watcher");

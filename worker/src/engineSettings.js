@@ -22,6 +22,13 @@ function resolveEnvPath(options = {}) {
   return DEFAULT_ENV_PATH;
 }
 
+function loadDotenv(options = {}) {
+  const dotenv = require("dotenv");
+  const filePath = resolveEnvPath(options);
+  // override:true so a stale User-level XAI_API_KEY cannot shadow the engine .env
+  return dotenv.config({ path: filePath, override: true });
+}
+
 function readEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return "";
   return fs.readFileSync(filePath, "utf8");
@@ -74,6 +81,7 @@ module.exports = {
   DEFAULT_ENV_PATH,
   defaultEnvPath,
   resolveEnvPath,
+  loadDotenv,
   upsertEnvVar,
   saveXaiApiKey,
   describeEngineSettings,
