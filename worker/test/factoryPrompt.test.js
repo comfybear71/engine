@@ -1,0 +1,43 @@
+"use strict";
+
+const { describe, test } = require("node:test");
+const assert = require("node:assert/strict");
+const {
+  assembleHiddenPrompt,
+  clampFactoryFrames,
+  factoryGrid,
+  inferFactoryIntent,
+  slugActionId,
+  buildFactoryPack,
+} = require("../src/factoryPrompt");
+
+describe("factory hidden prompt pack", () => {
+  test("clamps frames and names a long-stride side walk", () => {
+    assert.equal(clampFactoryFrames(7), 8);
+    assert.equal(clampFactoryFrames(13), 16);
+    assert.deepEqual(factoryGrid(12), { cols: 4, rows: 3 });
+    const intent = inferFactoryIntent("Rodney walking long stride");
+    assert.equal(intent.kind, "walk");
+    assert.equal(slugActionId("Rodney walking long stride", intent), "walk_side_long_stride");
+  });
+
+  test("silently adds locked style, green screen, and rig rules", () => {
+    const pack = buildFactoryPack({
+      character: { id: "rodney", display_name: "Rodney", style: "painted caricature" },
+      userPrompt: "Rodney walking long stride",
+      frames: 8,
+      references: [{ kind: "reference", rel: "characters/rodney/_reference/full.png" }],
+    });
+    assert.match(pack.hiddenPrompt, /fedora|painted caricature/);
+    assert.match(pack.hiddenPrompt, /#00FF00/);
+    assert.match(pack.hiddenPrompt, /Only one head/);
+    assert.equal(pack.greenScreen, "#00FF00");
+    assert.equal(pack.references[0].rel, "characters/rodney/_reference/full.png");
+    assert.equal(assembleHiddenPrompt({
+      character: { id: "rodney", display_name: "Rodney" },
+      userPrompt: "hi",
+      frames: 8,
+      advancedPrompt: "custom pack",
+    }), "custom pack");
+  });
+});

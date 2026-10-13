@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import AssetImaginePanel from "@/components/AssetImaginePanel";
+import FactoryPanel from "@/components/FactoryPanel";
 import PanelSplitter from "@/components/PanelSplitter";
 import {
   DEFAULT_IMAGINE_HEIGHT,
@@ -16,10 +16,10 @@ export default function ImagineDock({
   workerUp,
   open,
   characterId,
-  needId = null,
+  needId: _needId = null,
   onOpenChange,
   onCharacterId,
-  onNeedId,
+  onNeedId: _onNeedId,
   onChanged,
   refreshToken = 0,
 }: {
@@ -79,7 +79,7 @@ export default function ImagineDock({
         <>
           <PanelSplitter
             axis="y"
-            label="Resize Grok Imagine"
+            label="Resize Factory"
             testId="splitter-imagine"
             onDrag={(delta) => setHeight((current) => clampImagineHeight(current - delta))}
             onReset={() => setHeight(DEFAULT_IMAGINE_HEIGHT)}
@@ -87,7 +87,7 @@ export default function ImagineDock({
           <div className="flex min-h-0 flex-col overflow-hidden border-t border-studio-border" style={{ height }}>
             <div className="flex shrink-0 items-center justify-between gap-3 border-b border-studio-border px-3 py-1.5">
               <div className="flex min-w-0 items-center gap-3">
-                <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-studio-muted">Grok Imagine</h3>
+                <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-studio-muted">Factory</h3>
                 <label className="flex items-center gap-2 text-[11px] text-studio-muted">
                   Character
                   <select
@@ -117,19 +117,16 @@ export default function ImagineDock({
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
               {selected ? (
-                <AssetImaginePanel
+                <FactoryPanel
                   project={project}
                   character={selected}
-                  embedded
-                  initialNeedId={needId}
-                  onNeedId={onNeedId}
                   onChanged={() => {
                     setReloadKey((n) => n + 1);
                     onChanged();
                   }}
                 />
               ) : (
-                <p className="text-sm text-studio-muted">Add a character on Assets, then open Grok Imagine.</p>
+                <p className="text-sm text-studio-muted">Add a character on Assets, then open Factory.</p>
               )}
             </div>
           </div>
@@ -147,7 +144,7 @@ export default function ImagineDock({
               : "text-studio-muted hover:bg-studio-raised hover:text-neutral-200"
           }`}
         >
-          Grok Imagine
+          Factory
         </button>
       </div>
     </div>

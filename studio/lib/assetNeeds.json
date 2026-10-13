@@ -115,6 +115,21 @@
       "prompt": "A full establishing background plate in the world of {{name}}, {{style}}. 16:9 landscape, finished set, no characters, no watermark, no caption, no text, no logo. Even lighting, no letterbox bars. Do not crop architecture or furniture at the edges."
     },
     {
+      "id": "factory_action",
+      "label": "Factory action",
+      "description": "Hidden Factory pack. The owner types a plain prompt; this set is not shown in the old Imagine dropdown.",
+      "split": "grid",
+      "frameParam": {
+        "default": 8,
+        "min": 8,
+        "max": 16,
+        "views": ["side"]
+      },
+      "cycleFps": 12,
+      "dest": { "kind": "slot", "slot": "legs", "drawings_dir": "legs_side" },
+      "prompt": ""
+    },
+    {
       "id": "custom",
       "label": "Custom",
       "description": "Paste your own sheet prompt. The character style block is prepended. Choose a grid and target slot for the cut-out.",

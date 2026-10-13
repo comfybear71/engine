@@ -245,8 +245,8 @@ clobber the project's `timeline.json`.
   **Flip horizontally** writes a mirrored PNG the same way (undoable). A
   small **L/R** tag can be set per drawing so mixed arm sheets can be
   sorted.
-  **+** adds a named drawing the same way. **Open Grok Imagine for this
-  slot** opens the Generate dock preselected for that character and set.
+  **+** adds a named drawing the same way.   **Open Factory for this
+  slot** opens the Factory dock for that character.
   Rename updates `character.json` cycle lists. Delete asks once, then
   moves the file to `characters/<id>/_trash/<timestamp>/`; if a script
   uses the drawing, Studio lists those lines and refuses until you
@@ -255,16 +255,20 @@ clobber the project's `timeline.json`.
   `object-fit: contain` so the whole figure is visible. Character body and
   prop cards in the Assets lists use the same cached ~480px JPEG as
   background cards (`?thumb=1&v=<mtime>`).
-  **Grok Imagine** lives in a bottom dock (hidden by default): open it with
-  the **Grok Imagine** tab on the bottom edge, or the same-named button on
+  **Factory** lives in a bottom dock (hidden by default): open it with
+  the **Factory** tab on the bottom edge, or the same-named button on
   the Assets page. Drag the dock's top splitter to resize (persisted in
   `localStorage` as `engine.studio.imagineDock.v1`); double-click to reset;
   Close or the tab again hides it so the asset grids stay fully visible
-  above. The dock prefills a prompt per character and set (built-in Prompt
-  Pack for Rodney in `docs/prompt-packs/`; generic templates in
-  `studio/lib/assetNeeds.json`), then **Generate** calls xAI from the
-  worker so you do not copy the prompt out. The drop zone still ingests a
-  PNG you made in the browser. See [Image assets](#image-assets-grok-imagine)
+  above. Type a plain prompt (e.g. `Rodney walking long stride`), pick
+  8 / 12 / 16 frames, and press **Generate**. The dock already knows the
+  current project and character. Locked style, reference pictures, flat
+  `#00FF00`, and rig rules (one head; eyes/mouths never full heads; never
+  squash) are added silently — open **Advanced** only if you want to edit
+  that pack. Results show a looping clip with **Tick** (save into the
+  character library + Action Shots) and **Redo**. Nothing is wired until
+  Tick. The old set dropdown / style notes / variants / cost line are
+  gone. See [Image assets](#image-assets-grok-imagine)
   below.
 - **Stage** — the main workspace. A large frame preview from
   `POST /api/projects/:name/preview-frame?script=`, a thin transport bar under
@@ -515,6 +519,12 @@ other media durations are cached by path + mtime + size.
 | `GET` | `/api/projects/:name/asset?rel=&factory=1&over=` | Factory thumbnail: crop the PNG to its opaque bounds (plus padding). `over=` is an optional same-canvas head_base to composite first (eyes/mouth). |
 | `POST` | `/api/projects/:name/open-folder` | Opens a project-relative folder in the desktop file manager. JSON `{ "rel": "characters/rodney" }`. |
 | `GET` | `/api/projects/:name/actions` | Action JSON files: `shared/<id>` from a top-level `actions/` folder, plus `characters/<id>/actions/*.json` as `<character>/<action>`. |
+| `GET` | `/api/projects/:name/actions/:characterId/:actionId/preview` | Cached looping MP4 of that action, cropped to the character (no location props). |
+| `POST` | `/api/projects/:name/factory` | Factory v1. JSON `{ "characterId", "prompt", "frames"?: 8\|12\|16, "advancedPrompt"?, "imageBase64"?, "dryRun?" }`. Builds the hidden pack (locked style, project-local reference pictures, `#00FF00`, one-head / no-squash rules), calls xAI unless `imageBase64` is a fixture sheet, chroma-keys, splits, fits pieces to the character's existing slots without squashing, and renders a preview clip. Writes nothing into library slots until Tick. A project never reads another project's characters. |
+| `GET` | `/api/projects/:name/factory/:characterId/:jobId` | Draft job (drawings as data URLs, warnings, ticked). |
+| `GET` | `/api/projects/:name/factory/:characterId/:jobId/preview` | Looping preview MP4 for that draft. |
+| `POST` | `/api/projects/:name/factory/:characterId/:jobId/tick` | Save draft drawings into the character slots (`draft`→`ticked`) and write the Action Shot JSON. |
+| `POST` | `/api/projects/:name/factory/:characterId/:jobId/redo` | Drop the draft and generate again. |
 | `GET` | `/api/projects/:name/library` | Global characters from `_global_assets` plus `added` ids already referenced. Library thumbs may use `?library=1` on `/asset` so the catalog still previews while Independent is on. |
 | `POST` | `/api/projects/:name/library` | JSON `{ "characterId": "hicks" }`. Copies the character folder from `_global_assets` into the project, writes project-local `character.json`, and appends to `library.json`. Does not touch `_global_assets`. |
 | `POST` | `/api/projects/:name/make-independent` | Copies every global character, location/background, prop, and `staging_defaults.json` the project currently uses into the project (skips files already in `_trash/` / `_replaced/`), then sets `studio.json` `independent: true`. |

@@ -6,6 +6,9 @@ import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
 import { needIdForSlot, slotViewGroups, type AssetFocus } from "@/lib/assetEditor";
 import {
+  FACTORY_THUMB_COMPACT_PX,
+  FACTORY_THUMB_PX,
+  FACTORY_THUMB_WIDE_PX,
   FACTORY_VIEW_TABS,
   formatCountLine,
   formatPivot,
@@ -90,9 +93,10 @@ function Thumb({
       type="button"
       onClick={onClick}
       title={label}
-      className={`group flex flex-col text-left ${
-        compact ? "w-11 shrink-0 gap-0.5" : wide ? "w-[128px] gap-1" : "w-[72px] gap-1"
-      } ${onClick ? "cursor-pointer" : "cursor-default"}`}
+      style={{ width: compact ? FACTORY_THUMB_COMPACT_PX : wide ? FACTORY_THUMB_WIDE_PX : FACTORY_THUMB_PX }}
+      className={`group flex flex-col text-left ${compact ? "shrink-0 gap-0.5" : "gap-1"} ${
+        onClick ? "cursor-pointer" : "cursor-default"
+      }`}
     >
       <div
         className={`relative overflow-hidden border ${
@@ -143,6 +147,65 @@ function AddTile({
   return (
     <button type="button" className="studio-factory-add" data-testid={testId} data-wide={wide ? "true" : "false"} onClick={onClick} title={label || "Add"}>
       <span>+</span>
+    </button>
+  );
+}
+
+function ActionShotTile({
+  project,
+  action,
+  many,
+  onClick,
+}: {
+  project: string;
+  action: {
+    id: string;
+    name?: string;
+    label: string;
+    characterId: string | null;
+    thumbRel?: string | null;
+  };
+  many: boolean;
+  onClick: () => void;
+}) {
+  const preview = actionPreviewUrl(project, action.characterId, action.name || action.id);
+  const fallback = assetUrl(project, action.thumbRel || null, { factory: true });
+  const [failed, setFailed] = useState(false);
+  const showVideo = Boolean(preview && !failed);
+  return (
+    <button
+      type="button"
+      className="studio-factory-cell"
+      data-testid={`assets-action-${action.name}`}
+      onClick={onClick}
+    >
+      <span className="studio-factory-cell-thumb studio-checker">
+        {showVideo ? (
+          <video
+            src={preview || undefined}
+            muted
+            loop
+            playsInline
+            preload="auto"
+            autoPlay={!many}
+            poster={fallback || undefined}
+            onError={() => setFailed(true)}
+            onMouseEnter={(event) => {
+              if (many) void event.currentTarget.play();
+            }}
+            onMouseLeave={(event) => {
+              if (many) {
+                event.currentTarget.pause();
+                event.currentTarget.currentTime = 0;
+              }
+            }}
+          />
+        ) : fallback ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={fallback} alt="" />
+        ) : null}
+      </span>
+      <span className="studio-factory-cell-label">{action.label}</span>
     </button>
   );
 }
@@ -831,7 +894,7 @@ export default function AssetsPanel({
           onClick={() => onOpenImagine()}
           className={pool ? "rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white" : "studio-header-textbtn"}
         >
-          Grok Imagine
+          Factory
         </button>
       ) : null}
       {!pool && selected && alignableSlots(selected.slots).length > 0 ? (
@@ -1268,51 +1331,18 @@ export default function AssetsPanel({
                 </div>
                 <div className="studio-factory-thumbs">
                   {group.actions.map((action) => {
-                    const preview = actionPreviewUrl(project, action.characterId, action.name || action.id);
                     const many = actions.length > 8;
                     return (
                       <div key={action.id} className="studio-factory-tile-wrap">
-                        {preview ? (
-                          <button
-                            type="button"
-                            className="studio-factory-cell"
-                            data-testid={`assets-action-${action.name}`}
-                            onClick={() => {
-                              setLibrarySel({ kind: "actions", id: action.id });
-                              setNav({ page: "action", id: action.id });
-                            }}
-                          >
-                            <span className="studio-factory-cell-thumb studio-checker">
-                              <video
-                                src={preview}
-                                muted
-                                loop
-                                playsInline
-                                autoPlay={!many}
-                                onMouseEnter={(event) => {
-                                  if (many) void event.currentTarget.play();
-                                }}
-                                onMouseLeave={(event) => {
-                                  if (many) {
-                                    event.currentTarget.pause();
-                                    event.currentTarget.currentTime = 0;
-                                  }
-                                }}
-                              />
-                            </span>
-                            <span className="studio-factory-cell-label">{action.label}</span>
-                          </button>
-                        ) : (
-                          <Thumb
-                            src={assetUrl(project, action.thumbRel || null, { factory: true })}
-                            label={action.label}
-                            fit="contain"
-                            onClick={() => {
-                              setLibrarySel({ kind: "actions", id: action.id });
-                              setNav({ page: "action", id: action.id });
-                            }}
-                          />
-                        )}
+                        <ActionShotTile
+                          project={project}
+                          action={action}
+                          many={many}
+                          onClick={() => {
+                            setLibrarySel({ kind: "actions", id: action.id });
+                            setNav({ page: "action", id: action.id });
+                          }}
+                        />
                         <TrashButton
                           testId={`assets-trash-action-${action.name}`}
                           onClick={() =>
@@ -1434,9 +1464,9 @@ export default function AssetsPanel({
               />
             ) : null}
             {nav.page === "action" && selectedAction ? (
-              <FitPreview
-                src={assetUrl(project, selectedAction.thumbRel || null, { thumb: true })}
-                label={selectedAction.name || selectedAction.id}
+              <ActionFitPreview
+                project={project}
+                action={selectedAction}
               />
             ) : null}
             {nav.page === "sound" ? (
@@ -1586,6 +1616,35 @@ function FitPreview({ src, label, cover = false }: { src: string | null; label: 
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt={label} />
+      ) : (
+        <p className="text-[11px] text-studio-muted">No picture</p>
+      )}
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function ActionFitPreview({ project, action }: { project: string; action: ProjectAction }) {
+  const preview = actionPreviewUrl(project, action.characterId, action.name || action.id);
+  const fallback = assetUrl(project, action.thumbRel || null, { factory: true });
+  const [failed, setFailed] = useState(false);
+  const label = action.name || action.id;
+  return (
+    <div className="studio-factory-fit">
+      {preview && !failed ? (
+        <video
+          src={preview}
+          muted
+          loop
+          playsInline
+          autoPlay
+          preload="auto"
+          poster={fallback || undefined}
+          onError={() => setFailed(true)}
+        />
+      ) : fallback ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={fallback} alt={label} />
       ) : (
         <p className="text-[11px] text-studio-muted">No picture</p>
       )}

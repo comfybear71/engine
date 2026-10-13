@@ -610,6 +610,83 @@ export function actionPreviewUrl(project: string, characterId: string | null | u
   )}`;
 }
 
+export type FactoryJobDrawing = { name: string; imageBase64: string | null; problems: string[] };
+export type FactoryJob = {
+  ok: boolean;
+  jobId: string;
+  characterId: string;
+  actionId: string;
+  prompt: string;
+  hiddenPrompt: string;
+  frames: number;
+  grid: { cols: number; rows: number };
+  dest: { kind: string; slot: string; drawings_dir: string };
+  drawings: FactoryJobDrawing[];
+  warnings: string[];
+  previewRel: string | null;
+  ticked: boolean;
+  usedFixture: boolean;
+  styleBlock: string;
+  rigRules: string[];
+  greenScreen: string;
+};
+
+export function factoryPreviewUrl(project: string, characterId: string, jobId: string): string {
+  return `${WORKER_URL}${withShow(
+    `/api/projects/${encodeURIComponent(project)}/factory/${encodeURIComponent(characterId)}/${encodeURIComponent(jobId)}/preview`
+  )}`;
+}
+
+export async function startFactoryJob(
+  project: string,
+  body: {
+    characterId: string;
+    prompt: string;
+    frames?: number;
+    advancedPrompt?: string;
+    imageBase64?: string;
+    dryRun?: boolean;
+  }
+): Promise<FactoryJob> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(project)}/factory`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json().catch(() => ({}))) as FactoryJob & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Factory failed (${res.status})`);
+  return payload;
+}
+
+export async function tickFactoryJob(project: string, characterId: string, jobId: string): Promise<FactoryJob> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/factory/${encodeURIComponent(characterId)}/${encodeURIComponent(jobId)}/tick`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }
+  );
+  const payload = (await res.json().catch(() => ({}))) as FactoryJob & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Tick failed (${res.status})`);
+  return payload;
+}
+
+export async function redoFactoryJob(
+  project: string,
+  characterId: string,
+  jobId: string,
+  body: { prompt?: string; frames?: number; advancedPrompt?: string; imageBase64?: string } = {}
+): Promise<FactoryJob> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/factory/${encodeURIComponent(characterId)}/${encodeURIComponent(jobId)}/redo`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = (await res.json().catch(() => ({}))) as FactoryJob & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Redo failed (${res.status})`);
+  return payload;
+}
+
 export type TrashUsage = { script: string; line: number; text?: string };
 export type TrashAssetBody = {
   kind: "sound" | "background" | "prop" | "action";
