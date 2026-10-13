@@ -22,7 +22,7 @@ from .asset_cache import _to_bgra
 
 MARGIN = 8
 FULL_HEAD_HEIGHT_RATIO = 0.72
-LEGS_TOP_FRAC = 0.42
+LEGS_TOP_FRAC = 0.50
 BOOT_BAND_FRAC = 0.72
 BOOT_MIN_FRAC = 0.01
 
@@ -99,7 +99,14 @@ def looks_like_full_figure(piece: np.ndarray) -> bool:
     bot = crop[(height * 2) // 3 :]
     top_px = int(np.count_nonzero(top[:, :, 3] > 16))
     bot_px = int(np.count_nonzero(bot[:, :, 3] > 16))
-    return height > width * 1.15 and top_px > 8 and bot_px > 8
+    if not (height > width * 1.15 and top_px > 8 and bot_px > 8):
+        return False
+    # A head is one blob in the top third. Two thighs after a legs crop is not a figure.
+    num, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        (top[:, :, 3] > 16).astype(np.uint8), connectivity=8
+    )
+    top_blobs = sum(1 for i in range(1, num) if int(stats[i, cv2.CC_STAT_AREA]) >= 8)
+    return top_blobs <= 1
 
 
 def extract_legs(piece: np.ndarray, top_frac: float = LEGS_TOP_FRAC) -> np.ndarray:
@@ -150,7 +157,7 @@ def facing_direction(piece: np.ndarray) -> str:
     x0, y0, x1, y1 = box
     width = max(1, x1 - x0)
     height = max(1, y1 - y0)
-    y_head1 = y0 + max(1, int(height * 0.32))
+    y_head1 = y0 + max(1, int(height * 0.18))
     head = src[y0:y_head1, x0:x1, 3] > 16
     ys, xs = np.where(head)
     if xs.size < 4:

@@ -457,10 +457,19 @@ def _alpha_area(bgra: np.ndarray) -> int:
 
 
 def cell_looks_merged(cell: np.ndarray, expected_w: float, expected_h: float) -> bool:
-    """True when a cell is several poses stuck together (whole sheet / two cells)."""
+    """True when a cell is several poses stuck together (whole sheet / two cells).
+
+    Compare the opaque bbox, not the cell canvas: gap-split cells include
+    leftover margin/gutter, which made a fat left margin look like a merge
+    and knocked mouth sheets onto equal-area slices.
+    """
     if cell.size == 0:
         return False
-    h, w = cell.shape[:2]
+    ys, xs = np.where(cell[:, :, 3] > 8)
+    if xs.size == 0:
+        return False
+    w = int(xs.max() - xs.min() + 1)
+    h = int(ys.max() - ys.min() + 1)
     if w > expected_w * MERGED_CELL_AREA or h > expected_h * MERGED_CELL_AREA:
         if _alpha_area(cell) > 32:
             return True
