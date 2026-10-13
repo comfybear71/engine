@@ -208,3 +208,33 @@ def test_background_dest_rect_matches_js_cover_and_contain(tmp_path):
     assert py_box["w"] == 80
     assert py_box["h"] == 40
     assert py_box["x"] == -20
+
+
+def test_curtain_16x9_dest_rect_fills_canvas(tmp_path):
+    bg = _png(tmp_path / "curtain.png", 1920, 1080, (80, 40, 120))
+    timeline = Timeline(
+        series="Test",
+        episode="1",
+        fps=24,
+        canvas=Canvas(width=1920, height=1080),
+        scenes=[
+            Scene(
+                id="s1",
+                total_frames=1,
+                background=Background(asset=bg, fit="cover"),
+                layers=[],
+            )
+        ],
+        project_dir=tmp_path,
+    )
+    py = evaluate_draw_ops(timeline, 0)
+    py_bg = next(cmd for cmd in py["commands"] if cmd["kind"] == "bg")
+    box = background_dest_rect(py_bg, 1920, 1080)
+    assert box["x"] == 0
+    assert box["y"] == 0
+    assert box["w"] == 1920
+    assert box["h"] == 1080
+    frame = compose_frame(timeline, 0)
+    assert frame.shape[:2] == (1080, 1920)
+    assert tuple(int(v) for v in frame[0, 0]) == (80, 40, 120)
+    assert tuple(int(v) for v in frame[1079, 1919]) == (80, 40, 120)

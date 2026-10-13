@@ -1289,6 +1289,18 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   object-fit: cover;
 }
 
+.studio-bg-thumb {
+  background: #1a1a1a;
+}
+
+.studio-bg-thumb img,
+.studio-bg-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
 .studio-factory-home-thumb svg {
   padding: 18px;
   object-fit: contain;
@@ -1425,6 +1437,15 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   width: auto;
   height: auto;
   object-fit: contain;
+}
+
+.studio-factory-fit--cover img {
+  width: min(100%, calc((100vh - 180px) * 16 / 9));
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  object-position: center;
 }
 
 .studio-factory-fit span {

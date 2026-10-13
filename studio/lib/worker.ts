@@ -685,6 +685,7 @@ export function assetUrl(
     v?: number | string | null;
     library?: boolean;
     preview?: boolean;
+    cover?: boolean;
   }
 ): string | null {
   if (!rel) return null;
@@ -695,6 +696,7 @@ export function assetUrl(
   if (opts?.over) params.set("over", opts.over);
   if (opts?.library) params.set("library", "1");
   if (opts?.preview) params.set("preview", "1");
+  if (opts?.cover) params.set("cover", "1");
   if (opts?.v != null && opts.v !== "") params.set("v", String(opts.v));
   return `${WORKER_URL}${withShow(`/api/projects/${encodeURIComponent(project)}/asset?${params.toString()}`)}`;
 }

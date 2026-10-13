@@ -96,9 +96,9 @@ function Thumb({
     >
       <div
         className={`relative overflow-hidden border ${
-          wide ? "aspect-video" : "aspect-square"
+          wide ? "aspect-video studio-bg-thumb" : "aspect-square"
         } ${compact ? "rounded-sm" : "rounded-md"} ${
-          fit === "contain" ? "studio-checker" : "bg-studio-raised"
+          wide ? "bg-studio-raised" : fit === "contain" ? "studio-checker" : "bg-studio-raised"
         } ${selected ? "border-studio-accent ring-1 ring-studio-accent/50" : "border-studio-border"}`}
       >
         {src ? (
@@ -993,7 +993,13 @@ export default function AssetsPanel({
             <Section title="Backgrounds" count={staging?.backgrounds.length ?? 0}>
               <div className={gridClass}>
                 {(staging?.backgrounds || []).map((bg) => (
-                  <Thumb key={bg.id} src={assetUrl(project, bg.thumbRel, { thumb: true, v: bg.mtime })} label={bg.id} />
+                  <Thumb
+                    key={bg.id}
+                    src={assetUrl(project, bg.thumbRel, { thumb: true, cover: true, v: bg.mtime })}
+                    label={bg.id}
+                    fit="cover"
+                    wide
+                  />
                 ))}
               </div>
             </Section>
@@ -1051,7 +1057,11 @@ export default function AssetsPanel({
       count: (staging?.backgrounds || []).length,
       wide: true,
       src: staging?.backgrounds[0]
-        ? assetUrl(project, staging.backgrounds[0].thumbRel, { thumb: true, v: staging.backgrounds[0].mtime })
+        ? assetUrl(project, staging.backgrounds[0].thumbRel, {
+            thumb: true,
+            cover: true,
+            v: staging.backgrounds[0].mtime,
+          })
         : null,
     },
     {
@@ -1162,7 +1172,9 @@ export default function AssetsPanel({
                 onClick={() => goSection(card.id)}
               >
                 <span
-                  className={`studio-factory-home-thumb ${card.src || card.icon === "wave" ? "studio-checker" : ""}`}
+                  className={`studio-factory-home-thumb ${
+                    card.wide ? "studio-bg-thumb" : card.src || card.icon === "wave" ? "studio-checker" : ""
+                  }`}
                   data-wide={card.wide ? "true" : "false"}
                 >
                   {card.src ? (
@@ -1229,7 +1241,7 @@ export default function AssetsPanel({
             {(staging?.backgrounds || []).map((bg) => (
               <div key={bg.id} className="studio-factory-tile-wrap" data-wide="true">
                 <Thumb
-                  src={assetUrl(project, bg.thumbRel, { thumb: true, v: bg.mtime })}
+                  src={assetUrl(project, bg.thumbRel, { thumb: true, cover: true, v: bg.mtime })}
                   label={bg.id}
                   fit="cover"
                   wide
@@ -1416,8 +1428,9 @@ export default function AssetsPanel({
             ) : null}
             {nav.page === "background" && selectedBg ? (
               <FitPreview
-                src={assetUrl(project, selectedBg.thumbRel, { thumb: true, v: selectedBg.mtime })}
+                src={assetUrl(project, selectedBg.thumbRel, { thumb: true, cover: true, v: selectedBg.mtime })}
                 label={selectedBg.id}
+                cover
               />
             ) : null}
             {nav.page === "action" && selectedAction ? (
@@ -1567,9 +1580,9 @@ export default function AssetsPanel({
   );
 }
 
-function FitPreview({ src, label }: { src: string | null; label: string }) {
+function FitPreview({ src, label, cover = false }: { src: string | null; label: string; cover?: boolean }) {
   return (
-    <div className="studio-factory-fit">
+    <div className={`studio-factory-fit ${cover ? "studio-factory-fit--cover" : ""}`}>
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt={label} />

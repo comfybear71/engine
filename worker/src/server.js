@@ -54,7 +54,7 @@ const {
   readLibrary,
   isSafeFolderName,
 } = require("./studioProjects");
-const { cachedBackgroundThumb, cachedPreviewTexture } = require("./studioThumbs");
+const { cachedBackgroundThumb, cachedPreviewTexture, isBackgroundAssetPath } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
 const { previewIngest, confirmIngest, cancelIngest, DRAWING_NAME } = require("./assetIngest");
 const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, SLOT_NAME } = require("./characterLocal");
@@ -770,7 +770,12 @@ function createApp(options = {}) {
     }
     const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
     if (wantThumb) {
-      cachedBackgroundThumb(resolved.absPath)
+      const cover169 =
+        req.query.cover === "1" ||
+        req.query.cover === "true" ||
+        isBackgroundAssetPath(resolved.absPath) ||
+        /(?:^|\/)backgrounds\//.test(rel);
+      cachedBackgroundThumb(resolved.absPath, { cover169 })
         .then((thumbPath) => {
           const file = thumbPath || resolved.absPath;
           const sendType = thumbPath ? "image/jpeg" : type;
@@ -1499,7 +1504,12 @@ function createApp(options = {}) {
     }
     const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
     if (wantThumb) {
-      cachedBackgroundThumb(resolved.absPath)
+      const cover169 =
+        req.query.cover === "1" ||
+        req.query.cover === "true" ||
+        isBackgroundAssetPath(resolved.absPath) ||
+        /(?:^|\/)backgrounds\//.test(rel);
+      cachedBackgroundThumb(resolved.absPath, { cover169 })
         .then((thumbPath) => {
           const file = thumbPath || resolved.absPath;
           const sendType = thumbPath ? "image/jpeg" : type;
