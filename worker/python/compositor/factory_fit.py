@@ -136,6 +136,47 @@ def looks_like_full_figure(piece: np.ndarray) -> bool:
     return top_blobs == 1
 
 
+def looks_like_walk_body(piece: np.ndarray) -> bool:
+    """True for a walking body (cape/torso/legs), including headless Grok cells.
+
+    Live Imagine walk cells are often a side-on body without a separate head
+    blob. Those must still scale to the rig — not be treated as a boot close-up
+    and blown up to the canvas.
+    """
+
+    if looks_like_full_figure(piece):
+        return True
+    src = _to_bgra(piece)
+    box = alpha_bbox(src)
+    if box is None:
+        return False
+    x0, y0, x1, y1 = box
+    width = x1 - x0
+    height = y1 - y0
+    if height < 24 or width < 16:
+        return False
+    crop = src[y0:y1, x0:x1]
+    top = crop[: max(1, (height * 40) // 100)]
+    mid = crop[(height * 30) // 100 : (height * 65) // 100]
+    bot = crop[(height * 65) // 100 :]
+    top_px = int(np.count_nonzero(top[:, :, 3] > 16))
+    mid_px = int(np.count_nonzero(mid[:, :, 3] > 16))
+    bot_px = int(np.count_nonzero(bot[:, :, 3] > 16))
+    if top_px < 24 or bot_px < 16 or mid_px < 16:
+        return False
+    num, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        (top[:, :, 3] > 16).astype(np.uint8), connectivity=8
+    )
+    wide = 0
+    for i in range(1, num):
+        if int(stats[i, cv2.CC_STAT_AREA]) < 12:
+            continue
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        if bw >= width * 0.34:
+            wide += 1
+    return wide >= 1
+
+
 def count_figures(piece: np.ndarray) -> int:
     """Count separate bodies in a keyed cell (joined hat/cape/boots count as one)."""
 
@@ -178,7 +219,7 @@ def extract_legs(
     """
 
     src = _to_bgra(piece)
-    if not looks_like_full_figure(src):
+    if not looks_like_full_figure(src) and not looks_like_walk_body(src):
         return src
     box = alpha_bbox(src)
     if box is None:
@@ -428,7 +469,7 @@ def validate_walk_frame(
         problems.append(f"extra figures ({figures} bodies in one cell)")
     elif figures == 0:
         problems.append("no figure")
-    if require_full_figure and figures <= 1 and not looks_like_full_figure(piece):
+    if require_full_figure and figures <= 1 and not looks_like_walk_body(piece):
         problems.append("zoomed crop (not a whole body)")
     boots = count_boots(piece)
     if boots > max_boots:

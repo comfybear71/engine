@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
+import pytest
 
 from compositor.align import alpha_bbox
 from compositor.factory_fit import (
@@ -12,6 +15,7 @@ from compositor.factory_fit import (
     fit_walk_piece,
     looks_like_full_figure,
     looks_like_full_head,
+    looks_like_walk_body,
     normalize_walk_batch,
     validate_piece,
     validate_walk_frame,
@@ -109,6 +113,59 @@ def _rig_refs() -> tuple[np.ndarray, np.ndarray]:
 def test_count_figures_one_body_not_cape_or_two_people():
     assert count_figures(_full_figure_facing_right()) == 1
     assert count_figures(_two_rodneys()) == 2
+
+
+def _headless_walk_body() -> np.ndarray:
+    """Landscape Grok walk cell: cape + torso + legs, no separate head blob."""
+
+    img = np.zeros((90, 110, 4), dtype=np.uint8)
+    img[8:48, 6:22] = (20, 20, 180, 255)  # cape
+    img[12:48, 28:70] = (28, 28, 150, 255)  # torso
+    img[48:72, 32:42] = (40, 70, 140, 255)
+    img[48:72, 52:62] = (40, 70, 140, 255)
+    img[72:86, 28:46] = (24, 40, 70, 255)
+    img[72:86, 50:68] = (24, 40, 70, 255)
+    return img
+
+
+def test_headless_walk_body_is_accepted_and_not_scaled_to_canvas():
+    src = _headless_walk_body()
+    assert looks_like_walk_body(src) is True
+    problems = validate_walk_frame(src, expect_face=None, require_full_figure=True)
+    assert not any("zoomed crop" in item or "extra figures" in item for item in problems)
+    torso, legs = _rig_refs()
+    fitted, problems = fit_walk_piece(
+        src, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face=None
+    )
+    assert problems == []
+    box = alpha_bbox(fitted)
+    assert box is not None
+    assert box[3] - box[1] < 200
+    assert box[3] > 680
+
+
+REAL_WALK = Path("/workspace/projects/rodney_demo/characters/rodney/torso/walk_side_02.png")
+
+
+@pytest.mark.skipif(not REAL_WALK.exists(), reason="no live Rodney Grok walk drawing on disk")
+def test_real_grok_walk_drawing_is_not_scaled_to_fill_the_canvas():
+    import cv2
+
+    src = cv2.imread(str(REAL_WALK), cv2.IMREAD_UNCHANGED)
+    assert src is not None
+    old = fit_piece_no_squash(src, 1024, 1024, margin=8)
+    old_box = alpha_bbox(old)
+    assert old_box is not None
+    assert old_box[3] - old_box[1] > 800
+    torso, legs = _rig_refs()
+    fitted, problems = fit_walk_piece(
+        src, 1024, 1024, ref=legs, torso_ref=torso, extract=True, expect_face=None
+    )
+    assert problems == []
+    box = alpha_bbox(fitted)
+    assert box is not None
+    assert box[3] - box[1] < 220
+    assert 760 <= box[3] <= 810
 
 
 def test_validate_walk_rejects_extra_figures_and_zoomed_boots():
