@@ -122,13 +122,13 @@ def _resolve_layer_placements(
     placements = [root]
     placed_by_id: dict[str, _Placed] = {}
 
+    # Same scaled space as ``root``. Children used to sit on unscaled (x, y,
+    # scale) while the body/head slots used ``s`` -- Stage's 960×540 preview
+    # then drew the head in half-res and the torso/arms in 1920 space.
     # Layer rotation (body lean) is composed into every child's offset and
     # world rotation so the whole rig turns about the layer anchor. Children
     # are placed parent-before-child so chains of any depth accumulate.
-    layer_space = _Placed(
-        z=0, x=t.x, y=t.y, scale=t.scale, flip_x=t.flip_x, rotation=t.rotation,
-        opacity=t.opacity, anchor=t.anchor, asset=layer.asset, slots={},
-    )
+    layer_space = root._replace(slots={})
     for child in _children_parent_before_child(layer.children):
         if drawings is not None and not _visible_when_matches(child.visible_when, drawings):
             continue
@@ -380,9 +380,10 @@ def compose_scene_frame(
 ) -> np.ndarray:
     """Compose one scene-local frame, honoring ``frame_step`` hold cadence.
 
-    ``out_width`` / ``out_height`` compose onto a smaller canvas (preview /
-    proxy segments) by scaling placements and camera into that space so
-    assets are pre-scaled instead of blending a full 1080p frame.
+    ``out_width`` / ``out_height`` compose onto a smaller canvas by scaling
+    placements and camera into that space. Studio preview does **not** use
+    this path: ``compose_frame`` matches CLI ``render()`` (full canvas, then
+    ``scale_frame``).
 
     A non-identity camera is folded into each layer's placement (and the
     background sample) so pieces are resampled once from source. Zoom 1
@@ -482,20 +483,27 @@ def compose_frame(
     width: int | None = None,
     height: int | None = None,
 ) -> np.ndarray:
-    """Compose one global timeline frame (used by the Studio preview-frame API)."""
+    """Compose one global timeline frame the same way CLI ``render()`` does.
+
+    Full-canvas compose first (identity camera / rig math). If ``width`` and
+    ``height`` are set, ``scale_frame`` the result — the same resize CLI uses
+    for a proxy render. Do not pre-scale placements here; that path drifted
+    from the renderer (child offsets ignored ``world_scale``).
+    """
 
     cache = cache if cache is not None else AssetCache()
     scene, local_frame = scene_at_frame(timeline, frame_index)
-    return compose_scene_frame(
+    canvas = compose_scene_frame(
         scene,
         local_frame,
         timeline.canvas.width,
         timeline.canvas.height,
         timeline.fps,
         cache,
-        out_width=width,
-        out_height=height,
     )
+    if width and height:
+        return scale_frame(canvas, width, height)
+    return canvas
 
 
 def iter_frames(timeline: Timeline, cache: AssetCache | None = None) -> Iterator[np.ndarray]:

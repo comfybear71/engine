@@ -64,6 +64,20 @@ class TestPlacementComposition:
         child_p = next(p for p in placements if p.asset == Path("arm.png"))
         assert (child_p.x, child_p.y) == (1020, 1040)  # offset * scale
 
+    def test_world_scale_applies_to_children_and_root(self):
+        """Stage 960 preview used world_scale=0.5 on the body but not arms."""
+        t = Transform(x=960, y=1080, scale=1.66, anchor="bottom-center")
+        child = Child(id="arm", asset=Path("arm.png"), z=1, offset_x=10, offset_y=-20)
+        layer = _layer(t, [child])
+        full = {p.asset.name: p for p in _resolve_layer_placements(layer, world_scale=1.0)}
+        half = {p.asset.name: p for p in _resolve_layer_placements(layer, world_scale=0.5)}
+        assert half["parent.png"].x == pytest.approx(full["parent.png"].x * 0.5)
+        assert half["parent.png"].y == pytest.approx(full["parent.png"].y * 0.5)
+        assert half["parent.png"].scale == pytest.approx(full["parent.png"].scale * 0.5)
+        assert half["arm.png"].x == pytest.approx(full["arm.png"].x * 0.5)
+        assert half["arm.png"].y == pytest.approx(full["arm.png"].y * 0.5)
+        assert half["arm.png"].scale == pytest.approx(full["arm.png"].scale * 0.5)
+
     def test_child_flip_x_composes_as_xor_with_parent(self):
         t = Transform(x=0, y=0, flip_x=True, anchor="top-left")
         independently_flipped_child = Child(id="hand", asset=Path("h.png"), z=1, flip_x=True)

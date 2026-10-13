@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from compositor.compositor import clamp_preview_frame, compose_frame, scene_at_frame
+from compositor.compositor import clamp_preview_frame, compose_frame, scale_frame, scene_at_frame
 from compositor.timeline_loader import Background, Canvas, Scene, Timeline
 
 
@@ -76,3 +76,11 @@ def test_compose_frame_can_preview_at_reduced_resolution(tmp_path):
     assert small.shape[0] == 10
     assert small.shape[1] == 10
     assert tuple(int(v) for v in small[0, 0]) == (0, 0, 255)
+
+
+def test_preview_resize_matches_cli_scale_frame(tmp_path):
+    """Studio 960 preview must be the CLI frame after scale_frame, not a second compositor."""
+    timeline = _two_scene_timeline(tmp_path)
+    cli = compose_frame(timeline, 0)
+    preview = compose_frame(timeline, 0, width=10, height=10)
+    assert np.array_equal(preview, scale_frame(cli, 10, 10))
