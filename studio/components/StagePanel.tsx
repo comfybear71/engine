@@ -5,6 +5,7 @@ import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import CameraDrawer from "@/components/CameraDrawer";
 import StageAssetsPanel from "@/components/StageAssetsPanel";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
+import PreviewCanvas from "@/components/PreviewCanvas";
 import PanelSplitter from "@/components/PanelSplitter";
 import { LayersInspector, MarksInspector, ScriptInspector } from "@/components/StageInspectors";
 import { LeftIconRail, RightIconRail, type LeftPoolId, type RightDrawerId } from "@/components/StageRails";
@@ -15,6 +16,8 @@ import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import { ASSET_DRAG_MIME, applyStagePlacement, parseAssetDrag } from "@/lib/stageAssets";
 import {
   AUDIO_SYNC_SLACK_SEC,
+  PREVIEW_PREFETCH_SEC,
+  PREVIEW_PROXY_SIZE,
   PROXY_SEGMENT_PREFETCH_SEC,
   PROXY_SEGMENT_SEC,
   audioClockDriftSec,
@@ -22,6 +25,7 @@ import {
   chooseVideoFile,
   clipDurationSec,
   createFrameCache,
+  frameFromElapsedMs,
   frameInSegment,
   isLiveAudioStart,
   mergePlaybackAudioFromLanes,
@@ -61,6 +65,7 @@ import {
   fetchPreviewFrame,
   loadLanes,
   loadPlayback,
+  loadPreviewGraph,
   loadScript,
   loadStage,
   loadStudioSettings,
@@ -77,6 +82,7 @@ import {
   type PreviewSegmentStatus,
   type Mark,
   type PlaybackStatus,
+  type PreviewGraph,
   type StageInfo,
   type StageLayer,
   type LaneBlock,
@@ -120,6 +126,7 @@ export default function StagePanel({
   const [playback, setPlayback] = useState<PlaybackStatus | null>(null);
   const [previewStatus, setPreviewStatus] = useState<"idle" | "rendering" | "buffering">("idle");
   const [bufferHint, setBufferHint] = useState<string | null>(null);
+  const [previewGraph, setPreviewGraph] = useState<PreviewGraph | null>(null);
   const [leftPool, setLeftPool] = useState<LeftPoolId | null>(null);
   const previewBoxRef = useRef<HTMLDivElement | null>(null);
   const [rightDrawer, setRightDrawer] = useState<RightDrawerId | null>(null);
@@ -167,6 +174,7 @@ export default function StagePanel({
   const playRangeRef = useRef<{ start: number; end: number; loop: boolean } | null>(null);
   const segmentRef = useRef<typeof segment>(null);
   const nextSegmentRef = useRef<typeof segment>(null);
+  const previewGraphRef = useRef<PreviewGraph | null>(null);
 
   playingRef.current = playing;
   frameRef.current = frame;
@@ -176,12 +184,14 @@ export default function StagePanel({
   totalFramesRef.current = totalFrames;
   previewStatusRef.current = previewStatus;
   playbackRef.current = playback;
+  previewGraphRef.current = previewGraph;
 
   const videoChoice = chooseVideoFile(playback);
   const fullVideoSrc = project && videoChoice ? renderVideoUrl(project, renderNonce || undefined, script, videoChoice.file) : null;
+  const useCanvasPreview = Boolean(previewGraph) && !fullVideoSrc;
   const segmentLive = Boolean(segment && frameInSegment(frame, segment, 2));
   const segmentSrc = project && segment?.file && (fullVideoSrc || segmentLive) ? previewSegmentUrl(project, segment.file) : null;
-  const videoSrc = fullVideoSrc || (playing && segmentLive && segmentSrc ? segmentSrc : null);
+  const videoSrc = fullVideoSrc || (!useCanvasPreview && playing && segmentLive && segmentSrc ? segmentSrc : null);
   const playOriginFrame = fullVideoSrc ? 0 : segmentLive ? segment?.startFrame || 0 : 0;
 
   useEffect(() => {
@@ -204,6 +214,7 @@ export default function StagePanel({
     setError(null);
     setFrame(0);
     setPlaying(false);
+    setPreviewGraph(null);
     setSelectedMark(null);
     setLoopSelection(false);
     setSelectionRange(null);
@@ -270,6 +281,29 @@ export default function StagePanel({
 
   useEffect(() => {
     if (!project || !workerUp) return;
+    let cancelled = false;
+    loadPreviewGraph(project, script)
+      .then((next) => {
+        if (cancelled) return;
+        setPreviewGraph(next.graph);
+        if (next.fps) setFps(next.fps);
+        if (next.canvas?.width && next.canvas?.height) setCanvas(next.canvas);
+        if (next.totalFrames > 0 && playableTotalRef.current == null) {
+          playableTotalRef.current = next.totalFrames;
+          setTotalFrames(next.totalFrames);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewGraph(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project, script, workerUp, scriptEpoch, lanesEpoch]);
+
+  useEffect(() => {
+    if (!project || !workerUp) return;
+    if (previewGraph) return;
     if (playing && (videoSrc || previewStatus === "buffering")) return;
     if (skipPreviewRef.current || pendingScriptRef.current != null) return;
     const cached = frameCacheRef.current.get(frame);
@@ -280,7 +314,7 @@ export default function StagePanel({
     const controller = new AbortController();
     const requestFrame = clampFrameIndex(frame, totalFrames);
     const timer = window.setTimeout(() => {
-      fetchPreviewFrame(project, requestFrame, controller.signal, script)
+      fetchPreviewFrame(project, requestFrame, controller.signal, script, PREVIEW_PROXY_SIZE)
         .then(({ blob, meta }) => {
           const url = URL.createObjectURL(blob);
           frameCacheRef.current.put(requestFrame, url);
@@ -311,7 +345,7 @@ export default function StagePanel({
     };
     // kickProxyRender is stable enough via ref
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, script, workerUp, frame, playing, videoSrc, totalFrames, fps, lanesEpoch]);
+  }, [project, script, workerUp, frame, playing, videoSrc, totalFrames, fps, lanesEpoch, previewGraph]);
 
   useEffect(() => {
     return () => {
@@ -364,9 +398,10 @@ export default function StagePanel({
       if (video && videoSrc) {
         video.currentTime = Math.max(0, (clamped - playOriginFrame) / Math.max(fps, 1));
       }
-      if (playingRef.current && !fullVideoSrc && !frameInSegment(clamped, segmentRef.current)) {
+      if (playingRef.current && !fullVideoSrc && !previewGraphRef.current && !frameInSegment(clamped, segmentRef.current)) {
         setSegment(null);
       }
+      prefetchFromPlayhead(clamped);
     },
     [fps, videoSrc, playOriginFrame, fullVideoSrc, lanes, totalFrames, onSelectLine]
   );
@@ -560,6 +595,9 @@ export default function StagePanel({
   }
 
   function pictureIsPlaying() {
+    if (playingRef.current && previewStatusRef.current !== "buffering" && !fullVideoSrc) {
+      if (previewGraphRef.current || frameCacheRef.current.get(frameRef.current)) return true;
+    }
     const video = videoRef.current;
     return Boolean(video && !video.paused && video.readyState >= 2);
   }
@@ -648,7 +686,13 @@ export default function StagePanel({
     try {
       const status = await waitForPreviewSegment(
         project,
-        { startFrame: win.startFrame, durationSec, frames: win.frames },
+        {
+          startFrame: win.startFrame,
+          durationSec,
+          frames: win.frames,
+          width: PREVIEW_PROXY_SIZE.width,
+          height: PREVIEW_PROXY_SIZE.height,
+        },
         script,
         (next: PreviewSegmentStatus) => {
           const done = next.framesDone || 0;
@@ -669,6 +713,25 @@ export default function StagePanel({
       setBufferHint(null);
       setError(err instanceof Error ? explainTimelineError(err.message) : "Preview segment failed");
       return null;
+    }
+  }
+
+  function prefetchFromPlayhead(fromFrame: number) {
+    if (!project || previewGraphRef.current) return;
+    const ahead = Math.max(1, Math.round(PREVIEW_PREFETCH_SEC * Math.max(fpsRef.current, 1)));
+    const start = clampFrameIndex(fromFrame, totalFramesRef.current);
+    for (let i = 0; i <= ahead; i += 1) {
+      const requestFrame = start + i;
+      if (requestFrame >= totalFramesRef.current) break;
+      if (frameCacheRef.current.has(requestFrame)) continue;
+      void frameCacheRef.current.ensure(requestFrame, async () => {
+        const { blob } = await fetchPreviewFrame(project, requestFrame, undefined, script, PREVIEW_PROXY_SIZE);
+        return URL.createObjectURL(blob);
+      }).then((url) => {
+        if (url && !playingRef.current && frameRef.current === requestFrame) {
+          setPreviewUrl(url);
+        }
+      });
     }
   }
 
@@ -695,40 +758,60 @@ export default function StagePanel({
     }
 
     let cancelled = false;
-    const startFrame = frameRef.current;
-    pauseLineAudio();
-    (async () => {
-      let current = segmentRef.current;
-      if (!frameInSegment(startFrame, current)) {
-        current = await ensurePlaySegment(startFrame, true);
+    let startFrame = frameRef.current;
+    let startedAt = performance.now();
+    setPreviewStatus("idle");
+    previewStatusRef.current = "idle";
+    setBufferHint(null);
+    prefetchFromPlayhead(startFrame);
+    ensureLineAudio(startFrame);
+
+    function tick(now: number) {
+      if (cancelled || !playingRef.current) return;
+      if (userSeekRef.current) {
+        userSeekRef.current = false;
+        startFrame = frameRef.current;
+        startedAt = now;
+        prefetchFromPlayhead(startFrame);
       }
-      if (cancelled) return;
-      if (!current) {
+      const next = frameFromElapsedMs(now - startedAt, startFrame, fpsRef.current, totalFramesRef.current);
+      const range = playRangeRef.current;
+      if (range && next >= range.end) {
+        if (range.loop) {
+          startFrame = range.start;
+          startedAt = now;
+          setFrame(range.start);
+          ensureLineAudio(range.start);
+          window.requestAnimationFrame(tick);
+          return;
+        }
+        setFrame(range.end);
         setPlaying(false);
         return;
       }
-      const video = videoRef.current;
-      if (video) {
-        video.currentTime = Math.max(0, (frameRef.current - current.startFrame) / Math.max(fpsRef.current, 1));
-        void video.play().catch(() => {
-          if (!cancelled) setPlaying(false);
-        });
+      if (next >= Math.max(0, totalFramesRef.current - 1)) {
+        setFrame(Math.max(0, totalFramesRef.current - 1));
+        setPlaying(false);
+        return;
       }
-      const nextStart = current.startFrame + current.frames;
-      if (project && nextStart < totalFramesRef.current) {
-        const win = segmentWindow(nextStart, fpsRef.current, totalFramesRef.current, PROXY_SEGMENT_SEC);
-        void waitForPreviewSegment(
-          project,
-          { startFrame: win.startFrame, durationSec: PROXY_SEGMENT_SEC, frames: win.frames },
-          script
-        ).then((status) => {
-          if (!status.file) return;
-          nextSegmentRef.current = { file: status.file, startFrame: status.startFrame, frames: status.frames };
-        });
+      if (next !== frameRef.current) {
+        setFrame(next);
+        syncLineAudio(next);
+        const line = scriptLineAtFrame(lanes?.blocks || [], next);
+        if (line != null) onSelectLine(line);
+        prefetchFromPlayhead(next);
       }
-    })();
+      if (!previewGraphRef.current) {
+        const cached = frameCacheRef.current.get(next);
+        if (cached) setPreviewUrl(cached);
+      }
+      window.requestAnimationFrame(tick);
+    }
+
+    const raf = window.requestAnimationFrame(tick);
     return () => {
       cancelled = true;
+      window.cancelAnimationFrame(raf);
       videoRef.current?.pause();
     };
     // Start/stop only — do not depend on fps/totalFrames or a long-shot
@@ -1118,8 +1201,10 @@ export default function StagePanel({
                 onDragOver={onPreviewDragOver}
                 onDrop={onPreviewDrop}
               >
-                {showVideo && videoSrc ? null : previewUrl ? (
-                  // Worker-served preview PNG
+                {showVideo && videoSrc ? null : useCanvasPreview && previewGraph ? (
+                  <PreviewCanvas project={project} graph={previewGraph} frame={frame} />
+                ) : previewUrl ? (
+                  // Worker-served preview JPEG (480p fallback)
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={previewUrl}

@@ -15,7 +15,7 @@ const { fingerprintParseInputs, fingerprintAssets } = require("./parser/parseCac
 const MEM_LIMIT = 48;
 const memory = new Map();
 // Bump when compose_frame pixels change so stale 960 frames are not reused.
-const PREVIEW_COMPOSE_V = "cli-scale-v1";
+const PREVIEW_COMPOSE_V = "cli-scale-480-v1";
 
 function cacheDir() {
   const dir = path.join(os.tmpdir(), "engine-preview-frames");

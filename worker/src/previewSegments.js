@@ -15,8 +15,8 @@ const { fingerprintParseInputs, fingerprintAssets } = require("./parser/parseCac
 const { segmentViaSession } = require("./previewSession");
 
 const SEGMENT_SEC = 25;
-const SEGMENT_SIZE = { width: 960, height: 540 };
-const PREVIEW_COMPOSE_V = "cli-scale-v1";
+const SEGMENT_SIZE = { width: 854, height: 480 };
+const PREVIEW_COMPOSE_V = "cli-scale-480-v1";
 
 const jobs = new Map();
 

@@ -760,6 +760,34 @@ describe("studio worker API", () => {
     assert.equal(bad.status, 400);
   });
 
+  test("GET /preview-graph returns the canvas graph and does not write timeline.json", async () => {
+    fixture.writeScript(
+      ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi there."].join("\n")
+    );
+    const timelinePath = path.join(fixture.projectDir, "timeline.json");
+    const sentinel = { sentinel: true };
+    fs.writeFileSync(timelinePath, JSON.stringify(sentinel));
+    const res = await fetch(`${ctx.url}/api/projects/project/preview-graph`);
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    assert.ok(body.graph);
+    assert.ok(body.graph.scenes);
+    assert.ok(body.graph.canvas);
+    assert.deepEqual(JSON.parse(fs.readFileSync(timelinePath, "utf8")), sentinel);
+  });
+
+  test("GET asset?preview=1 serves a png texture", async () => {
+    const res = await fetch(
+      `${ctx.url}/api/projects/project/asset?rel=${encodeURIComponent("characters/alice/body.png")}&preview=1`
+    );
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") || "", /image\/png/);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    assert.ok(bytes.length > 8);
+    assert.equal(bytes[0], 0x89);
+  });
+
   test("POST /preview-segment starts a windowed proxy and never writes timeline.json", async () => {
     fixture.writeScript(
       ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi there."].join("\n")

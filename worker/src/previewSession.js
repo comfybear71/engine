@@ -148,10 +148,22 @@ function segmentViaSession(projectDir, options = {}) {
       frames: options.frames,
       output: path.resolve(options.output),
       progressPath: options.progressPath ? path.resolve(options.progressPath) : null,
-      width: options.width || 960,
-      height: options.height || 540,
+      width: options.width || 854,
+      height: options.height || 480,
     },
     { ...options, timeoutMs: options.timeoutMs || 10 * 60 * 1000 }
+  );
+}
+
+function graphViaSession(projectDir, options = {}) {
+  return requestViaPool(
+    framePool,
+    {
+      cmd: "graph",
+      projectDir: path.resolve(projectDir),
+      timeline: options.timeline ? path.resolve(options.timeline) : null,
+    },
+    { ...options, timeoutMs: options.timeoutMs || 60_000 }
   );
 }
 
@@ -176,6 +188,7 @@ function closePreviewSession() {
 module.exports = {
   previewViaSession,
   segmentViaSession,
+  graphViaSession,
   closePreviewSession,
   ensureSession: (options) => ensurePool(framePool, options),
 };

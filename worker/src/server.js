@@ -15,7 +15,7 @@ const os = require("os");
 const path = require("path");
 const express = require("express");
 
-const { renderProject, previewFrame, parseEstimatedSilent } = require("./render");
+const { renderProject, previewFrame, previewGraph, parseEstimatedSilent } = require("./render");
 const { parseProjectToTemp, resolveGlobalAssetsDir, ScriptError } = require("./parser");
 const { getCachedParse } = require("./parser/parseCache");
 const { validateTimelineFile } = require("./parser/validateTimelineFile");
@@ -49,7 +49,7 @@ const {
   readLibrary,
   isSafeFolderName,
 } = require("./studioProjects");
-const { cachedBackgroundThumb } = require("./studioThumbs");
+const { cachedBackgroundThumb, cachedPreviewTexture } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
 const { previewIngest, confirmIngest, cancelIngest, DRAWING_NAME } = require("./assetIngest");
 const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, SLOT_NAME } = require("./characterLocal");
@@ -1443,6 +1443,18 @@ function createApp(options = {}) {
         });
       return;
     }
+    const wantPreview = req.query.preview === "1" || req.query.preview === "true";
+    if (wantPreview) {
+      cachedPreviewTexture(resolved.absPath)
+        .then((file) => {
+          setAssetCacheControl(req, res, resolved.absPath);
+          res.type("image/png").sendFile(file || resolved.absPath);
+        })
+        .catch((err) => {
+          if (!res.headersSent) res.status(500).json({ error: err.message });
+        });
+      return;
+    }
     setAssetCacheControl(req, res, resolved.absPath);
     res.type(type).sendFile(resolved.absPath);
   });
@@ -1738,6 +1750,38 @@ function createApp(options = {}) {
     }
   });
 
+  app.get("/api/projects/:name/preview-graph", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const scriptName = scriptFromRequest(req, res);
+    if (!scriptName) return;
+    let result;
+    try {
+      result = await parseForRead(projectDir, scriptName);
+    } catch (err) {
+      return res.status(400).json(parseErrorPayload(err));
+    }
+    try {
+      const graph = await previewGraph(projectDir, {
+        timeline: result.timelinePath,
+        pythonBin: options.pythonBin,
+      });
+      const lanes = buildLaneBlocks(result);
+      res.setHeader("Cache-Control", "private, max-age=30");
+      res.json({
+        ok: true,
+        graph,
+        fps: graph.fps || lanes.fps,
+        totalFrames: graph.totalFrames || lanes.totalFrames,
+        canvas: graph.canvas || { width: 1920, height: 1080 },
+      });
+    } catch (err) {
+      if (!res.headersSent) res.status(500).json({ error: explainTimelineError(err.message) });
+    } finally {
+      cleanupTempParse(result);
+    }
+  });
+
   app.post("/api/projects/:name/preview-frame", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
@@ -1768,8 +1812,8 @@ function createApp(options = {}) {
     frame = clampFrame(frame, playableFrames);
     const format = body.format === "png" ? "png" : "jpeg";
     const quality = 85;
-    const width = body.width != null ? Number(body.width) : format === "jpeg" ? 960 : null;
-    const height = body.height != null ? Number(body.height) : format === "jpeg" ? 540 : null;
+    const width = body.width != null ? Number(body.width) : format === "jpeg" ? 854 : null;
+    const height = body.height != null ? Number(body.height) : format === "jpeg" ? 480 : null;
 
     function sendPreview(type, buffer, meta) {
       const totalFrames =

@@ -46,9 +46,13 @@ export function frameFromElapsedMs(elapsedMs: number, startFrame: number, fps: n
 export const PROXY_SEGMENT_SEC = 25;
 /** First window after Play — short so the mouth can start without a 30s wait. */
 export const PROXY_SEGMENT_FIRST_SEC = 6;
-export const PROXY_SEGMENT_SIZE = { width: 960, height: 540 };
+/** Worker fallback / scrub size. 480p is the default so Play does not encode HD. */
+export const PREVIEW_PROXY_SIZE = { width: 854, height: 480 };
+export const PROXY_SEGMENT_SIZE = PREVIEW_PROXY_SIZE;
 /** Start the next window when this much of the current segment remains. */
 export const PROXY_SEGMENT_PREFETCH_SEC = 8;
+/** How far ahead of the playhead to prefetch cached 480p frames. */
+export const PREVIEW_PREFETCH_SEC = 2;
 /** Reseek line audio when it drifts this far from the picture clock. */
 export const AUDIO_SYNC_SLACK_SEC = 0.35;
 

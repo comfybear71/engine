@@ -10,7 +10,7 @@ const { spawn } = require("child_process");
 const path = require("path");
 
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
-const { previewViaSession } = require("./previewSession");
+const { previewViaSession, graphViaSession } = require("./previewSession");
 
 const ESTIMATED_SILENT_RE = /(\d+) of (\d+) lines are estimated\/silent/;
 
@@ -146,4 +146,9 @@ async function previewFrame(projectDir, frame, outputPath, options = {}) {
   return { ...result, meta };
 }
 
-module.exports = { renderProject, previewFrame, parseEstimatedSilent };
+async function previewGraph(projectDir, options = {}) {
+  const msg = await graphViaSession(projectDir, options);
+  return msg.graph;
+}
+
+module.exports = { renderProject, previewFrame, previewGraph, parseEstimatedSilent };

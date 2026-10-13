@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   AUDIO_SYNC_SLACK_SEC,
+  PREVIEW_PROXY_SIZE,
   PROXY_SEGMENT_FIRST_SEC,
   PROXY_SEGMENT_SEC,
   audioClockDriftSec,
@@ -86,6 +87,8 @@ describe("stage playback helpers", () => {
     const first = segmentWindow(0, 24, 24 * 600, playSegmentDurationSec(true));
     assert.equal(first.frames, 24 * PROXY_SEGMENT_FIRST_SEC);
     assert.equal(playSegmentDurationSec(false), PROXY_SEGMENT_SEC);
+    assert.equal(PREVIEW_PROXY_SIZE.width, 854);
+    assert.equal(PREVIEW_PROXY_SIZE.height, 480);
   });
 
   test("line audio waits for the picture and reseeks when it drifts", () => {
