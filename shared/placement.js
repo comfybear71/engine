@@ -480,6 +480,41 @@ export function sceneAtFrame(graph, frame) {
   return { scene: last, localFrame: Math.max(0, last.totalFrames - 1), startFrame: elapsed - last.totalFrames };
 }
 
+/**
+ * Destination rectangle for a background command, in canvas pixels.
+ *
+ * This is the rect `drawImage` must use. It is derived from the graph's
+ * source width/height (the real asset, same as CLI `probe_size`), not
+ * from a downscaled `?preview=1` texture. A 512px preview still covers
+ * the 1920×1080 frame the same way `fit_to_canvas` does.
+ */
+export function backgroundDestRect(cmd, canvasW, canvasH) {
+  const width = canvasW || 1920;
+  const height = canvasH || 1080;
+  const zoom = Number(cmd?.zoom) || 1;
+  const srcW = Number(cmd?.width) || width;
+  const srcH = Number(cmd?.height) || height;
+  const cx = cmd?.cx == null ? width / 2 : Number(cmd.cx);
+  const cy = cmd?.cy == null ? height / 2 : Number(cmd.cy);
+  const originX = Number(cmd?.originX) || 0;
+  const originY = Number(cmd?.originY) || 0;
+  const sx = Number(cmd?.sx) || zoom;
+  const sy = Number(cmd?.sy) || zoom;
+  return {
+    x: width / 2 + (originX - cx) * zoom,
+    y: height / 2 + (originY - cy) * zoom,
+    w: srcW * sx,
+    h: srcH * sy,
+  };
+}
+
+export function evaluateBackgroundRect(graph, frameIndex) {
+  const evaluated = evaluateFrame(graph, frameIndex);
+  const bg = (evaluated.commands || []).find((cmd) => cmd.kind === "bg");
+  if (!bg) return null;
+  return backgroundDestRect(bg, evaluated.canvas.width, evaluated.canvas.height);
+}
+
 export function evaluateFrame(graph, frameIndex) {
   const fps = graph.fps || 24;
   const canvasW = graph.canvas?.width || 1920;

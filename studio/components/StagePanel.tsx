@@ -1205,7 +1205,7 @@ export default function StagePanel({
             ) : null}
               <div
                 ref={previewBoxRef}
-                className="relative inline-block max-h-full max-w-full"
+                className="relative flex h-full min-h-0 w-full max-h-full max-w-full items-center justify-center"
                 data-testid="stage-preview-drop"
                 onDragOver={onPreviewDragOver}
                 onDrop={onPreviewDrop}
@@ -1219,6 +1219,7 @@ export default function StagePanel({
                     src={previewUrl}
                     alt={`Frame ${frame}`}
                     className="max-h-full max-w-full rounded-sm object-contain shadow-2xl"
+                    style={{ width: "100%", height: "auto", aspectRatio: "16 / 9" }}
                   />
                 ) : (
                   <div className="flex h-[280px] w-[500px] max-w-full items-center justify-center rounded-sm border border-studio-border bg-studio-raised text-sm text-studio-muted">

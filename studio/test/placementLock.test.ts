@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { collectRels, evaluateFrame } from "../../shared/placement.js";
+import { backgroundDestRect, collectRels, evaluateBackgroundRect, evaluateFrame } from "../../shared/placement.js";
 
 const graph = {
   fps: 24,
@@ -98,5 +98,76 @@ describe("shared placement lock", () => {
   test("collectRels lists every drawing piece", () => {
     const rels = collectRels(graph);
     assert.deepEqual(rels, ["arm.png", "bg.png", "body.png", "mouth_a.png", "mouth_x.png"]);
+  });
+
+  test("background dest rect covers the canvas from graph size, not a 512 preview texture", () => {
+    const cover = evaluateBackgroundRect(
+      {
+        fps: 24,
+        canvas: { width: 1920, height: 1080 },
+        totalFrames: 1,
+        scenes: [
+          {
+            id: "s1",
+            totalFrames: 1,
+            background: { rel: "curtain.png", width: 1920, height: 1080, fit: "cover" },
+            layers: [],
+          },
+        ],
+      },
+      0
+    );
+    assert.deepEqual(cover, { x: 0, y: 0, w: 1920, h: 1080 });
+
+    const wide = evaluateBackgroundRect(
+      {
+        fps: 24,
+        canvas: { width: 1920, height: 1080 },
+        totalFrames: 1,
+        scenes: [
+          {
+            id: "s1",
+            totalFrames: 1,
+            background: { rel: "wide.png", width: 4000, height: 2000, fit: "cover" },
+            layers: [],
+          },
+        ],
+      },
+      0
+    );
+    assert.equal(wide?.x, -120);
+    assert.equal(wide?.y, 0);
+    assert.equal(wide?.w, 2160);
+    assert.equal(wide?.h, 1080);
+
+    const previewSized = backgroundDestRect(
+      { width: 1920, height: 1080, sx: 1, sy: 1, zoom: 1, cx: 960, cy: 540, originX: 0, originY: 0 },
+      1920,
+      1080
+    );
+    assert.deepEqual(previewSized, { x: 0, y: 0, w: 1920, h: 1080 });
+
+    const squareSource = evaluateBackgroundRect(
+      {
+        fps: 24,
+        canvas: { width: 1920, height: 1080 },
+        totalFrames: 1,
+        scenes: [
+          {
+            id: "s1",
+            totalFrames: 1,
+            background: { rel: "bedroom.png", width: 1024, height: 1024, fit: "cover" },
+            layers: [],
+          },
+        ],
+      },
+      0
+    );
+    assert.ok(squareSource);
+    assert.equal(squareSource.w, 1920);
+    assert.equal(squareSource.h, 1920);
+    assert.equal(squareSource.x, 0);
+    assert.equal(squareSource.y, -420);
+    assert.ok(squareSource.y + squareSource.h >= 1080);
   });
 });

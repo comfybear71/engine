@@ -318,6 +318,26 @@ def _slot_command(
     }
 
 
+def background_dest_rect(cmd: dict[str, Any], canvas_w: int, canvas_h: int) -> dict[str, float]:
+    """Canvas-pixel dest rect for a bg command (same numbers Studio must draw)."""
+
+    zoom = float(cmd.get("zoom") or 1)
+    src_w = float(cmd.get("width") or canvas_w or 1)
+    src_h = float(cmd.get("height") or canvas_h or 1)
+    cx = canvas_w / 2.0 if cmd.get("cx") is None else float(cmd["cx"])
+    cy = canvas_h / 2.0 if cmd.get("cy") is None else float(cmd["cy"])
+    origin_x = float(cmd.get("originX") or 0)
+    origin_y = float(cmd.get("originY") or 0)
+    sx = float(cmd.get("sx") or zoom)
+    sy = float(cmd.get("sy") or zoom)
+    return {
+        "x": canvas_w / 2.0 + (origin_x - cx) * zoom,
+        "y": canvas_h / 2.0 + (origin_y - cy) * zoom,
+        "w": src_w * sx,
+        "h": src_h * sy,
+    }
+
+
 def evaluate_draw_ops(timeline: Timeline, frame_index: int) -> dict[str, Any]:
     """CLI compositor placements as a draw list (same numbers Studio must use)."""
 

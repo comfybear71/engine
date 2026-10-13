@@ -3,7 +3,7 @@
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
 const { encodeRgbaPng } = require("../src/pngFlip");
-const { alphaBounds, compositeRgba, renderFactoryThumb } = require("../src/factoryThumb");
+const { alphaBounds, compositeRgba, keyChromaGreen, renderFactoryThumb } = require("../src/factoryThumb");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -58,6 +58,25 @@ describe("factory thumbs", () => {
     const box = alphaBounds(blended, width, height);
     assert.equal(box.x, 10);
     assert.equal(box.y, 10);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("chroma key punches lime green to transparent so thumbs sit on a checker", () => {
+    const width = 32;
+    const height = 32;
+    const rgba = Buffer.alloc(width * height * 4);
+    fillRect(rgba, width, 0, 0, 32, 32, 0, 220, 0, 255);
+    fillRect(rgba, width, 10, 8, 12, 16, 40, 30, 24, 255);
+    const keyed = keyChromaGreen(rgba, width, height);
+    assert.equal(keyed[3], 0);
+    const body = ((8 * 32 + 10) * 4) + 3;
+    assert.equal(keyed[body], 255);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "factory-key-"));
+    const piece = path.join(tmp, "body.png");
+    fs.writeFileSync(piece, encodeRgbaPng(width, height, rgba));
+    const rendered = renderFactoryThumb({ piecePath: piece, pad: 2, keyGreen: true });
+    assert.ok(rendered.width < 32);
+    assert.ok(rendered.height < 32);
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

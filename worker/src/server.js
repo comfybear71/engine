@@ -25,6 +25,8 @@ const { getCachedPreview, storePreview } = require("./previewCache");
 const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = require("./studioLibrary");
 const { describeFactoryCharacter, applyStatusBody, listProjectActions, inspectorForPiece } = require("./characterStatus");
 const { listProjectAudio } = require("./studioAudio");
+const { trashAsset } = require("./projectTrash");
+const { ensureActionPreview } = require("./actionPreview");
 const { renderFactoryThumb } = require("./factoryThumb");
 const { openProjectRel } = require("./factoryOpen");
 const { buildLaneBlocks, clampFrame } = require("./studioLanes");
@@ -52,7 +54,7 @@ const {
   readLibrary,
   isSafeFolderName,
 } = require("./studioProjects");
-const { cachedBackgroundThumb, cachedPreviewTexture } = require("./studioThumbs");
+const { cachedBackgroundThumb, cachedPreviewTexture, isBackgroundAssetPath } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
 const { previewIngest, confirmIngest, cancelIngest, DRAWING_NAME } = require("./assetIngest");
 const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, SLOT_NAME } = require("./characterLocal");
@@ -768,7 +770,12 @@ function createApp(options = {}) {
     }
     const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
     if (wantThumb) {
-      cachedBackgroundThumb(resolved.absPath)
+      const cover169 =
+        req.query.cover === "1" ||
+        req.query.cover === "true" ||
+        isBackgroundAssetPath(resolved.absPath) ||
+        /(?:^|\/)backgrounds\//.test(rel);
+      cachedBackgroundThumb(resolved.absPath, { cover169 })
         .then((thumbPath) => {
           const file = thumbPath || resolved.absPath;
           const sendType = thumbPath ? "image/jpeg" : type;
@@ -1003,6 +1010,42 @@ function createApp(options = {}) {
     if (!projectDir) return;
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     res.json({ actions: listProjectActions(projectDir, globalAssetsDir) });
+  });
+
+  app.get("/api/projects/:name/actions/:characterId/:actionId/preview", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const file = await ensureActionPreview(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.actionId,
+        options.pythonBin ? { pythonBin: options.pythonBin } : {}
+      );
+      res.setHeader("Cache-Control", "private, max-age=30");
+      res.type("video/mp4").sendFile(path.resolve(file));
+    } catch (err) {
+      if (!res.headersSent) res.status(500).json({ error: err.message || "Action preview failed" });
+    }
+  });
+
+  app.post("/api/projects/:name/assets/trash", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = trashAsset(projectDir, globalAssetsDir, req.body || {});
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      const status = err.code === "EUSED" ? 409 : err.code === "ENOTFOUND" ? 404 : 400;
+      res.status(status).json({
+        error: err.message,
+        code: err.code || null,
+        usages: err.usages || [],
+      });
+    }
   });
 
   app.get("/api/projects/:name/library", (req, res) => {
@@ -1450,7 +1493,8 @@ function createApp(options = {}) {
           );
           if (over) basePath = over.absPath;
         }
-        const rendered = renderFactoryThumb({ piecePath: resolved.absPath, basePath });
+        const wantKey = req.query.key === "1" || req.query.key === "true";
+        const rendered = renderFactoryThumb({ piecePath: resolved.absPath, basePath, keyGreen: wantKey });
         setAssetCacheControl(req, res, resolved.absPath);
         res.type("image/png").send(rendered.png);
       } catch (err) {
@@ -1460,7 +1504,12 @@ function createApp(options = {}) {
     }
     const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
     if (wantThumb) {
-      cachedBackgroundThumb(resolved.absPath)
+      const cover169 =
+        req.query.cover === "1" ||
+        req.query.cover === "true" ||
+        isBackgroundAssetPath(resolved.absPath) ||
+        /(?:^|\/)backgrounds\//.test(rel);
+      cachedBackgroundThumb(resolved.absPath, { cover169 })
         .then((thumbPath) => {
           const file = thumbPath || resolved.absPath;
           const sendType = thumbPath ? "image/jpeg" : type;

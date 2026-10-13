@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { collectRels, evaluateFrame, type PreviewCommand } from "@/lib/previewCompose";
+import {
+  backgroundDestRect,
+  collectRels,
+  evaluateFrame,
+  type PreviewCommand,
+} from "@/lib/previewCompose";
 import { assetUrl } from "@/lib/worker";
 
 const DISPLAY_WIDTH = 854;
@@ -33,16 +38,11 @@ function drawBackground(
     ctx.fillRect(0, 0, canvasW, canvasH);
     return;
   }
-  const zoom = Number(cmd.zoom) || 1;
-  const cx = cmd.cx == null ? canvasW / 2 : Number(cmd.cx);
-  const cy = cmd.cy == null ? canvasH / 2 : Number(cmd.cy);
-  const originX = Number(cmd.originX) || 0;
-  const originY = Number(cmd.originY) || 0;
-  const sx = Number(cmd.sx) || zoom;
-  const sy = Number(cmd.sy) || zoom;
-  ctx.setTransform(sx, 0, 0, sy, canvasW / 2 + (originX - cx) * zoom, canvasH / 2 + (originY - cy) * zoom);
-  ctx.drawImage(img, 0, 0);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Dest size comes from the graph (CLI source pixels + cover/contain), never
+  // from the loaded texture. `?preview=1` assets are ~512px; drawing them at
+  // natural size left a small strip on a 1920×1080 stage.
+  const rect = backgroundDestRect(cmd, canvasW, canvasH);
+  ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
 }
 
 function drawSprite(ctx: CanvasRenderingContext2D, img: HTMLImageElement, cmd: PreviewCommand) {
@@ -132,7 +132,6 @@ export default function PreviewCanvas({
       const img = cmd.rel ? textures.get(cmd.rel) || null : null;
       if (cmd.kind === "bg") {
         drawBackground(ctx, img, cmd, worldW, worldH);
-        ctx.setTransform(displayW / worldW, 0, 0, displayH / worldH, 0, 0);
         continue;
       }
       if (!img) continue;
@@ -145,6 +144,7 @@ export default function PreviewCanvas({
       ref={canvasRef}
       data-testid="stage-preview-canvas"
       className="max-h-full max-w-full rounded-sm object-contain shadow-2xl"
+      style={{ width: "100%", height: "auto", aspectRatio: "16 / 9" }}
       width={DISPLAY_WIDTH}
       height={DISPLAY_HEIGHT}
     />

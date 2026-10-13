@@ -21,6 +21,8 @@ import {
   soundDisplayName,
   sourceLabel,
   visibleDrawings,
+  pickVisibleProp,
+  actionPreviewSeconds,
 } from "../lib/factoryAssets.ts";
 
 describe("factory Assets helpers", () => {
@@ -129,5 +131,8 @@ describe("factory Assets helpers", () => {
     );
     assert.equal(soundDisplayName({ label: "truck", rel: "audio/truck/001_rodney.wav" }, false), "truck");
     assert.equal(soundDisplayName({ label: "truck", rel: "audio/truck/002_rodney.wav" }, true), "truck 002_rodney");
+    assert.equal(pickVisibleProp([{ id: "letterbox" }, { id: "mic_stand" }, { id: "speaker" }])?.id, "mic_stand");
+    assert.equal(actionPreviewSeconds(8, 12), 2);
+    assert.equal(actionPreviewSeconds(4, 12), 2);
   });
 });

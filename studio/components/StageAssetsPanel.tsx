@@ -287,7 +287,7 @@ export default function StageAssetsPanel({
                       key={bg.id}
                       testId={`stage-asset-bg-${bg.id}`}
                       label={bg.id}
-                      src={assetUrl(project, bg.thumbRel, { thumb: true, v: bg.mtime })}
+                      src={assetUrl(project, bg.thumbRel, { thumb: true, cover: true, v: bg.mtime })}
                       asset={{ kind: "background", locationId: bg.id }}
                     />
                   ))
