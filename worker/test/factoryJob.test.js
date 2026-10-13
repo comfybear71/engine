@@ -196,7 +196,7 @@ describe("factory dest and names", () => {
     );
     assert.equal(setSlots.head_base, "none");
     assert.equal(setSlots.eyes, "none");
-    assert.equal(setSlots.mouth, "none");
+    assert.equal(setSlots.mouth, undefined);
     assert.equal(setSlots.hat, "none");
     assert.equal(setSlots.cape, "none");
     assert.equal(setSlots.arm_L, "none");
@@ -295,7 +295,7 @@ describe("factory pipeline with a fixture sheet", () => {
     assert.equal(job.action && job.action.set_slots && job.action.set_slots.legs, "none");
     assert.equal(job.action && job.action.set_slots && job.action.set_slots.head_base, "none");
     assert.equal(job.action && job.action.set_slots && job.action.set_slots.eyes, "none");
-    assert.equal(job.action && job.action.set_slots && job.action.set_slots.mouth, "none");
+    assert.equal(job.action && job.action.set_slots && job.action.set_slots.mouth, undefined);
     assert.equal(job.action && job.action.set_slots && job.action.set_slots.hand, "none");
     assert.equal(job.action && job.action.set_slots && job.action.set_slots.torso, undefined);
     assert.equal(job.action && job.action.hide_children, true);
@@ -328,7 +328,7 @@ describe("factory pipeline with a fixture sheet", () => {
     assert.equal(actionJson.set_slots.body, "none");
     assert.equal(actionJson.set_slots.legs, "none");
     assert.equal(actionJson.set_slots.head_base, "none");
-    assert.equal(actionJson.set_slots.mouth, "none");
+    assert.equal(actionJson.set_slots.mouth, undefined);
     assert.equal(actionJson.hide_children, true);
     assert.equal(actionJson.view, "right_side");
     const charJson = JSON.parse(

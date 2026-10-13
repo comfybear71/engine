@@ -31,7 +31,7 @@ WALK_SCALE_TOLERANCE = 0.22
 LEGS_OF_FIGURE_FRAC = 0.42
 POSE_DIFF_MIN = 0.028
 PREVIEW_POSE_DIFF_MIN = 0.012
-WALK_BOOT_X_MIN_STD = 2.5
+WALK_BOOT_X_MIN_STD = 1.8
 
 
 def _resize_uniform(piece: np.ndarray, scale: float) -> np.ndarray:
@@ -671,6 +671,21 @@ def _mask_to_bgra(mask: np.ndarray) -> np.ndarray:
     return out
 
 
+def _lead_x(mask: np.ndarray, y0: int, y1: int) -> float | None:
+    """Rightmost opaque x in a foot band — used to tell a stride from a freeze."""
+
+    if mask is None or y1 <= y0:
+        return None
+    y0 = max(0, int(y0))
+    y1 = min(int(y1), mask.shape[0])
+    if y1 <= y0:
+        return None
+    _ys, xs = np.where(mask[y0:y1])
+    if xs.size < 4:
+        return None
+    return float(xs.max())
+
+
 def validate_preview_motion(frames: list[np.ndarray]) -> list[str]:
     """Fail when consecutive preview frames are frozen (same pose)."""
 
@@ -683,7 +698,9 @@ def validate_preview_motion(frames: list[np.ndarray]) -> list[str]:
         else:
             grays.append(frame)
     for i in range(1, len(grays)):
-        mask = _figure_mask(frames[i]) | _figure_mask(frames[i - 1])
+        mask_a = _figure_mask(frames[i - 1])
+        mask_b = _figure_mask(frames[i])
+        mask = mask_a | mask_b
         ys, xs = np.where(mask)
         if ys.size < 16:
             continue
@@ -692,7 +709,11 @@ def validate_preview_motion(frames: list[np.ndarray]) -> list[str]:
         a = grays[i - 1][y0:y1, x0:x1].astype(np.float32)
         b = grays[i][y0:y1, x0:x1].astype(np.float32)
         diff = float(np.mean(np.abs(a - b))) / 255.0
-        if diff < PREVIEW_POSE_DIFF_MIN:
+        band0 = y0 + int((y1 - y0) * 0.85)
+        lead_a = _lead_x(mask_a, band0, y1)
+        lead_b = _lead_x(mask_b, band0, y1)
+        boot_delta = abs(lead_b - lead_a) if lead_a is not None and lead_b is not None else 0.0
+        if diff < PREVIEW_POSE_DIFF_MIN and boot_delta < WALK_BOOT_X_MIN_STD:
             return [f"near-identical cells (frames {i} and {i + 1} do not change)"]
     return []
 

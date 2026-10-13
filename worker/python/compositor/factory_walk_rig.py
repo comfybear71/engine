@@ -25,8 +25,8 @@ from .factory_fit import (
     normalize_walk_batch,
 )
 
-STRIDE_GAIN = 0.16
-BOB_PX = 3.0
+STRIDE_GAIN = 0.26
+BOB_PX = 4.0
 HIP_FRAC = 0.62
 MORPH_MIN_SOURCES = 4
 
@@ -151,9 +151,33 @@ def _sample_pair(sources: list[np.ndarray], index: int, count: int) -> tuple[np.
     return sources[a], sources[b], frac, phase
 
 
+def morph_legs_only(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
+    """Blend the legs; keep the nearest source's head and torso.
+
+    A full-body cross-dissolve of two contact poses ghosts a second head.
+    """
+
+    a = _to_bgra(a)
+    b = _to_bgra(b)
+    if t <= 0.02:
+        return a.copy()
+    if t >= 0.98:
+        return b.copy()
+    blended = morph_frames(a, b, t)
+    nearest = a if t < 0.5 else b
+    box = alpha_bbox(nearest)
+    if box is None:
+        return blended
+    hip_y = box[1] + int((box[3] - box[1]) * HIP_FRAC)
+    out = nearest.copy()
+    out[hip_y:] = blended[hip_y:]
+    return _to_bgra(out)
+
+
 def _inbetween(a: np.ndarray, b: np.ndarray, frac: float, n_sources: int) -> np.ndarray:
-    """Morph adjacent keys when we have a real cycle. Never cross-dissolve two
-    opposite contact poses — that ghosts a second body."""
+    """Morph adjacent keys when we have a real cycle. Two contact poses
+    keep the nearest key and rely on the leg warp for in-betweens — a
+    full blend of opposite strides ghosts extra feet."""
 
     if n_sources >= MORPH_MIN_SOURCES and 0.08 < frac < 0.92:
         return morph_frames(a, b, frac)
@@ -161,8 +185,8 @@ def _inbetween(a: np.ndarray, b: np.ndarray, frac: float, n_sources: int) -> np.
 
 
 def stride_amount(phase: float) -> float:
-    # Contact (legs apart) at 0 / 0.5; passing (together) at 0.25 / 0.75.
-    return STRIDE_GAIN * abs(math.cos(phase * math.pi * 2.0))
+    # + spread at contact (0 / 0.5), squeeze toward passing (0.25 / 0.75).
+    return STRIDE_GAIN * math.cos(phase * math.pi * 4.0)
 
 
 def bob_amount(phase: float) -> float:

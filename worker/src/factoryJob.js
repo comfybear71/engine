@@ -356,6 +356,9 @@ function walkSetSlots(character, dest) {
   const destSlot = dest && dest.slot;
   for (const name of names) {
     if (name === destSlot) continue;
+    // Mouth is dialogue-driven; [Do:] / [Action:] cannot set it. The
+    // compositor already skips overlays on a walk_* torso drawing.
+    if (String(name).toLowerCase() === "mouth") continue;
     setSlots[name] = "none";
   }
   return setSlots;
