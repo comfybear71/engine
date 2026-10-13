@@ -12,6 +12,7 @@ import StagePanel from "@/components/StagePanel";
 import StudioSettings from "@/components/StudioSettings";
 import { readRememberedScript, writeRememberedScript } from "@/lib/activeScript";
 import { isOldScript, pickActiveScript } from "@/lib/factoryAssets";
+import type { FactoryContext } from "@/lib/factoryPrompt";
 import {
   checkWorker,
   createScript,
@@ -63,6 +64,7 @@ export default function StudioApp({
   const [scriptEpoch, setScriptEpoch] = useState(0);
   const [imagineOpen, setImagineOpen] = useState(false);
   const [imagineNeedId, setImagineNeedId] = useState<string | null>(null);
+  const [imagineContext, setImagineContext] = useState<FactoryContext | null>(null);
   const [assetCharacterId, setAssetCharacterId] = useState<string | null>(null);
   const [assetEpoch, setAssetEpoch] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -178,7 +180,6 @@ export default function StudioApp({
               project
             )}
           </span>
-          <ScriptIdentity name={script} />
         </div>
 
         <nav className="flex items-end gap-1">
@@ -223,7 +224,6 @@ export default function StudioApp({
             Settings
           </button>
           <div className="flex items-center gap-2">
-            <ScriptIdentity name={script} size="sm" />
             <button
               type="button"
               data-testid="studio-render"
@@ -253,6 +253,13 @@ export default function StudioApp({
             onOpenImagine={(opts) => {
               if (opts?.characterId) setAssetCharacterId(opts.characterId);
               if (opts?.needId) setImagineNeedId(opts.needId);
+              setImagineContext({
+                kind: opts?.mode || (opts?.slot ? "slot" : "character"),
+                characterId: opts?.characterId || null,
+                slot: opts?.slot || null,
+                view: opts?.view || null,
+                label: opts?.label || null,
+              });
               setImagineOpen(true);
             }}
             refreshToken={assetEpoch}
@@ -272,6 +279,10 @@ export default function StudioApp({
             onOpenImagine={(opts) => {
               setAssetCharacterId(opts.characterId);
               setImagineNeedId(opts.needId);
+              setImagineContext({
+                kind: "character",
+                characterId: opts.characterId,
+              });
               setImagineOpen(true);
             }}
           />
@@ -311,6 +322,7 @@ export default function StudioApp({
         open={imagineOpen}
         characterId={assetCharacterId}
         needId={imagineNeedId}
+        factoryContext={imagineContext}
         onOpenChange={setImagineOpen}
         onCharacterId={setAssetCharacterId}
         onNeedId={setImagineNeedId}

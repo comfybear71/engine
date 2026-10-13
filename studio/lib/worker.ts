@@ -615,20 +615,26 @@ export type FactoryJob = {
   ok: boolean;
   jobId: string;
   characterId: string;
+  mode?: string;
+  slot?: string | null;
+  view?: string | null;
+  name?: string | null;
+  title?: string | null;
   actionId: string;
   prompt: string;
   hiddenPrompt: string;
   frames: number;
   grid: { cols: number; rows: number };
-  dest: { kind: string; slot: string; drawings_dir: string };
+  dest: { kind: string; slot?: string; drawings_dir?: string };
   drawings: FactoryJobDrawing[];
   warnings: string[];
   previewRel: string | null;
+  previewKind?: "image" | "video" | string | null;
   ticked: boolean;
   usedFixture: boolean;
   styleBlock: string;
   rigRules: string[];
-  greenScreen: string;
+  greenScreen: string | null;
 };
 
 export function factoryPreviewUrl(project: string, characterId: string, jobId: string): string {
@@ -640,7 +646,12 @@ export function factoryPreviewUrl(project: string, characterId: string, jobId: s
 export async function startFactoryJob(
   project: string,
   body: {
-    characterId: string;
+    mode?: string;
+    characterId?: string;
+    slot?: string;
+    view?: string;
+    label?: string;
+    name?: string;
     prompt: string;
     frames?: number;
     advancedPrompt?: string;

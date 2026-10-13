@@ -35,6 +35,20 @@ def _resize_uniform(piece: np.ndarray, scale: float) -> np.ndarray:
     return cv2.resize(piece, (new_w, new_h), interpolation=interp)
 
 
+def keep_on_canvas(src: np.ndarray, canvas_w: int, canvas_h: int) -> np.ndarray:
+    """Pad or crop onto the canvas without moving opaque pixels relative to (0, 0)."""
+
+    src = _to_bgra(src)
+    canvas_w = max(2, int(canvas_w))
+    canvas_h = max(2, int(canvas_h))
+    out = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+    h, w = src.shape[:2]
+    copy_h = min(h, canvas_h)
+    copy_w = min(w, canvas_w)
+    out[:copy_h, :copy_w] = src[:copy_h, :copy_w]
+    return out
+
+
 def fit_piece_no_squash(
     src: np.ndarray,
     canvas_w: int,
@@ -256,6 +270,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--canvas-w", type=int, default=1024)
     parser.add_argument("--canvas-h", type=int, default=1024)
     parser.add_argument("--check-head", action="store_true")
+    parser.add_argument(
+        "--keep-canvas",
+        action="store_true",
+        help="Keep pixel placement (pad/crop to canvas) instead of refitting to feet/pivot",
+    )
     parser.add_argument("--head-ref", type=Path, dest="head_ref")
     parser.add_argument(
         "--extract-legs",
@@ -291,7 +310,10 @@ def main(argv: list[str] | None = None) -> int:
             walk_problems.extend(validate_walk_frame(src, expect_face=args.expect_face))
         if args.extract_legs:
             src = extract_legs(src)
-        fitted = fit_piece_no_squash(src, args.canvas_w, args.canvas_h, ref=ref)
+        if args.keep_canvas:
+            fitted = keep_on_canvas(src, args.canvas_w, args.canvas_h)
+        else:
+            fitted = fit_piece_no_squash(src, args.canvas_w, args.canvas_h, ref=ref)
         if args.check_head and looks_like_full_head(src, head_ref):
             warnings.append(f"{src_path.name}: looks like a full head (eyes/mouth must be overlays)")
         problems = validate_piece(fitted, args.canvas_w, args.canvas_h)

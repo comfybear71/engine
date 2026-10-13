@@ -29,6 +29,7 @@ import {
   soundDisplayName,
   sourceLabel,
   visibleDrawings,
+  splitSlotActionFrames,
   type AssetsSection,
 } from "@/lib/factoryAssets";
 import { alignableSlots } from "@/lib/headAlign";
@@ -534,9 +535,12 @@ function FactoryRowBlock({
   row,
   selectedKey,
   showMissing,
+  actions,
+  characterId,
   onSelect,
   onOpenSlot,
   onOpenDrawing,
+  onOpenAction,
   onAdd,
   onDeleteDrawing,
   onRenameDrawing,
@@ -547,22 +551,41 @@ function FactoryRowBlock({
   row: FactoryRow;
   selectedKey: string | null;
   showMissing: boolean;
+  actions?: ProjectAction[];
+  characterId?: string | null;
   onSelect: (piece: FactoryPiece) => void;
   onOpenSlot?: () => void;
   onOpenDrawing: (piece: FactoryPiece) => void;
+  onOpenAction?: (actionId: string) => void;
   onAdd?: () => void;
   onDeleteDrawing?: (piece: FactoryPiece) => void;
   onRenameDrawing?: (piece: FactoryPiece, name: string) => void;
   onCleanDrawing?: (piece: FactoryPiece) => void;
   onCleanRow?: () => void;
 }) {
-  const counts = row.drawings.reduce(
+  const { drawings, actionGroups } = splitSlotActionFrames(row.drawings, actions, characterId);
+  const counts = drawings.reduce(
     (acc, piece) => {
       if (piece.badge && acc[piece.badge] != null) acc[piece.badge] += 1;
       return acc;
     },
     { ticked: 0, locked: 0, draft: 0, missing: 0 } as Record<FactoryBadge, number>
   );
+  function renderCell(piece: FactoryPiece) {
+    return (
+      <FactoryCell
+        key={piece.key}
+        project={project}
+        piece={piece}
+        selected={piece.key === selectedKey}
+        onSelect={() => onSelect(piece)}
+        onOpen={piece.rel && row.kind === "slot" ? () => onOpenDrawing(piece) : undefined}
+        onDelete={piece.rel && row.kind === "slot" ? () => onDeleteDrawing?.(piece) : undefined}
+        onRename={piece.rel && row.kind === "slot" ? (name) => onRenameDrawing?.(piece, name) : undefined}
+        onClean={piece.rel && row.kind === "slot" ? () => onCleanDrawing?.(piece) : undefined}
+      />
+    );
+  }
   return (
     <section className="studio-factory-row" data-testid={`assets-row-${row.label}`}>
       <div className="studio-factory-row-head">
@@ -573,7 +596,7 @@ function FactoryRowBlock({
           </button>
         </h4>
         <span className="studio-factory-row-meta">
-          {row.drawings.length} drawing{row.drawings.length === 1 ? "" : "s"}
+          {drawings.length} drawing{drawings.length === 1 ? "" : "s"}
           {formatCountLine(counts) ? ` · ${formatCountLine(counts)}` : ""}
           {onCleanRow ? (
             <>
@@ -591,21 +614,33 @@ function FactoryRowBlock({
         </span>
       </div>
       <div className="studio-factory-thumbs" data-testid={`assets-slot-row-${row.slot}`}>
-        {visibleDrawings(row.drawings, showMissing).map((piece) => (
-          <FactoryCell
-            key={piece.key}
-            project={project}
-            piece={piece}
-            selected={piece.key === selectedKey}
-            onSelect={() => onSelect(piece)}
-            onOpen={piece.rel && row.kind === "slot" ? () => onOpenDrawing(piece) : undefined}
-            onDelete={piece.rel && row.kind === "slot" ? () => onDeleteDrawing?.(piece) : undefined}
-            onRename={piece.rel && row.kind === "slot" ? (name) => onRenameDrawing?.(piece, name) : undefined}
-            onClean={piece.rel && row.kind === "slot" ? () => onCleanDrawing?.(piece) : undefined}
-          />
-        ))}
+        {visibleDrawings(drawings, showMissing).map((piece) => renderCell(piece))}
         {onAdd ? <AddTile testId={`assets-new-slot-${row.slot}`} onClick={onAdd} /> : null}
       </div>
+      {actionGroups.map((group) => (
+        <details key={group.id} className="studio-factory-action-frames" data-testid={`assets-action-frames-${group.id}`}>
+          <summary>
+            <span>{group.label}</span>
+            {group.actionId && onOpenAction ? (
+              <button
+                type="button"
+                className="studio-factory-action-shot-link"
+                data-testid={`assets-action-frames-link-${group.id}`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenAction(group.actionId!);
+                }}
+              >
+                Action Shot
+              </button>
+            ) : null}
+          </summary>
+          <div className="studio-factory-thumbs" data-testid={`assets-action-frames-row-${group.id}`}>
+            {visibleDrawings(group.drawings, showMissing).map((piece) => renderCell(piece))}
+          </div>
+        </details>
+      ))}
     </section>
   );
 }
@@ -630,7 +665,14 @@ export default function AssetsPanel({
   poolSection?: "assets" | "media" | "effects";
   selectedId?: string | null;
   onSelectId?: (id: string | null) => void;
-  onOpenImagine?: (opts?: { characterId?: string; needId?: string }) => void;
+  onOpenImagine?: (opts?: {
+    characterId?: string;
+    needId?: string;
+    mode?: "character" | "new-character" | "prop" | "background" | "slot";
+    slot?: string;
+    view?: string;
+    label?: string;
+  }) => void;
   refreshToken?: number;
 }) {
   const pool = variant === "pool";
@@ -975,21 +1017,21 @@ export default function AssetsPanel({
       return;
     }
     if (kind === "characters") {
-      setLibraryOpen(true);
+      onOpenImagine?.({ mode: "new-character" });
       return;
     }
     if (kind === "actions") {
-      onOpenImagine?.(selectedId ? { characterId: selectedId } : undefined);
+      onOpenImagine?.(selectedId ? { mode: "character", characterId: selectedId } : { mode: "character" });
       return;
     }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/png,.png";
-    input.onchange = () => {
-      const file = input.files && input.files[0];
-      if (file) void onImportStill(kind === "backgrounds" ? "background" : "prop", file);
-    };
-    input.click();
+    if (kind === "props") {
+      onOpenImagine?.({ mode: "prop" });
+      return;
+    }
+    if (kind === "backgrounds") {
+      onOpenImagine?.({ mode: "background" });
+      return;
+    }
   }
 
   if (!project) {
@@ -1118,7 +1160,23 @@ export default function AssetsPanel({
         <button
           type="button"
           data-testid="imagine-open"
-          onClick={() => onOpenImagine()}
+          onClick={() =>
+            onOpenImagine(
+              nav.page === "character" && selected
+                ? { mode: "character", characterId: selected.id }
+                : nav.page === "section" && nav.section === "props"
+                  ? { mode: "prop" }
+                  : nav.page === "section" && nav.section === "backgrounds"
+                    ? { mode: "background" }
+                    : nav.page === "section" && nav.section === "characters"
+                      ? { mode: "new-character" }
+                      : nav.page === "section" && nav.section === "actions"
+                        ? { mode: "character", characterId: selectedId || undefined }
+                        : selectedId
+                          ? { mode: "character", characterId: selectedId }
+                          : { mode: "character" }
+            )
+          }
           className={pool ? "rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white" : "studio-header-textbtn"}
         >
           Factory
@@ -1640,6 +1698,15 @@ export default function AssetsPanel({
                     row={row}
                     selectedKey={selectedKey}
                     showMissing={showMissing}
+                    actions={actions}
+                    characterId={selected.id}
+                    onOpenAction={(actionId) => {
+                      const hit = actions.find((item) => (item.name || item.id) === actionId && item.characterId === selected.id)
+                        || actions.find((item) => (item.name || item.id) === actionId);
+                      if (!hit) return;
+                      setLibrarySel({ kind: "actions", id: hit.id });
+                      setNav({ page: "action", id: hit.id });
+                    }}
                     onSelect={(piece) => {
                       setSelectedKey(piece.key);
                       setRedoNote(factory.redos[piece.key] || "");
@@ -1657,7 +1724,14 @@ export default function AssetsPanel({
                     }
                     onAdd={() =>
                       onOpenImagine
-                        ? onOpenImagine({ characterId: selected.id, needId: needIdForSlot(row.slot) })
+                        ? onOpenImagine({
+                            mode: "slot",
+                            characterId: selected.id,
+                            slot: row.slot,
+                            view,
+                            label: row.label,
+                            needId: needIdForSlot(row.slot),
+                          })
                         : setAssetFocus({ mode: "slot", characterId: selected.id, slot: row.slot, view })
                     }
                     onDeleteDrawing={(piece) => void onDeleteDrawing(row.slot, piece)}

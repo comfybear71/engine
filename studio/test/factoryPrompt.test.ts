@@ -4,6 +4,8 @@ import {
   assembleHiddenPrompt,
   clampFactoryFrames,
   factoryGrid,
+  factoryHint,
+  factoryModeTitle,
   inferFactoryIntent,
   slugActionId,
   walkPoseNotes,
@@ -35,5 +37,29 @@ describe("factory hidden prompt pack", () => {
     assert.match(hidden, /heel landing first/);
     assert.match(hidden, /4x2/);
     assert.match(walkPoseNotes(12), /Twelve frames/);
+  });
+
+  test("context-aware Factory hints and slot header", () => {
+    assert.equal(factoryHint("prop"), "Type the prop you want (e.g. guitar, bar stool)");
+    assert.equal(factoryHint("new-character"), "Describe a new character (e.g. grumpy old barman)");
+    assert.equal(factoryHint("slot", { slot: "eyes" }), "Type an expression, e.g. angry, sleepy");
+    assert.equal(
+      factoryModeTitle({
+        mode: "slot",
+        character: { id: "rodney", display_name: "Rodney", style: "" },
+        slot: "eyes",
+        view: "front",
+      }),
+      "Rodney / Front / Eyes"
+    );
+    const hidden = assembleHiddenPrompt({
+      mode: "slot",
+      character: { id: "rodney", display_name: "Rodney", style: "" },
+      userPrompt: "sleepy",
+      slot: "eyes",
+      view: "front",
+    });
+    assert.match(hidden, /ONLY the eyes/i);
+    assert.match(hidden, /Never draw a full head/i);
   });
 });

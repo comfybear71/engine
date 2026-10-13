@@ -219,8 +219,10 @@ function attachReferenceSentence(prompt, references) {
   );
 }
 
-function aspectRatioForNeed(needId) {
-  const need = getNeed(needId);
+function aspectRatioForNeed(needId, override) {
+  const trimmed = String(override || "").trim();
+  if (trimmed) return trimmed;
+  const need = needId ? getNeed(needId) : null;
   if (need && need.id === "background") return "16:9";
   return "1:1";
 }
@@ -343,36 +345,64 @@ function dryRunResult({
       useEdits,
       estimatedCost,
     }),
-    characterId: character.id,
+    characterId: character ? character.id : null,
   };
+}
+
+function collectRels(projectDir, globalAssetsDir, rels) {
+  const refs = [];
+  const seen = new Set();
+  for (const item of rels || []) {
+    const rel = typeof item === "string" ? item : item && item.rel;
+    const kind = typeof item === "string" ? "reference" : (item && item.kind) || "reference";
+    if (!rel || seen.has(rel)) continue;
+    const resolved = resolveAsset(projectDir, globalAssetsDir, rel);
+    if (!resolved) continue;
+    seen.add(rel);
+    const buf = fs.readFileSync(resolved.absPath);
+    if (buf.length < 8) continue;
+    const mime = mimeFromBuffer(buf);
+    refs.push({ kind, rel, mime, dataUrl: dataUrlFor(buf, mime) });
+  }
+  return refs;
 }
 
 async function generateProjectImage(projectDir, globalAssetsDir, body, options = {}) {
   const env = options.env || process.env;
   const characterId = body && body.characterId;
   const needId = (body && (body.needId || body.setId)) || "";
-  if (!needId) throw new GenerateImageError("needId is required", "EINVAL");
+  const userPrompt = typeof (body && body.prompt) === "string" ? body.prompt.trim() : "";
+  if (!needId && !userPrompt) throw new GenerateImageError("needId is required", "EINVAL");
 
-  const character = findCharacter(projectDir, globalAssetsDir, characterId);
+  const character = characterId ? findCharacter(projectDir, globalAssetsDir, characterId) : null;
   const n = clampN(body && body.n);
   const model = resolveModelId(env);
-  const need = getNeed(needId);
-  if (!need) throw new GenerateImageError("Unknown set or need", "EINVAL");
-  expandNeed(need, body && body.frames);
+  const need = needId ? getNeed(needId) : null;
+  if (!need && !userPrompt) throw new GenerateImageError("Unknown set or need", "EINVAL");
+  if (need) expandNeed(need, body && body.frames);
 
-  const references = collectReferences(projectDir, globalAssetsDir, character);
-  const built = resolvePrompt({
-    character,
-    needId,
-    prompt: body && body.prompt,
-    frames: body && body.frames,
-  });
+  const skipReferences = Boolean(body && body.skipReferences) || !character;
+  let references = [];
+  if (!skipReferences && character) {
+    references = collectReferences(projectDir, globalAssetsDir, character);
+  }
+  if (Array.isArray(body && body.referenceRels) && body.referenceRels.length) {
+    references = collectRels(projectDir, globalAssetsDir, body.referenceRels);
+  }
+  const built = userPrompt
+    ? userPrompt
+    : resolvePrompt({
+        character,
+        needId,
+        prompt: body && body.prompt,
+        frames: body && body.frames,
+      });
   const prompt = attachReferenceSentence(built, references);
   const key = resolveApiKey(env);
   const keyConfigured = Boolean(key);
 
   if (body && body.dryRun) {
-    return dryRunResult({ character, needId, prompt, n, model, references, keyConfigured });
+    return dryRunResult({ character: character || { id: null }, needId: needId || "factory", prompt, n, model, references, keyConfigured });
   }
 
   if (!key) {
@@ -389,7 +419,7 @@ async function generateProjectImage(projectDir, globalAssetsDir, body, options =
     prompt,
     n,
     response_format: "b64_json",
-    aspect_ratio: aspectRatioForNeed(needId),
+    aspect_ratio: aspectRatioForNeed(needId, body && body.aspectRatio),
   };
   let url = GENERATIONS_URL;
   if (useEdits) {
@@ -422,7 +452,9 @@ async function generateProjectImage(projectDir, globalAssetsDir, body, options =
     if (!decoded) {
       throw new GenerateImageError("xAI returned an image we could not read.", "EXAI");
     }
-    const libraryRel = saveLibrarySheet(projectDir, character.id, needId, i + 1, decoded.buf, decoded.mime);
+    const libraryRel = character
+      ? saveLibrarySheet(projectDir, character.id, needId || "factory", i + 1, decoded.buf, decoded.mime)
+      : null;
     images.push({
       index: i,
       url: decoded.url,
@@ -460,7 +492,7 @@ async function generateProjectImage(projectDir, globalAssetsDir, body, options =
       estimatedCost: usageCost != null ? usageCost : estimatedCost,
     }),
     images,
-    characterId: character.id,
+    characterId: character ? character.id : null,
   };
 }
 

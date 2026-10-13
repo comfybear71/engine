@@ -964,6 +964,55 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   gap: 6px;
 }
 
+.studio-factory-action-frames {
+  margin-top: 6px;
+  border: 1px solid #2e2e2e;
+  border-radius: 4px;
+  background: #141414;
+}
+
+.studio-factory-action-frames > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  color: #a3a3a3;
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.studio-factory-action-frames > summary::-webkit-details-marker {
+  display: none;
+}
+
+.studio-factory-action-frames > summary::before {
+  content: "▸";
+  color: #737373;
+  font-size: 10px;
+}
+
+.studio-factory-action-frames[open] > summary::before {
+  content: "▾";
+}
+
+.studio-factory-action-frames .studio-factory-thumbs {
+  padding: 0 8px 8px;
+}
+
+.studio-factory-action-shot-link {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: #f97316;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.studio-factory-action-shot-link:hover {
+  text-decoration: underline;
+}
+
 .studio-factory-cell {
   position: relative;
   display: flex;

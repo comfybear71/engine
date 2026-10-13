@@ -5,7 +5,11 @@ import {
   FACTORY_FRAMES,
   assembleHiddenPrompt,
   clampFactoryFrames,
+  factoryHint,
+  factoryPlaceholder,
+  factoryUsesFrames,
   type FactoryFrames,
+  type FactoryModeKind,
 } from "@/lib/factoryPrompt";
 import {
   factoryPreviewUrl,
@@ -18,14 +22,23 @@ import {
 
 export default function FactoryPanel({
   project,
-  character,
+  mode = "character",
+  character = null,
+  slot = null,
+  view = null,
+  label = null,
   onChanged,
 }: {
   project: string;
-  character: Character;
+  mode?: FactoryModeKind;
+  character?: Character | null;
+  slot?: string | null;
+  view?: string | null;
+  label?: string | null;
   onChanged: () => void;
 }) {
   const [prompt, setPrompt] = useState("");
+  const [name, setName] = useState("");
   const [frames, setFrames] = useState<FactoryFrames>(8);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advancedPrompt, setAdvancedPrompt] = useState("");
@@ -34,29 +47,55 @@ export default function FactoryPanel({
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<FactoryJob | null>(null);
 
+  const showFrames = factoryUsesFrames(mode);
+  const hint = factoryHint(mode, { character, slot, label });
+  const placeholder = factoryPlaceholder(mode, { character, slot, label });
+
   const assembled = useMemo(
     () =>
       assembleHiddenPrompt({
-        character,
+        mode,
+        character: character || undefined,
         userPrompt: prompt,
         frames,
         advancedPrompt: advancedTouched ? advancedPrompt : undefined,
+        slot,
+        view,
+        label,
+        name,
       }),
-    [character, prompt, frames, advancedPrompt, advancedTouched]
+    [mode, character, prompt, frames, advancedPrompt, advancedTouched, slot, view, label, name]
   );
+
+  function jobOwner(current: FactoryJob | null): string {
+    return current?.characterId || character?.id || "project";
+  }
 
   async function onGenerate() {
     if (!prompt.trim()) {
-      setError("Type what you want, e.g. Rodney walking long stride.");
+      setError(hint);
+      return;
+    }
+    if (mode === "character" && !character) {
+      setError("Pick a character first.");
+      return;
+    }
+    if (mode === "slot" && (!character || !slot)) {
+      setError("Open a slot on a character first.");
       return;
     }
     setBusy("Generating…");
     setError(null);
     try {
       const result = await startFactoryJob(project, {
-        characterId: character.id,
+        mode,
+        characterId: character?.id,
+        slot: slot || undefined,
+        view: view || undefined,
+        label: label || undefined,
+        name: mode === "new-character" ? name.trim() : undefined,
         prompt: prompt.trim(),
-        frames,
+        frames: showFrames ? frames : 1,
         advancedPrompt: advancedTouched ? advancedPrompt : undefined,
       });
       setJob(result);
@@ -73,7 +112,7 @@ export default function FactoryPanel({
     setBusy("Saving…");
     setError(null);
     try {
-      const result = await tickFactoryJob(project, character.id, job.jobId);
+      const result = await tickFactoryJob(project, jobOwner(job), job.jobId);
       setJob(result);
       onChanged();
     } catch (err) {
@@ -91,9 +130,9 @@ export default function FactoryPanel({
     setBusy("Generating…");
     setError(null);
     try {
-      const result = await redoFactoryJob(project, character.id, job.jobId, {
+      const result = await redoFactoryJob(project, jobOwner(job), job.jobId, {
         prompt: prompt.trim() || job.prompt,
-        frames,
+        frames: showFrames ? frames : 1,
         advancedPrompt: advancedTouched ? advancedPrompt : undefined,
       });
       setJob(result);
@@ -104,38 +143,64 @@ export default function FactoryPanel({
     }
   }
 
-  const preview = job ? factoryPreviewUrl(project, character.id, job.jobId) : null;
+  const preview = job ? factoryPreviewUrl(project, jobOwner(job), job.jobId) : null;
+  const previewIsImage = Boolean(job && (job.previewKind === "image" || /\.png$/i.test(job.previewRel || "")));
+  const tickedMessage =
+    mode === "prop"
+      ? "Ticked. The prop is on the Props page."
+      : mode === "background"
+        ? "Ticked. The background is on the Backgrounds page."
+        : mode === "new-character"
+          ? `Ticked. ${job?.actionId || "Character"} is in Characters, ready for rig pieces.`
+          : mode === "slot"
+            ? `Ticked. Saved as a draft in ${label || slot}.`
+            : `Ticked. ${job?.actionId} is in the character library and Action Shots.`;
 
   return (
-    <section data-testid="factory-panel">
-      <p className="mb-3 text-sm text-neutral-300">
-        Type what {character.display_name} should do. Style, references, and green screen are already packed in.
-      </p>
+    <section data-testid="factory-panel" data-mode={mode}>
+      <p className="mb-3 text-sm text-neutral-300">{hint}</p>
+      {mode === "new-character" ? (
+        <label className="mb-3 block">
+          <span className="mb-1 block text-[11px] text-studio-muted">Name</span>
+          <input
+            type="text"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Grumpy old barman"
+            className="w-full rounded-md border border-studio-border bg-studio-raised px-3 py-2 text-sm text-neutral-100"
+            data-testid="factory-name"
+          />
+        </label>
+      ) : null}
       <label className="mb-3 block">
         <span className="sr-only">Prompt</span>
         <input
           type="text"
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
-          placeholder={`${character.display_name} walking long stride`}
+          placeholder={placeholder}
           className="w-full rounded-md border border-studio-border bg-studio-raised px-3 py-2 text-sm text-neutral-100"
           data-testid="factory-prompt"
         />
       </label>
       <div className="mb-3 flex flex-wrap items-center gap-3">
-        <span className="text-[11px] text-studio-muted">Frames</span>
-        {FACTORY_FRAMES.map((count) => (
-          <label key={count} className="flex items-center gap-1.5 text-xs text-neutral-200">
-            <input
-              type="radio"
-              name="factory-frames"
-              checked={frames === count}
-              onChange={() => setFrames(clampFactoryFrames(count))}
-              data-testid={`factory-frames-${count}`}
-            />
-            {count}
-          </label>
-        ))}
+        {showFrames ? (
+          <>
+            <span className="text-[11px] text-studio-muted">Frames</span>
+            {FACTORY_FRAMES.map((count) => (
+              <label key={count} className="flex items-center gap-1.5 text-xs text-neutral-200">
+                <input
+                  type="radio"
+                  name="factory-frames"
+                  checked={frames === count}
+                  onChange={() => setFrames(clampFactoryFrames(count))}
+                  data-testid={`factory-frames-${count}`}
+                />
+                {count}
+              </label>
+            ))}
+          </>
+        ) : null}
         <button
           type="button"
           onClick={() => void onGenerate()}
@@ -157,8 +222,7 @@ export default function FactoryPanel({
           Advanced
         </summary>
         <p className="mt-2 text-[11px] text-studio-muted">
-          Hidden pack for this project only: locked style, reference pictures, flat #00FF00, one head, no squash.
-          You never have to open this.
+          Hidden pack for this project only. You never have to open this.
         </p>
         <textarea
           value={advancedTouched ? advancedPrompt : assembled}
@@ -178,24 +242,35 @@ export default function FactoryPanel({
         {job ? (
           <div className="space-y-3">
             {preview && !job.ticked ? (
-              <video
-                key={job.jobId}
-                src={preview}
-                muted
-                loop
-                playsInline
-                autoPlay
-                className="mx-auto max-h-56 w-full max-w-xs object-contain"
-                data-testid="factory-preview"
-              />
+              previewIsImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={job.jobId}
+                  src={preview}
+                  alt=""
+                  className="mx-auto max-h-56 w-full max-w-xs object-contain"
+                  data-testid="factory-preview"
+                />
+              ) : (
+                <video
+                  key={job.jobId}
+                  src={preview}
+                  muted
+                  loop
+                  playsInline
+                  autoPlay
+                  className="mx-auto max-h-56 w-full max-w-xs object-contain"
+                  data-testid="factory-preview"
+                />
+              )
             ) : null}
             {job.ticked ? (
               <p className="text-sm text-emerald-300" data-testid="factory-ticked">
-                Ticked. {job.actionId} is in the character library and Action Shots.
+                {tickedMessage}
               </p>
             ) : (
               <p className="text-[12px] text-studio-muted">
-                Preview only. Tick saves the drawings. Redo makes a new sheet.
+                Preview only. Tick saves it. Redo makes a new one.
               </p>
             )}
             <div className="flex flex-wrap gap-2">

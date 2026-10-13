@@ -1,6 +1,5 @@
 "use client";
 
-import ScriptIdentity from "@/components/ScriptIdentity";
 import { formatTimecode } from "@/lib/playhead";
 
 const btnBase =
@@ -12,8 +11,6 @@ export default function TransportBar({
   frame,
   maxFrame,
   fps,
-  script,
-  scriptIsOld = false,
   playing,
   usingVideo,
   previewStatus,
@@ -26,7 +23,7 @@ export default function TransportBar({
   frame: number;
   maxFrame: number;
   fps: number;
-  script: string;
+  script?: string;
   scriptIsOld?: boolean;
   playing: boolean;
   usingVideo: boolean;
@@ -121,7 +118,6 @@ export default function TransportBar({
               frame {frame} · {fps} fps
               {usingVideo ? <span className="ml-2 text-[10px] uppercase tracking-wide text-studio-accent">render</span> : null}
             </span>
-            <ScriptIdentity name={script} old={scriptIsOld} size="sm" />
           </span>
         </div>
       </div>

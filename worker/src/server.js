@@ -1081,9 +1081,10 @@ function createApp(options = {}) {
     if (!projectDir) return;
     try {
       const file = resolveFactoryPreview(projectDir, req.params.characterId, req.params.jobId);
+      const type = /\.png$/i.test(file) ? "image/png" : /\.jpe?g$/i.test(file) ? "image/jpeg" : "video/mp4";
       res.setHeader("Cache-Control", "private, max-age=30");
       res.sendFile(path.resolve(file), {
-        headers: { "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
+        headers: { "Content-Type": type, "Accept-Ranges": "bytes" },
       });
     } catch (err) {
       sendFactoryError(res, err);

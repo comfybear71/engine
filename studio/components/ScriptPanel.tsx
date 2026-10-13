@@ -272,7 +272,7 @@ export default function ScriptPanel({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between gap-2 border-b border-studio-border px-3 py-2">
           <div className="flex items-center gap-2 text-xs text-studio-muted">
-            <span className="text-sm font-semibold text-white">{script}</span>
+            <span className="text-sm font-semibold text-white" data-testid="active-script-name">{script}</span>
             {dirty ? <span data-testid="script-unsaved">· unsaved</span> : null}
             {status ? (
               <span
