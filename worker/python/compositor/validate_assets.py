@@ -25,6 +25,7 @@ from .align import ALPHA_MIN, alpha_bbox
 
 HEAD_VIEWS = ("front", "left_34", "left_side", "right_34", "right_side", "up", "down", "back")
 SKIP_DIRS = {"_trash", "_replaced", "_reference", "_library"}
+INTENTIONAL_BLANK_STEMS = frozenset({"none", "rig", "blank"})
 
 
 def _is_png(path: Path) -> bool:
@@ -110,8 +111,33 @@ def _rel_for(path: Path, roots: list[Path]) -> str:
     return path.name
 
 
-def check_png(path: Path, canvas: dict | None, rel: str) -> list[str]:
+def _drawing_meta(spec: dict | None, stem: str) -> dict | None:
+    drawings = spec.get("drawings") if isinstance(spec, dict) and isinstance(spec.get("drawings"), dict) else None
+    if not drawings:
+        return None
+    if stem in drawings and isinstance(drawings[stem], dict):
+        return drawings[stem]
+    wanted = str(stem or "").strip().lower()
+    for key, value in drawings.items():
+        if str(key).strip().lower() == wanted and isinstance(value, dict):
+            return value
+    return None
+
+
+def is_intentional_blank(stem: str, spec: dict | None = None) -> bool:
+    """True for drawings that are blank on purpose: none / rig / blank, or flagged in character.json."""
+
+    name = str(stem or "").strip().lower()
+    if name in INTENTIONAL_BLANK_STEMS:
+        return True
+    meta = _drawing_meta(spec, stem) or _drawing_meta(spec, name)
+    return bool(meta and (meta.get("blank") is True or meta.get("intentional_blank") is True))
+
+
+def check_png(path: Path, canvas: dict | None, rel: str, *, allow_blank: bool = False) -> list[str]:
     issues: list[str] = []
+    stem = Path(rel).stem if rel else path.stem
+    allow_blank = allow_blank or is_intentional_blank(stem)
     raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if raw is None:
         return [f"{rel}: could not read PNG"]
@@ -127,11 +153,13 @@ def check_png(path: Path, canvas: dict | None, rel: str) -> list[str]:
             issues.append(f"{rel}: expected {want_w}x{want_h} RGBA, got {width}x{height} RGBA")
     alpha = raw[:, :, 3]
     if int(alpha.max()) <= ALPHA_MIN:
-        issues.append(f"{rel}: blank PNG (no visible pixels)")
+        if not allow_blank:
+            issues.append(f"{rel}: blank PNG (no visible pixels)")
         return issues
     box = alpha_bbox(raw)
     if box is None:
-        issues.append(f"{rel}: blank PNG (no visible pixels)")
+        if not allow_blank:
+            issues.append(f"{rel}: blank PNG (no visible pixels)")
         return issues
     x0, y0, x1, y1 = box
     if x0 <= 0 or y0 <= 0 or x1 >= width or y1 >= height:
@@ -195,7 +223,14 @@ def validate_character(char_dir: Path, config: dict | None = None, *, roots: lis
             continue
         for folder in folders:
             for png in _iter_pngs(folder):
-                issues.extend(check_png(png, canvas, _rel_for(png, roots)))
+                issues.extend(
+                    check_png(
+                        png,
+                        canvas,
+                        _rel_for(png, roots),
+                        allow_blank=is_intentional_blank(png.stem, spec),
+                    )
+                )
     return issues
 
 
