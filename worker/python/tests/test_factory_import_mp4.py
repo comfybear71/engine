@@ -165,7 +165,7 @@ def test_infer_clip_meta_from_desktop_filenames():
     assert mic["category"] == "mic"
 
 
-def test_detect_upside_down_and_arm_side_warnings():
+def test_detect_upside_down_warning():
     flipped = np.zeros((180, 80, 4), dtype=np.uint8)
     flipped[4:70, 18:62] = (40, 36, 170, 255)
     flipped[48:62, 16:32] = (32, 36, 42, 255)
@@ -174,12 +174,27 @@ def test_detect_upside_down_and_arm_side_warnings():
     issues = detect_frame_issues(flipped, "body", "front")
     assert "upside_down" in issues
 
-    arm = np.zeros((160, 100, 4), dtype=np.uint8)
-    arm[20:140, 4:28] = (40, 36, 170, 255)
-    arm[30:70, 4:40] = (50, 80, 150, 255)
-    arm[130:150, 8:22] = (32, 36, 42, 255)
+
+def test_detect_arm_side_and_mirrored_warnings():
+    arm = np.zeros((220, 200, 4), dtype=np.uint8)
+    arm[16:46, 140:186] = (96, 140, 196, 255)  # head, facing right
+    arm[46:150, 138:176] = (40, 36, 170, 255)  # torso
+    arm[70:118, 8:70] = (50, 80, 150, 255)  # raised mass on the far side
+    arm[150:204, 132:158] = (50, 80, 150, 255)
+    arm[150:204, 162:188] = (50, 80, 150, 255)
+    arm[196:214, 132:156] = (32, 36, 42, 255)
+    arm[196:214, 164:188] = (32, 36, 42, 255)
     issues = detect_frame_issues(arm, "body", "right_side")
     assert "arm_side" in issues
+    assert "upside_down" not in issues
+
+    mirrored = np.zeros((180, 80, 4), dtype=np.uint8)
+    mirrored[16:46, 8:36] = (96, 140, 196, 255)  # head mass on the left
+    mirrored[46:130, 24:56] = (40, 36, 170, 255)
+    mirrored[130:158, 24:38] = (32, 36, 42, 255)
+    mirrored[130:158, 42:56] = (32, 36, 42, 255)
+    issues = detect_frame_issues(mirrored, "body", "right_side")
+    assert "mirrored" in issues
 
 
 def test_catalog_tags_kind_view_phase(tmp_path):

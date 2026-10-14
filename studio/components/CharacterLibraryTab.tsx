@@ -155,7 +155,7 @@ function ClipStrip({ project, clip }: { project: string; clip: LibraryClip }) {
           <figure key={frame.index} className="studio-factory-import-cell" data-testid={`assets-library-frame-${clip.id}-${frame.index}`}>
             {frame.thumbRel || frame.rel ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={assetUrl(project, frame.thumbRel || frame.rel, { factory: true })} alt="" />
+              <img src={assetUrl(project, frame.thumbRel || frame.rel, { factory: true }) || undefined} alt="" />
             ) : null}
             <span>{String(frame.index).padStart(2, "0")}</span>
             {frame.issues && frame.issues.length ? <i>!</i> : null}

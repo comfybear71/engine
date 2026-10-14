@@ -124,8 +124,8 @@ describe("factory library per character", { concurrency: false }, () => {
     const ctx = await listen(createApp({ projectsDir: root }));
     try {
       const lib = await fetch(`${ctx.url}/api/projects/rodney_test/characters/rodney/library`);
-      assert.equal(lib.ok, true, await lib.text());
       const body = await lib.json();
+      assert.equal(lib.ok, true, body.error || `HTTP ${lib.status}`);
       assert.ok(body.categories.some((item) => item.id === "walks"));
       const add = await fetch(`${ctx.url}/api/projects/rodney_test/characters/rodney/library/categories`, {
         method: "POST",

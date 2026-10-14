@@ -237,7 +237,7 @@ export function ActionShotDetail({
               >
                 {frame.rel ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={assetUrl(project, frame.rel, { factory: true })} alt="" />
+                  <img src={assetUrl(project, frame.rel, { factory: true }) || undefined} alt="" />
                 ) : (
                   <span />
                 )}

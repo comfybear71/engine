@@ -565,14 +565,15 @@ def detect_frame_issues(frame: np.ndarray, kind: str, view: str) -> list[str]:
     if view in {"left_side", "left_34"} and facing == "right":
         issues.append("mirrored")
     if kind == "body":
-        mid = crop[h // 4 : (h * 3) // 4, :, 3] > 16
-        ys, xs = np.where(mid)
-        if xs.size > 8:
-            cx = float(xs.mean())
+        band = crop[h // 6 : h // 2, :, 3] > 16
+        _ys, xs = np.where(band)
+        if xs.size > 12:
+            far = int(np.count_nonzero(xs < crop.shape[1] * 0.22))
+            near = int(np.count_nonzero(xs > crop.shape[1] * 0.78))
             # Raised mass on the far side of a profile view is often the wrong arm.
-            if view in {"right_side", "right_34"} and cx < crop.shape[1] * 0.28:
+            if view in {"right_side", "right_34"} and far > max(20, xs.size * 0.18):
                 issues.append("arm_side")
-            if view in {"left_side", "left_34"} and cx > crop.shape[1] * 0.72:
+            if view in {"left_side", "left_34"} and near > max(20, xs.size * 0.18):
                 issues.append("arm_side")
     return issues
 
