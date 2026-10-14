@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WORKER_URL, workerFetch } from "@/lib/worker";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -1139,10 +1139,11 @@ export default function HeadRigModal({
                   {Array.from({ length: Math.min(Math.ceil(maxFrames / 10), 40) }, (_, i) => {
                     const f = (i + 1) * 10;
                     if (f > maxFrames) return null;
-                    return (
-                      <div key={`tick-${f}`} className="absolute top-0 h-full w-px bg-[#2a2a2a]" style={{ left: `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%` }} />
-                      <span key={`lbl-${f}`} className="absolute bottom-1 text-[9px] text-neutral-600" style={{ left: `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, transform: "translateX(-50%)" }}>{f}</span>
-                    );
+                    const pct = `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
+                    return (<Fragment key={f}>
+                      <div className="absolute top-0 h-full w-px bg-[#2a2a2a]" style={{ left: pct }} />
+                      <span className="absolute bottom-1 text-[9px] text-neutral-600" style={{ left: pct, transform: "translateX(-50%)" }}>{f}</span>
+                    </Fragment>);
                   })}
                   {/* Red playhead handle */}
                   <div className="absolute top-0" style={{ left: playheadPct, zIndex: 20, transform: "translateX(-50%)", cursor: "ew-resize" }}
