@@ -89,6 +89,16 @@ export default function HeadRigModal({
   const [headIn, setHeadIn] = useState(1);
   const [headOut, setHeadOut] = useState(0); // 0 = use all frames
 
+  // Timeline zoom (pixels per frame)
+  const [timelineZoom, setTimelineZoom] = useState(1); // 1 = fit-to-width, >1 = zoomed in
+
+  // DaVinci Resolve-style trim handle drag state
+  const [draggingTrim, setDraggingTrim] = useState<{
+    track: "body" | "head";
+    edge: "in" | "out";
+  } | null>(null);
+  const [selectedTrack, setSelectedTrack] = useState<"body" | "head" | null>(null);
+
   // Interpolate anchor/scale at a given frame from keyframes
   function interpAt(f: number): { ax: number; ay: number; sc: number } {
     if (keyframes.length === 0) return { ax: anchorX, ay: anchorY, sc: headScale };
@@ -602,9 +612,6 @@ export default function HeadRigModal({
           ctx.drawImage(headImg, hx, hy, hw, hh);
         }
 
-        // Update playhead position during playback
-        setScrubFrame(bf);
-
         // Frame counter
         ctx.fillStyle = "#e0a040";
         ctx.font = "12px monospace";
@@ -613,6 +620,9 @@ export default function HeadRigModal({
           ctx.fillText(`Keyframes: ${keyframes.length}`, 8, ch - 22);
         }
       }
+
+      // Update playhead position during playback (outside image check so it always moves)
+      setScrubFrame(bf);
 
       playRafRef.current = requestAnimationFrame(tick);
     }
@@ -706,8 +716,15 @@ export default function HeadRigModal({
         if (bodyId === shotId) setBodyId("");
         if (headId === shotId) setHeadId("");
         await reloadShots();
+      } else {
+        const body = await res.text();
+        console.error("Delete failed:", res.status, body);
+        alert(`Delete failed (${res.status}): ${body}`);
       }
-    } catch {}
+    } catch (err) {
+      console.error("Delete error:", err);
+      alert(`Delete error: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // Save a combined head+body shot
@@ -801,14 +818,116 @@ export default function HeadRigModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draggingPlayhead, playing, maxFrames]);
 
+  // ── Resolve-style trim handle dragging ──
+  useEffect(() => {
+    if (!draggingTrim) return;
+    const el = timelineRef.current;
+    if (!el) return;
+    function onMove(e: MouseEvent) {
+      if (!el || !draggingTrim) return;
+      const rect = el.getBoundingClientRect();
+      const pct = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+      const f = Math.max(1, Math.min(maxFrames, Math.round(pct * (maxFrames - 1) + 1)));
+      const { track, edge } = draggingTrim;
+      if (track === "body") {
+        if (edge === "in") setBodyIn(Math.min(f, bodyOutEff));
+        else setBodyOut(Math.max(f, bodyInEff));
+      } else {
+        if (edge === "in") setHeadIn(Math.min(f, headOutEff));
+        else setHeadOut(Math.max(f, headInEff));
+      }
+    }
+    function onUp() { setDraggingTrim(null); }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draggingTrim, maxFrames, bodyInEff, bodyOutEff, headInEff, headOutEff]);
+
+  // ── Keyboard shortcuts (Resolve-style) ──
+  // Ctrl+B = blade/cut at playhead, Delete = remove clip from track,
+  // Ctrl+C = copy clip, Ctrl+V = paste clip, I/O = set in/out
+  const copiedShotRef = useRef<{ track: "body" | "head"; shotId: string } | null>(null);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      // Don't capture when typing in an input/textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      const ctrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+
+      // Ctrl+B — blade/split at playhead
+      if (ctrl && key === "b") {
+        e.preventDefault();
+        const track = selectedTrack || "body";
+        if (track === "body" && bodyFrameCount > 0) {
+          if (scrubFrame <= bodyInEff) setBodyIn(scrubFrame);
+          else setBodyOut(scrubFrame);
+        } else if (track === "head" && headFrameCount > 0) {
+          if (scrubFrame <= headInEff) setHeadIn(scrubFrame);
+          else setHeadOut(scrubFrame);
+        }
+        return;
+      }
+
+      // Delete / Backspace — remove clip from selected track
+      if (key === "delete" || key === "backspace") {
+        if (selectedTrack === "body" && bodyId) {
+          setBodyId(""); setBodyIn(1); setBodyOut(0);
+        } else if (selectedTrack === "head" && headId) {
+          setHeadId(""); setHeadIn(1); setHeadOut(0);
+        }
+        return;
+      }
+
+      // I — set in-point at playhead
+      if (key === "i" && !ctrl) {
+        e.preventDefault();
+        const track = selectedTrack || "body";
+        if (track === "body") setBodyIn(scrubFrame);
+        else setHeadIn(scrubFrame);
+        return;
+      }
+
+      // O — set out-point at playhead
+      if (key === "o" && !ctrl) {
+        e.preventDefault();
+        const track = selectedTrack || "body";
+        if (track === "body") setBodyOut(scrubFrame);
+        else setHeadOut(scrubFrame);
+        return;
+      }
+
+      // Ctrl+C — copy selected track's clip
+      if (ctrl && key === "c") {
+        const track = selectedTrack || "body";
+        const shotId = track === "body" ? bodyId : headId;
+        if (shotId) {
+          copiedShotRef.current = { track, shotId };
+        }
+        return;
+      }
+
+      // Ctrl+V — paste copied clip into selected track
+      if (ctrl && key === "v") {
+        if (!copiedShotRef.current) return;
+        const { track: srcTrack, shotId } = copiedShotRef.current;
+        const destTrack = selectedTrack || srcTrack;
+        if (destTrack === "body") setBodyId(shotId);
+        else setHeadId(shotId);
+        return;
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedTrack, scrubFrame, bodyFrameCount, headFrameCount, bodyInEff, headInEff, bodyId, headId]);
+
   const playheadPct = `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
 
   const content = (
         <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto p-4"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
-        <div className="flex gap-4">
-
-          {/* ── LEFT COLUMN — Editor / Compositor ────────── */}
-          <div className="min-w-0 flex-1">
           {/* ── Centered Viewer (DaVinci Resolve layout) ────────── */}
           <div className="flex flex-col items-center">
             {/* Shot pickers — compact row */}
@@ -973,6 +1092,23 @@ export default function HeadRigModal({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
+                    className="rounded bg-neutral-700 px-2 py-1 text-[11px] font-bold text-white hover:bg-neutral-600"
+                    onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))}
+                    title="Zoom out"
+                  >
+                    −
+                  </button>
+                  <span className="text-[10px] text-neutral-400">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
+                  <button
+                    type="button"
+                    className="rounded bg-neutral-700 px-2 py-1 text-[11px] font-bold text-white hover:bg-neutral-600"
+                    onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))}
+                    title="Zoom in"
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
                     className={`rounded px-3 py-1 text-[11px] font-semibold disabled:opacity-40 ${
                       playing
                         ? "bg-red-600 text-white hover:bg-red-500"
@@ -993,6 +1129,10 @@ export default function HeadRigModal({
                   </button>
                 </div>
               </div>
+
+              {/* Scrollable zoom container for ruler + tracks */}
+              <div className="overflow-x-auto">
+              <div style={{ minWidth: timelineZoom > 1 ? `${timelineZoom * 100}%` : undefined }}>
 
               {/* Frame ruler + red playhead handle */}
               <div
@@ -1044,8 +1184,9 @@ export default function HeadRigModal({
                     </label>
                   </div>
                   <div
-                    className="relative flex-1 cursor-pointer overflow-hidden rounded-r bg-[#1a2a3a]"
-                    style={{ height: 48 }}
+                    className={`relative flex-1 cursor-pointer overflow-hidden rounded-r ${selectedTrack === "body" ? "ring-1 ring-blue-400/60" : ""}`}
+                    style={{ height: 48, background: "#1a2a3a" }}
+                    onClick={() => setSelectedTrack("body")}
                     onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
                     {/* Frame thumbnails strip */}
@@ -1077,12 +1218,32 @@ export default function HeadRigModal({
                     {bodyFrameCount > 0 && bodyOutEff < bodyFrameCount ? (
                       <div className="absolute inset-y-0 right-0 bg-black/60" style={{ left: `${(bodyOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
-                    {/* Trim edge markers */}
-                    {bodyFrameCount > 0 && bodyInEff > 1 ? (
-                      <div className="absolute inset-y-0 w-0.5 bg-yellow-400" style={{ left: `${((bodyInEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 4 }} title={`In: F${bodyInEff}`} />
+                    {/* ── Resolve-style trim handles (draggable) ── */}
+                    {bodyFrameCount > 0 ? (
+                      <div
+                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-l bg-yellow-500 hover:bg-yellow-300"
+                        style={{
+                          left: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`,
+                          width: 6, zIndex: 8,
+                        }}
+                        title={`In: F${bodyInEff} — drag to trim`}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "in" }); setSelectedTrack("body"); }}
+                      >
+                        <div className="h-3 w-0.5 rounded bg-yellow-900" />
+                      </div>
                     ) : null}
-                    {bodyFrameCount > 0 && bodyOutEff < bodyFrameCount ? (
-                      <div className="absolute inset-y-0 w-0.5 bg-yellow-400" style={{ left: `${((bodyOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 4 }} title={`Out: F${bodyOutEff}`} />
+                    {bodyFrameCount > 0 ? (
+                      <div
+                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-r bg-yellow-500 hover:bg-yellow-300"
+                        style={{
+                          left: `${((bodyOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`,
+                          width: 6, zIndex: 8, transform: "translateX(-6px)",
+                        }}
+                        title={`Out: F${bodyOutEff} — drag to trim`}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "out" }); setSelectedTrack("body"); }}
+                      >
+                        <div className="h-3 w-0.5 rounded bg-yellow-900" />
+                      </div>
                     ) : null}
                     {/* Red playhead line */}
                     <div
@@ -1112,8 +1273,9 @@ export default function HeadRigModal({
                     </label>
                   </div>
                   <div
-                    className="relative flex-1 cursor-pointer overflow-hidden rounded-r bg-[#1a2a1a]"
-                    style={{ height: 48 }}
+                    className={`relative flex-1 cursor-pointer overflow-hidden rounded-r ${selectedTrack === "head" ? "ring-1 ring-green-400/60" : ""}`}
+                    style={{ height: 48, background: "#1a2a1a" }}
+                    onClick={() => setSelectedTrack("head")}
                     onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
                     {/* Frame thumbnails strip */}
@@ -1145,12 +1307,32 @@ export default function HeadRigModal({
                     {headFrameCount > 0 && headOutEff < headFrameCount ? (
                       <div className="absolute inset-y-0 right-0 bg-black/60" style={{ left: `${(headOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
-                    {/* Trim edge markers */}
-                    {headFrameCount > 0 && headInEff > 1 ? (
-                      <div className="absolute inset-y-0 w-0.5 bg-yellow-400" style={{ left: `${((headInEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 4 }} title={`In: F${headInEff}`} />
+                    {/* ── Resolve-style trim handles (draggable) ── */}
+                    {headFrameCount > 0 ? (
+                      <div
+                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-l bg-yellow-500 hover:bg-yellow-300"
+                        style={{
+                          left: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`,
+                          width: 6, zIndex: 8,
+                        }}
+                        title={`In: F${headInEff} — drag to trim`}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "in" }); setSelectedTrack("head"); }}
+                      >
+                        <div className="h-3 w-0.5 rounded bg-yellow-900" />
+                      </div>
                     ) : null}
-                    {headFrameCount > 0 && headOutEff < headFrameCount ? (
-                      <div className="absolute inset-y-0 w-0.5 bg-yellow-400" style={{ left: `${((headOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 4 }} title={`Out: F${headOutEff}`} />
+                    {headFrameCount > 0 ? (
+                      <div
+                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-r bg-yellow-500 hover:bg-yellow-300"
+                        style={{
+                          left: `${((headOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`,
+                          width: 6, zIndex: 8, transform: "translateX(-6px)",
+                        }}
+                        title={`Out: F${headOutEff} — drag to trim`}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "out" }); setSelectedTrack("head"); }}
+                      >
+                        <div className="h-3 w-0.5 rounded bg-yellow-900" />
+                      </div>
                     ) : null}
                     {/* Keyframe markers */}
                     {keyframes.map((kf) => (
@@ -1180,6 +1362,8 @@ export default function HeadRigModal({
                   </div>
                 </div>
               </div>
+              </div>{/* end zoom inner */}
+              </div>{/* end scroll wrapper */}
 
               {/* Keyframe chips */}
               {keyframes.length > 0 ? (
@@ -1215,13 +1399,18 @@ export default function HeadRigModal({
                 </div>
               ) : (
                 <p className="mt-1 text-[9px] text-studio-muted" style={{ marginLeft: 80 }}>
-                  Drag the red playhead to scrub. Position head, click + Key.
+                  Drag playhead to scrub. Drag yellow handles to trim. <b>I</b>=In <b>O</b>=Out <b>Ctrl+B</b>=Cut <b>Del</b>=Remove <b>Ctrl+C/V</b>=Copy/Paste
                 </p>
               )}
 
               {/* ── Trim controls ── */}
               <div className="mt-2 flex flex-wrap items-center gap-4 border-t border-[#333] pt-2" style={{ marginLeft: 80 }}>
                 <span className="text-[10px] font-semibold text-neutral-400">TRIM</span>
+                {selectedTrack && (
+                  <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${selectedTrack === "body" ? "bg-blue-900/50 text-blue-400" : "bg-green-900/50 text-green-400"}`}>
+                    {selectedTrack.toUpperCase()} selected
+                  </span>
+                )}
                 <label className="flex items-center gap-1 text-[10px] text-blue-400">
                   Body In
                   <input
@@ -1280,85 +1469,151 @@ export default function HeadRigModal({
             </div>
           ) : null}
 
-          {/* ── Shot Browser — pick body & head visually ──── */}
+          {/* ── Shot Browser + Combined Outputs — 2-col inside this card ──── */}
           <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
-            <h3 className="mb-2 text-xs font-semibold text-neutral-300">Body Shots</h3>
-            {bodyShots.length === 0 && allShots.length === 0 ? (
-              <p className="text-[10px] text-studio-muted">No body shots yet — create one with Grok below</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {(bodyShots.length > 0 ? bodyShots : allShots).map((s) => (
-                  <div key={s.id} className="group relative" style={{ width: 80, height: 80 }}>
-                    <button
-                      type="button"
-                      className={`relative overflow-hidden rounded-md border-2 ${
-                        bodyId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
-                      }`}
-                      style={{ width: 80, height: 80 }}
-                      onClick={() => setBodyId(s.id)}
-                      title={s.name || s.id}
-                    >
-                      <img
-                        src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
-                        alt={s.name || s.id}
-                        className="h-full w-full object-cover"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                      />
-                      <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
-                        {s.name || s.id}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
-                      onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
-                      title="Delete shot"
-                    >
-                      ✕
-                    </button>
+            <div className="flex gap-4">
+              {/* LEFT — Body Shots + Head Shots */}
+              <div className="min-w-0 flex-1">
+                <h3 className="mb-2 text-xs font-semibold text-neutral-300">Body Shots</h3>
+                {bodyShots.length === 0 && allShots.length === 0 ? (
+                  <p className="text-[10px] text-studio-muted">No body shots yet — create one with Grok below</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {(bodyShots.length > 0 ? bodyShots : allShots).map((s) => (
+                      <div key={s.id} className="group relative" style={{ width: 80, height: 80 }}>
+                        <button
+                          type="button"
+                          className={`relative overflow-hidden rounded-md border-2 ${
+                            bodyId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
+                          }`}
+                          style={{ width: 80, height: 80 }}
+                          onClick={() => setBodyId(s.id)}
+                          title={s.name || s.id}
+                        >
+                          <img
+                            src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                            alt={s.name || s.id}
+                            className="h-full w-full object-cover"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                          />
+                          <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
+                            {s.name || s.id}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
+                          onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
+                          title="Delete shot"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
+                )}
 
-            <h3 className="mb-2 mt-3 text-xs font-semibold text-neutral-300">Head Shots</h3>
-            {headShots.length === 0 && allShots.length === 0 ? (
-              <p className="text-[10px] text-studio-muted">No head shots yet — create one with Grok below</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {(headShots.length > 0 ? headShots : allShots).map((s) => (
-                  <div key={s.id} className="group relative" style={{ width: 80, height: 80 }}>
-                    <button
-                      type="button"
-                      className={`relative overflow-hidden rounded-md border-2 ${
-                        headId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
-                      }`}
-                      style={{ width: 80, height: 80 }}
-                      onClick={() => setHeadId(s.id)}
-                      title={s.name || s.id}
-                    >
-                      <img
-                        src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
-                        alt={s.name || s.id}
-                        className="h-full w-full object-cover"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                      />
-                      <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
-                        {s.name || s.id}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
-                      onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
-                      title="Delete shot"
-                    >
-                      ✕
-                    </button>
+                <h3 className="mb-2 mt-3 text-xs font-semibold text-neutral-300">Head Shots</h3>
+                {headShots.length === 0 && allShots.length === 0 ? (
+                  <p className="text-[10px] text-studio-muted">No head shots yet — create one with Grok below</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {(headShots.length > 0 ? headShots : allShots).map((s) => (
+                      <div key={s.id} className="group relative" style={{ width: 80, height: 80 }}>
+                        <button
+                          type="button"
+                          className={`relative overflow-hidden rounded-md border-2 ${
+                            headId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
+                          }`}
+                          style={{ width: 80, height: 80 }}
+                          onClick={() => setHeadId(s.id)}
+                          title={s.name || s.id}
+                        >
+                          <img
+                            src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                            alt={s.name || s.id}
+                            className="h-full w-full object-cover"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                          />
+                          <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
+                            {s.name || s.id}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
+                          onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
+                          title="Delete shot"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
-            )}
+
+              {/* RIGHT — Combined Outputs */}
+              <div className="w-60 shrink-0 border-l border-studio-border pl-4">
+                <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Combined Outputs</h3>
+                <button
+                  type="button"
+                  className="mb-3 w-full rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+                  disabled={combineBusy || !bodyId || !headId}
+                  onClick={() => void handleCombine()}
+                >
+                  {combineBusy ? "Combining…" : "Save Combined Shot"}
+                </button>
+                {combineMsg ? (
+                  <p className={`mb-2 text-[10px] font-medium ${combineMsg.includes("failed") || combineMsg.includes("Failed") ? "text-red-400" : "text-emerald-300"}`}>
+                    {combineMsg}
+                  </p>
+                ) : null}
+                {combinedShots.length === 0 ? (
+                  <p className="text-[10px] text-studio-muted">No combined shots yet.</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {combinedShots.map((s) => (
+                      <div key={s.id} className="group relative rounded-md border border-studio-border bg-[#111] p-2">
+                        <div className="flex items-start gap-2">
+                          <img
+                            src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                            alt={s.name || s.id}
+                            className="h-12 w-12 shrink-0 rounded object-cover"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[10px] font-medium text-neutral-200" title={s.id}>{s.name || s.id}</p>
+                            <p className="text-[9px] text-studio-muted">{s.frameCount}f</p>
+                            {s.actionId ? (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400">
+                                <span>✓</span> In Action Shots
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="mt-1 rounded bg-blue-700 px-2 py-0.5 text-[9px] font-semibold text-white hover:bg-blue-600"
+                                onClick={() => void handleSendToAction(s.id)}
+                              >
+                                Send to Action Shots
+                              </button>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
+                            onClick={() => void handleDeleteShot(s.id)}
+                            title="Delete combined shot"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* ── Grok Shot Creator ─────────────────────────── */}
@@ -1420,76 +1675,6 @@ export default function HeadRigModal({
                 : "Creates a head shot (mouth moving, expressions). Will be overlaid onto body."}
             </p>
           </div>
-          </div>{/* end left column */}
-
-          {/* ── RIGHT COLUMN — Saved Combined Outputs ──────────── */}
-          <div className="w-72 shrink-0">
-            <div className="sticky top-0 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
-              <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Combined Outputs</h3>
-
-              {/* Save Combined button */}
-              <button
-                type="button"
-                className="mb-3 w-full rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
-                disabled={combineBusy || !bodyId || !headId}
-                onClick={() => void handleCombine()}
-              >
-                {combineBusy ? "Combining…" : "Save Combined Shot"}
-              </button>
-              {combineMsg ? (
-                <p className={`mb-2 text-[10px] font-medium ${combineMsg.includes("failed") || combineMsg.includes("Failed") ? "text-red-400" : "text-emerald-300"}`}>
-                  {combineMsg}
-                </p>
-              ) : null}
-
-              {/* List of combined shots */}
-              {combinedShots.length === 0 ? (
-                <p className="text-[10px] text-studio-muted">No combined shots yet. Pick a body + head, position them, then click Save Combined Shot.</p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {combinedShots.map((s) => (
-                    <div key={s.id} className="group relative rounded-md border border-studio-border bg-[#111] p-2">
-                      <div className="flex items-start gap-2">
-                        <img
-                          src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
-                          alt={s.name || s.id}
-                          className="h-14 w-14 shrink-0 rounded object-cover"
-                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-[10px] font-medium text-neutral-200" title={s.id}>{s.name || s.id}</p>
-                          <p className="text-[9px] text-studio-muted">{s.frameCount}f</p>
-                          {s.actionId ? (
-                            <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400">
-                              <span>✓</span> In Action Shots
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              className="mt-1 rounded bg-blue-700 px-2 py-0.5 text-[9px] font-semibold text-white hover:bg-blue-600"
-                              onClick={() => void handleSendToAction(s.id)}
-                            >
-                              Send to Action Shots
-                            </button>
-                          )}
-                        </div>
-                        {/* Delete button */}
-                        <button
-                          type="button"
-                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] text-red-400 opacity-0 transition-opacity hover:bg-red-600 hover:text-white group-hover:opacity-100"
-                          onClick={() => void handleDeleteShot(s.id)}
-                          title="Delete combined shot"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>{/* end flex row */}
         </div>
 
   );
