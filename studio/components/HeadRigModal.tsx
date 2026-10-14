@@ -261,9 +261,12 @@ export default function HeadRigModal({
       }
     }
 
-    // Click anywhere on canvas = set anchor position relative to body
-    setAnchorX(clamp((mx - bx) / bw, 0, 1));
-    setAnchorY((my - by) / bh); // allow negative (above body)
+    // Click on body (outside head) = set anchor position
+    // Skip if head is loaded — only allow click-to-place when no head image yet
+    if (!headImgRef.current || headNat.w === 0) {
+      setAnchorX(clamp((mx - bx) / bw, 0, 1));
+      setAnchorY((my - by) / bh);
+    }
   }
 
   function onMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
