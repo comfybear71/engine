@@ -118,6 +118,9 @@ const {
   flagActionFrame,
   deleteActionFrame,
   saveFrameToSlot,
+  saveLibraryFrameToSlot,
+  extractFaceFromClip,
+  tickLibraryClip,
   listCategories,
 } = require("./factoryLibrary");
 const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
@@ -1140,6 +1143,62 @@ function createApp(options = {}) {
     try {
       const index = patchClipCategory(projectDir, req.params.characterId, req.params.clipId, req.body && req.body.category);
       res.json({ ok: true, clip: index });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/library/:clipId/frames/:index/save-slot", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await saveLibraryFrameToSlot(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.clipId,
+        Number(req.params.index),
+        String((req.body && req.body.slot) || "torso"),
+        (req.body && req.body.view) || undefined,
+        (req.body && req.body.name) || undefined,
+        (req.body && req.body.side) || undefined,
+        { pythonBin: options.pythonBin }
+      );
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/library/:clipId/extract-face", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await extractFaceFromClip(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.clipId,
+        (req.body && req.body.kind) || "mouth",
+        { pythonBin: options.pythonBin }
+      );
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/library/:clipId/tick", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await tickLibraryClip(projectDir, globalAssetsDir, req.params.characterId, req.params.clipId, {
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
     } catch (err) {
       sendFactoryError(res, err);
     }

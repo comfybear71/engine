@@ -1652,4 +1652,5 @@ module.exports = {
   slotCanvas,
   renderJobPreview,
   GenerateImageError,
+  findHeadBaseAbs,
 };

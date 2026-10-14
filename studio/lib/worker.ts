@@ -594,6 +594,8 @@ export type LibraryClip = {
   warnings: string[];
   issues: string[];
   frames: LibraryFrame[];
+  ticked?: boolean;
+  actionId?: string | null;
 };
 
 export type CharacterLibrary = {
@@ -721,6 +723,59 @@ export async function deleteActionFrame(
   );
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<ActionFrameDetail>;
+}
+
+export async function saveLibraryFrameToSlot(
+  project: string,
+  characterId: string,
+  clipId: string,
+  index: number,
+  slot: string,
+  view?: string,
+  name?: string,
+  side?: string
+): Promise<{ rel: string; name: string; state: string; slot: string }> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/library/${encodeURIComponent(clipId)}/frames/${index}/save-slot`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot, view, name, side }),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ rel: string; name: string; state: string; slot: string }>;
+}
+
+export async function extractLibraryFace(
+  project: string,
+  characterId: string,
+  clipId: string,
+  kind: "mouth" | "eyes"
+): Promise<{ drawings: { name: string; view: string; rel: string }[]; missing: { name: string; view: string }[]; scanned: number }> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/library/${encodeURIComponent(clipId)}/extract-face`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }) }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{
+    drawings: { name: string; view: string; rel: string }[];
+    missing: { name: string; view: string }[];
+    scanned: number;
+  }>;
+}
+
+export async function tickLibraryClip(
+  project: string,
+  characterId: string,
+  clipId: string
+): Promise<{ actionId: string; frames: number; still: boolean }> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/library/${encodeURIComponent(clipId)}/tick`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ actionId: string; frames: number; still: boolean }>;
 }
 
 export async function saveActionFrameToSlot(
