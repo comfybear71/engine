@@ -139,6 +139,20 @@ def test_eight_real_keys_alternate_readable_strides():
         assert diff > 1.5, f"frames {i} and {i + 1} look frozen ({diff:.3f})"
 
 
+def test_smeared_morph_falls_back_to_nearest_key():
+    from compositor.factory_walk_rig import _inbetween
+
+    a = _full_figure(-6)
+    b = _full_figure(6)
+    out = _inbetween(a, b, 0.4, n_sources=8)
+    # Opposite contacts must not keep a ghosted double-body blend.
+    assert count_figures(out) == 1
+    assert count_boots(out) <= 2
+    oa = int(np.count_nonzero(out[:, :, 3] > 16))
+    aa = int(np.count_nonzero(a[:, :, 3] > 16))
+    assert abs(oa - aa) <= max(30, int(aa * 0.2))
+
+
 def test_painted_sources_build_8_12_16_without_squash_or_a_second_head():
     sources = [_full_figure(-6), _full_figure(6)]
     for frames in (8, 12, 16):

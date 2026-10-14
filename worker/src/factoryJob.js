@@ -802,6 +802,9 @@ async function renderJobPreview(projectDir, globalAssetsDir, character, job, opt
       for (const [name, slotSpec] of Object.entries(characterJson.slots || {})) {
         if (name === job.dest.slot) continue;
         slotSpec.default_drawing = "none";
+        // A leftover walk_side cycle on body/ would stack on the new torso
+        // dest and read as a second head in the 16:9 preview.
+        if (slotSpec.cycles) delete slotSpec.cycles;
       }
     }
     if (job.dest.slot === "body" && job.cycle) {

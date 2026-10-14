@@ -153,17 +153,84 @@ def _sample_pair(sources: list[np.ndarray], index: int, count: int) -> tuple[np.
     return sources[a], sources[b], frac, phase
 
 
+def _bbox_wh(frame: np.ndarray) -> tuple[int, int]:
+    box = alpha_bbox(frame)
+    if box is None:
+        return 0, 0
+    return int(box[2] - box[0]), int(box[3] - box[1])
+
+
+def _alpha_iou(a: np.ndarray, b: np.ndarray) -> float:
+    ma = _to_bgra(a)[:, :, 3] > 16
+    mb = _to_bgra(b)[:, :, 3] > 16
+    inter = int(np.count_nonzero(ma & mb))
+    union = int(np.count_nonzero(ma | mb))
+    return inter / max(1, union)
+
+
+def _morph_looks_clean(a: np.ndarray, b: np.ndarray, blended: np.ndarray) -> bool:
+    """Reject optical-flow smears that grow a second head or extra limbs."""
+
+    if count_figures(blended) != 1 or count_boots(blended) > 2:
+        return False
+    aw, ah = _bbox_wh(a)
+    bw, bh = _bbox_wh(b)
+    cw, ch = _bbox_wh(blended)
+    if cw <= 0 or ch <= 0:
+        return False
+    if cw > max(aw, bw, 1) * 1.18 or ch > max(ah, bh, 1) * 1.10:
+        return False
+    if max(_alpha_iou(blended, a), _alpha_iou(blended, b)) < 0.75:
+        return False
+    return True
+
+
+def _leg_nudge(frame: np.ndarray, dx: float) -> np.ndarray:
+    """Slide only the legs toward the next key. Head stays put — no blend."""
+
+    src = _to_bgra(frame)
+    if abs(float(dx)) < 0.5:
+        return src
+    box = alpha_bbox(src)
+    if box is None:
+        return src
+    x0, y0, x1, y1 = box
+    hip_y = y0 + int((y1 - y0) * HIP_FRAC)
+    h, w = src.shape[:2]
+    grid_x, grid_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    t = np.clip((grid_y - hip_y) / max(1.0, float(y1 - hip_y)), 0.0, 1.0)
+    t = t * t
+    map_x = grid_x - float(dx) * t
+    warped = cv2.remap(
+        src,
+        map_x.astype(np.float32),
+        grid_y.astype(np.float32),
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
+    return plant_to_ground(_to_bgra(warped), y1)
+
+
 def _inbetween(a: np.ndarray, b: np.ndarray, frac: float, n_sources: int) -> np.ndarray:
     """Morph adjacent keys when we have a real cycle. Two contact poses
     keep the nearest key and rely on the leg warp for in-betweens — a
     full blend of opposite strides ghosts extra feet. If a morph of a
-    longer key set still grows a second body, fall back to the nearest
-    key so 8/12/16 loops stay one-headed."""
+    longer key set still grows a second body, slide the nearest key's
+    legs so 12/16 loops do not freeze on a held pose."""
 
     if n_sources >= MORPH_MIN_SOURCES and 0.08 < frac < 0.92:
         blended = morph_frames(a, b, frac)
-        if count_figures(blended) == 1 and count_boots(blended) <= 2:
+        if _morph_looks_clean(a, b, blended):
             return blended
+        nearest = a if frac < 0.5 else b
+        other = b if frac < 0.5 else a
+        nxs = _foot_xs(nearest)
+        oxs = _foot_xs(other)
+        if nxs and oxs:
+            t = frac if frac < 0.5 else (1.0 - frac)
+            dx = (max(oxs) - max(nxs)) * t
+            return _leg_nudge(nearest, dx)
+        return nearest.copy()
     return a.copy() if frac < 0.5 else b.copy()
 
 
