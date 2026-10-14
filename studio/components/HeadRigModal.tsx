@@ -1,0 +1,551 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { WORKER_URL, workerFetch } from "@/lib/worker";
+
+// ── Types ──────────────────────────────────────────────────────────
+
+interface ShotInfo {
+  id: string;
+  name: string;
+  category: string;
+  status: string;
+  shotType?: string;
+  frameCount: number;
+}
+
+interface RigEntry {
+  anchorX: number;
+  anchorY: number;
+  headScale: number;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+function shotMediaUrl(project: string, characterId: string, shotId: string, rel: string): string {
+  return `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/media?rel=${encodeURIComponent(`${shotId}/${rel}`)}`;
+}
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+// ── Component ───────────────────────────────────────────────────────
+
+export default function HeadRigModal({
+  project,
+  characterId,
+  onClose,
+}: {
+  project: string;
+  characterId: string;
+  onClose: () => void;
+}) {
+  const [shots, setShots] = useState<ShotInfo[]>([]);
+  const [rigs, setRigs] = useState<Record<string, RigEntry>>({});
+  const [bodyId, setBodyId] = useState("");
+  const [headId, setHeadId] = useState("");
+  const [rigKey, setRigKey] = useState("front");
+  const [anchorX, setAnchorX] = useState(0.5);
+  const [anchorY, setAnchorY] = useState(0.15);
+  const [headScale, setHeadScale] = useState(0.7);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // Canvas refs
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bodyImgRef = useRef<HTMLImageElement | null>(null);
+  const headImgRef = useRef<HTMLImageElement | null>(null);
+  const [bodyNat, setBodyNat] = useState({ w: 0, h: 0 });
+  const [headNat, setHeadNat] = useState({ w: 0, h: 0 });
+
+  // Drag state
+  const dragRef = useRef<{
+    kind: "move" | "scale";
+    startX: number;
+    startY: number;
+    origAnchorX: number;
+    origAnchorY: number;
+    origScale: number;
+  } | null>(null);
+
+  // Load shots + rigs
+  useEffect(() => {
+    (async () => {
+      try {
+        const [shotsRes, rigRes] = await Promise.all([
+          workerFetch(`/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots`),
+          workerFetch(`/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/head-rig`),
+        ]);
+        if (shotsRes.ok) {
+          const data: ShotInfo[] = await shotsRes.json();
+          setShots(data.filter((s) => s.status === "ready"));
+        }
+        if (rigRes.ok) {
+          const data = await rigRes.json();
+          setRigs(data.rigs || {});
+        }
+      } catch {}
+    })();
+  }, [project, characterId]);
+
+  // When rig key changes, load saved settings if they exist
+  useEffect(() => {
+    const entry = rigs[rigKey];
+    if (entry) {
+      setAnchorX(entry.anchorX);
+      setAnchorY(entry.anchorY);
+      setHeadScale(entry.headScale);
+    }
+  }, [rigKey, rigs]);
+
+  // Load body image
+  useEffect(() => {
+    if (!bodyId) { bodyImgRef.current = null; setBodyNat({ w: 0, h: 0 }); return; }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => { bodyImgRef.current = img; setBodyNat({ w: img.naturalWidth, h: img.naturalHeight }); };
+    img.src = shotMediaUrl(project, characterId, bodyId, "cut/f_0001.png");
+  }, [bodyId, project, characterId]);
+
+  // Load head image
+  useEffect(() => {
+    if (!headId) { headImgRef.current = null; setHeadNat({ w: 0, h: 0 }); return; }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => { headImgRef.current = img; setHeadNat({ w: img.naturalWidth, h: img.naturalHeight }); };
+    img.src = shotMediaUrl(project, characterId, headId, "cut/f_0001.png");
+  }, [headId, project, characterId]);
+
+  // Draw canvas
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const cw = canvas.width;
+    const ch = canvas.height;
+    ctx.clearRect(0, 0, cw, ch);
+
+    // Checkerboard background
+    const sz = 12;
+    for (let y = 0; y < ch; y += sz) {
+      for (let x = 0; x < cw; x += sz) {
+        ctx.fillStyle = (Math.floor(x / sz) + Math.floor(y / sz)) % 2 === 0 ? "#1a1a1a" : "#222";
+        ctx.fillRect(x, y, sz, sz);
+      }
+    }
+
+    const bodyImg = bodyImgRef.current;
+    if (!bodyImg || bodyNat.w === 0) return;
+
+    // Fit body into canvas
+    const scale = Math.min(cw / bodyNat.w, ch / bodyNat.h) * 0.85;
+    const bw = bodyNat.w * scale;
+    const bh = bodyNat.h * scale;
+    const bx = (cw - bw) / 2;
+    const by = (ch - bh) / 2;
+
+    ctx.drawImage(bodyImg, bx, by, bw, bh);
+
+    // Draw head overlay
+    const headImg = headImgRef.current;
+    if (headImg && headNat.w > 0) {
+      const hw = headNat.w * headScale * scale;
+      const hh = headNat.h * headScale * scale;
+      const hx = bx + anchorX * bw - hw / 2;
+      const hy = by + anchorY * bh - hh / 2;
+
+      ctx.globalAlpha = 0.8;
+      ctx.drawImage(headImg, hx, hy, hw, hh);
+      ctx.globalAlpha = 1;
+
+      // Dashed outline
+      ctx.strokeStyle = "#e0a040";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(hx, hy, hw, hh);
+      ctx.setLineDash([]);
+
+      // Corner handles
+      const handles = [
+        [hx, hy], [hx + hw, hy],
+        [hx, hy + hh], [hx + hw, hy + hh],
+      ];
+      for (const [cx, cy] of handles) {
+        ctx.fillStyle = "#e0a040";
+        ctx.fillRect(cx - 4, cy - 4, 8, 8);
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx - 4, cy - 4, 8, 8);
+      }
+
+      // Crosshair at anchor point
+      const ax = bx + anchorX * bw;
+      const ay = by + anchorY * bh;
+      ctx.strokeStyle = "#e0a040";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(ax - 10, ay); ctx.lineTo(ax + 10, ay);
+      ctx.moveTo(ax, ay - 10); ctx.lineTo(ax, ay + 10);
+      ctx.stroke();
+    }
+  }, [bodyNat, headNat, anchorX, anchorY, headScale]);
+
+  useEffect(() => { draw(); }, [draw]);
+
+  // Mouse handlers for drag
+  function onMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    if (!canvas || !bodyImgRef.current || bodyNat.w === 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const scale = Math.min(cw / bodyNat.w, ch / bodyNat.h) * 0.85;
+    const bw = bodyNat.w * scale;
+    const bh = bodyNat.h * scale;
+    const bx = (cw - bw) / 2;
+    const by = (ch - bh) / 2;
+
+    // Check if clicking near a corner handle (scale)
+    if (headImgRef.current && headNat.w > 0) {
+      const hw = headNat.w * headScale * scale;
+      const hh = headNat.h * headScale * scale;
+      const hx = bx + anchorX * bw - hw / 2;
+      const hy = by + anchorY * bh - hh / 2;
+      const corners = [
+        [hx, hy], [hx + hw, hy],
+        [hx, hy + hh], [hx + hw, hy + hh],
+      ];
+      for (const [cx, cy] of corners) {
+        if (Math.abs(mx - cx) < 10 && Math.abs(my - cy) < 10) {
+          dragRef.current = {
+            kind: "scale",
+            startX: e.clientX,
+            startY: e.clientY,
+            origAnchorX: anchorX,
+            origAnchorY: anchorY,
+            origScale: headScale,
+          };
+          e.preventDefault();
+          return;
+        }
+      }
+
+      // Check if clicking inside head bounds (move)
+      if (mx >= hx && mx <= hx + hw && my >= hy && my <= hy + hh) {
+        dragRef.current = {
+          kind: "move",
+          startX: e.clientX,
+          startY: e.clientY,
+          origAnchorX: anchorX,
+          origAnchorY: anchorY,
+          origScale: headScale,
+        };
+        e.preventDefault();
+        return;
+      }
+    }
+
+    // Click anywhere on body = set anchor position
+    if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh) {
+      setAnchorX(clamp((mx - bx) / bw, 0, 1));
+      setAnchorY(clamp((my - by) / bh, 0, 1));
+    }
+  }
+
+  function onMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const canvas = canvasRef.current;
+    if (!canvas || bodyNat.w === 0) return;
+
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const scale = Math.min(cw / bodyNat.w, ch / bodyNat.h) * 0.85;
+    const bw = bodyNat.w * scale;
+    const bh = bodyNat.h * scale;
+
+    if (drag.kind === "move") {
+      const dx = (e.clientX - drag.startX) / bw;
+      const dy = (e.clientY - drag.startY) / bh;
+      setAnchorX(clamp(drag.origAnchorX + dx, 0, 1));
+      setAnchorY(clamp(drag.origAnchorY + dy, 0, 1));
+    } else if (drag.kind === "scale") {
+      const dy = drag.startY - e.clientY;
+      const factor = 1 + dy / 200;
+      setHeadScale(clamp(drag.origScale * factor, 0.1, 3));
+    }
+  }
+
+  function onMouseUp() {
+    dragRef.current = null;
+  }
+
+  function onWheel(e: React.WheelEvent<HTMLCanvasElement>) {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.03 : 0.03;
+    setHeadScale((s) => clamp(s + delta, 0.1, 3));
+  }
+
+  // Save rig
+  async function handleSave() {
+    setBusy("Saving...");
+    setError(null);
+    setSaved(false);
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/head-rig`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key: rigKey,
+            anchorX: Math.round(anchorX * 1000) / 1000,
+            anchorY: Math.round(anchorY * 1000) / 1000,
+            headScale: Math.round(headScale * 1000) / 1000,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Save failed" }));
+        throw new Error(body.error || "Save failed");
+      }
+      const data = await res.json();
+      setRigs(data.rigs || {});
+      setSaved(true);
+      setBusy(null);
+    } catch (err) {
+      setBusy(null);
+      setError(err instanceof Error ? err.message : "Save failed");
+    }
+  }
+
+  // Delete rig
+  async function handleDelete(key: string) {
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/head-rig/${encodeURIComponent(key)}`,
+        { method: "DELETE" }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setRigs(data.rigs || {});
+      }
+    } catch {}
+  }
+
+  // Filter shots into body/head categories
+  const bodyShots = shots.filter((s) => s.shotType === "body" || s.category === "idle_stand" || s.category === "walks" || s.category === "mic");
+  const headShots = shots.filter((s) => s.shotType === "head" || s.category === "expressions" || s.category === "head_moves" || s.category === "mouth_tongue");
+  // If no type/category filtering works, show all
+  const allShots = shots;
+
+  const rigKeys = Object.keys(rigs);
+
+  const CANVAS_W = 600;
+  const CANVAS_H = 550;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
+      <div className="flex max-h-[96vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-studio-border bg-studio-panel shadow-2xl">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 border-b border-studio-border px-4 py-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Build Character</h2>
+            <p className="text-[11px] text-studio-muted">
+              Pick a body shot and a head shot. Drag the head to position it, scroll to resize. Save the rig for each angle.
+            </p>
+          </div>
+          <button type="button" className="text-sm text-studio-muted hover:text-white" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {/* Shot pickers */}
+          <div className="mb-3 flex flex-wrap items-end gap-3">
+            <label className="text-[11px] text-studio-muted">
+              Body shot
+              <select
+                className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                value={bodyId}
+                onChange={(e) => setBodyId(e.target.value)}
+              >
+                <option value="">— pick —</option>
+                {(bodyShots.length > 0 ? bodyShots : allShots).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || s.id} {s.shotType ? `(${s.shotType})` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px] text-studio-muted">
+              Head shot
+              <select
+                className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                value={headId}
+                onChange={(e) => setHeadId(e.target.value)}
+              >
+                <option value="">— pick —</option>
+                {(headShots.length > 0 ? headShots : allShots).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || s.id} {s.shotType ? `(${s.shotType})` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px] text-studio-muted">
+              Rig name
+              <select
+                className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                value={rigKey}
+                onChange={(e) => setRigKey(e.target.value)}
+              >
+                <option value="front">front</option>
+                <option value="left_34">left 3/4</option>
+                <option value="right_34">right 3/4</option>
+                <option value="left_side">left side</option>
+                <option value="right_side">right side</option>
+                <option value="back">back</option>
+              </select>
+              <input
+                type="text"
+                className="ml-1 w-20 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                placeholder="custom..."
+                value={rigKey}
+                onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
+              />
+            </label>
+          </div>
+
+          {/* Canvas */}
+          <div className="flex gap-4">
+            <div>
+              <canvas
+                ref={canvasRef}
+                width={CANVAS_W}
+                height={CANVAS_H}
+                className="rounded-md border border-studio-border"
+                style={{ cursor: "crosshair", width: CANVAS_W, height: CANVAS_H }}
+                onMouseDown={onMouseDown}
+                onMouseMove={onMouseMove}
+                onMouseUp={onMouseUp}
+                onMouseLeave={onMouseUp}
+                onWheel={onWheel}
+              />
+              <p className="mt-1 text-[10px] text-studio-muted">
+                Click = set position · Drag head = move · Corner handles = scale · Scroll = resize
+              </p>
+            </div>
+
+            {/* Controls + saved rigs */}
+            <div className="flex min-w-[200px] flex-col gap-3">
+              <label className="text-[11px] text-studio-muted">
+                Head scale: {headScale.toFixed(2)}
+                <input
+                  type="range"
+                  min={0.1}
+                  max={2.5}
+                  step={0.01}
+                  value={headScale}
+                  onChange={(e) => setHeadScale(Number(e.target.value))}
+                  className="studio-scrubber mt-1 w-full"
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-[11px] text-studio-muted">
+                  Anchor X
+                  <input
+                    type="number"
+                    step={0.01}
+                    min={0}
+                    max={1}
+                    value={anchorX.toFixed(3)}
+                    onChange={(e) => setAnchorX(clamp(Number(e.target.value), 0, 1))}
+                    className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                  />
+                </label>
+                <label className="text-[11px] text-studio-muted">
+                  Anchor Y
+                  <input
+                    type="number"
+                    step={0.01}
+                    min={0}
+                    max={1}
+                    value={anchorY.toFixed(3)}
+                    onChange={(e) => setAnchorY(clamp(Number(e.target.value), 0, 1))}
+                    className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                  />
+                </label>
+              </div>
+
+              {error ? <p className="text-xs text-red-400">{error}</p> : null}
+              {saved ? <p className="text-xs text-green-400">Saved!</p> : null}
+
+              <button
+                type="button"
+                className="rounded-md bg-studio-accent px-3 py-2 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+                disabled={busy != null || !bodyId || !headId}
+                onClick={() => void handleSave()}
+              >
+                {busy || `Save "${rigKey}" rig`}
+              </button>
+
+              {/* Saved rigs list */}
+              {rigKeys.length > 0 ? (
+                <div className="mt-2">
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-studio-muted">Saved rigs</p>
+                  {rigKeys.map((key) => {
+                    const r = rigs[key];
+                    return (
+                      <div key={key} className="mb-1 flex items-center justify-between rounded bg-studio-raised px-2 py-1">
+                        <button
+                          type="button"
+                          className="text-left text-xs text-neutral-200 hover:text-white"
+                          onClick={() => {
+                            setRigKey(key);
+                            setAnchorX(r.anchorX);
+                            setAnchorY(r.anchorY);
+                            setHeadScale(r.headScale);
+                          }}
+                        >
+                          <span className="font-medium">{key}</span>
+                          <span className="ml-2 text-studio-muted">
+                            s={r.headScale.toFixed(2)} x={r.anchorX.toFixed(2)} y={r.anchorY.toFixed(2)}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="ml-2 text-[10px] text-red-400 hover:text-red-300"
+                          onClick={() => void handleDelete(key)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-2 border-t border-studio-border px-4 py-3">
+          <button
+            type="button"
+            className="rounded-md border border-studio-border px-3 py-1.5 text-xs text-neutral-200"
+            onClick={onClose}
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

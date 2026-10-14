@@ -714,9 +714,33 @@ function CombinePanel({
   const [combineName, setCombineName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [rigLoaded, setRigLoaded] = useState("");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bodyImgRef = useRef<HTMLImageElement | null>(null);
   const headImgRef = useRef<HTMLImageElement | null>(null);
+
+  // Auto-load saved head rig settings
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await workerFetch(
+          `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/head-rig`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const rigs = data.rigs || {};
+        // Use first available rig as default
+        const keys = Object.keys(rigs);
+        if (keys.length > 0) {
+          const first = rigs[keys[0]];
+          setAnchorX(first.anchorX);
+          setAnchorY(first.anchorY);
+          setHeadScale(first.headScale);
+          setRigLoaded(keys[0]);
+        }
+      } catch {}
+    })();
+  }, [project, characterId]);
 
   // Draw preview whenever inputs change
   const drawPreview = useCallback(() => {
@@ -926,6 +950,12 @@ function CombinePanel({
             />
             <span style={{ fontSize: 11, color: "#aaa" }}>{headScale.toFixed(2)}×</span>
           </div>
+
+          {rigLoaded ? (
+            <div style={{ fontSize: 11, color: "#e0a040", marginBottom: 4 }}>
+              Using saved rig: {rigLoaded}
+            </div>
+          ) : null}
 
           {error && <div className="shots-error">{error}</div>}
 

@@ -185,6 +185,59 @@ function saveSlotAlignment(projectDir, globalAssetsDir, characterId, slotName, b
   };
 }
 
+/**
+ * Load saved head-rig entries for a character.
+ * Returns { rigs: { [key]: { anchorX, anchorY, headScale } } }
+ */
+function loadHeadRig(projectDir, globalAssetsDir, characterId) {
+  if (!isSafeFolderName(characterId)) throw localError("Invalid character id");
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  return { ok: true, rigs: character.headRig || {} };
+}
+
+/**
+ * Save a head-rig entry for a character.
+ * Body: { key, anchorX, anchorY, headScale }
+ * key = pose/angle identifier (e.g. "front", "left_34")
+ */
+function saveHeadRig(projectDir, globalAssetsDir, characterId, body) {
+  if (!isSafeFolderName(characterId)) throw localError("Invalid character id");
+  const patch = body && typeof body === "object" ? body : {};
+  const key = String(patch.key || "").trim();
+  if (!key) throw localError("key is required (e.g. 'front', 'left_34')");
+
+  const anchorX = Number(patch.anchorX);
+  const anchorY = Number(patch.anchorY);
+  const headScale = Number(patch.headScale);
+  if (!Number.isFinite(anchorX) || anchorX < 0 || anchorX > 1)
+    throw localError("anchorX must be 0-1");
+  if (!Number.isFinite(anchorY) || anchorY < 0 || anchorY > 1)
+    throw localError("anchorY must be 0-1");
+  if (!Number.isFinite(headScale) || headScale <= 0 || headScale > 5)
+    throw localError("headScale must be > 0 and <= 5");
+
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  if (!character.headRig) character.headRig = {};
+  character.headRig[key] = { anchorX, anchorY, headScale };
+
+  writeCharacterJson(projectDir, characterId, character, null);
+  return { ok: true, key, anchorX, anchorY, headScale, rigs: character.headRig };
+}
+
+/**
+ * Delete a head-rig entry.
+ */
+function deleteHeadRig(projectDir, globalAssetsDir, characterId, key) {
+  if (!isSafeFolderName(characterId)) throw localError("Invalid character id");
+  if (!key) throw localError("key is required");
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  if (character.headRig) {
+    delete character.headRig[key];
+  }
+  writeCharacterJson(projectDir, characterId, character, null);
+  return { ok: true, rigs: character.headRig || {} };
+}
+
 module.exports = {
   REFERENCE_DIR,
   SLOT_NAME,
@@ -198,5 +251,8 @@ module.exports = {
   saveCharacterStyle,
   saveCharacterReference,
   saveSlotAlignment,
+  loadHeadRig,
+  saveHeadRig,
+  deleteHeadRig,
   decodeImageBuffer,
 };

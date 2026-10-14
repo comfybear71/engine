@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ActionShotsPage from "@/components/ActionShotsPage";
 import { ActionShotDetail } from "@/components/ActionShotsSection";
 import AlignHeadModal from "@/components/AlignHeadModal";
+import HeadRigModal from "@/components/HeadRigModal";
 import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
 import {
@@ -642,6 +643,7 @@ export default function AssetsPanel({
   const [addingId, setAddingId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [alignOpen, setAlignOpen] = useState(false);
+  const [headRigOpen, setHeadRigOpen] = useState(false);
   const [assetFocus, setAssetFocus] = useState<AssetFocus | null>(null);
   const [independent, setIndependent] = useState(true);
   const [independentBusy, setIndependentBusy] = useState(false);
@@ -1143,6 +1145,11 @@ export default function AssetsPanel({
           Align head
         </button>
       ) : null}
+      {!pool && nav.page === "character" && selected ? (
+        <button type="button" data-testid="build-character" onClick={() => setHeadRigOpen(true)} className="studio-header-textbtn" style={{ color: "#e0a040" }}>
+          Build Character
+        </button>
+      ) : null}
       {!pool && nav.page === "character" ? (
         <label className="studio-factory-toggle" data-testid="assets-show-missing">
           <input type="checkbox" checked={showMissing} onChange={(event) => setShowMissing(event.target.checked)} />
@@ -1183,6 +1190,14 @@ export default function AssetsPanel({
             setReloadKey((n) => n + 1);
             onLibraryChange?.();
           }}
+        />
+      ) : null}
+
+      {headRigOpen && selected ? (
+        <HeadRigModal
+          project={project}
+          characterId={selected.id}
+          onClose={() => setHeadRigOpen(false)}
         />
       ) : null}
 
