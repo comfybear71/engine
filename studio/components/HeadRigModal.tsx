@@ -661,7 +661,7 @@ export default function HeadRigModal({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             prompt: grokType === "body"
-              ? `${grokPrompt.trim()}, include neck and top of shoulders so head can be overlaid`
+              ? `${grokPrompt.trim()}, headless body only — show neck and top of shoulders but DO NOT draw any head or face, the head will be composited separately`
               : grokPrompt.trim(),
             shotType: grokType,
             background: "green",
