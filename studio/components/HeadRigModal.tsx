@@ -1044,21 +1044,38 @@ export default function HeadRigModal({
                     </label>
                   </div>
                   <div
-                    className="relative h-10 flex-1 cursor-pointer rounded-r bg-[#1a2a3a]"
+                    className="relative flex-1 cursor-pointer overflow-hidden rounded-r bg-[#1a2a3a]"
+                    style={{ height: 48 }}
                     onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
+                    {/* Frame thumbnails strip */}
                     {bodyFrameCount > 0 ? (
                       <div
-                        className="absolute inset-y-1 left-0 rounded bg-blue-900/60"
+                        className="absolute inset-y-0 left-0 flex"
                         style={{ width: `${(bodyFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
-                      />
+                      >
+                        {Array.from({ length: Math.min(bodyFrameCount, 60) }, (_, i) => {
+                          const frame = Math.max(1, Math.round((i / Math.min(bodyFrameCount, 60)) * bodyFrameCount));
+                          const pad = String(frame).padStart(4, "0");
+                          return (
+                            <img
+                              key={i}
+                              src={shotMediaUrl(project, characterId, bodyId, `cut/f_${pad}.png`)}
+                              alt=""
+                              className="h-full shrink-0 object-cover"
+                              style={{ width: `${100 / Math.min(bodyFrameCount, 60)}%`, opacity: 0.85 }}
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                            />
+                          );
+                        })}
+                      </div>
                     ) : null}
                     {/* Dimmed regions outside trim range */}
                     {bodyFrameCount > 0 && bodyInEff > 1 ? (
-                      <div className="absolute inset-y-0 left-0 bg-black/50" style={{ width: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
+                      <div className="absolute inset-y-0 left-0 bg-black/60" style={{ width: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
                     {bodyFrameCount > 0 && bodyOutEff < bodyFrameCount ? (
-                      <div className="absolute inset-y-0 right-0 bg-black/50" style={{ left: `${(bodyOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
+                      <div className="absolute inset-y-0 right-0 bg-black/60" style={{ left: `${(bodyOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
                     {/* Trim edge markers */}
                     {bodyFrameCount > 0 && bodyInEff > 1 ? (
@@ -1072,7 +1089,7 @@ export default function HeadRigModal({
                       className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500"
                       style={{ left: playheadPct, zIndex: 10 }}
                     />
-                    <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-blue-300/60">
+                    <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-blue-300/80" style={{ zIndex: 6 }}>
                       {bodyShot?.name || bodyId || "no body"}
                     </span>
                   </div>
@@ -1095,21 +1112,38 @@ export default function HeadRigModal({
                     </label>
                   </div>
                   <div
-                    className="relative h-10 flex-1 cursor-pointer rounded-r bg-[#1a2a1a]"
+                    className="relative flex-1 cursor-pointer overflow-hidden rounded-r bg-[#1a2a1a]"
+                    style={{ height: 48 }}
                     onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
+                    {/* Frame thumbnails strip */}
                     {headFrameCount > 0 ? (
                       <div
-                        className="absolute inset-y-1 left-0 rounded bg-green-900/60"
+                        className="absolute inset-y-0 left-0 flex"
                         style={{ width: `${(headFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
-                      />
+                      >
+                        {Array.from({ length: Math.min(headFrameCount, 60) }, (_, i) => {
+                          const frame = Math.max(1, Math.round((i / Math.min(headFrameCount, 60)) * headFrameCount));
+                          const pad = String(frame).padStart(4, "0");
+                          return (
+                            <img
+                              key={i}
+                              src={shotMediaUrl(project, characterId, headId, `cut/f_${pad}.png`)}
+                              alt=""
+                              className="h-full shrink-0 object-cover"
+                              style={{ width: `${100 / Math.min(headFrameCount, 60)}%`, opacity: 0.85 }}
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                            />
+                          );
+                        })}
+                      </div>
                     ) : null}
                     {/* Dimmed regions outside trim range */}
                     {headFrameCount > 0 && headInEff > 1 ? (
-                      <div className="absolute inset-y-0 left-0 bg-black/50" style={{ width: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
+                      <div className="absolute inset-y-0 left-0 bg-black/60" style={{ width: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
                     {headFrameCount > 0 && headOutEff < headFrameCount ? (
-                      <div className="absolute inset-y-0 right-0 bg-black/50" style={{ left: `${(headOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
+                      <div className="absolute inset-y-0 right-0 bg-black/60" style={{ left: `${(headOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
                     {/* Trim edge markers */}
                     {headFrameCount > 0 && headInEff > 1 ? (
@@ -1140,7 +1174,7 @@ export default function HeadRigModal({
                       className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500"
                       style={{ left: playheadPct, zIndex: 10 }}
                     />
-                    <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-green-300/60">
+                    <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-green-300/80" style={{ zIndex: 6 }}>
                       {headShot?.name || headId || "no head"}
                     </span>
                   </div>
@@ -1276,7 +1310,7 @@ export default function HeadRigModal({
                     </button>
                     <button
                       type="button"
-                      className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white opacity-0 shadow transition-opacity hover:bg-red-500 group-hover:opacity-100"
+                      className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
                       onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
                       title="Delete shot"
                     >
@@ -1315,7 +1349,7 @@ export default function HeadRigModal({
                     </button>
                     <button
                       type="button"
-                      className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white opacity-0 shadow transition-opacity hover:bg-red-500 group-hover:opacity-100"
+                      className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
                       onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
                       title="Delete shot"
                     >
