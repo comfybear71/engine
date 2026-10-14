@@ -271,7 +271,7 @@ function getShot(projectDir, characterId, shotId) {
  * Start making a shot with Grok – returns immediately, processes in background.
  */
 async function makeShot(projectDir, characterId, body, options = {}) {
-  const { prompt, background, duration, refRel, refBase64 } = body;
+  const { prompt, background, duration, refRel, refBase64, shotType } = body;
   if (!prompt) throw shotError("Enter a prompt.");
 
   const bg = background || "green";
@@ -306,6 +306,7 @@ async function makeShot(projectDir, characterId, body, options = {}) {
     in: 1,
     out: 0,
     category: inferCategory(prompt),
+    shotType: shotType || "",
     createdAt: new Date().toISOString(),
     status: "making",
   };
@@ -409,6 +410,7 @@ function patchShot(projectDir, characterId, shotId, body) {
 
   if (body.name != null) info.name = String(body.name).trim() || info.name;
   if (body.category != null) info.category = String(body.category).trim() || info.category;
+  if (body.shotType != null) info.shotType = String(body.shotType).trim();
   if (body.in != null) info.in = Math.max(1, Math.min(Number(body.in) || 1, info.frameCount));
   if (body.out != null) info.out = Math.max(1, Math.min(Number(body.out) || info.frameCount, info.frameCount));
 

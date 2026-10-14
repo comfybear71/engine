@@ -36,10 +36,12 @@ export default function HeadRigModal({
   project,
   characterId,
   onClose,
+  inline,
 }: {
   project: string;
   characterId: string;
-  onClose: () => void;
+  onClose?: () => void;
+  inline?: boolean;
 }) {
   const [shots, setShots] = useState<ShotInfo[]>([]);
   const [rigs, setRigs] = useState<Record<string, RigEntry>>({});
@@ -52,6 +54,12 @@ export default function HeadRigModal({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  // Grok shot creator state
+  const [grokType, setGrokType] = useState<"body" | "head">("body");
+  const [grokPrompt, setGrokPrompt] = useState("");
+  const [grokBusy, setGrokBusy] = useState(false);
+  const [grokMsg, setGrokMsg] = useState("");
 
   // Canvas refs
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -140,12 +148,13 @@ export default function HeadRigModal({
     const bodyImg = bodyImgRef.current;
     if (!bodyImg || bodyNat.w === 0) return;
 
-    // Fit body into canvas
-    const scale = Math.min(cw / bodyNat.w, ch / bodyNat.h) * 0.85;
+    // Fit body into lower 70% of canvas, leaving headroom above
+    const bodyZone = ch * 0.7;
+    const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
     const bw = bodyNat.w * scale;
     const bh = bodyNat.h * scale;
     const bx = (cw - bw) / 2;
-    const by = (ch - bh) / 2;
+    const by = ch - bh - ch * 0.03; // body sits near bottom
 
     ctx.drawImage(bodyImg, bx, by, bw, bh);
 
@@ -205,11 +214,12 @@ export default function HeadRigModal({
 
     const cw = canvas.width;
     const ch = canvas.height;
-    const scale = Math.min(cw / bodyNat.w, ch / bodyNat.h) * 0.85;
+    const bodyZone = ch * 0.7;
+    const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
     const bw = bodyNat.w * scale;
     const bh = bodyNat.h * scale;
     const bx = (cw - bw) / 2;
-    const by = (ch - bh) / 2;
+    const by = ch - bh - ch * 0.03;
 
     // Check if clicking near a corner handle (scale)
     if (headImgRef.current && headNat.w > 0) {
@@ -251,11 +261,9 @@ export default function HeadRigModal({
       }
     }
 
-    // Click anywhere on body = set anchor position
-    if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh) {
-      setAnchorX(clamp((mx - bx) / bw, 0, 1));
-      setAnchorY(clamp((my - by) / bh, 0, 1));
-    }
+    // Click anywhere on canvas = set anchor position relative to body
+    setAnchorX(clamp((mx - bx) / bw, 0, 1));
+    setAnchorY((my - by) / bh); // allow negative (above body)
   }
 
   function onMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
@@ -266,7 +274,8 @@ export default function HeadRigModal({
 
     const cw = canvas.width;
     const ch = canvas.height;
-    const scale = Math.min(cw / bodyNat.w, ch / bodyNat.h) * 0.85;
+    const bodyZone = ch * 0.7;
+    const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
     const bw = bodyNat.w * scale;
     const bh = bodyNat.h * scale;
 
@@ -274,7 +283,7 @@ export default function HeadRigModal({
       const dx = (e.clientX - drag.startX) / bw;
       const dy = (e.clientY - drag.startY) / bh;
       setAnchorX(clamp(drag.origAnchorX + dx, 0, 1));
-      setAnchorY(clamp(drag.origAnchorY + dy, 0, 1));
+      setAnchorY(clamp(drag.origAnchorY + dy, -0.5, 1));
     } else if (drag.kind === "scale") {
       const dy = drag.startY - e.clientY;
       const factor = 1 + dy / 200;
@@ -339,6 +348,69 @@ export default function HeadRigModal({
     } catch {}
   }
 
+  // Reload shots list
+  async function reloadShots() {
+    try {
+      const res = await workerFetch(`/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots`);
+      if (res.ok) {
+        const data: ShotInfo[] = await res.json();
+        setShots(data.filter((s) => s.status === "ready"));
+      }
+    } catch {}
+  }
+
+  // Create a Grok shot
+  async function handleGrokCreate() {
+    if (!grokPrompt.trim()) return;
+    setGrokBusy(true);
+    setGrokMsg("");
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: grokPrompt.trim(),
+            shotType: grokType,
+            background: "green",
+            duration: 6,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: "Failed" }));
+        setGrokMsg(data.error || "Failed to create shot");
+      } else {
+        const data = await res.json();
+        setGrokMsg(`Creating ${grokType} shot "${data.shotId}" — will appear when ready`);
+        setGrokPrompt("");
+        // Poll for completion
+        const poll = setInterval(async () => {
+          await reloadShots();
+          try {
+            const check = await workerFetch(
+              `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(data.shotId)}`
+            );
+            if (check.ok) {
+              const info = await check.json();
+              if (info.status === "ready" || info.status === "error") {
+                clearInterval(poll);
+                await reloadShots();
+                setGrokMsg(info.status === "ready" ? `Shot "${data.shotId}" ready!` : `Error: ${info.error || "failed"}`);
+              }
+            }
+          } catch {}
+        }, 5000);
+        // Stop polling after 12 minutes
+        setTimeout(() => clearInterval(poll), 720000);
+      }
+    } catch (err) {
+      setGrokMsg(err instanceof Error ? err.message : "Failed");
+    }
+    setGrokBusy(false);
+  }
+
   // Filter shots into body/head categories
   const bodyShots = shots.filter((s) => s.shotType === "body" || s.category === "idle_stand" || s.category === "walks" || s.category === "mic");
   const headShots = shots.filter((s) => s.shotType === "head" || s.category === "expressions" || s.category === "head_moves" || s.category === "mouth_tongue");
@@ -348,25 +420,10 @@ export default function HeadRigModal({
   const rigKeys = Object.keys(rigs);
 
   const CANVAS_W = 600;
-  const CANVAS_H = 550;
+  const CANVAS_H = 800;
 
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
-      <div className="flex max-h-[96vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-studio-border bg-studio-panel shadow-2xl">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3 border-b border-studio-border px-4 py-3">
-          <div>
-            <h2 className="text-sm font-semibold text-white">Build Character</h2>
-            <p className="text-[11px] text-studio-muted">
-              Pick a body shot and a head shot. Drag the head to position it, scroll to resize. Save the rig for each angle.
-            </p>
-          </div>
-          <button type="button" className="text-sm text-studio-muted hover:text-white" onClick={onClose}>
-            Close
-          </button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+  const content = (
+        <div className={inline ? "p-2" : "min-h-0 flex-1 overflow-y-auto p-4"}>
           {/* Shot pickers */}
           <div className="mb-3 flex flex-wrap items-end gap-3">
             <label className="text-[11px] text-studio-muted">
@@ -431,7 +488,7 @@ export default function HeadRigModal({
                 width={CANVAS_W}
                 height={CANVAS_H}
                 className="rounded-md border border-studio-border"
-                style={{ cursor: "crosshair", width: CANVAS_W, height: CANVAS_H }}
+                style={{ cursor: "crosshair", width: CANVAS_W, height: CANVAS_H, maxHeight: "70vh", objectFit: "contain" }}
                 onMouseDown={onMouseDown}
                 onMouseMove={onMouseMove}
                 onMouseUp={onMouseUp}
@@ -475,10 +532,10 @@ export default function HeadRigModal({
                   <input
                     type="number"
                     step={0.01}
-                    min={0}
+                    min={-0.5}
                     max={1}
                     value={anchorY.toFixed(3)}
-                    onChange={(e) => setAnchorY(clamp(Number(e.target.value), 0, 1))}
+                    onChange={(e) => setAnchorY(clamp(Number(e.target.value), -0.5, 1))}
                     className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
                   />
                 </label>
@@ -533,9 +590,70 @@ export default function HeadRigModal({
               ) : null}
             </div>
           </div>
+
+          {/* ── Grok Shot Creator ─────────────────────────── */}
+          <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
+            <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Create Shot with Grok</h3>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="text-[11px] text-studio-muted">
+                Shot type
+                <select
+                  className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                  value={grokType}
+                  onChange={(e) => setGrokType(e.target.value as "body" | "head")}
+                >
+                  <option value="body">Body / Torso</option>
+                  <option value="head">Head shot</option>
+                </select>
+              </label>
+              <label className="flex-1 text-[11px] text-studio-muted">
+                Prompt
+                <input
+                  type="text"
+                  className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                  placeholder={grokType === "body" ? "cowboy standing with arms out, green screen" : "cowboy head talking, green screen"}
+                  value={grokPrompt}
+                  onChange={(e) => setGrokPrompt(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void handleGrokCreate(); }}
+                />
+              </label>
+              <button
+                type="button"
+                className="rounded-md bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+                disabled={grokBusy || !grokPrompt.trim()}
+                onClick={() => void handleGrokCreate()}
+              >
+                {grokBusy ? "Creating…" : `Create ${grokType} shot`}
+              </button>
+            </div>
+            {grokMsg ? <p className="mt-2 text-[11px] text-emerald-300">{grokMsg}</p> : null}
+            <p className="mt-1 text-[10px] text-studio-muted">
+              {grokType === "body"
+                ? "Creates a torso/body shot (arms, poses, actions). Head will be added separately."
+                : "Creates a head shot (mouth moving, expressions). Will be overlaid onto body."}
+            </p>
+          </div>
         </div>
 
-        {/* Footer */}
+  );
+
+  if (inline) return content;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
+      <div className="flex max-h-[96vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-studio-border bg-studio-panel shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-studio-border px-4 py-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Build Character</h2>
+            <p className="text-[11px] text-studio-muted">
+              Pick a body shot and a head shot. Drag the head to position it, scroll to resize. Save the rig for each angle.
+            </p>
+          </div>
+          <button type="button" className="text-sm text-studio-muted hover:text-white" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        {content}
         <div className="flex justify-end gap-2 border-t border-studio-border px-4 py-3">
           <button
             type="button"

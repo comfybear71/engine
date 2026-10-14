@@ -211,8 +211,8 @@ function saveHeadRig(projectDir, globalAssetsDir, characterId, body) {
   const headScale = Number(patch.headScale);
   if (!Number.isFinite(anchorX) || anchorX < 0 || anchorX > 1)
     throw localError("anchorX must be 0-1");
-  if (!Number.isFinite(anchorY) || anchorY < 0 || anchorY > 1)
-    throw localError("anchorY must be 0-1");
+  if (!Number.isFinite(anchorY) || anchorY < -0.5 || anchorY > 1.5)
+    throw localError("anchorY must be -0.5 to 1.5");
   if (!Number.isFinite(headScale) || headScale <= 0 || headScale > 5)
     throw localError("headScale must be > 0 and <= 5");
 

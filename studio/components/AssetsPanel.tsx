@@ -643,7 +643,7 @@ export default function AssetsPanel({
   const [addingId, setAddingId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [alignOpen, setAlignOpen] = useState(false);
-  const [headRigOpen, setHeadRigOpen] = useState(false);
+
   const [assetFocus, setAssetFocus] = useState<AssetFocus | null>(null);
   const [independent, setIndependent] = useState(true);
   const [independentBusy, setIndependentBusy] = useState(false);
@@ -1055,34 +1055,28 @@ export default function AssetsPanel({
     <div className={pool ? "flex shrink-0 flex-wrap items-center justify-end gap-2" : "studio-factory-actions"}>
       {!pool ? (
         <>
-          {nav.page === "character" ? (
-            <div className="studio-factory-pills" data-testid="assets-status-pills">
-              {(["ticked", "locked", "draft", "missing"] as const).map((badge) => (
-                <span key={badge} className="studio-factory-pill" data-badge={badge} data-testid={`assets-pill-${badge}`}>
-                  <i />
-                  {factoryCounts[badge]} {badge}
-                </span>
-              ))}
-            </div>
+          {nav.page !== "character" ? (
+            <>
+              <button
+                type="button"
+                className="studio-header-textbtn"
+                data-testid="assets-validate"
+                disabled={lintBusy}
+                onClick={() => void onValidate()}
+              >
+                {lintBusy ? "Validate…" : lintNote ? `Validate · ${lintNote}` : "Validate"}
+              </button>
+              <button
+                type="button"
+                className="studio-header-textbtn"
+                data-testid="assets-open-folder"
+                disabled={!selectedId || openBusy}
+                onClick={() => void onOpenFolder()}
+              >
+                {openBusy ? "Opening…" : "Open folder"}
+              </button>
+            </>
           ) : null}
-          <button
-            type="button"
-            className="studio-header-textbtn"
-            data-testid="assets-validate"
-            disabled={lintBusy}
-            onClick={() => void onValidate()}
-          >
-            {lintBusy ? "Validate…" : lintNote ? `Validate · ${lintNote}` : "Validate"}
-          </button>
-          <button
-            type="button"
-            className="studio-header-textbtn"
-            data-testid="assets-open-folder"
-            disabled={!selectedId || openBusy}
-            onClick={() => void onOpenFolder()}
-          >
-            {openBusy ? "Opening…" : "Open folder"}
-          </button>
         </>
       ) : (
         <>
@@ -1114,15 +1108,13 @@ export default function AssetsPanel({
           </button>
         </>
       )}
-      {onOpenImagine ? (
+      {onOpenImagine && nav.page !== "character" ? (
         <button
           type="button"
           data-testid="imagine-open"
           onClick={() =>
             onOpenImagine(
-              nav.page === "character" && selected
-                ? { mode: "character", characterId: selected.id }
-                : nav.page === "section" && nav.section === "props"
+              nav.page === "section" && nav.section === "props"
                   ? { mode: "prop" }
                   : nav.page === "section" && nav.section === "backgrounds"
                     ? { mode: "background" }
@@ -1139,22 +1131,6 @@ export default function AssetsPanel({
         >
           Factory
         </button>
-      ) : null}
-      {!pool && selected && alignableSlots(selected.slots).length > 0 ? (
-        <button type="button" data-testid="align-head" onClick={() => setAlignOpen(true)} className="studio-header-textbtn">
-          Align head
-        </button>
-      ) : null}
-      {!pool && nav.page === "character" && selected ? (
-        <button type="button" data-testid="build-character" onClick={() => setHeadRigOpen(true)} className="studio-header-textbtn" style={{ color: "#e0a040" }}>
-          Build Character
-        </button>
-      ) : null}
-      {!pool && nav.page === "character" ? (
-        <label className="studio-factory-toggle" data-testid="assets-show-missing">
-          <input type="checkbox" checked={showMissing} onChange={(event) => setShowMissing(event.target.checked)} />
-          Show missing
-        </label>
       ) : null}
     </div>
   ) : null;
@@ -1190,14 +1166,6 @@ export default function AssetsPanel({
             setReloadKey((n) => n + 1);
             onLibraryChange?.();
           }}
-        />
-      ) : null}
-
-      {headRigOpen && selected ? (
-        <HeadRigModal
-          project={project}
-          characterId={selected.id}
-          onClose={() => setHeadRigOpen(false)}
         />
       ) : null}
 
@@ -1408,7 +1376,7 @@ export default function AssetsPanel({
     },
   ];
 
-  const showInspector = nav.page === "character" && Boolean(inspector || selected);
+  const showInspector = false; // old slot inspector disabled — Build Character is now inline
 
   return (
     <div className="studio-factory-page" data-testid="assets-factory">
@@ -1603,88 +1571,11 @@ export default function AssetsPanel({
           </div>
         ) : nav.page === "character" ? (
           <>
-            <div className="studio-factory-tabs" data-testid="assets-view-tabs">
-              {factoryTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  className="studio-factory-tab"
-                  data-testid={`assets-view-${tab.id}`}
-                  data-active={view === tab.id ? "true" : "false"}
-                  onClick={() => setView(tab.id)}
-                >
-                  {tab.label}
-                  {"count" in tab && tab.count != null ? (
-                    <span className="studio-factory-tab-count">{tab.count}</span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-            <div className="studio-factory-rows">
-              {!selected ? (
-                <p className="text-[11px] text-studio-muted">No character in this project yet.</p>
-              ) : factory ? (
-                factory.rows.map((row) => (
-                  <FactoryRowBlock
-                    key={row.id}
-                    project={project}
-                    row={row}
-                    selectedKey={selectedKey}
-                    showMissing={showMissing}
-                    actions={actions}
-                    characterId={selected.id}
-                    onOpenAction={(actionId) => {
-                      const hit = actions.find((item) => (item.name || item.id) === actionId && item.characterId === selected.id)
-                        || actions.find((item) => (item.name || item.id) === actionId);
-                      if (!hit) return;
-                      setLibrarySel({ kind: "actions", id: hit.label });
-                      setNav({ page: "action", id: hit.label });
-                    }}
-                    onSelect={(piece) => {
-                      setSelectedKey(piece.key);
-                      setRedoNote(factory.redos[piece.key] || "");
-                      setDetailOpen(false);
-                    }}
-                    onOpenSlot={() => setAssetFocus({ mode: "slot", characterId: selected.id, slot: row.slot, view })}
-                    onOpenDrawing={(piece) =>
-                      setAssetFocus({
-                        mode: "drawing",
-                        characterId: selected.id,
-                        slot: row.slot,
-                        drawing: piece.name,
-                        view,
-                      })
-                    }
-                    onAdd={() =>
-                      onOpenImagine
-                        ? onOpenImagine({
-                            mode: "slot",
-                            characterId: selected.id,
-                            slot: row.slot,
-                            view,
-                            label: row.label,
-                            needId: needIdForSlot(row.slot),
-                          })
-                        : setAssetFocus({ mode: "slot", characterId: selected.id, slot: row.slot, view })
-                    }
-                    onDeleteDrawing={(piece) => void onDeleteDrawing(row.slot, piece)}
-                    onRenameDrawing={(piece, name) => void onRenameDrawing(row.slot, piece, name)}
-                    onCleanDrawing={(piece) => void onCleanDrawing(row.slot, piece)}
-                    onCleanRow={() => void onCleanRow(row.slot)}
-                  />
-                ))
-              ) : (
-                selected.slots.map((slot) => (
-                  <SlotBlock
-                    key={`${slot.owner || "root"}:${slot.name}`}
-                    slot={slot}
-                    project={project}
-                    characterId={selected.id}
-                    onOpen={setAssetFocus}
-                  />
-                ))
-              )}
-            </div>
+            {!selected ? (
+              <p className="p-4 text-[11px] text-studio-muted">No character in this project yet.</p>
+            ) : (
+              <HeadRigModal project={project} characterId={selected.id} inline />
+            )}
           </>
         ) : nav.page === "action" && selectedAction ? (
           <ActionShotDetail
