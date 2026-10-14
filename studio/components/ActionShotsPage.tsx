@@ -568,8 +568,9 @@ function ResizeHeadPanel({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const maxW = 400;
-    const scale = Math.min(1, maxW / img.width);
+    const maxW = 360;
+    const maxH = 300;
+    const scale = Math.min(1, maxW / img.width, maxH / img.height);
     const dw = Math.round(img.width * scale);
     const dh = Math.round(img.height * scale);
     canvas.width = dw;
