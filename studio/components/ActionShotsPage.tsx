@@ -443,6 +443,26 @@ function ShotDetailView({
         >
           {saving ? "Creating…" : "Use as Action Shot"}
         </button>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!confirm("Delete this entire shot?")) return;
+            setSaving(true);
+            try {
+              await workerFetch(
+                `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}`,
+                { method: "DELETE" }
+              );
+              onReload();
+              onBack();
+            } catch {}
+            setSaving(false);
+          }}
+          disabled={saving}
+          className="shots-btn-danger"
+        >
+          Delete shot
+        </button>
         {detail.actionId && (
           <span className="shots-action-done">✓ Action: {detail.actionId}</span>
         )}

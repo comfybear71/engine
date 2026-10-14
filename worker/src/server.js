@@ -131,6 +131,7 @@ const {
   importShot,
   patchShot,
   deleteFrame: deleteShotFrame,
+  deleteShot: deleteShotFull,
   saveFrameToSlot: saveShotFrameToSlot,
   useAsActionShot,
   retryShot,
@@ -1284,6 +1285,16 @@ function createApp(options = {}) {
     if (!projectDir) return;
     try {
       res.json(patchShot(projectDir, req.params.characterId, req.params.shotId, req.body || {}));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.delete("/api/projects/:name/characters/:characterId/shots/:shotId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(deleteShotFull(projectDir, req.params.characterId, req.params.shotId));
     } catch (err) {
       sendFactoryError(res, err);
     }

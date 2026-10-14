@@ -597,6 +597,24 @@ function serveMedia(projectDir, characterId, req, res) {
   res.sendFile(filePath);
 }
 
+function deleteShot(projectDir, characterId, shotId) {
+  const dir = shotDir(projectDir, characterId, shotId);
+  if (!fs.existsSync(dir)) throw shotError("Shot not found", "ENOENT");
+  // Move to _deleted/ instead of hard-deleting
+  const parent = shotsDir(projectDir, characterId);
+  const delDir = path.join(parent, "_deleted");
+  fs.mkdirSync(delDir, { recursive: true });
+  const dest = path.join(delDir, shotId);
+  if (fs.existsSync(dest)) {
+    // Already a deleted shot with this name, add timestamp
+    const stamp = Date.now();
+    fs.renameSync(dir, path.join(delDir, `${shotId}_${stamp}`));
+  } else {
+    fs.renameSync(dir, dest);
+  }
+  return { deleted: shotId };
+}
+
 module.exports = {
   listShots,
   getShot,
@@ -604,6 +622,7 @@ module.exports = {
   importShot,
   patchShot,
   deleteFrame,
+  deleteShot,
   saveFrameToSlot,
   useAsActionShot,
   retryShot,
