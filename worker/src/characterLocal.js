@@ -192,7 +192,10 @@ function saveSlotAlignment(projectDir, globalAssetsDir, characterId, slotName, b
 function loadHeadRig(projectDir, globalAssetsDir, characterId) {
   if (!isSafeFolderName(characterId)) throw localError("Invalid character id");
   const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
-  return { ok: true, rigs: character.headRig || {} };
+  const refRel = character.reference
+    ? posixJoin("characters", characterId, character.reference)
+    : null;
+  return { ok: true, rigs: character.headRig || {}, reference: refRel };
 }
 
 /**

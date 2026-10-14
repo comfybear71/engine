@@ -80,6 +80,12 @@ export default function HeadRigModal({
   const [keyframes, setKeyframes] = useState<Keyframe[]>([]);
   const [scrubFrame, setScrubFrame] = useState(1); // current frame when scrubbing (not playing)
 
+  // Trim / in-out points for each track
+  const [bodyIn, setBodyIn] = useState(1);
+  const [bodyOut, setBodyOut] = useState(0); // 0 = use all frames
+  const [headIn, setHeadIn] = useState(1);
+  const [headOut, setHeadOut] = useState(0); // 0 = use all frames
+
   // Interpolate anchor/scale at a given frame from keyframes
   function interpAt(f: number): { ax: number; ay: number; sc: number } {
     if (keyframes.length === 0) return { ax: anchorX, ay: anchorY, sc: headScale };
@@ -127,6 +133,7 @@ export default function HeadRigModal({
   const [grokDuration, setGrokDuration] = useState(6);
   const [grokBusy, setGrokBusy] = useState(false);
   const [grokMsg, setGrokMsg] = useState("");
+  const [charRefRel, setCharRefRel] = useState("");
 
   // Canvas refs
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -160,6 +167,7 @@ export default function HeadRigModal({
         if (rigRes.ok) {
           const data = await rigRes.json();
           setRigs(data.rigs || {});
+          if (data.reference) setCharRefRel(data.reference);
         }
       } catch {}
     })();
@@ -185,6 +193,8 @@ export default function HeadRigModal({
     img.crossOrigin = "anonymous";
     img.onload = () => { bodyImgRef.current = img; setBodyNat({ w: img.naturalWidth, h: img.naturalHeight }); };
     img.src = shotMediaUrl(project, characterId, bodyId, "cut/f_0001.png");
+    setBodyIn(1);
+    setBodyOut(0);
   }, [bodyId, project, characterId]);
 
   // Load head image
@@ -194,6 +204,8 @@ export default function HeadRigModal({
     img.crossOrigin = "anonymous";
     img.onload = () => { headImgRef.current = img; setHeadNat({ w: img.naturalWidth, h: img.naturalHeight }); };
     img.src = shotMediaUrl(project, characterId, headId, "cut/f_0001.png");
+    setHeadIn(1);
+    setHeadOut(0);
   }, [headId, project, characterId]);
 
   // Draw canvas
@@ -236,9 +248,7 @@ export default function HeadRigModal({
       const hx = bx + anchorX * bw - hw / 2;
       const hy = by + anchorY * bh - hh / 2;
 
-      ctx.globalAlpha = 0.8;
       ctx.drawImage(headImg, hx, hy, hw, hh);
-      ctx.globalAlpha = 1;
 
       // Dashed outline
       ctx.strokeStyle = "#e0a040";
@@ -427,6 +437,13 @@ export default function HeadRigModal({
   const headShot = shots.find((s) => s.id === headId);
   const bodyFrameCount = bodyShot?.frameCount || 0;
   const headFrameCount = headShot?.frameCount || 0;
+  // Effective ranges after trim
+  const bodyInEff = Math.max(1, bodyIn);
+  const bodyOutEff = bodyOut > 0 ? Math.min(bodyOut, bodyFrameCount) : bodyFrameCount;
+  const headInEff = Math.max(1, headIn);
+  const headOutEff = headOut > 0 ? Math.min(headOut, headFrameCount) : headFrameCount;
+  const bodyTrimCount = Math.max(0, bodyOutEff - bodyInEff + 1);
+  const headTrimCount = Math.max(0, headOutEff - headInEff + 1);
   const maxFrames = Math.max(bodyFrameCount, headFrameCount);
 
   // Preload frames for preview
@@ -517,8 +534,8 @@ export default function HeadRigModal({
   useEffect(() => {
     if (!playing) return;
 
-    let bf = 1;
-    let hf = 1;
+    let bf = bodyInEff;
+    let hf = headInEff;
     let lastBodyTime = performance.now();
     let lastHeadTime = performance.now();
 
@@ -530,19 +547,19 @@ export default function HeadRigModal({
       const cw = canvas.width;
       const ch = canvas.height;
 
-      // Advance body frame
+      // Advance body frame (respect trim range)
       const bodyInterval = 1000 / bodyFps;
       if (now - lastBodyTime >= bodyInterval) {
         lastBodyTime = now;
-        bf = bf >= bodyFrameCount ? 1 : bf + 1;
+        bf = bf >= bodyOutEff ? bodyInEff : bf + 1;
         setBodyFrame(bf);
       }
 
-      // Advance head frame
+      // Advance head frame (respect trim range)
       const headInterval = 1000 / headFps;
       if (now - lastHeadTime >= headInterval) {
         lastHeadTime = now;
-        hf = hf >= headFrameCount ? 1 : hf + 1;
+        hf = hf >= headOutEff ? headInEff : hf + 1;
         setHeadFrame(hf);
       }
 
@@ -592,7 +609,7 @@ export default function HeadRigModal({
     playRafRef.current = requestAnimationFrame(tick);
     return () => { if (playRafRef.current) cancelAnimationFrame(playRafRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, bodyFps, headFps, bodyNat, headNat, anchorX, anchorY, headScale, bodyFrameCount, headFrameCount, keyframes]);
+  }, [playing, bodyFps, headFps, bodyNat, headNat, anchorX, anchorY, headScale, bodyFrameCount, headFrameCount, keyframes, bodyInEff, bodyOutEff, headInEff, headOutEff]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -628,6 +645,7 @@ export default function HeadRigModal({
             shotType: grokType,
             background: "green",
             duration: grokDuration,
+            ...(charRefRel ? { refRel: charRefRel } : {}),
           }),
         }
       );
@@ -675,388 +693,471 @@ export default function HeadRigModal({
   const CANVAS_W = 600;
   const CANVAS_H = 800;
 
+  // ── Red playhead drag state ──
+  const timelineRef = useRef<HTMLDivElement | null>(null);
+  const [draggingPlayhead, setDraggingPlayhead] = useState(false);
+
+  function scrubFromMouse(clientX: number) {
+    const el = timelineRef.current;
+    if (!el || playing) return;
+    const rect = el.getBoundingClientRect();
+    const pct = clamp((clientX - rect.left) / rect.width, 0, 1);
+    const f = Math.max(1, Math.min(maxFrames, Math.round(pct * (maxFrames - 1) + 1)));
+    setScrubFrame(f);
+    scrubToFrame(f);
+  }
+
+  useEffect(() => {
+    if (!draggingPlayhead) return;
+    function onMove(e: MouseEvent) { scrubFromMouse(e.clientX); }
+    function onUp() { setDraggingPlayhead(false); }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draggingPlayhead, playing, maxFrames]);
+
+  const playheadPct = `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
+
   const content = (
         <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto p-4"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
-          {/* Shot pickers */}
-          <div className="mb-3 flex flex-wrap items-end gap-3">
-            <label className="text-[11px] text-studio-muted">
-              Body shot
-              <select
-                className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                value={bodyId}
-                onChange={(e) => setBodyId(e.target.value)}
-              >
-                <option value="">— pick —</option>
-                {(bodyShots.length > 0 ? bodyShots : allShots).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name || s.id} {s.shotType ? `(${s.shotType})` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-[11px] text-studio-muted">
-              Head shot
-              <select
-                className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                value={headId}
-                onChange={(e) => setHeadId(e.target.value)}
-              >
-                <option value="">— pick —</option>
-                {(headShots.length > 0 ? headShots : allShots).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name || s.id} {s.shotType ? `(${s.shotType})` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-[11px] text-studio-muted">
-              Rig name
-              <select
-                className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                value={rigKey}
-                onChange={(e) => setRigKey(e.target.value)}
-              >
-                <option value="front">front</option>
-                <option value="left_34">left 3/4</option>
-                <option value="right_34">right 3/4</option>
-                <option value="left_side">left side</option>
-                <option value="right_side">right side</option>
-                <option value="back">back</option>
-              </select>
-              <input
-                type="text"
-                className="ml-1 w-20 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                placeholder="custom..."
-                value={rigKey}
-                onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
-              />
-            </label>
-          </div>
 
-          {/* Canvas */}
-          <div className="flex gap-4">
-            <div>
-              <canvas
-                ref={canvasRef}
-                width={CANVAS_W}
-                height={CANVAS_H}
-                className="rounded-md border border-studio-border"
-                style={{ cursor: "crosshair", width: CANVAS_W, height: CANVAS_H, maxHeight: "70vh", objectFit: "contain" }}
-                onMouseDown={onMouseDown}
-                onMouseMove={onMouseMove}
-                onMouseUp={onMouseUp}
-                onMouseLeave={onMouseUp}
-                onWheel={onWheel}
-              />
-              <p className="mt-1 text-[10px] text-studio-muted">
-                Click = set position · Drag head = move · Corner handles = scale · Scroll = resize
-              </p>
-
-              {/* ── DaVinci Resolve-style Two-Track Timeline ──────────────── */}
-              {(bodyFrameCount > 0 || headFrameCount > 0) ? (
-                <div className="mt-2 rounded-md border border-studio-border bg-[#111] p-2" style={{ minWidth: CANVAS_W }}>
-                  {/* Timeline header */}
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <span className="text-[11px] font-semibold text-neutral-300">TIMELINE</span>
-                      <span className="text-[10px] text-studio-muted">Frame {scrubFrame}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        className={`rounded px-2 py-1 text-[10px] font-semibold disabled:opacity-40 ${
-                          playing
-                            ? "bg-red-600 text-white hover:bg-red-500"
-                            : "bg-emerald-600 text-white hover:bg-emerald-500"
-                        }`}
-                        disabled={!bodyId || !headId || previewLoading}
-                        onClick={handlePlay}
-                      >
-                        {previewLoading ? "Loading…" : playing ? "⏹ Stop" : "▶ Play"}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded bg-[#e0a040] px-2 py-1 text-[10px] font-semibold text-black hover:bg-[#f0b050]"
-                        onClick={addKeyframe}
-                        title="Set keyframe at current frame"
-                      >
-                        + Key
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Frame ruler */}
-                  <div className="relative mb-1 h-4 rounded-t bg-[#1a1a1a]" style={{ marginLeft: 80 }}>
-                    {Array.from({ length: Math.min(Math.ceil(maxFrames / 10), 20) }, (_, i) => {
-                      const f = (i + 1) * 10;
-                      if (f > maxFrames) return null;
-                      return (
-                        <span
-                          key={f}
-                          className="absolute top-0 text-[8px] text-neutral-500"
-                          style={{ left: `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, transform: "translateX(-50%)" }}
-                        >
-                          {f}
-                        </span>
-                      );
-                    })}
-                    {/* Playhead marker */}
-                    <div
-                      className="absolute top-0 h-full w-0.5 bg-white"
-                      style={{ left: `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 10 }}
-                    />
-                  </div>
-
-                  {/* ── BODY TRACK ── */}
-                  <div className="flex items-stretch">
-                    <div className="flex w-20 shrink-0 flex-col justify-center rounded-l border-r border-[#333] bg-[#1a1a1a] px-2 py-1">
-                      <span className="text-[10px] font-semibold text-blue-400">BODY</span>
-                      <span className="text-[9px] text-studio-muted">{bodyFrameCount} frames</span>
-                      <label className="mt-0.5 text-[8px] text-studio-muted">
-                        {bodyFps}fps
-                        <input
-                          type="range" min={4} max={30} step={1} value={bodyFps}
-                          onChange={(e) => setBodyFps(Number(e.target.value))}
-                          className="studio-scrubber mt-0.5 w-full"
-                        />
-                      </label>
-                    </div>
-                    <div
-                      className="relative h-10 flex-1 cursor-pointer rounded-r bg-[#1a2a3a]"
-                      onClick={(e) => {
-                        if (playing) return;
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const pct = (e.clientX - rect.left) / rect.width;
-                        const f = Math.max(1, Math.min(maxFrames, Math.round(pct * (maxFrames - 1) + 1)));
-                        setScrubFrame(f);
-                        scrubToFrame(f);
-                      }}
-                    >
-                      {/* Body frame blocks */}
-                      {bodyFrameCount > 0 ? (
-                        <div
-                          className="absolute inset-y-1 left-0 rounded bg-blue-900/60"
-                          style={{ width: `${(bodyFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
-                        />
-                      ) : null}
-                      {/* Playhead on body track */}
-                      <div
-                        className="absolute inset-y-0 w-0.5 bg-white"
-                        style={{ left: `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 10 }}
-                      />
-                      <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-blue-300/60">
-                        {bodyShot?.name || bodyId || "no body"}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* ── HEAD TRACK ── */}
-                  <div className="mt-0.5 flex items-stretch">
-                    <div className="flex w-20 shrink-0 flex-col justify-center rounded-l border-r border-[#333] bg-[#1a1a1a] px-2 py-1">
-                      <span className="text-[10px] font-semibold text-green-400">HEAD</span>
-                      <span className="text-[9px] text-studio-muted">{headFrameCount} frames</span>
-                      <label className="mt-0.5 text-[8px] text-studio-muted">
-                        {headFps}fps
-                        <input
-                          type="range" min={4} max={30} step={1} value={headFps}
-                          onChange={(e) => setHeadFps(Number(e.target.value))}
-                          className="studio-scrubber mt-0.5 w-full"
-                        />
-                      </label>
-                    </div>
-                    <div
-                      className="relative h-10 flex-1 cursor-pointer rounded-r bg-[#1a2a1a]"
-                      onClick={(e) => {
-                        if (playing) return;
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const pct = (e.clientX - rect.left) / rect.width;
-                        const f = Math.max(1, Math.min(maxFrames, Math.round(pct * (maxFrames - 1) + 1)));
-                        setScrubFrame(f);
-                        scrubToFrame(f);
-                      }}
-                    >
-                      {/* Head frame blocks */}
-                      {headFrameCount > 0 ? (
-                        <div
-                          className="absolute inset-y-1 left-0 rounded bg-green-900/60"
-                          style={{ width: `${(headFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
-                        />
-                      ) : null}
-                      {/* Keyframe markers on head track */}
-                      {keyframes.map((kf) => (
-                        <div
-                          key={kf.frame}
-                          className="absolute top-1 bottom-1 w-1.5 cursor-pointer rounded-sm bg-[#e0a040] hover:bg-[#f0c060]"
-                          style={{ left: `${((kf.frame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 5 }}
-                          title={`Keyframe F${kf.frame} — x=${kf.anchorX.toFixed(2)} y=${kf.anchorY.toFixed(2)} s=${kf.headScale.toFixed(2)}\nClick to go here`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setScrubFrame(kf.frame);
-                            setAnchorX(kf.anchorX);
-                            setAnchorY(kf.anchorY);
-                            setHeadScale(kf.headScale);
-                            scrubToFrame(kf.frame);
-                          }}
-                        />
-                      ))}
-                      {/* Playhead on head track */}
-                      <div
-                        className="absolute inset-y-0 w-0.5 bg-white"
-                        style={{ left: `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 10 }}
-                      />
-                      <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-green-300/60">
-                        {headShot?.name || headId || "no head"}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Scrub slider (spans full width below tracks) */}
-                  <div className="mt-1" style={{ marginLeft: 80 }}>
-                    <input
-                      type="range"
-                      min={1}
-                      max={maxFrames || 1}
-                      step={1}
-                      value={scrubFrame}
-                      onChange={(e) => {
-                        const f = Number(e.target.value);
-                        setScrubFrame(f);
-                        scrubToFrame(f);
-                      }}
-                      className="studio-scrubber w-full"
-                      disabled={playing}
-                    />
-                  </div>
-
-                  {/* Keyframe list */}
-                  {keyframes.length > 0 ? (
-                    <div className="mt-1 flex flex-wrap gap-1" style={{ marginLeft: 80 }}>
-                      {keyframes.map((kf) => (
-                        <span
-                          key={kf.frame}
-                          className="inline-flex items-center gap-1 rounded bg-studio-raised px-1.5 py-0.5 text-[9px] text-neutral-300"
-                        >
-                          <button
-                            type="button"
-                            className="font-medium text-[#e0a040] hover:text-white"
-                            onClick={() => {
-                              setScrubFrame(kf.frame);
-                              setAnchorX(kf.anchorX);
-                              setAnchorY(kf.anchorY);
-                              setHeadScale(kf.headScale);
-                              scrubToFrame(kf.frame);
-                            }}
-                          >
-                            F{kf.frame}
-                          </button>
-                          <button
-                            type="button"
-                            className="text-red-400 hover:text-red-300"
-                            onClick={() => removeKeyframe(kf.frame)}
-                            title="Remove keyframe"
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-1 text-[9px] text-studio-muted" style={{ marginLeft: 80 }}>
-                      Scrub to a frame, position the head, click + Key. Gold bars on HEAD track show keyframes.
-                    </p>
-                  )}
-                </div>
-              ) : null}
+          {/* ── Centered Viewer (DaVinci Resolve layout) ────────── */}
+          <div className="flex flex-col items-center">
+            {/* Shot pickers — compact row */}
+            <div className="mb-2 flex flex-wrap items-end justify-center gap-3">
+              <label className="text-[11px] text-studio-muted">
+                Body
+                <select
+                  className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                  value={bodyId}
+                  onChange={(e) => setBodyId(e.target.value)}
+                >
+                  <option value="">— pick —</option>
+                  {(bodyShots.length > 0 ? bodyShots : allShots).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || s.id} {s.shotType ? `(${s.shotType})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-[11px] text-studio-muted">
+                Head
+                <select
+                  className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                  value={headId}
+                  onChange={(e) => setHeadId(e.target.value)}
+                >
+                  <option value="">— pick —</option>
+                  {(headShots.length > 0 ? headShots : allShots).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || s.id} {s.shotType ? `(${s.shotType})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-[11px] text-studio-muted">
+                Rig
+                <select
+                  className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                  value={rigKey}
+                  onChange={(e) => setRigKey(e.target.value)}
+                >
+                  <option value="front">front</option>
+                  <option value="left_34">left 3/4</option>
+                  <option value="right_34">right 3/4</option>
+                  <option value="left_side">left side</option>
+                  <option value="right_side">right side</option>
+                  <option value="back">back</option>
+                </select>
+                <input
+                  type="text"
+                  className="ml-1 w-16 rounded-md border border-studio-border bg-studio-raised px-1 py-1 text-xs text-neutral-200"
+                  placeholder="custom"
+                  value={rigKey}
+                  onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
+                />
+              </label>
             </div>
 
-            {/* Controls + saved rigs */}
-            <div className="flex min-w-[200px] flex-col gap-3">
-              <label className="text-[11px] text-studio-muted">
-                Head scale: {headScale.toFixed(2)}
+            {/* Canvas — centered */}
+            <canvas
+              ref={canvasRef}
+              width={CANVAS_W}
+              height={CANVAS_H}
+              className="rounded-md border border-studio-border"
+              style={{ cursor: "crosshair", width: CANVAS_W, height: CANVAS_H, maxHeight: "65vh", objectFit: "contain" }}
+              onMouseDown={onMouseDown}
+              onMouseMove={onMouseMove}
+              onMouseUp={onMouseUp}
+              onMouseLeave={onMouseUp}
+              onWheel={onWheel}
+            />
+            <p className="mt-1 text-[10px] text-studio-muted">
+              Drag head = move · Corner handles = scale · Scroll = resize
+            </p>
+
+            {/* ── Controls toolbar — horizontal under canvas ── */}
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-4 rounded-md border border-studio-border bg-[#1a1a1a] px-4 py-2">
+              <label className="flex items-center gap-2 text-[11px] text-studio-muted">
+                Scale
                 <input
-                  type="range"
-                  min={0.1}
-                  max={2.5}
-                  step={0.01}
-                  value={headScale}
+                  type="range" min={0.1} max={2.5} step={0.01} value={headScale}
                   onChange={(e) => setHeadScale(Number(e.target.value))}
-                  className="studio-scrubber mt-1 w-full"
+                  className="studio-scrubber w-24"
                 />
+                <span className="w-8 text-right text-[10px] text-neutral-300">{headScale.toFixed(2)}</span>
               </label>
-              <label className="text-[11px] text-studio-muted">
-                X position: {anchorX.toFixed(2)}
+              <label className="flex items-center gap-2 text-[11px] text-studio-muted">
+                X
                 <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.005}
-                  value={anchorX}
+                  type="range" min={0} max={1} step={0.005} value={anchorX}
                   onChange={(e) => setAnchorX(Number(e.target.value))}
-                  className="studio-scrubber mt-1 w-full"
+                  className="studio-scrubber w-24"
                 />
+                <span className="w-8 text-right text-[10px] text-neutral-300">{anchorX.toFixed(2)}</span>
               </label>
-              <label className="text-[11px] text-studio-muted">
-                Y position: {anchorY.toFixed(2)}
+              <label className="flex items-center gap-2 text-[11px] text-studio-muted">
+                Y
                 <input
-                  type="range"
-                  min={-0.5}
-                  max={1}
-                  step={0.005}
-                  value={anchorY}
+                  type="range" min={-0.5} max={1} step={0.005} value={anchorY}
                   onChange={(e) => setAnchorY(Number(e.target.value))}
-                  className="studio-scrubber mt-1 w-full"
+                  className="studio-scrubber w-24"
                 />
+                <span className="w-8 text-right text-[10px] text-neutral-300">{anchorY.toFixed(2)}</span>
               </label>
-
-              {error ? <p className="text-xs text-red-400">{error}</p> : null}
-              {saved ? <p className="text-xs text-green-400">Saved!</p> : null}
-
               <button
                 type="button"
-                className="rounded-md bg-studio-accent px-3 py-2 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+                className="rounded-md bg-studio-accent px-3 py-1 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
                 disabled={busy != null || !bodyId || !headId}
                 onClick={() => void handleSave()}
               >
-                {busy || `Save "${rigKey}" rig`}
+                {busy || `Save "${rigKey}"`}
               </button>
-
-              {/* Saved rigs list */}
-              {rigKeys.length > 0 ? (
-                <div className="mt-2">
-                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-studio-muted">Saved rigs</p>
-                  {rigKeys.map((key) => {
-                    const r = rigs[key];
-                    return (
-                      <div key={key} className="mb-1 flex items-center justify-between rounded bg-studio-raised px-2 py-1">
-                        <button
-                          type="button"
-                          className="text-left text-xs text-neutral-200 hover:text-white"
-                          onClick={() => {
-                            setRigKey(key);
-                            setAnchorX(r.anchorX);
-                            setAnchorY(r.anchorY);
-                            setHeadScale(r.headScale);
-                          }}
-                        >
-                          <span className="font-medium">{key}</span>
-                          <span className="ml-2 text-studio-muted">
-                            s={r.headScale.toFixed(2)} x={r.anchorX.toFixed(2)} y={r.anchorY.toFixed(2)}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className="ml-2 text-[10px] text-red-400 hover:text-red-300"
-                          onClick={() => void handleDelete(key)}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
+              {error ? <span className="text-xs text-red-400">{error}</span> : null}
+              {saved ? <span className="text-xs text-green-400">Saved!</span> : null}
             </div>
+
+            {/* Saved rigs — compact horizontal */}
+            {rigKeys.length > 0 ? (
+              <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+                <span className="text-[10px] text-studio-muted">Rigs:</span>
+                {rigKeys.map((key) => {
+                  const r = rigs[key];
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] ${
+                        rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-300 hover:text-white"
+                      }`}
+                      onClick={() => {
+                        setRigKey(key);
+                        setAnchorX(r.anchorX);
+                        setAnchorY(r.anchorY);
+                        setHeadScale(r.headScale);
+                      }}
+                    >
+                      {key}
+                      <span
+                        className="ml-1 text-red-400 hover:text-red-300"
+                        onClick={(e) => { e.stopPropagation(); void handleDelete(key); }}
+                      >
+                        ×
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
+
+          {/* ── DaVinci Resolve-style Timeline — FULL WIDTH ──────── */}
+          {(bodyFrameCount > 0 || headFrameCount > 0) ? (
+            <div className="mt-3 rounded-md border border-studio-border bg-[#111] p-2">
+              {/* Timeline header */}
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] font-semibold text-neutral-300">TIMELINE</span>
+                  <span className="font-mono text-[11px] text-neutral-400">
+                    F<span className="text-white">{scrubFrame}</span> / {maxFrames}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className={`rounded px-3 py-1 text-[11px] font-semibold disabled:opacity-40 ${
+                      playing
+                        ? "bg-red-600 text-white hover:bg-red-500"
+                        : "bg-emerald-600 text-white hover:bg-emerald-500"
+                    }`}
+                    disabled={!bodyId || !headId || previewLoading}
+                    onClick={handlePlay}
+                  >
+                    {previewLoading ? "Loading…" : playing ? "⏹ Stop" : "▶ Play"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded bg-[#e0a040] px-3 py-1 text-[11px] font-semibold text-black hover:bg-[#f0b050]"
+                    onClick={addKeyframe}
+                    title="Set keyframe at current frame"
+                  >
+                    + Key
+                  </button>
+                </div>
+              </div>
+
+              {/* Frame ruler + red playhead handle */}
+              <div
+                className="relative mb-0.5 h-5 cursor-pointer rounded-t bg-[#1a1a1a]"
+                style={{ marginLeft: 80 }}
+                onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
+              >
+                {Array.from({ length: Math.min(Math.ceil(maxFrames / 10), 30) }, (_, i) => {
+                  const f = (i + 1) * 10;
+                  if (f > maxFrames) return null;
+                  return (
+                    <span
+                      key={f}
+                      className="absolute bottom-0 text-[8px] text-neutral-500"
+                      style={{ left: `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, transform: "translateX(-50%)" }}
+                    >
+                      {f}
+                    </span>
+                  );
+                })}
+                {/* Red playhead handle — triangle */}
+                <div
+                  className="absolute top-0"
+                  style={{ left: playheadPct, zIndex: 20, transform: "translateX(-50%)", cursor: "ew-resize" }}
+                  onMouseDown={(e) => { e.stopPropagation(); setDraggingPlayhead(true); }}
+                >
+                  <svg width="14" height="12" viewBox="0 0 14 12" style={{ display: "block" }}>
+                    <polygon points="0,0 14,0 7,12" fill="#e03030" stroke="#ff4444" strokeWidth="1" />
+                  </svg>
+                </div>
+              </div>
+
+              {/* Track area — with ref for mouse scrubbing */}
+              <div ref={timelineRef} style={{ marginLeft: 80 }}>
+                {/* ── BODY TRACK ── */}
+                <div className="flex items-stretch" style={{ marginLeft: -80 }}>
+                  <div className="flex w-20 shrink-0 flex-col justify-center rounded-l border-r border-[#333] bg-[#1a1a1a] px-2 py-1">
+                    <span className="text-[10px] font-semibold text-blue-400">BODY</span>
+                    <span className="text-[9px] text-studio-muted">
+                      {bodyTrimCount > 0 && bodyTrimCount < bodyFrameCount ? `${bodyTrimCount}/${bodyFrameCount}f` : `${bodyFrameCount}f`}
+                    </span>
+                    <label className="mt-0.5 text-[8px] text-studio-muted">
+                      {bodyFps}fps
+                      <input
+                        type="range" min={4} max={30} step={1} value={bodyFps}
+                        onChange={(e) => setBodyFps(Number(e.target.value))}
+                        className="studio-scrubber mt-0.5 w-full"
+                      />
+                    </label>
+                  </div>
+                  <div
+                    className="relative h-10 flex-1 cursor-pointer rounded-r bg-[#1a2a3a]"
+                    onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
+                  >
+                    {bodyFrameCount > 0 ? (
+                      <div
+                        className="absolute inset-y-1 left-0 rounded bg-blue-900/60"
+                        style={{ width: `${(bodyFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
+                      />
+                    ) : null}
+                    {/* Dimmed regions outside trim range */}
+                    {bodyFrameCount > 0 && bodyInEff > 1 ? (
+                      <div className="absolute inset-y-0 left-0 bg-black/50" style={{ width: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
+                    ) : null}
+                    {bodyFrameCount > 0 && bodyOutEff < bodyFrameCount ? (
+                      <div className="absolute inset-y-0 right-0 bg-black/50" style={{ left: `${(bodyOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
+                    ) : null}
+                    {/* Trim edge markers */}
+                    {bodyFrameCount > 0 && bodyInEff > 1 ? (
+                      <div className="absolute inset-y-0 w-0.5 bg-yellow-400" style={{ left: `${((bodyInEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 4 }} title={`In: F${bodyInEff}`} />
+                    ) : null}
+                    {bodyFrameCount > 0 && bodyOutEff < bodyFrameCount ? (
+                      <div className="absolute inset-y-0 w-0.5 bg-yellow-400" style={{ left: `${((bodyOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 4 }} title={`Out: F${bodyOutEff}`} />
+                    ) : null}
+                    {/* Red playhead line */}
+                    <div
+                      className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500"
+                      style={{ left: playheadPct, zIndex: 10 }}
+                    />
+                    <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-blue-300/60">
+                      {bodyShot?.name || bodyId || "no body"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* ── HEAD TRACK ── */}
+                <div className="mt-0.5 flex items-stretch" style={{ marginLeft: -80 }}>
+                  <div className="flex w-20 shrink-0 flex-col justify-center rounded-l border-r border-[#333] bg-[#1a1a1a] px-2 py-1">
+                    <span className="text-[10px] font-semibold text-green-400">HEAD</span>
+                    <span className="text-[9px] text-studio-muted">
+                      {headTrimCount > 0 && headTrimCount < headFrameCount ? `${headTrimCount}/${headFrameCount}f` : `${headFrameCount}f`}
+                    </span>
+                    <label className="mt-0.5 text-[8px] text-studio-muted">
+                      {headFps}fps
+                      <input
+                        type="range" min={4} max={30} step={1} value={headFps}
+                        onChange={(e) => setHeadFps(Number(e.target.value))}
+                        className="studio-scrubber mt-0.5 w-full"
+                      />
+                    </label>
+                  </div>
+                  <div
+                    className="relative h-10 flex-1 cursor-pointer rounded-r bg-[#1a2a1a]"
+                    onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
+                  >
+                    {headFrameCount > 0 ? (
+                      <div
+                        className="absolute inset-y-1 left-0 rounded bg-green-900/60"
+                        style={{ width: `${(headFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
+                      />
+                    ) : null}
+                    {/* Dimmed regions outside trim range */}
+                    {headFrameCount > 0 && headInEff > 1 ? (
+                      <div className="absolute inset-y-0 left-0 bg-black/50" style={{ width: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
+                    ) : null}
+                    {headFrameCount > 0 && headOutEff < headFrameCount ? (
+                      <div className="absolute inset-y-0 right-0 bg-black/50" style={{ left: `${(headOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
+                    ) : null}
+                    {/* Trim edge markers */}
+                    {headFrameCount > 0 && headInEff > 1 ? (
+                      <div className="absolute inset-y-0 w-0.5 bg-yellow-400" style={{ left: `${((headInEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 4 }} title={`In: F${headInEff}`} />
+                    ) : null}
+                    {headFrameCount > 0 && headOutEff < headFrameCount ? (
+                      <div className="absolute inset-y-0 w-0.5 bg-yellow-400" style={{ left: `${((headOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 4 }} title={`Out: F${headOutEff}`} />
+                    ) : null}
+                    {/* Keyframe markers */}
+                    {keyframes.map((kf) => (
+                      <div
+                        key={kf.frame}
+                        className="absolute top-1 bottom-1 w-1.5 cursor-pointer rounded-sm bg-[#e0a040] hover:bg-[#f0c060]"
+                        style={{ left: `${((kf.frame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 5 }}
+                        title={`Keyframe F${kf.frame}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setScrubFrame(kf.frame);
+                          setAnchorX(kf.anchorX);
+                          setAnchorY(kf.anchorY);
+                          setHeadScale(kf.headScale);
+                          scrubToFrame(kf.frame);
+                        }}
+                      />
+                    ))}
+                    {/* Red playhead line */}
+                    <div
+                      className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500"
+                      style={{ left: playheadPct, zIndex: 10 }}
+                    />
+                    <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-green-300/60">
+                      {headShot?.name || headId || "no head"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Keyframe chips */}
+              {keyframes.length > 0 ? (
+                <div className="mt-1 flex flex-wrap gap-1" style={{ marginLeft: 80 }}>
+                  {keyframes.map((kf) => (
+                    <span
+                      key={kf.frame}
+                      className="inline-flex items-center gap-1 rounded bg-studio-raised px-1.5 py-0.5 text-[9px] text-neutral-300"
+                    >
+                      <button
+                        type="button"
+                        className="font-medium text-[#e0a040] hover:text-white"
+                        onClick={() => {
+                          setScrubFrame(kf.frame);
+                          setAnchorX(kf.anchorX);
+                          setAnchorY(kf.anchorY);
+                          setHeadScale(kf.headScale);
+                          scrubToFrame(kf.frame);
+                        }}
+                      >
+                        F{kf.frame}
+                      </button>
+                      <button
+                        type="button"
+                        className="text-red-400 hover:text-red-300"
+                        onClick={() => removeKeyframe(kf.frame)}
+                        title="Remove keyframe"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-[9px] text-studio-muted" style={{ marginLeft: 80 }}>
+                  Drag the red playhead to scrub. Position head, click + Key.
+                </p>
+              )}
+
+              {/* ── Trim controls ── */}
+              <div className="mt-2 flex flex-wrap items-center gap-4 border-t border-[#333] pt-2" style={{ marginLeft: 80 }}>
+                <span className="text-[10px] font-semibold text-neutral-400">TRIM</span>
+                <label className="flex items-center gap-1 text-[10px] text-blue-400">
+                  Body In
+                  <input
+                    type="number" min={1} max={bodyFrameCount || 1}
+                    value={bodyIn}
+                    onChange={(e) => setBodyIn(clamp(Number(e.target.value), 1, bodyFrameCount || 1))}
+                    className="w-14 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+                  />
+                  Out
+                  <input
+                    type="number" min={1} max={bodyFrameCount || 1}
+                    value={bodyOut > 0 ? bodyOut : bodyFrameCount}
+                    onChange={(e) => setBodyOut(clamp(Number(e.target.value), 1, bodyFrameCount || 1))}
+                    className="w-14 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+                  />
+                  {bodyTrimCount < bodyFrameCount ? (
+                    <button type="button" className="text-[9px] text-yellow-400 hover:text-yellow-200" onClick={() => { setBodyIn(1); setBodyOut(0); }}>Reset</button>
+                  ) : null}
+                </label>
+                <label className="flex items-center gap-1 text-[10px] text-green-400">
+                  Head In
+                  <input
+                    type="number" min={1} max={headFrameCount || 1}
+                    value={headIn}
+                    onChange={(e) => setHeadIn(clamp(Number(e.target.value), 1, headFrameCount || 1))}
+                    className="w-14 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+                  />
+                  Out
+                  <input
+                    type="number" min={1} max={headFrameCount || 1}
+                    value={headOut > 0 ? headOut : headFrameCount}
+                    onChange={(e) => setHeadOut(clamp(Number(e.target.value), 1, headFrameCount || 1))}
+                    className="w-14 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+                  />
+                  {headTrimCount < headFrameCount ? (
+                    <button type="button" className="text-[9px] text-yellow-400 hover:text-yellow-200" onClick={() => { setHeadIn(1); setHeadOut(0); }}>Reset</button>
+                  ) : null}
+                </label>
+                <button
+                  type="button"
+                  className="rounded bg-blue-700 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-blue-600"
+                  onClick={() => { setBodyIn(scrubFrame); }}
+                  title="Set body in-point to current frame"
+                >
+                  Set In
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-blue-700 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-blue-600"
+                  onClick={() => { setBodyOut(scrubFrame); setHeadOut(scrubFrame); }}
+                  title="Set out-point to current frame"
+                >
+                  Set Out
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           {/* ── Shot Browser — pick body & head visually ──── */}
           <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
