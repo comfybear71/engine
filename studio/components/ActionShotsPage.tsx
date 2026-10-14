@@ -155,11 +155,13 @@ function ShotCard({
   characterId,
   shot,
   onClick,
+  onDelete,
 }: {
   project: string;
   characterId: string;
   shot: ShotInfo;
   onClick: () => void;
+  onDelete: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [hovering, setHovering] = useState(false);
@@ -232,6 +234,12 @@ function ShotCard({
         {shot.status === "ready" && (
           <span className="shots-badge">{shot.frameCount} frames</span>
         )}
+        <button
+          type="button"
+          className="shots-card-delete"
+          title="Delete shot"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        >✕</button>
       </div>
       <div className="shots-card-name">{shot.name || shot.id}</div>
       {/* Horizontal scroll strip of thumbnails */}
@@ -648,6 +656,16 @@ export default function ActionShotsPage({
                       } else if (shot.status === "ready") {
                         setSelectedShot(shot.id);
                       }
+                    }}
+                    onDelete={async () => {
+                      if (!confirm("Delete this shot?")) return;
+                      try {
+                        await workerFetch(
+                          `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shot.id)}`,
+                          { method: "DELETE" }
+                        );
+                        loadShots();
+                      } catch {}
                     }}
                   />
                 ))}

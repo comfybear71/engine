@@ -2418,6 +2418,26 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   font-size: 10px;
 }
 
+.shots-card-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.75);
+  color: #f66;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+  z-index: 2;
+}
+.shots-card:hover .shots-card-delete { display: block; }
+.shots-card-delete:hover { background: #c44; color: #fff; }
+
 .shots-card-name {
   padding: 4px 6px;
   font-size: 12px;
