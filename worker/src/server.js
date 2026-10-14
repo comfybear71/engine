@@ -138,6 +138,7 @@ const {
   serveMedia: serveShotMedia,
   combineShots,
   resizeHead,
+  bakeTimeline,
 } = require("./shots");
 const {
   isSafeShowId,
@@ -1330,6 +1331,18 @@ function createApp(options = {}) {
     if (!projectDir) return;
     try {
       const result = await resizeHead(projectDir, req.params.characterId, req.params.shotId, req.body || {});
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // ── Bake a multi-segment body/head timeline into one shot ──────────
+  app.post("/api/projects/:name/characters/:characterId/shots/bake-timeline", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await bakeTimeline(projectDir, req.params.characterId, req.body || {});
       res.json(result);
     } catch (err) {
       sendFactoryError(res, err);

@@ -12,17 +12,30 @@ interface ShotInfo {
   status: string;
   shotType?: string;
   frameCount: number;
-  actionId?: string;    // set when sent to Action Shots
+  actionId?: string; // set when sent to Action Shots
   sourceBody?: string;
   sourceHead?: string;
 }
 
-interface RigEntry {
+/** One clip reference placed on a track. Many segments can reference the
+ * same source shot (different frame ranges), and the source shot is never
+ * modified — this is the "scratch board" recipe, not a destructive edit. */
+interface Segment {
+  id: string; // client-only, regenerated on load
+  shotId: string;
+  inFrame: number;
+  outFrame: number;
+  start: number; // 1-based position on this timeline's own output
+}
+
+interface HeadSegment extends Segment {
   anchorX: number;
   anchorY: number;
   headScale: number;
-  keyframes?: Keyframe[];
 }
+
+type StoredSegment = Omit<Segment, "id">;
+type StoredHeadSegment = Omit<HeadSegment, "id">;
 
 interface Keyframe {
   frame: number;
@@ -30,6 +43,17 @@ interface Keyframe {
   anchorY: number;
   headScale: number;
 }
+
+interface RigEntry {
+  anchorX: number;
+  anchorY: number;
+  headScale: number;
+  keyframes?: Keyframe[];
+  bodySegments?: StoredSegment[];
+  headSegments?: StoredHeadSegment[];
+}
+
+type TrackName = "body" | "head";
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -39,6 +63,47 @@ function shotMediaUrl(project: string, characterId: string, shotId: string, rel:
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+let segCounter = 0;
+function genSegId() {
+  segCounter += 1;
+  return `seg_${Date.now().toString(36)}_${segCounter}`;
+}
+
+function segLength(seg: { inFrame: number; outFrame: number }): number {
+  return Math.max(1, seg.outFrame - seg.inFrame + 1);
+}
+
+function segEnd(seg: { start: number; inFrame: number; outFrame: number }): number {
+  return seg.start + segLength(seg) - 1;
+}
+
+/** Whichever segment on this track covers `frame`, or null for a gap. */
+function activeSegmentAt<T extends { start: number; inFrame: number; outFrame: number }>(
+  segments: T[],
+  frame: number
+): T | null {
+  for (const seg of segments) {
+    if (frame >= seg.start && frame <= segEnd(seg)) return seg;
+  }
+  return null;
+}
+
+function sourceFrameOf(seg: { inFrame: number; start: number }, frame: number): number {
+  return seg.inFrame + (frame - seg.start);
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      resolve(result.replace(/^data:[^;]+;base64,/, ""));
+    };
+    reader.onerror = () => reject(new Error("Could not read image"));
+    reader.readAsDataURL(blob);
+  });
 }
 
 // ── Component ───────────────────────────────────────────────────────
@@ -56,107 +121,41 @@ export default function HeadRigModal({
 }) {
   const [shots, setShots] = useState<ShotInfo[]>([]);
   const [rigs, setRigs] = useState<Record<string, RigEntry>>({});
-  const [bodyId, setBodyId] = useState("");
-  const [headId, setHeadId] = useState("");
   const [rigKey, setRigKey] = useState("front");
-  const [anchorX, setAnchorX] = useState(0.5);
-  const [anchorY, setAnchorY] = useState(0.15);
-  const [headScale, setHeadScale] = useState(0.7);
+  const [charRefRel, setCharRefRel] = useState("");
+
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  // Preview playback state
+  // ── The multi-segment timeline (this rig key's "scratch board") ──
+  const [bodySegments, setBodySegments] = useState<Segment[]>([]);
+  const [headSegments, setHeadSegments] = useState<HeadSegment[]>([]);
+  const [selectedSegment, setSelectedSegment] = useState<{ track: TrackName; id: string } | null>(null);
+  const legacyKeyframesRef = useRef<Keyframe[] | undefined>(undefined); // round-tripped untouched
+
+  // Playback / scrub
   const [playing, setPlaying] = useState(false);
-  const [bodyFrame, setBodyFrame] = useState(1);
-  const [headFrame, setHeadFrame] = useState(1);
-  const [bodyFps, setBodyFps] = useState(12);
-  const [headFps, setHeadFps] = useState(12);
-  const playRafRef = useRef<number | null>(null);
-  const bodyLastRef = useRef(0);
-  const headLastRef = useRef(0);
-  const bodyFramesRef = useRef<Map<number, HTMLImageElement>>(new Map());
-  const headFramesRef = useRef<Map<number, HTMLImageElement>>(new Map());
-  const [previewLoading, setPreviewLoading] = useState(false);
+  const [scrubFrame, setScrubFrame] = useState(1);
+  const [fps, setFps] = useState(24);
+  const [draggingPlayhead, setDraggingPlayhead] = useState(false);
+  const [timelineZoom, setTimelineZoom] = useState(1);
 
-  // Keyframe timeline state
-  const [keyframes, setKeyframes] = useState<Keyframe[]>([]);
-  const [scrubFrame, setScrubFrame] = useState(1); // current frame when scrubbing (not playing)
-
-  // Trim / in-out points for each track
-  const [bodyIn, setBodyIn] = useState(1);
-  const [bodyOut, setBodyOut] = useState(0); // 0 = use all frames
-  const [headIn, setHeadIn] = useState(1);
-  const [headOut, setHeadOut] = useState(0); // 0 = use all frames
-
-  // Timeline zoom (pixels per frame)
-  const [timelineZoom, setTimelineZoom] = useState(1); // 1 = fit-to-width, >1 = zoomed in
-
-  // DaVinci Resolve-style trim handle drag state
-  const [draggingTrim, setDraggingTrim] = useState<{
-    track: "body" | "head";
-    edge: "in" | "out";
+  // Drag state for moving/trimming segment blocks
+  const dragSegRef = useRef<{
+    mode: "move" | "trim";
+    track: TrackName;
+    id: string;
+    edge?: "in" | "out";
+    startClientX: number;
+    origStart: number;
+    origInFrame: number;
+    origOutFrame: number;
   } | null>(null);
-  const [selectedTrack, setSelectedTrack] = useState<"body" | "head" | null>(null);
+  const [, forceDragTick] = useState(0); // re-render while dragging segment blocks
 
-  // Interpolate anchor/scale at a given frame from keyframes
-  function interpAt(f: number): { ax: number; ay: number; sc: number } {
-    if (keyframes.length === 0) return { ax: anchorX, ay: anchorY, sc: headScale };
-    if (keyframes.length === 1) return { ax: keyframes[0].anchorX, ay: keyframes[0].anchorY, sc: keyframes[0].headScale };
-    // Sort by frame
-    const sorted = [...keyframes].sort((a, b) => a.frame - b.frame);
-    // Before first keyframe
-    if (f <= sorted[0].frame) return { ax: sorted[0].anchorX, ay: sorted[0].anchorY, sc: sorted[0].headScale };
-    // After last keyframe
-    if (f >= sorted[sorted.length - 1].frame) {
-      const last = sorted[sorted.length - 1];
-      return { ax: last.anchorX, ay: last.anchorY, sc: last.headScale };
-    }
-    // Find surrounding keyframes and lerp
-    for (let i = 0; i < sorted.length - 1; i++) {
-      if (f >= sorted[i].frame && f <= sorted[i + 1].frame) {
-        const t = (f - sorted[i].frame) / (sorted[i + 1].frame - sorted[i].frame);
-        return {
-          ax: sorted[i].anchorX + t * (sorted[i + 1].anchorX - sorted[i].anchorX),
-          ay: sorted[i].anchorY + t * (sorted[i + 1].anchorY - sorted[i].anchorY),
-          sc: sorted[i].headScale + t * (sorted[i + 1].headScale - sorted[i].headScale),
-        };
-      }
-    }
-    return { ax: anchorX, ay: anchorY, sc: headScale };
-  }
-
-  // Add or update keyframe at current scrub position
-  function addKeyframe() {
-    const f = scrubFrame;
-    setKeyframes((prev) => {
-      const filtered = prev.filter((k) => k.frame !== f);
-      return [...filtered, { frame: f, anchorX, anchorY, headScale }].sort((a, b) => a.frame - b.frame);
-    });
-  }
-
-  // Remove a keyframe
-  function removeKeyframe(frame: number) {
-    setKeyframes((prev) => prev.filter((k) => k.frame !== frame));
-  }
-
-  // Grok shot creator state
-  const [grokType, setGrokType] = useState<"body" | "head">("body");
-  const [grokPrompt, setGrokPrompt] = useState("");
-  const [grokDuration, setGrokDuration] = useState(6);
-  const [grokBusy, setGrokBusy] = useState(false);
-  const [grokMsg, setGrokMsg] = useState("");
-  const [charRefRel, setCharRefRel] = useState("");
-
-  // Canvas refs
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const bodyImgRef = useRef<HTMLImageElement | null>(null);
-  const headImgRef = useRef<HTMLImageElement | null>(null);
-  const [bodyNat, setBodyNat] = useState({ w: 0, h: 0 });
-  const [headNat, setHeadNat] = useState({ w: 0, h: 0 });
-
-  // Drag state
-  const dragRef = useRef<{
+  // Canvas drag state (move/scale a head segment's anchor)
+  const canvasDragRef = useRef<{
     kind: "move" | "scale";
     startX: number;
     startY: number;
@@ -165,7 +164,49 @@ export default function HeadRigModal({
     origScale: number;
   } | null>(null);
 
-  // Load shots + rigs
+  // Refs mirroring the latest state for the rAF playback loop (so the loop
+  // doesn't need to restart every time a segment is edited)
+  const segmentsRef = useRef<{ body: Segment[]; head: HeadSegment[] }>({ body: [], head: [] });
+  useEffect(() => { segmentsRef.current = { body: bodySegments, head: headSegments }; }, [bodySegments, headSegments]);
+  const selectedRef = useRef(selectedSegment);
+  useEffect(() => { selectedRef.current = selectedSegment; }, [selectedSegment]);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const timelineRef = useRef<HTMLDivElement | null>(null);
+  const playRafRef = useRef<number | null>(null);
+
+  // Shot natural dimensions, cached per shot id (lazily loaded)
+  const [shotDims, setShotDims] = useState<Record<string, { w: number; h: number }>>({});
+  const shotDimsLoadingRef = useRef<Set<string>>(new Set());
+  function ensureShotDims(shotId: string) {
+    if (!shotId || shotDims[shotId] || shotDimsLoadingRef.current.has(shotId)) return;
+    shotDimsLoadingRef.current.add(shotId);
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
+    };
+    img.onerror = () => { shotDimsLoadingRef.current.delete(shotId); };
+    img.src = shotMediaUrl(project, characterId, shotId, "cut/f_0001.png");
+  }
+
+  // Per-frame image cache (shotId#frame -> Image), with a bump counter to
+  // force a redraw once a requested frame finishes loading.
+  const frameImgCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const [redrawTick, setRedrawTick] = useState(0);
+  function getFrameImage(shotId: string, frame: number): HTMLImageElement | null {
+    const key = `${shotId}#${frame}`;
+    const cached = frameImgCacheRef.current.get(key);
+    if (cached) return cached;
+    const pad = String(Math.max(1, frame)).padStart(4, "0");
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
+    img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
+    return null;
+  }
+
+  // ── Load shots + rigs ──
   useEffect(() => {
     (async () => {
       try {
@@ -182,49 +223,56 @@ export default function HeadRigModal({
           setRigs(data.rigs || {});
           if (data.reference) setCharRefRel(data.reference);
         }
-      } catch {}
+      } catch { /* worker may not be reachable yet */ }
     })();
   }, [project, characterId]);
 
-  // When rig key changes, load saved settings if they exist
+  // ── When rig key changes, load its saved timeline (fresh client ids) ──
   useEffect(() => {
     const entry = rigs[rigKey];
-    if (entry) {
-      setAnchorX(entry.anchorX);
-      setAnchorY(entry.anchorY);
-      setHeadScale(entry.headScale);
-      setKeyframes(entry.keyframes || []);
-    } else {
-      setKeyframes([]);
-    }
+    legacyKeyframesRef.current = entry?.keyframes;
+    setBodySegments((entry?.bodySegments || []).map((s) => ({ ...s, id: genSegId() })));
+    setHeadSegments((entry?.headSegments || []).map((s) => ({ ...s, id: genSegId() })));
+    setSelectedSegment(null);
+    setScrubFrame(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rigKey, rigs]);
 
-  // Load body image
-  useEffect(() => {
-    if (!bodyId) { bodyImgRef.current = null; setBodyNat({ w: 0, h: 0 }); return; }
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => { bodyImgRef.current = img; setBodyNat({ w: img.naturalWidth, h: img.naturalHeight }); };
-    img.onerror = () => { console.error("Failed to load body frame:", bodyId); };
-    img.src = shotMediaUrl(project, characterId, bodyId, "cut/f_0001.png");
-    setBodyIn(1);
-    setBodyOut(0);
-  }, [bodyId, project, characterId]);
+  const shotsById = useMemo(() => {
+    const map = new Map<string, ShotInfo>();
+    for (const s of shots) map.set(s.id, s);
+    return map;
+  }, [shots]);
 
-  // Load head image
-  useEffect(() => {
-    if (!headId) { headImgRef.current = null; setHeadNat({ w: 0, h: 0 }); return; }
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => { headImgRef.current = img; setHeadNat({ w: img.naturalWidth, h: img.naturalHeight }); };
-    img.onerror = () => { console.error("Failed to load head frame:", headId); };
-    img.src = shotMediaUrl(project, characterId, headId, "cut/f_0001.png");
-    setHeadIn(1);
-    setHeadOut(0);
-  }, [headId, project, characterId]);
+  const maxFrames = useMemo(() => {
+    let max = 1;
+    for (const s of bodySegments) max = Math.max(max, segEnd(s));
+    for (const s of headSegments) max = Math.max(max, segEnd(s));
+    return max;
+  }, [bodySegments, headSegments]);
 
-  // Draw canvas
-  const draw = useCallback(() => {
+  // Pre-fetch natural dimensions for every shot currently placed on the body track
+  useEffect(() => {
+    for (const s of bodySegments) ensureShotDims(s.shotId);
+    for (const s of headSegments) ensureShotDims(s.shotId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bodySegments, headSegments]);
+
+  const activeBody = useMemo(() => activeSegmentAt(bodySegments, scrubFrame), [bodySegments, scrubFrame]);
+  const activeHead = useMemo(() => activeSegmentAt(headSegments, scrubFrame), [headSegments, scrubFrame]);
+  const editingHead = useMemo(() => {
+    if (selectedSegment?.track === "head") {
+      const sel = headSegments.find((s) => s.id === selectedSegment.id);
+      if (sel) return sel;
+    }
+    return activeHead;
+  }, [selectedSegment, headSegments, activeHead]);
+
+  // ── Canvas drawing ──
+  const CANVAS_W = 600;
+  const CANVAS_H = 800;
+
+  const drawFrame = useCallback((frame: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -233,7 +281,6 @@ export default function HeadRigModal({
     const ch = canvas.height;
     ctx.clearRect(0, 0, cw, ch);
 
-    // Checkerboard background
     const sz = 12;
     for (let y = 0; y < ch; y += sz) {
       for (let x = 0; x < cw; x += sz) {
@@ -242,190 +289,234 @@ export default function HeadRigModal({
       }
     }
 
-    const bodyImg = bodyImgRef.current;
-    if (!bodyImg || bodyNat.w === 0) return;
+    const body = activeSegmentAt(segmentsRef.current.body, frame);
+    const head = activeSegmentAt(segmentsRef.current.head, frame);
 
-    // Fit body into lower 70% of canvas, leaving headroom above
-    const bodyZone = ch * 0.7;
-    const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
-    const bw = bodyNat.w * scale;
-    const bh = bodyNat.h * scale;
-    const bx = (cw - bw) / 2;
-    const by = ch - bh - ch * 0.03; // body sits near bottom
+    // Layout basis: fit whichever body is active into the lower 70% of the
+    // canvas. If there's no body at this frame, fall back to a generic zone
+    // so a head-only segment can still be positioned.
+    let scale = 1;
+    let bw = cw * 0.6;
+    let bh = ch * 0.6;
+    let bx = (cw - bw) / 2;
+    let by = ch - bh - ch * 0.03;
 
-    ctx.drawImage(bodyImg, bx, by, bw, bh);
-
-    // Draw head overlay
-    const headImg = headImgRef.current;
-    if (headImg && headNat.w > 0) {
-      const hw = headNat.w * headScale * scale;
-      const hh = headNat.h * headScale * scale;
-      const hx = bx + anchorX * bw - hw / 2;
-      const hy = by + anchorY * bh - hh / 2;
-
-      // Draw head twice — keyed PNGs can have semi-transparent pixels from
-      // green-screen removal; a second pass makes them fully opaque.
-      ctx.drawImage(headImg, hx, hy, hw, hh);
-      ctx.drawImage(headImg, hx, hy, hw, hh);
-
-      // Dashed outline
-      ctx.strokeStyle = "#e0a040";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
-      ctx.strokeRect(hx, hy, hw, hh);
-      ctx.setLineDash([]);
-
-      // Corner handles
-      const handles = [
-        [hx, hy], [hx + hw, hy],
-        [hx, hy + hh], [hx + hw, hy + hh],
-      ];
-      for (const [cx, cy] of handles) {
-        ctx.fillStyle = "#e0a040";
-        ctx.fillRect(cx - 4, cy - 4, 8, 8);
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(cx - 4, cy - 4, 8, 8);
+    if (body) {
+      const dims = shotDims[body.shotId];
+      if (dims && dims.w > 0) {
+        const bodyZone = ch * 0.7;
+        scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
+        bw = dims.w * scale;
+        bh = dims.h * scale;
+        bx = (cw - bw) / 2;
+        by = ch - bh - ch * 0.03;
+        const img = getFrameImage(body.shotId, sourceFrameOf(body, frame));
+        if (img) ctx.drawImage(img, bx, by, bw, bh);
       }
-
-      // Crosshair at anchor point
-      const ax = bx + anchorX * bw;
-      const ay = by + anchorY * bh;
-      ctx.strokeStyle = "#e0a040";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(ax - 10, ay); ctx.lineTo(ax + 10, ay);
-      ctx.moveTo(ax, ay - 10); ctx.lineTo(ax, ay + 10);
-      ctx.stroke();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bodyNat, headNat, anchorX, anchorY, headScale, bodyId, headId]);
 
-  useEffect(() => { draw(); }, [draw]);
+    if (head) {
+      const dims = shotDims[head.shotId];
+      if (dims && dims.w > 0) {
+        const img = getFrameImage(head.shotId, sourceFrameOf(head, frame));
+        if (img) {
+          const hw = dims.w * head.headScale * scale;
+          const hh = dims.h * head.headScale * scale;
+          const hx = bx + head.anchorX * bw - hw / 2;
+          const hy = by + head.anchorY * bh - hh / 2;
+          // Draw twice -- keyed PNGs can have semi-transparent pixels from
+          // green-screen removal; a second pass makes them fully opaque.
+          ctx.drawImage(img, hx, hy, hw, hh);
+          ctx.drawImage(img, hx, hy, hw, hh);
 
-  // Mouse handlers for drag
-  function onMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+          const isEditing = selectedRef.current?.track === "head" ? selectedRef.current.id === head.id : true;
+          if (isEditing) {
+            ctx.strokeStyle = "#e0a040";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 4]);
+            ctx.strokeRect(hx, hy, hw, hh);
+            ctx.setLineDash([]);
+
+            const handles = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
+            for (const [cx, cy] of handles) {
+              ctx.fillStyle = "#e0a040";
+              ctx.fillRect(cx - 4, cy - 4, 8, 8);
+              ctx.strokeStyle = "#fff";
+              ctx.lineWidth = 1;
+              ctx.strokeRect(cx - 4, cy - 4, 8, 8);
+            }
+
+            const ax = bx + head.anchorX * bw;
+            const ay = by + head.anchorY * bh;
+            ctx.strokeStyle = "#e0a040";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(ax - 10, ay); ctx.lineTo(ax + 10, ay);
+            ctx.moveTo(ax, ay - 10); ctx.lineTo(ax, ay + 10);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    ctx.fillStyle = "#e0a040";
+    ctx.font = "11px monospace";
+    const bodyLabel = body ? `${shotsById.get(body.shotId)?.name || body.shotId} f${sourceFrameOf(body, frame)}` : "— body gap —";
+    const headLabel = head ? `${shotsById.get(head.shotId)?.name || head.shotId} f${sourceFrameOf(head, frame)}` : "— head gap —";
+    ctx.fillText(`F${frame}/${maxFrames}  Body: ${bodyLabel}  Head: ${headLabel}`, 8, ch - 8);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shotDims, maxFrames, shotsById]);
+
+  // Redraw whenever the scrub position, segments, selection, or a newly
+  // loaded image/dim becomes available (while paused).
+  useEffect(() => {
+    if (playing) return;
+    drawFrame(scrubFrame);
+  }, [playing, scrubFrame, bodySegments, headSegments, selectedSegment, shotDims, redrawTick, drawFrame]);
+
+  // ── Playback loop ──
+  function handlePlay() {
+    if (playing) {
+      if (playRafRef.current) cancelAnimationFrame(playRafRef.current);
+      playRafRef.current = null;
+      setPlaying(false);
+      return;
+    }
+    if (maxFrames <= 1) return;
+    setPlaying(true);
+  }
+
+  useEffect(() => {
+    if (!playing) return;
+    let frame = scrubFrame >= maxFrames ? 1 : scrubFrame;
+    let lastTime = performance.now();
+
+    function tick(now: number) {
+      const interval = 1000 / Math.max(1, fps);
+      if (now - lastTime >= interval) {
+        lastTime = now;
+        frame = frame >= maxFrames ? 1 : frame + 1;
+        setScrubFrame(frame);
+        drawFrame(frame);
+      }
+      playRafRef.current = requestAnimationFrame(tick);
+    }
+    playRafRef.current = requestAnimationFrame(tick);
+    return () => { if (playRafRef.current) cancelAnimationFrame(playRafRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, fps, maxFrames]);
+
+  useEffect(() => {
+    return () => { if (playRafRef.current) cancelAnimationFrame(playRafRef.current); };
+  }, []);
+
+  // ── Canvas mouse handlers (move/scale the editing head segment) ──
+  function layoutBasis(frame: number) {
+    const body = activeSegmentAt(segmentsRef.current.body, frame);
+    const cw = CANVAS_W;
+    const ch = CANVAS_H;
+    if (body) {
+      const dims = shotDims[body.shotId];
+      if (dims && dims.w > 0) {
+        const bodyZone = ch * 0.7;
+        const scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
+        const bw = dims.w * scale;
+        const bh = dims.h * scale;
+        return { scale, bw, bh, bx: (cw - bw) / 2, by: ch - bh - ch * 0.03 };
+      }
+    }
+    const bw = cw * 0.6;
+    const bh = ch * 0.6;
+    return { scale: 1, bw, bh, bx: (cw - bw) / 2, by: ch - bh - ch * 0.03 };
+  }
+
+  function onCanvasMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+    const head = editingHead;
+    if (!head) return;
+    const dims = shotDims[head.shotId];
+    if (!dims || dims.w === 0) return;
     const canvas = canvasRef.current;
-    if (!canvas || !bodyImgRef.current || bodyNat.w === 0) return;
+    if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
+    const { scale, bw, bh, bx, by } = layoutBasis(scrubFrame);
 
-    const cw = canvas.width;
-    const ch = canvas.height;
-    const bodyZone = ch * 0.7;
-    const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
-    const bw = bodyNat.w * scale;
-    const bh = bodyNat.h * scale;
-    const bx = (cw - bw) / 2;
-    const by = ch - bh - ch * 0.03;
+    const hw = dims.w * head.headScale * scale;
+    const hh = dims.h * head.headScale * scale;
+    const hx = bx + head.anchorX * bw - hw / 2;
+    const hy = by + head.anchorY * bh - hh / 2;
 
-    // Check if clicking near a corner handle (scale)
-    if (headImgRef.current && headNat.w > 0) {
-      const hw = headNat.w * headScale * scale;
-      const hh = headNat.h * headScale * scale;
-      const hx = bx + anchorX * bw - hw / 2;
-      const hy = by + anchorY * bh - hh / 2;
-      const corners = [
-        [hx, hy], [hx + hw, hy],
-        [hx, hy + hh], [hx + hw, hy + hh],
-      ];
-      for (const [cx, cy] of corners) {
-        if (Math.abs(mx - cx) < 10 && Math.abs(my - cy) < 10) {
-          dragRef.current = {
-            kind: "scale",
-            startX: e.clientX,
-            startY: e.clientY,
-            origAnchorX: anchorX,
-            origAnchorY: anchorY,
-            origScale: headScale,
-          };
-          e.preventDefault();
-          return;
-        }
-      }
-
-      // Check if clicking inside head bounds (move)
-      if (mx >= hx && mx <= hx + hw && my >= hy && my <= hy + hh) {
-        dragRef.current = {
-          kind: "move",
-          startX: e.clientX,
-          startY: e.clientY,
-          origAnchorX: anchorX,
-          origAnchorY: anchorY,
-          origScale: headScale,
-        };
+    const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
+    for (const [cx, cy] of corners) {
+      if (Math.abs(mx - cx) < 10 && Math.abs(my - cy) < 10) {
+        setSelectedSegment({ track: "head", id: head.id });
+        canvasDragRef.current = { kind: "scale", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
         e.preventDefault();
         return;
       }
     }
-
-    // Click on body (outside head) = set anchor position
-    // Skip if head is loaded — only allow click-to-place when no head image yet
-    if (!headImgRef.current || headNat.w === 0) {
-      setAnchorX(clamp((mx - bx) / bw, 0, 1));
-      setAnchorY((my - by) / bh);
+    if (mx >= hx && mx <= hx + hw && my >= hy && my <= hy + hh) {
+      setSelectedSegment({ track: "head", id: head.id });
+      canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
+      e.preventDefault();
     }
   }
 
-  function onMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const canvas = canvasRef.current;
-    if (!canvas || bodyNat.w === 0) return;
+  function updateHeadSegment(id: string, patch: Partial<HeadSegment>) {
+    setHeadSegments((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }
 
-    const cw = canvas.width;
-    const ch = canvas.height;
-    const bodyZone = ch * 0.7;
-    const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
-    const bw = bodyNat.w * scale;
-    const bh = bodyNat.h * scale;
-
+  function onCanvasMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+    const drag = canvasDragRef.current;
+    if (!drag || !editingHead) return;
+    const { bw, bh } = layoutBasis(scrubFrame);
     if (drag.kind === "move") {
       const dx = (e.clientX - drag.startX) / bw;
       const dy = (e.clientY - drag.startY) / bh;
-      setAnchorX(clamp(drag.origAnchorX + dx, 0, 1));
-      setAnchorY(clamp(drag.origAnchorY + dy, -0.5, 1));
+      updateHeadSegment(editingHead.id, {
+        anchorX: clamp(drag.origAnchorX + dx, 0, 1),
+        anchorY: clamp(drag.origAnchorY + dy, -0.5, 1),
+      });
     } else if (drag.kind === "scale") {
       const dy = drag.startY - e.clientY;
       const factor = 1 + dy / 200;
-      setHeadScale(clamp(drag.origScale * factor, 0.1, 3));
+      updateHeadSegment(editingHead.id, { headScale: clamp(drag.origScale * factor, 0.1, 3) });
     }
   }
 
-  function onMouseUp() {
-    dragRef.current = null;
+  function onCanvasMouseUp() {
+    canvasDragRef.current = null;
   }
 
-  function onWheel(e: React.WheelEvent<HTMLCanvasElement>) {
+  function onCanvasWheel(e: React.WheelEvent<HTMLCanvasElement>) {
+    if (!editingHead) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.03 : 0.03;
-    setHeadScale((s) => clamp(s + delta, 0.1, 3));
+    updateHeadSegment(editingHead.id, { headScale: clamp(editingHead.headScale + delta, 0.1, 3) });
   }
 
-  // Save rig
+  // ── Save / load rig ──
   async function handleSave() {
     setBusy("Saving...");
     setError(null);
     setSaved(false);
     try {
+      const body: Record<string, unknown> = {
+        key: rigKey,
+        bodySegments: bodySegments.map(({ id, ...rest }) => rest),
+        headSegments: headSegments.map(({ id, ...rest }) => rest),
+      };
+      if (legacyKeyframesRef.current && legacyKeyframesRef.current.length > 0) {
+        body.keyframes = legacyKeyframesRef.current;
+      }
       const res = await workerFetch(
         `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/head-rig`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            key: rigKey,
-            anchorX: Math.round(anchorX * 1000) / 1000,
-            anchorY: Math.round(anchorY * 1000) / 1000,
-            headScale: Math.round(headScale * 1000) / 1000,
-            keyframes: keyframes.length > 0 ? keyframes : undefined,
-          }),
-        }
+        { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
       );
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: "Save failed" }));
-        throw new Error(body.error || "Save failed");
+        const data = await res.json().catch(() => ({ error: "Save failed" }));
+        throw new Error(data.error || "Save failed");
       }
       const data = await res.json();
       setRigs(data.rigs || {});
@@ -437,8 +528,7 @@ export default function HeadRigModal({
     }
   }
 
-  // Delete rig
-  async function handleDelete(key: string) {
+  async function handleDeleteRig(key: string) {
     try {
       const res = await workerFetch(
         `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/head-rig/${encodeURIComponent(key)}`,
@@ -448,199 +538,10 @@ export default function HeadRigModal({
         const data = await res.json();
         setRigs(data.rigs || {});
       }
-    } catch {}
+    } catch { /* best effort */ }
   }
 
-  // Get frame counts for selected shots
-  const bodyShot = shots.find((s) => s.id === bodyId);
-  const headShot = shots.find((s) => s.id === headId);
-  const bodyFrameCount = bodyShot?.frameCount || 0;
-  const headFrameCount = headShot?.frameCount || 0;
-  // Effective ranges after trim
-  const bodyInEff = Math.max(1, bodyIn);
-  const bodyOutEff = bodyOut > 0 ? Math.min(bodyOut, bodyFrameCount) : bodyFrameCount;
-  const headInEff = Math.max(1, headIn);
-  const headOutEff = headOut > 0 ? Math.min(headOut, headFrameCount) : headFrameCount;
-  const bodyTrimCount = Math.max(0, bodyOutEff - bodyInEff + 1);
-  const headTrimCount = Math.max(0, headOutEff - headInEff + 1);
-  const maxFrames = Math.max(bodyFrameCount, headFrameCount);
-
-  // Preload frames for preview
-  function preloadFrames(shotId: string, count: number, cache: Map<number, HTMLImageElement>) {
-    cache.clear();
-    const toLoad = Math.min(count, 200); // cap at 200 frames
-    let loaded = 0;
-    for (let i = 1; i <= toLoad; i++) {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      const pad = String(i).padStart(4, "0");
-      img.onload = () => { cache.set(i, img); loaded++; if (loaded >= toLoad) setPreviewLoading(false); };
-      img.onerror = () => { loaded++; if (loaded >= toLoad) setPreviewLoading(false); };
-      img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
-    }
-  }
-
-  // Load a single frame on demand for scrubbing (fixes jump-back-to-frame-1 bug)
-  function scrubToFrame(f: number) {
-    if (playing) return;
-    // Load body frame
-    if (bodyId && bodyFrameCount > 0) {
-      const cached = bodyFramesRef.current.get(f);
-      if (cached) {
-        bodyImgRef.current = cached;
-      } else {
-        const pad = String(Math.min(f, bodyFrameCount)).padStart(4, "0");
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        img.onload = () => {
-          bodyFramesRef.current.set(f, img);
-          bodyImgRef.current = img;
-          draw();
-        };
-        img.src = shotMediaUrl(project, characterId, bodyId, `cut/f_${pad}.png`);
-      }
-    }
-    // Load head frame
-    if (headId && headFrameCount > 0) {
-      const hf = Math.min(f, headFrameCount);
-      const cached = headFramesRef.current.get(hf);
-      if (cached) {
-        headImgRef.current = cached;
-      } else {
-        const pad = String(hf).padStart(4, "0");
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        img.onload = () => {
-          headFramesRef.current.set(hf, img);
-          headImgRef.current = img;
-          draw();
-        };
-        img.src = shotMediaUrl(project, characterId, headId, `cut/f_${pad}.png`);
-      }
-    }
-    // Apply keyframe interpolation at this frame
-    const kf = keyframes.find((k) => k.frame === f);
-    if (kf) {
-      setAnchorX(kf.anchorX);
-      setAnchorY(kf.anchorY);
-      setHeadScale(kf.headScale);
-    }
-  }
-
-  function handlePlay() {
-    if (playing) {
-      // Stop
-      if (playRafRef.current) cancelAnimationFrame(playRafRef.current);
-      playRafRef.current = null;
-      setPlaying(false);
-      return;
-    }
-    if (!bodyId || !headId || maxFrames === 0) return;
-
-    // Preload frames
-    setPreviewLoading(true);
-    preloadFrames(bodyId, bodyFrameCount, bodyFramesRef.current);
-    preloadFrames(headId, headFrameCount, headFramesRef.current);
-
-    setPlaying(true);
-    setBodyFrame(1);
-    setHeadFrame(1);
-    bodyLastRef.current = 0;
-    headLastRef.current = 0;
-  }
-
-  // rAF playback loop with separate body/head frame rates
-  useEffect(() => {
-    if (!playing) return;
-
-    let bf = bodyInEff;
-    let hf = headInEff;
-    let lastBodyTime = performance.now();
-    let lastHeadTime = performance.now();
-
-    function tick(now: number) {
-      const canvas = canvasRef.current;
-      if (!canvas) { playRafRef.current = requestAnimationFrame(tick); return; }
-      const ctx = canvas.getContext("2d");
-      if (!ctx) { playRafRef.current = requestAnimationFrame(tick); return; }
-      const cw = canvas.width;
-      const ch = canvas.height;
-
-      // Advance body frame (respect trim range)
-      const bodyInterval = 1000 / bodyFps;
-      if (now - lastBodyTime >= bodyInterval) {
-        lastBodyTime = now;
-        bf = bf >= bodyOutEff ? bodyInEff : bf + 1;
-        setBodyFrame(bf);
-      }
-
-      // Advance head frame (respect trim range)
-      const headInterval = 1000 / headFps;
-      if (now - lastHeadTime >= headInterval) {
-        lastHeadTime = now;
-        hf = hf >= headOutEff ? headInEff : hf + 1;
-        setHeadFrame(hf);
-      }
-
-      // Draw
-      ctx.clearRect(0, 0, cw, ch);
-      const sz = 12;
-      for (let y2 = 0; y2 < ch; y2 += sz) {
-        for (let x2 = 0; x2 < cw; x2 += sz) {
-          ctx.fillStyle = (Math.floor(x2 / sz) + Math.floor(y2 / sz)) % 2 === 0 ? "#1a1a1a" : "#222";
-          ctx.fillRect(x2, y2, sz, sz);
-        }
-      }
-
-      const bodyImg = bodyFramesRef.current.get(bf) || bodyImgRef.current;
-      if (bodyImg && bodyNat.w > 0) {
-        const bodyZone = ch * 0.7;
-        const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
-        const bw = bodyNat.w * scale;
-        const bh = bodyNat.h * scale;
-        const bx = (cw - bw) / 2;
-        const by = ch - bh - ch * 0.03;
-        ctx.drawImage(bodyImg, bx, by, bw, bh);
-
-        const headImg = headFramesRef.current.get(hf) || headImgRef.current;
-        if (headImg && headNat.w > 0) {
-          // Use keyframe interpolation if keyframes exist
-          const interp = interpAt(bf);
-          const hw = headNat.w * interp.sc * scale;
-          const hh = headNat.h * interp.sc * scale;
-          const hx = bx + interp.ax * bw - hw / 2;
-          const hy = by + interp.ay * bh - hh / 2;
-          // Double-draw for full opacity (keyed PNGs may have semi-transparent pixels)
-          ctx.drawImage(headImg, hx, hy, hw, hh);
-          ctx.drawImage(headImg, hx, hy, hw, hh);
-        }
-
-        // Frame counter
-        ctx.fillStyle = "#e0a040";
-        ctx.font = "12px monospace";
-        ctx.fillText(`Body ${bf}/${bodyFrameCount} @ ${bodyFps}fps  Head ${hf}/${headFrameCount} @ ${headFps}fps`, 8, ch - 8);
-        if (keyframes.length > 0) {
-          ctx.fillText(`Keyframes: ${keyframes.length}`, 8, ch - 22);
-        }
-      }
-
-      // Update playhead position during playback (outside image check so it always moves)
-      setScrubFrame(bf);
-
-      playRafRef.current = requestAnimationFrame(tick);
-    }
-
-    playRafRef.current = requestAnimationFrame(tick);
-    return () => { if (playRafRef.current) cancelAnimationFrame(playRafRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, bodyFps, headFps, bodyNat, headNat, anchorX, anchorY, headScale, bodyFrameCount, headFrameCount, keyframes, bodyInEff, bodyOutEff, headInEff, headOutEff]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => { if (playRafRef.current) cancelAnimationFrame(playRafRef.current); };
-  }, []);
-
-  // Reload shots list
+  // ── Reload shots list ──
   async function reloadShots() {
     try {
       const res = await workerFetch(`/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots`);
@@ -648,15 +549,221 @@ export default function HeadRigModal({
         const data: ShotInfo[] = await res.json();
         setShots(data.filter((s) => s.status === "ready"));
       }
-    } catch {}
+    } catch { /* best effort */ }
   }
 
-  // Create a Grok shot
+  // ── Add a shot (full frame range) to the end of a track ──
+  function addToTrack(track: TrackName, shot: ShotInfo) {
+    if (track === "body") {
+      setBodySegments((prev) => {
+        const start = prev.length ? Math.max(...prev.map(segEnd)) + 1 : 1;
+        return [...prev, { id: genSegId(), shotId: shot.id, inFrame: 1, outFrame: shot.frameCount || 1, start }];
+      });
+    } else {
+      setHeadSegments((prev) => {
+        const start = prev.length ? Math.max(...prev.map(segEnd)) + 1 : 1;
+        return [...prev, { id: genSegId(), shotId: shot.id, inFrame: 1, outFrame: shot.frameCount || 1, start, anchorX: 0.5, anchorY: 0.15, headScale: 1.0 }];
+      });
+    }
+  }
+
+  // ── Segment block drag (move / trim) on the timeline ──
+  function onSegmentMouseDown(e: React.MouseEvent, track: TrackName, seg: Segment, edge?: "in" | "out") {
+    e.stopPropagation();
+    setSelectedSegment({ track, id: seg.id });
+    dragSegRef.current = {
+      mode: edge ? "trim" : "move",
+      track, id: seg.id, edge,
+      startClientX: e.clientX,
+      origStart: seg.start, origInFrame: seg.inFrame, origOutFrame: seg.outFrame,
+    };
+    forceDragTick((t) => t + 1);
+  }
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const drag = dragSegRef.current;
+      const el = timelineRef.current;
+      if (!drag || !el) return;
+      const rect = el.getBoundingClientRect();
+      const pxPerFrame = rect.width / Math.max(maxFrames, 1);
+      const deltaFrames = Math.round((e.clientX - drag.startClientX) / Math.max(pxPerFrame, 0.01));
+      const setter = drag.track === "body" ? setBodySegments : setHeadSegments;
+      const shot = shotsById.get(
+        (drag.track === "body" ? bodySegments : headSegments).find((s) => s.id === drag.id)?.shotId || ""
+      );
+      const srcFrameCount = shot?.frameCount || drag.origOutFrame;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (setter as any)((prev: Segment[]) => prev.map((s) => {
+        if (s.id !== drag.id) return s;
+        if (drag.mode === "move") {
+          return { ...s, start: Math.max(1, drag.origStart + deltaFrames) };
+        }
+        if (drag.edge === "in") {
+          const maxShift = drag.origOutFrame - drag.origInFrame; // can't trim past 1 frame left
+          const shift = clamp(deltaFrames, Math.max(-(drag.origStart - 1), -(drag.origInFrame - 1)), maxShift);
+          return { ...s, start: drag.origStart + shift, inFrame: drag.origInFrame + shift };
+        }
+        // out edge
+        const minShift = -(drag.origOutFrame - drag.origInFrame); // keep length >= 1
+        const maxShift = srcFrameCount - drag.origOutFrame;
+        const shift = clamp(deltaFrames, minShift, maxShift);
+        return { ...s, outFrame: drag.origOutFrame + shift };
+      }));
+    }
+    function onUp() {
+      if (dragSegRef.current) { dragSegRef.current = null; forceDragTick((t) => t + 1); }
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [maxFrames, bodySegments, headSegments, shotsById]);
+
+  // ── Playhead ruler scrubbing ──
+  function scrubFromMouse(clientX: number) {
+    const el = timelineRef.current;
+    if (!el || playing) return;
+    const rect = el.getBoundingClientRect();
+    const pct = clamp((clientX - rect.left) / rect.width, 0, 1);
+    const f = Math.max(1, Math.min(maxFrames, Math.round(pct * (maxFrames - 1) + 1)));
+    setScrubFrame(f);
+  }
+
+  useEffect(() => {
+    if (!draggingPlayhead) return;
+    function onMove(e: MouseEvent) { scrubFromMouse(e.clientX); }
+    function onUp() { setDraggingPlayhead(false); }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draggingPlayhead, playing, maxFrames]);
+
+  // ── Keyboard shortcuts (Resolve-style, now operating on segments) ──
+  const clipboardRef = useRef<{ track: TrackName; seg: Segment | HeadSegment } | null>(null);
+
+  function selectedSeg(): { track: TrackName; seg: Segment | HeadSegment } | null {
+    if (!selectedSegment) return null;
+    const list = selectedSegment.track === "body" ? bodySegments : headSegments;
+    const seg = list.find((s) => s.id === selectedSegment.id);
+    return seg ? { track: selectedSegment.track, seg } : null;
+  }
+
+  function deleteSelected() {
+    const sel = selectedSeg();
+    if (!sel) return;
+    if (sel.track === "body") setBodySegments((prev) => prev.filter((s) => s.id !== sel.seg.id));
+    else setHeadSegments((prev) => prev.filter((s) => s.id !== sel.seg.id));
+    setSelectedSegment(null);
+  }
+
+  function copySelected() {
+    const sel = selectedSeg();
+    if (sel) clipboardRef.current = { track: sel.track, seg: sel.seg };
+  }
+
+  function pasteClipboard() {
+    const clip = clipboardRef.current;
+    if (!clip) return;
+    if (clip.track === "body") {
+      setBodySegments((prev) => {
+        const start = prev.length ? Math.max(...prev.map(segEnd)) + 1 : 1;
+        const copy: Segment = { ...(clip.seg as Segment), id: genSegId(), start };
+        return [...prev, copy];
+      });
+    } else {
+      setHeadSegments((prev) => {
+        const start = prev.length ? Math.max(...prev.map(segEnd)) + 1 : 1;
+        const copy: HeadSegment = { ...(clip.seg as HeadSegment), id: genSegId(), start };
+        return [...prev, copy];
+      });
+    }
+  }
+
+  function bladeSelected() {
+    const sel = selectedSeg();
+    if (!sel) return;
+    const seg = sel.seg;
+    const end = segEnd(seg);
+    if (scrubFrame <= seg.start || scrubFrame > end) return; // playhead must be strictly inside
+    const splitSourceFrame = sourceFrameOf(seg, scrubFrame);
+    if (sel.track === "body") {
+      const first: Segment = { ...seg, outFrame: splitSourceFrame - 1 };
+      const second: Segment = { ...seg, id: genSegId(), start: scrubFrame, inFrame: splitSourceFrame };
+      setBodySegments((prev) => prev.flatMap((s) => (s.id === seg.id ? [first, second] : [s])));
+      setSelectedSegment({ track: "body", id: second.id });
+    } else {
+      const h = seg as HeadSegment;
+      const first: HeadSegment = { ...h, outFrame: splitSourceFrame - 1 };
+      const second: HeadSegment = { ...h, id: genSegId(), start: scrubFrame, inFrame: splitSourceFrame };
+      setHeadSegments((prev) => prev.flatMap((s) => (s.id === h.id ? [first, second] : [s])));
+      setSelectedSegment({ track: "head", id: second.id });
+    }
+  }
+
+  function trimSelectedEdge(edge: "in" | "out") {
+    const sel = selectedSeg();
+    if (!sel) return;
+    const seg = sel.seg;
+    const end = segEnd(seg);
+    if (edge === "in") {
+      if (scrubFrame < seg.start || scrubFrame >= end) return;
+      const shift = scrubFrame - seg.start;
+      const patch = { start: seg.start + shift, inFrame: seg.inFrame + shift };
+      if (sel.track === "body") setBodySegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
+      else setHeadSegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
+    } else {
+      if (scrubFrame <= seg.start || scrubFrame > end) return;
+      const newLen = scrubFrame - seg.start + 1;
+      const patch = { outFrame: seg.inFrame + newLen - 1 };
+      if (sel.track === "body") setBodySegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
+      else setHeadSegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
+    }
+  }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+
+      if (ctrl && key === "b") { e.preventDefault(); bladeSelected(); return; }
+      if (key === "delete" || key === "backspace") { deleteSelected(); return; }
+      if (key === "i" && !ctrl) { e.preventDefault(); trimSelectedEdge("in"); return; }
+      if (key === "o" && !ctrl) { e.preventDefault(); trimSelectedEdge("out"); return; }
+      if (ctrl && key === "c") { copySelected(); return; }
+      if (ctrl && key === "v") { pasteClipboard(); return; }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSegment, bodySegments, headSegments, scrubFrame]);
+
+  const playheadPct = `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
+
+  // ── Grok shot creator ──
+  const [grokType, setGrokType] = useState<"body" | "head">("body");
+  const [grokPrompt, setGrokPrompt] = useState("");
+  const [grokDuration, setGrokDuration] = useState(6);
+  const [grokBusy, setGrokBusy] = useState(false);
+  const [grokMsg, setGrokMsg] = useState("");
+  const [grokRefShotId, setGrokRefShotId] = useState(""); // "" = character reference
+
   async function handleGrokCreate() {
     if (!grokPrompt.trim()) return;
     setGrokBusy(true);
     setGrokMsg("");
     try {
+      let refBase64: string | undefined;
+      if (grokRefShotId) {
+        const refRes = await workerFetch(
+          `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/media?rel=${encodeURIComponent(`${grokRefShotId}/poster.jpg`)}`
+        );
+        if (refRes.ok) refBase64 = await blobToBase64(await refRes.blob());
+      }
       const res = await workerFetch(
         `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/make`,
         {
@@ -669,7 +776,7 @@ export default function HeadRigModal({
             shotType: grokType,
             background: "green",
             duration: grokDuration,
-            ...(charRefRel ? { refRel: charRefRel } : {}),
+            ...(refBase64 ? { refBase64 } : charRefRel ? { refRel: charRefRel } : {}),
           }),
         }
       );
@@ -680,7 +787,6 @@ export default function HeadRigModal({
         const data = await res.json();
         setGrokMsg(`Creating ${grokType} shot "${data.shotId}" — will appear when ready`);
         setGrokPrompt("");
-        // Poll for completion
         const poll = setInterval(async () => {
           await reloadShots();
           try {
@@ -695,9 +801,8 @@ export default function HeadRigModal({
                 setGrokMsg(info.status === "ready" ? `Shot "${data.shotId}" ready!` : `Error: ${info.error || "failed"}`);
               }
             }
-          } catch {}
+          } catch { /* keep polling */ }
         }, 5000);
-        // Stop polling after 12 minutes
         setTimeout(() => clearInterval(poll), 720000);
       }
     } catch (err) {
@@ -706,7 +811,7 @@ export default function HeadRigModal({
     setGrokBusy(false);
   }
 
-  // Delete a shot (moves to _deleted/ on disk)
+  // ── Delete / import shots ──
   async function handleDeleteShot(shotId: string) {
     if (!confirm(`Delete shot "${shotId}"?`)) return;
     try {
@@ -715,22 +820,18 @@ export default function HeadRigModal({
         { method: "DELETE" }
       );
       if (res.ok) {
-        // Clear selection if deleted
-        if (bodyId === shotId) setBodyId("");
-        if (headId === shotId) setHeadId("");
+        setBodySegments((prev) => prev.filter((s) => s.shotId !== shotId));
+        setHeadSegments((prev) => prev.filter((s) => s.shotId !== shotId));
         await reloadShots();
       } else {
         const body = await res.text();
-        console.error("Delete failed:", res.status, body);
         alert(`Delete failed (${res.status}): ${body}`);
       }
     } catch (err) {
-      console.error("Delete error:", err);
       alert(`Delete error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  // Import a video clip from desktop
   const importRef = useRef<HTMLInputElement>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importType, setImportType] = useState<"body" | "head">("body");
@@ -759,826 +860,410 @@ export default function HeadRigModal({
     }
   }
 
-  // Save a combined head+body shot
-  const [combineMsg, setCombineMsg] = useState("");
-  const [combineBusy, setCombineBusy] = useState(false);
+  // ── Bake the timeline into a new Action-Shots-ready combined shot ──
+  const [bakeMsg, setBakeMsg] = useState("");
+  const [bakeBusy, setBakeBusy] = useState(false);
+  const [bakeName, setBakeName] = useState("");
 
-  async function handleCombine() {
-    if (!bodyId || !headId) return;
-    setCombineBusy(true);
-    setCombineMsg("");
+  async function handleBake() {
+    if (!bodySegments.length && !headSegments.length) return;
+    setBakeBusy(true);
+    setBakeMsg("");
     try {
+      await handleSave(); // keep the recipe persisted alongside the bake
       const res = await workerFetch(
-        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/combine`,
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/bake-timeline`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            bodyId,
-            headId,
-            anchorX: Math.round(anchorX * 1000) / 1000,
-            anchorY: Math.round(anchorY * 1000) / 1000,
-            headScale: Math.round(headScale * 1000) / 1000,
-            bodyIn: bodyInEff,
-            bodyOut: bodyOutEff,
-            headIn: headInEff,
-            headOut: headOutEff,
-            fps: bodyFps,
+            name: bakeName || rigKey,
+            fps,
+            bodySegments: bodySegments.map(({ id, ...rest }) => rest),
+            headSegments: headSegments.map(({ id, ...rest }) => rest),
           }),
         }
       );
       if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: "Combine failed" }));
-        setCombineMsg(data.error || "Failed");
+        const data = await res.json().catch(() => ({ error: "Bake failed" }));
+        setBakeMsg(data.error || "Failed");
       } else {
         const data = await res.json();
-        setCombineMsg(`Combined shot "${data.id}" created!`);
+        setBakeMsg(`Baked shot "${data.id}" created!`);
         await reloadShots();
       }
     } catch (err) {
-      setCombineMsg(err instanceof Error ? err.message : "Failed");
+      setBakeMsg(err instanceof Error ? err.message : "Failed");
     }
-    setCombineBusy(false);
+    setBakeBusy(false);
   }
 
-  // Send a combined shot to Action Shots
   async function handleSendToAction(shotId: string) {
     try {
       const res = await workerFetch(
         `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}/use`,
         { method: "POST" }
       );
-      if (res.ok) {
-        await reloadShots();
-      }
-    } catch {}
+      if (res.ok) await reloadShots();
+    } catch { /* best effort */ }
   }
 
-  // Filter shots into body/head categories
+  // ── Shot categorization ──
   const bodyShots = shots.filter((s) => s.shotType === "body" || s.category === "idle_stand" || s.category === "walks" || s.category === "mic");
   const headShots = shots.filter((s) => s.shotType === "head" || s.category === "expressions" || s.category === "head_moves" || s.category === "mouth_tongue");
   const combinedShots = shots.filter((s) => s.shotType === "combined");
-  // If no type/category filtering works, show all
   const allShots = shots;
-
   const rigKeys = Object.keys(rigs);
 
-  const CANVAS_W = 600;
-  const CANVAS_H = 800;
-
-  // ── Red playhead drag state ──
-  const timelineRef = useRef<HTMLDivElement | null>(null);
-  const [draggingPlayhead, setDraggingPlayhead] = useState(false);
-
-  function scrubFromMouse(clientX: number) {
-    const el = timelineRef.current;
-    if (!el || playing) return;
-    const rect = el.getBoundingClientRect();
-    const pct = clamp((clientX - rect.left) / rect.width, 0, 1);
-    const f = Math.max(1, Math.min(maxFrames, Math.round(pct * (maxFrames - 1) + 1)));
-    setScrubFrame(f);
-    scrubToFrame(f);
-  }
-
-  useEffect(() => {
-    if (!draggingPlayhead) return;
-    function onMove(e: MouseEvent) { scrubFromMouse(e.clientX); }
-    function onUp() { setDraggingPlayhead(false); }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draggingPlayhead, playing, maxFrames]);
-
-  // ── Resolve-style trim handle dragging ──
-  useEffect(() => {
-    if (!draggingTrim) return;
-    const el = timelineRef.current;
-    if (!el) return;
-    function onMove(e: MouseEvent) {
-      if (!el || !draggingTrim) return;
-      const rect = el.getBoundingClientRect();
-      const pct = clamp((e.clientX - rect.left) / rect.width, 0, 1);
-      const f = Math.max(1, Math.min(maxFrames, Math.round(pct * (maxFrames - 1) + 1)));
-      const { track, edge } = draggingTrim;
-      if (track === "body") {
-        if (edge === "in") setBodyIn(Math.min(f, bodyOutEff));
-        else setBodyOut(Math.max(f, bodyInEff));
-      } else {
-        if (edge === "in") setHeadIn(Math.min(f, headOutEff));
-        else setHeadOut(Math.max(f, headInEff));
-      }
-    }
-    function onUp() { setDraggingTrim(null); }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draggingTrim, maxFrames, bodyInEff, bodyOutEff, headInEff, headOutEff]);
-
-  // ── Keyboard shortcuts (Resolve-style) ──
-  // Ctrl+B = blade/cut at playhead, Delete = remove clip from track,
-  // Ctrl+C = copy clip, Ctrl+V = paste clip, I/O = set in/out
-  const copiedShotRef = useRef<{ track: "body" | "head"; shotId: string } | null>(null);
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      // Don't capture when typing in an input/textarea
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
-      const ctrl = e.ctrlKey || e.metaKey;
-      const key = e.key.toLowerCase();
-
-      // Ctrl+B — blade/split at playhead
-      if (ctrl && key === "b") {
-        e.preventDefault();
-        const track = selectedTrack || "body";
-        if (track === "body" && bodyFrameCount > 0) {
-          if (scrubFrame <= bodyInEff) setBodyIn(scrubFrame);
-          else setBodyOut(scrubFrame);
-        } else if (track === "head" && headFrameCount > 0) {
-          if (scrubFrame <= headInEff) setHeadIn(scrubFrame);
-          else setHeadOut(scrubFrame);
-        }
-        return;
-      }
-
-      // Delete / Backspace — remove clip from selected track
-      if (key === "delete" || key === "backspace") {
-        if (selectedTrack === "body" && bodyId) {
-          setBodyId(""); setBodyIn(1); setBodyOut(0);
-        } else if (selectedTrack === "head" && headId) {
-          setHeadId(""); setHeadIn(1); setHeadOut(0);
-        }
-        return;
-      }
-
-      // I — set in-point at playhead
-      if (key === "i" && !ctrl) {
-        e.preventDefault();
-        const track = selectedTrack || "body";
-        if (track === "body") setBodyIn(scrubFrame);
-        else setHeadIn(scrubFrame);
-        return;
-      }
-
-      // O — set out-point at playhead
-      if (key === "o" && !ctrl) {
-        e.preventDefault();
-        const track = selectedTrack || "body";
-        if (track === "body") setBodyOut(scrubFrame);
-        else setHeadOut(scrubFrame);
-        return;
-      }
-
-      // Ctrl+C — copy selected track's clip
-      if (ctrl && key === "c") {
-        const track = selectedTrack || "body";
-        const shotId = track === "body" ? bodyId : headId;
-        if (shotId) {
-          copiedShotRef.current = { track, shotId };
-        }
-        return;
-      }
-
-      // Ctrl+V — paste copied clip into selected track
-      if (ctrl && key === "v") {
-        if (!copiedShotRef.current) return;
-        const { track: srcTrack, shotId } = copiedShotRef.current;
-        const destTrack = selectedTrack || srcTrack;
-        if (destTrack === "body") setBodyId(shotId);
-        else setHeadId(shotId);
-        return;
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedTrack, scrubFrame, bodyFrameCount, headFrameCount, bodyInEff, headInEff, bodyId, headId]);
-
-  const playheadPct = `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
-
   const content = (
-        <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto p-4"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
-          {/* ── Centered Viewer (DaVinci Resolve layout) ────────── */}
-          <div className="flex flex-col items-center">
-            {/* Shot pickers — compact row */}
-            <div className="mb-2 flex flex-wrap items-end justify-center gap-3">
-              <label className="text-[11px] text-studio-muted">
-                Body
-                <select
-                  className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                  value={bodyId}
-                  onChange={(e) => setBodyId(e.target.value)}
-                >
-                  <option value="">— pick —</option>
-                  {(bodyShots.length > 0 ? bodyShots : allShots).map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name || s.id} {s.shotType ? `(${s.shotType})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-[11px] text-studio-muted">
-                Head
-                <select
-                  className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                  value={headId}
-                  onChange={(e) => setHeadId(e.target.value)}
-                >
-                  <option value="">— pick —</option>
-                  {(headShots.length > 0 ? headShots : allShots).map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name || s.id} {s.shotType ? `(${s.shotType})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-[11px] text-studio-muted">
-                Rig
-                <select
-                  className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                  value={rigKey}
-                  onChange={(e) => setRigKey(e.target.value)}
-                >
-                  <option value="front">front</option>
-                  <option value="left_34">left 3/4</option>
-                  <option value="right_34">right 3/4</option>
-                  <option value="left_side">left side</option>
-                  <option value="right_side">right side</option>
-                  <option value="back">back</option>
-                </select>
-                <input
-                  type="text"
-                  className="ml-1 w-16 rounded-md border border-studio-border bg-studio-raised px-1 py-1 text-xs text-neutral-200"
-                  placeholder="custom"
-                  value={rigKey}
-                  onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
-                />
-              </label>
-            </div>
-
-            {/* Canvas — centered */}
-            <canvas
-              ref={canvasRef}
-              width={CANVAS_W}
-              height={CANVAS_H}
-              className="rounded-md border border-studio-border"
-              style={{ cursor: "crosshair", width: CANVAS_W, height: CANVAS_H, maxHeight: "65vh", objectFit: "contain" }}
-              onMouseDown={onMouseDown}
-              onMouseMove={onMouseMove}
-              onMouseUp={onMouseUp}
-              onMouseLeave={onMouseUp}
-              onWheel={onWheel}
+    <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto p-4"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
+      {/* ── Centered Viewer ── */}
+      <div className="flex flex-col items-center">
+        <div className="mb-2 flex flex-wrap items-end justify-center gap-3">
+          <label className="text-[11px] text-studio-muted">
+            Rig
+            <select
+              className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+              value={rigKey}
+              onChange={(e) => setRigKey(e.target.value)}
+            >
+              <option value="front">front</option>
+              <option value="left_34">left 3/4</option>
+              <option value="right_34">right 3/4</option>
+              <option value="left_side">left side</option>
+              <option value="right_side">right side</option>
+              <option value="back">back</option>
+            </select>
+            <input
+              type="text"
+              className="ml-1 w-16 rounded-md border border-studio-border bg-studio-raised px-1 py-1 text-xs text-neutral-200"
+              placeholder="custom"
+              value={rigKey}
+              onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
             />
-            <p className="mt-1 text-[10px] text-studio-muted">
-              Drag head = move · Corner handles = scale · Scroll = resize
-            </p>
+          </label>
+          <label className="text-[11px] text-studio-muted">
+            FPS
+            <input
+              type="number" min={4} max={60}
+              className="ml-1 w-14 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+              value={fps}
+              onChange={(e) => setFps(clamp(Number(e.target.value) || 24, 4, 60))}
+            />
+          </label>
+        </div>
 
-            {/* ── Controls toolbar — horizontal under canvas ── */}
-            <div className="mt-2 flex flex-wrap items-center justify-center gap-4 rounded-md border border-studio-border bg-[#1a1a1a] px-4 py-2">
-              <label className="flex items-center gap-2 text-[11px] text-studio-muted">
-                Scale
-                <input
-                  type="range" min={0.1} max={2.5} step={0.01} value={headScale}
-                  onChange={(e) => setHeadScale(Number(e.target.value))}
-                  className="studio-scrubber w-24"
-                />
-                <span className="w-8 text-right text-[10px] text-neutral-300">{headScale.toFixed(2)}</span>
-              </label>
-              <label className="flex items-center gap-2 text-[11px] text-studio-muted">
-                X
-                <input
-                  type="range" min={0} max={1} step={0.005} value={anchorX}
-                  onChange={(e) => setAnchorX(Number(e.target.value))}
-                  className="studio-scrubber w-24"
-                />
-                <span className="w-8 text-right text-[10px] text-neutral-300">{anchorX.toFixed(2)}</span>
-              </label>
-              <label className="flex items-center gap-2 text-[11px] text-studio-muted">
-                Y
-                <input
-                  type="range" min={-0.5} max={1} step={0.005} value={anchorY}
-                  onChange={(e) => setAnchorY(Number(e.target.value))}
-                  className="studio-scrubber w-24"
-                />
-                <span className="w-8 text-right text-[10px] text-neutral-300">{anchorY.toFixed(2)}</span>
-              </label>
+        <canvas
+          ref={canvasRef}
+          width={CANVAS_W}
+          height={CANVAS_H}
+          className="rounded-md border border-studio-border"
+          style={{ cursor: editingHead ? "crosshair" : "default", width: CANVAS_W, height: CANVAS_H, maxHeight: "60vh", objectFit: "contain" }}
+          onMouseDown={onCanvasMouseDown}
+          onMouseMove={onCanvasMouseMove}
+          onMouseUp={onCanvasMouseUp}
+          onMouseLeave={onCanvasMouseUp}
+          onWheel={onCanvasWheel}
+        />
+        <p className="mt-1 text-[10px] text-studio-muted">
+          {editingHead
+            ? "Drag head = move · Corner handles = scale · Scroll = resize"
+            : "Select or add a head segment on the timeline below to reposition it"}
+        </p>
+
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-4 rounded-md border border-studio-border bg-[#1a1a1a] px-4 py-2">
+          <button
+            type="button"
+            className="rounded-md bg-studio-accent px-3 py-1 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+            disabled={busy != null || (!bodySegments.length && !headSegments.length)}
+            onClick={() => void handleSave()}
+          >
+            {busy || `Save "${rigKey}"`}
+          </button>
+          {error ? <span className="text-xs text-red-400">{error}</span> : null}
+          {saved ? <span className="text-xs text-green-400">Saved!</span> : null}
+        </div>
+
+        {rigKeys.length > 0 ? (
+          <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+            <span className="text-[10px] text-studio-muted">Rigs:</span>
+            {rigKeys.map((key) => (
               <button
+                key={key}
                 type="button"
-                className="rounded-md bg-studio-accent px-3 py-1 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
-                disabled={busy != null || !bodyId || !headId}
-                onClick={() => void handleSave()}
+                className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] ${
+                  rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-300 hover:text-white"
+                }`}
+                onClick={() => setRigKey(key)}
               >
-                {busy || `Save "${rigKey}"`}
+                {key}
+                <span className="ml-1 text-red-400 hover:text-red-300" onClick={(e) => { e.stopPropagation(); void handleDeleteRig(key); }}>×</span>
               </button>
-              {error ? <span className="text-xs text-red-400">{error}</span> : null}
-              {saved ? <span className="text-xs text-green-400">Saved!</span> : null}
-            </div>
-
-            {/* Saved rigs — compact horizontal */}
-            {rigKeys.length > 0 ? (
-              <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
-                <span className="text-[10px] text-studio-muted">Rigs:</span>
-                {rigKeys.map((key) => {
-                  const r = rigs[key];
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] ${
-                        rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-300 hover:text-white"
-                      }`}
-                      onClick={() => {
-                        setRigKey(key);
-                        setAnchorX(r.anchorX);
-                        setAnchorY(r.anchorY);
-                        setHeadScale(r.headScale);
-                      }}
-                    >
-                      {key}
-                      <span
-                        className="ml-1 text-red-400 hover:text-red-300"
-                        onClick={(e) => { e.stopPropagation(); void handleDelete(key); }}
-                      >
-                        ×
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
+            ))}
           </div>
+        ) : null}
+      </div>
 
-          {/* ══════════ DaVinci Resolve-style Timeline ══════════ */}
-          {(bodyFrameCount > 0 || headFrameCount > 0) ? (
-            <div className="mt-4 overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#0d0d0d]">
-
-              {/* ── Transport bar (like Resolve's center toolbar) ── */}
-              <div className="flex items-center justify-between border-b border-[#222] bg-[#181818] px-4 py-2">
-                {/* Timecode */}
-                <div className="font-mono text-xl font-bold tracking-wider text-neutral-100" style={{ minWidth: 120 }}>
-                  {String(Math.floor((scrubFrame - 1) / (bodyFps * 60))).padStart(2, "0")}
-                  <span className="text-neutral-500">:</span>
-                  {String(Math.floor(((scrubFrame - 1) / bodyFps) % 60)).padStart(2, "0")}
-                  <span className="text-neutral-500">:</span>
-                  {String(Math.floor((scrubFrame - 1) % bodyFps)).padStart(2, "0")}
-                </div>
-
-                {/* Transport controls */}
-                <div className="flex items-center gap-1">
-                  <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white"
-                    onClick={() => { setScrubFrame(1); scrubToFrame(1); }} title="Go to start">⏮</button>
-                  <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white"
-                    onClick={() => { const f = Math.max(1, scrubFrame - 1); setScrubFrame(f); scrubToFrame(f); }} title="Previous frame">◀</button>
-                  <button type="button"
-                    className={`rounded-md px-4 py-1.5 text-sm font-semibold ${playing ? "bg-[#c83030] text-white hover:bg-[#a02828]" : "bg-[#2a2a2a] text-neutral-200 hover:bg-[#3a3a3a]"}`}
-                    disabled={!bodyId || !headId || previewLoading}
-                    onClick={handlePlay}
-                  >
-                    {previewLoading ? "…" : playing ? "■" : "▶"}
-                  </button>
-                  <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white"
-                    onClick={() => { const f = Math.min(maxFrames, scrubFrame + 1); setScrubFrame(f); scrubToFrame(f); }} title="Next frame">▶</button>
-                  <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white"
-                    onClick={() => { setScrubFrame(maxFrames); scrubToFrame(maxFrames); }} title="Go to end">⏭</button>
-                </div>
-
-                {/* Right side — zoom + key */}
-                <div className="flex items-center gap-2">
-                  <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white"
-                    onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))} title="Zoom out">−</button>
-                  <span className="w-8 text-center font-mono text-[10px] text-neutral-500">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
-                  <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white"
-                    onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))} title="Zoom in">+</button>
-                  <div className="mx-1 h-5 w-px bg-[#333]" />
-                  <button type="button" className="rounded bg-[#e0a040]/20 px-2.5 py-1 text-[11px] font-semibold text-[#e0a040] hover:bg-[#e0a040]/30"
-                    onClick={addKeyframe} title="Set keyframe at current frame">◆ Key</button>
-                </div>
-              </div>
-
-              {/* ── Scrollable track area ── */}
-              <div className="overflow-x-auto">
-              <div style={{ minWidth: timelineZoom > 1 ? `${timelineZoom * 100}%` : undefined }}>
-
-              {/* Ruler */}
-              <div className="flex">
-                <div className="w-[120px] shrink-0 border-r border-[#222] bg-[#141414]" />
-                <div
-                  className="relative h-6 flex-1 cursor-pointer border-b border-[#222] bg-[#141414]"
-                  onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
-                >
-                  {Array.from({ length: Math.min(Math.ceil(maxFrames / 10), 40) }, (_, i) => {
-                    const f = (i + 1) * 10;
-                    if (f > maxFrames) return null;
-                    const pct = `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
-                    return (<Fragment key={f}>
-                      <div className="absolute top-0 h-full w-px bg-[#2a2a2a]" style={{ left: pct }} />
-                      <span className="absolute bottom-1 text-[9px] text-neutral-600" style={{ left: pct, transform: "translateX(-50%)" }}>{f}</span>
-                    </Fragment>);
-                  })}
-                  {/* Red playhead handle */}
-                  <div className="absolute top-0" style={{ left: playheadPct, zIndex: 20, transform: "translateX(-50%)", cursor: "ew-resize" }}
-                    onMouseDown={(e) => { e.stopPropagation(); setDraggingPlayhead(true); }}>
-                    <svg width="16" height="20" viewBox="0 0 16 20" style={{ display: "block" }}>
-                      <polygon points="0,0 16,0 16,10 8,20 0,10" fill="#e03030" />
-                    </svg>
-                  </div>
-                </div>
-              </div>
-
-              {/* Track area — with ref for mouse scrubbing */}
-              <div className="flex">
-                <div className="w-[120px] shrink-0" />
-                <div ref={timelineRef} className="relative flex-1">
-
-                {/* ── BODY TRACK (V1) ── */}
-                <div className="flex" style={{ marginLeft: -120 }}>
-                  <div
-                    className={`flex w-[120px] shrink-0 items-center gap-2 border-b border-r border-[#222] px-3 py-2 ${selectedTrack === "body" ? "bg-[#1a2233]" : "bg-[#161616]"}`}
-                    onClick={() => setSelectedTrack("body")}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <span className="rounded bg-blue-600 px-1.5 py-0.5 text-[9px] font-bold text-white">V1</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[11px] font-medium text-neutral-300">Body</div>
-                      <div className="text-[9px] text-neutral-500">{bodyFrameCount}f</div>
-                    </div>
-                  </div>
-                  <div
-                    className={`relative flex-1 cursor-pointer overflow-hidden border-b border-[#222] ${selectedTrack === "body" ? "ring-1 ring-inset ring-blue-500/40" : ""}`}
-                    style={{ height: 80, background: "#161e28" }}
-                    onClick={() => setSelectedTrack("body")}
-                  >
-                    {/* Clip with thumbnails */}
-                    {bodyFrameCount > 0 ? (
-                      <div className="absolute inset-y-0 left-0 border-y border-blue-500/30" style={{ width: `${(bodyFrameCount / Math.max(maxFrames, 1)) * 100}%` }}>
-                        <div className="flex h-full">
-                          {Array.from({ length: Math.min(bodyFrameCount, 60) }, (_, i) => {
-                            const frame = Math.max(1, Math.round((i / Math.min(bodyFrameCount, 60)) * bodyFrameCount));
-                            const pad = String(frame).padStart(4, "0");
-                            return (
-                              <img key={i} src={shotMediaUrl(project, characterId, bodyId, `cut/f_${pad}.png`)} alt=""
-                                className="h-full shrink-0 object-contain" style={{ width: `${100 / Math.min(bodyFrameCount, 60)}%`, background: "#0a0a0a" }}
-                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                            );
-                          })}
-                        </div>
-                        {/* Clip name label (like Resolve) */}
-                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-0.5">
-                          <span className="text-[9px] font-medium text-blue-300">{bodyShot?.name || bodyId}</span>
-                        </div>
-                      </div>
-                    ) : null}
-                    {/* Dimmed regions outside trim */}
-                    {bodyFrameCount > 0 && bodyInEff > 1 ? (
-                      <div className="absolute inset-y-0 left-0 bg-black/60" style={{ width: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
-                    ) : null}
-                    {bodyFrameCount > 0 && bodyOutEff < bodyFrameCount ? (
-                      <div className="absolute inset-y-0 right-0 bg-black/60" style={{ left: `${(bodyOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
-                    ) : null}
-                    {/* Trim handles */}
-                    {bodyFrameCount > 0 ? (<>
-                      <div className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center"
-                        style={{ left: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, width: 7, zIndex: 8, background: "#e0a040", borderRadius: "3px 0 0 3px" }}
-                        title={`In: F${bodyInEff}`}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "in" }); setSelectedTrack("body"); }}>
-                        <div className="h-6 w-px bg-[#000]/30" />
-                      </div>
-                      <div className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center"
-                        style={{ left: `${((bodyOutEff) / Math.max(maxFrames, 1)) * 100}%`, width: 7, zIndex: 8, background: "#e0a040", borderRadius: "0 3px 3px 0", transform: "translateX(-7px)" }}
-                        title={`Out: F${bodyOutEff}`}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "out" }); setSelectedTrack("body"); }}>
-                        <div className="h-6 w-px bg-[#000]/30" />
-                      </div>
-                    </>) : null}
-                    {/* Playhead */}
-                    <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500" style={{ left: playheadPct, zIndex: 10 }} />
-                  </div>
-                </div>
-
-                {/* ── HEAD TRACK (V2) ── */}
-                <div className="flex" style={{ marginLeft: -120 }}>
-                  <div
-                    className={`flex w-[120px] shrink-0 items-center gap-2 border-b border-r border-[#222] px-3 py-2 ${selectedTrack === "head" ? "bg-[#1a2a1a]" : "bg-[#161616]"}`}
-                    onClick={() => setSelectedTrack("head")}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <span className="rounded bg-green-600 px-1.5 py-0.5 text-[9px] font-bold text-white">V2</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[11px] font-medium text-neutral-300">Head</div>
-                      <div className="text-[9px] text-neutral-500">{headFrameCount}f</div>
-                    </div>
-                  </div>
-                  <div
-                    className={`relative flex-1 cursor-pointer overflow-hidden border-b border-[#222] ${selectedTrack === "head" ? "ring-1 ring-inset ring-green-500/40" : ""}`}
-                    style={{ height: 80, background: "#161e16" }}
-                    onClick={() => setSelectedTrack("head")}
-                  >
-                    {/* Clip with thumbnails */}
-                    {headFrameCount > 0 ? (
-                      <div className="absolute inset-y-0 left-0 border-y border-green-500/30" style={{ width: `${(headFrameCount / Math.max(maxFrames, 1)) * 100}%` }}>
-                        <div className="flex h-full">
-                          {Array.from({ length: Math.min(headFrameCount, 60) }, (_, i) => {
-                            const frame = Math.max(1, Math.round((i / Math.min(headFrameCount, 60)) * headFrameCount));
-                            const pad = String(frame).padStart(4, "0");
-                            return (
-                              <img key={i} src={shotMediaUrl(project, characterId, headId, `cut/f_${pad}.png`)} alt=""
-                                className="h-full shrink-0 object-contain" style={{ width: `${100 / Math.min(headFrameCount, 60)}%`, background: "#0a0a0a" }}
-                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                            );
-                          })}
-                        </div>
-                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-0.5">
-                          <span className="text-[9px] font-medium text-green-300">{headShot?.name || headId}</span>
-                        </div>
-                      </div>
-                    ) : null}
-                    {/* Dimmed regions outside trim */}
-                    {headFrameCount > 0 && headInEff > 1 ? (
-                      <div className="absolute inset-y-0 left-0 bg-black/60" style={{ width: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
-                    ) : null}
-                    {headFrameCount > 0 && headOutEff < headFrameCount ? (
-                      <div className="absolute inset-y-0 right-0 bg-black/60" style={{ left: `${(headOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
-                    ) : null}
-                    {/* Trim handles */}
-                    {headFrameCount > 0 ? (<>
-                      <div className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center"
-                        style={{ left: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, width: 7, zIndex: 8, background: "#e0a040", borderRadius: "3px 0 0 3px" }}
-                        title={`In: F${headInEff}`}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "in" }); setSelectedTrack("head"); }}>
-                        <div className="h-6 w-px bg-[#000]/30" />
-                      </div>
-                      <div className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center"
-                        style={{ left: `${((headOutEff) / Math.max(maxFrames, 1)) * 100}%`, width: 7, zIndex: 8, background: "#e0a040", borderRadius: "0 3px 3px 0", transform: "translateX(-7px)" }}
-                        title={`Out: F${headOutEff}`}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "out" }); setSelectedTrack("head"); }}>
-                        <div className="h-6 w-px bg-[#000]/30" />
-                      </div>
-                    </>) : null}
-                    {/* Keyframe markers */}
-                    {keyframes.map((kf) => (
-                      <div key={kf.frame} className="absolute top-1 bottom-1 w-1.5 cursor-pointer rounded-sm bg-[#e0a040] hover:bg-[#f0c060]"
-                        style={{ left: `${((kf.frame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 5 }} title={`Key F${kf.frame}`}
-                        onClick={(e) => { e.stopPropagation(); setScrubFrame(kf.frame); setAnchorX(kf.anchorX); setAnchorY(kf.anchorY); setHeadScale(kf.headScale); scrubToFrame(kf.frame); }} />
-                    ))}
-                    {/* Playhead */}
-                    <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500" style={{ left: playheadPct, zIndex: 10 }} />
-                  </div>
-                </div>
-
-                </div>{/* end timelineRef inner */}
-              </div>{/* end track flex */}
-              </div>{/* end zoom inner */}
-              </div>{/* end scroll wrapper */}
-
-              {/* ── Bottom bar: keyframes + shortcuts ── */}
-              <div className="flex items-center justify-between border-t border-[#222] bg-[#141414] px-4 py-1.5">
-                <div className="flex items-center gap-2">
-                  {keyframes.length > 0 ? keyframes.map((kf) => (
-                    <span key={kf.frame} className="inline-flex items-center gap-1 rounded bg-[#222] px-1.5 py-0.5 text-[9px] text-neutral-400">
-                      <button type="button" className="font-medium text-[#e0a040] hover:text-white"
-                        onClick={() => { setScrubFrame(kf.frame); setAnchorX(kf.anchorX); setAnchorY(kf.anchorY); setHeadScale(kf.headScale); scrubToFrame(kf.frame); }}>
-                        ◆ F{kf.frame}
-                      </button>
-                      <button type="button" className="text-red-400/60 hover:text-red-300" onClick={() => removeKeyframe(kf.frame)} title="Remove">×</button>
-                    </span>
-                  )) : (
-                    <span className="text-[9px] text-neutral-600">
-                      <b className="text-neutral-500">I</b> In  <b className="text-neutral-500">O</b> Out  <b className="text-neutral-500">Ctrl+B</b> Cut  <b className="text-neutral-500">Del</b> Remove  <b className="text-neutral-500">Ctrl+C/V</b> Copy/Paste
-                    </span>
-                  )}
-                </div>
-                <span className="font-mono text-[9px] text-neutral-600">F{scrubFrame} / {maxFrames}</span>
-              </div>
-
-            </div>
-          ) : null}
-
-          {/* ── Shot Browser + Combined Outputs — 2-col inside this card ──── */}
-          <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
-            <div className="flex gap-4">
-              {/* LEFT — Body Shots + Head Shots */}
-              <div className="min-w-0 flex-1">
-                {/* Import button */}
-                <div className="mb-3 flex items-center gap-2">
-                  <input ref={importRef} type="file" accept="video/*,.mp4,.mov,.webm" className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFile(f, importType); }} />
-                  <select className="rounded border border-studio-border bg-studio-raised px-2 py-1 text-[11px] text-neutral-200"
-                    value={importType} onChange={(e) => setImportType(e.target.value as "body" | "head")}>
-                    <option value="body">Body clip</option>
-                    <option value="head">Head clip</option>
-                  </select>
-                  <button type="button"
-                    className="rounded bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
-                    disabled={importBusy}
-                    onClick={() => importRef.current?.click()}>
-                    {importBusy ? "Importing…" : "📁 Import Clip"}
-                  </button>
-                </div>
-                <h3 className="mb-2 text-xs font-semibold text-neutral-300">Body Shots</h3>
-                {bodyShots.length === 0 && allShots.length === 0 ? (
-                  <p className="text-[10px] text-studio-muted">No body shots yet — create one with Grok below</p>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {(bodyShots.length > 0 ? bodyShots : allShots).map((s) => (
-                      <div key={s.id} className="group relative" style={{ width: 80, height: 80 }}>
-                        <button
-                          type="button"
-                          className={`relative overflow-hidden rounded-md border-2 ${
-                            bodyId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
-                          }`}
-                          style={{ width: 80, height: 80 }}
-                          onClick={() => setBodyId(s.id)}
-                          title={s.name || s.id}
-                        >
-                          <img
-                            src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
-                            alt={s.name || s.id}
-                            className="h-full w-full object-cover"
-                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                          />
-                          <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
-                            {s.name || s.id}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
-                          onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
-                          title="Delete shot"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <h3 className="mb-2 mt-3 text-xs font-semibold text-neutral-300">Head Shots</h3>
-                {headShots.length === 0 && allShots.length === 0 ? (
-                  <p className="text-[10px] text-studio-muted">No head shots yet — create one with Grok below</p>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {(headShots.length > 0 ? headShots : allShots).map((s) => (
-                      <div key={s.id} className="group relative" style={{ width: 80, height: 80 }}>
-                        <button
-                          type="button"
-                          className={`relative overflow-hidden rounded-md border-2 ${
-                            headId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
-                          }`}
-                          style={{ width: 80, height: 80 }}
-                          onClick={() => setHeadId(s.id)}
-                          title={s.name || s.id}
-                        >
-                          <img
-                            src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
-                            alt={s.name || s.id}
-                            className="h-full w-full object-cover"
-                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                          />
-                          <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
-                            {s.name || s.id}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
-                          onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
-                          title="Delete shot"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* RIGHT — Combined Outputs */}
-              <div className="w-60 shrink-0 border-l border-studio-border pl-4">
-                <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Combined Outputs</h3>
-                <button
-                  type="button"
-                  className="mb-3 w-full rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
-                  disabled={combineBusy || !bodyId || !headId}
-                  onClick={() => void handleCombine()}
-                >
-                  {combineBusy ? "Combining…" : "Save Combined Shot"}
-                </button>
-                {combineMsg ? (
-                  <p className={`mb-2 text-[10px] font-medium ${combineMsg.includes("failed") || combineMsg.includes("Failed") ? "text-red-400" : "text-emerald-300"}`}>
-                    {combineMsg}
-                  </p>
-                ) : null}
-                {combinedShots.length === 0 ? (
-                  <p className="text-[10px] text-studio-muted">No combined shots yet.</p>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    {combinedShots.map((s) => (
-                      <div key={s.id} className="group relative rounded-md border border-studio-border bg-[#111] p-2">
-                        <div className="flex items-start gap-2">
-                          <img
-                            src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
-                            alt={s.name || s.id}
-                            className="h-12 w-12 shrink-0 rounded object-cover"
-                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-[10px] font-medium text-neutral-200" title={s.id}>{s.name || s.id}</p>
-                            <p className="text-[9px] text-studio-muted">{s.frameCount}f</p>
-                            {s.actionId ? (
-                              <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400">
-                                <span>✓</span> In Action Shots
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                className="mt-1 rounded bg-blue-700 px-2 py-0.5 text-[9px] font-semibold text-white hover:bg-blue-600"
-                                onClick={() => void handleSendToAction(s.id)}
-                              >
-                                Send to Action Shots
-                              </button>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
-                            onClick={() => void handleDeleteShot(s.id)}
-                            title="Delete combined shot"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+      {/* ══════════ Multi-segment DaVinci-style Timeline ══════════ */}
+      <div className="mt-4 overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#0d0d0d]">
+        <div className="flex items-center justify-between border-b border-[#222] bg-[#181818] px-4 py-2">
+          <div className="font-mono text-xl font-bold tracking-wider text-neutral-100" style={{ minWidth: 120 }}>
+            {String(Math.floor((scrubFrame - 1) / (fps * 60))).padStart(2, "0")}
+            <span className="text-neutral-500">:</span>
+            {String(Math.floor(((scrubFrame - 1) / fps) % 60)).padStart(2, "0")}
+            <span className="text-neutral-500">:</span>
+            {String(Math.floor((scrubFrame - 1) % fps)).padStart(2, "0")}
           </div>
-
-          {/* ── Grok Shot Creator ─────────────────────────── */}
-          <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
-            <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Create Shot with Grok</h3>
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="text-[11px] text-studio-muted">
-                Shot type
-                <select
-                  className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                  value={grokType}
-                  onChange={(e) => setGrokType(e.target.value as "body" | "head")}
-                >
-                  <option value="body">Body / Torso</option>
-                  <option value="head">Head shot</option>
-                </select>
-              </label>
-              <label className="text-[11px] text-studio-muted">
-                Duration
-                <select
-                  className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                  value={grokDuration}
-                  onChange={(e) => setGrokDuration(Number(e.target.value))}
-                >
-                  <option value={4}>4 sec</option>
-                  <option value={6}>6 sec</option>
-                  <option value={8}>8 sec</option>
-                  <option value={10}>10 sec</option>
-                </select>
-              </label>
-              <label className="flex-1 text-[11px] text-studio-muted">
-                Prompt
-                <input
-                  type="text"
-                  className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                  placeholder={grokType === "body" ? "cowboy standing with arms out (neck added automatically)" : "cowboy head talking, green screen"}
-                  value={grokPrompt}
-                  onChange={(e) => setGrokPrompt(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void handleGrokCreate(); }}
-                />
-              </label>
-              <button
-                type="button"
-                className="rounded-md bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
-                disabled={grokBusy || !grokPrompt.trim()}
-                onClick={() => void handleGrokCreate()}
-              >
-                {grokBusy ? "Creating…" : `Create ${grokType} shot`}
-              </button>
-            </div>
-            {grokMsg ? (
-              <p className={`mt-2 text-sm font-medium ${grokMsg.startsWith("Error") || grokMsg === "Failed" || grokMsg.includes("fail") ? "text-red-400" : "text-emerald-300"}`}>
-                {grokMsg}
-              </p>
-            ) : null}
-            <p className="mt-1 text-[10px] text-studio-muted">
-              {grokType === "body"
-                ? "Creates a torso/body shot with neck included. Head will be overlaid separately."
-                : "Creates a head shot (mouth moving, expressions). Will be overlaid onto body."}
-            </p>
+          <div className="flex items-center gap-1">
+            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(1)} title="Go to start">⏮</button>
+            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.max(1, f - 1))} title="Previous frame">◀</button>
+            <button
+              type="button"
+              className={`rounded-md px-4 py-1.5 text-sm font-semibold ${playing ? "bg-[#c83030] text-white hover:bg-[#a02828]" : "bg-[#2a2a2a] text-neutral-200 hover:bg-[#3a3a3a]"}`}
+              disabled={maxFrames <= 1}
+              onClick={handlePlay}
+            >
+              {playing ? "■" : "▶"}
+            </button>
+            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.min(maxFrames, f + 1))} title="Next frame">▶</button>
+            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(maxFrames)} title="Go to end">⏭</button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))} title="Zoom out">−</button>
+            <span className="w-8 text-center font-mono text-[10px] text-neutral-500">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
+            <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))} title="Zoom in">+</button>
           </div>
         </div>
 
+        <div className="overflow-x-auto">
+          <div style={{ minWidth: timelineZoom > 1 ? `${timelineZoom * 100}%` : undefined }}>
+            {/* Ruler */}
+            <div className="flex">
+              <div className="w-[120px] shrink-0 border-r border-[#222] bg-[#141414]" />
+              <div className="relative h-6 flex-1 cursor-pointer border-b border-[#222] bg-[#141414]" onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}>
+                {Array.from({ length: Math.min(Math.ceil(maxFrames / 10), 60) }, (_, i) => {
+                  const f = (i + 1) * 10;
+                  if (f > maxFrames) return null;
+                  const pct = `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
+                  return (
+                    <Fragment key={f}>
+                      <div className="absolute top-0 h-full w-px bg-[#2a2a2a]" style={{ left: pct }} />
+                      <span className="absolute bottom-1 text-[9px] text-neutral-600" style={{ left: pct, transform: "translateX(-50%)" }}>{f}</span>
+                    </Fragment>
+                  );
+                })}
+                <div className="absolute top-0" style={{ left: playheadPct, zIndex: 20, transform: "translateX(-50%)", cursor: "ew-resize" }} onMouseDown={(e) => { e.stopPropagation(); setDraggingPlayhead(true); }}>
+                  <svg width="16" height="20" viewBox="0 0 16 20" style={{ display: "block" }}>
+                    <polygon points="0,0 16,0 16,10 8,20 0,10" fill="#e03030" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex">
+              <div className="w-[120px] shrink-0" />
+              <div ref={timelineRef} className="relative flex-1">
+                <div style={{ marginLeft: -120 }}>
+                  {/* ── BODY TRACK (V1) ── */}
+                  <TrackRow
+                    label="Body" code="V1" codeClass="bg-blue-600"
+                    bg="#161e28" ringClass="ring-blue-500/40"
+                    isSelected={(id) => selectedSegment?.track === "body" && selectedSegment.id === id}
+                    segments={bodySegments}
+                    maxFrames={maxFrames}
+                    shotsById={shotsById}
+                    project={project} characterId={characterId}
+                    onSelect={(id) => setSelectedSegment({ track: "body", id })}
+                    onSegMouseDown={(e, seg, edge) => onSegmentMouseDown(e, "body", seg, edge)}
+                    playheadPct={playheadPct}
+                  />
+                  {/* ── HEAD TRACK (V2) ── */}
+                  <TrackRow
+                    label="Head" code="V2" codeClass="bg-green-600"
+                    bg="#161e16" ringClass="ring-green-500/40"
+                    isSelected={(id) => selectedSegment?.track === "head" && selectedSegment.id === id}
+                    segments={headSegments}
+                    maxFrames={maxFrames}
+                    shotsById={shotsById}
+                    project={project} characterId={characterId}
+                    onSelect={(id) => setSelectedSegment({ track: "head", id })}
+                    onSegMouseDown={(e, seg, edge) => onSegmentMouseDown(e, "head", seg, edge)}
+                    playheadPct={playheadPct}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between border-t border-[#222] bg-[#141414] px-4 py-1.5">
+          <span className="text-[9px] text-neutral-600">
+            <b className="text-neutral-500">Click</b> select · <b className="text-neutral-500">Drag</b> move · <b className="text-neutral-500">Drag edge</b> trim · <b className="text-neutral-500">I/O</b> trim at playhead · <b className="text-neutral-500">Ctrl+B</b> split · <b className="text-neutral-500">Del</b> remove · <b className="text-neutral-500">Ctrl+C/V</b> copy/paste
+          </span>
+          <span className="font-mono text-[9px] text-neutral-600">F{scrubFrame} / {maxFrames}</span>
+        </div>
+      </div>
+
+      {/* ── Shot Browser + Bake Outputs ──────────────────────────── */}
+      <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
+        <div className="flex gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="mb-3 flex items-center gap-2">
+              <input ref={importRef} type="file" accept="video/*,.mp4,.mov,.webm" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFile(f, importType); }} />
+              <select className="rounded border border-studio-border bg-studio-raised px-2 py-1 text-[11px] text-neutral-200"
+                value={importType} onChange={(e) => setImportType(e.target.value as "body" | "head")}>
+                <option value="body">Body clip</option>
+                <option value="head">Head clip</option>
+              </select>
+              <button type="button"
+                className="rounded bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
+                disabled={importBusy}
+                onClick={() => importRef.current?.click()}>
+                {importBusy ? "Importing…" : "📁 Import Clip"}
+              </button>
+            </div>
+
+            <h3 className="mb-2 text-xs font-semibold text-neutral-300">Body Shots <span className="text-neutral-500">— click to add to Body track</span></h3>
+            {bodyShots.length === 0 && allShots.length === 0 ? (
+              <p className="text-[10px] text-studio-muted">No body shots yet — create one with Grok below</p>
+            ) : (
+              <ShotGrid shots={bodyShots.length > 0 ? bodyShots : allShots} project={project} characterId={characterId}
+                onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot} />
+            )}
+
+            <h3 className="mb-2 mt-3 text-xs font-semibold text-neutral-300">Head Shots <span className="text-neutral-500">— click to add to Head track</span></h3>
+            {headShots.length === 0 && allShots.length === 0 ? (
+              <p className="text-[10px] text-studio-muted">No head shots yet — create one with Grok below</p>
+            ) : (
+              <ShotGrid shots={headShots.length > 0 ? headShots : allShots} project={project} characterId={characterId}
+                onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot} />
+            )}
+          </div>
+
+          <div className="w-64 shrink-0 border-l border-studio-border pl-4">
+            <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Bake to Action Shot</h3>
+            <input
+              type="text"
+              className="mb-2 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+              placeholder="Shot name (optional)"
+              value={bakeName}
+              onChange={(e) => setBakeName(e.target.value)}
+            />
+            <button
+              type="button"
+              className="mb-3 w-full rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+              disabled={bakeBusy || (!bodySegments.length && !headSegments.length)}
+              onClick={() => void handleBake()}
+            >
+              {bakeBusy ? "Baking…" : "Bake Timeline"}
+            </button>
+            {bakeMsg ? (
+              <p className={`mb-2 text-[10px] font-medium ${/fail/i.test(bakeMsg) ? "text-red-400" : "text-emerald-300"}`}>{bakeMsg}</p>
+            ) : null}
+            <p className="mb-3 text-[9px] text-studio-muted">
+              Stitches every segment on both tracks into one new shot. The source clips stay untouched, and the segment recipe is saved under this rig key so you can keep editing later.
+            </p>
+
+            {combinedShots.length === 0 ? (
+              <p className="text-[10px] text-studio-muted">No baked shots yet.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {combinedShots.map((s) => (
+                  <div key={s.id} className="group relative rounded-md border border-studio-border bg-[#111] p-2">
+                    <div className="flex items-start gap-2">
+                      <img
+                        src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                        alt={s.name || s.id}
+                        className="h-12 w-12 shrink-0 rounded object-cover"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[10px] font-medium text-neutral-200" title={s.id}>{s.name || s.id}</p>
+                        <p className="text-[9px] text-studio-muted">{s.frameCount}f</p>
+                        {s.actionId ? (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400"><span>✓</span> In Action Shots</span>
+                        ) : (
+                          <button type="button" className="mt-1 rounded bg-blue-700 px-2 py-0.5 text-[9px] font-semibold text-white hover:bg-blue-600"
+                            onClick={() => void handleSendToAction(s.id)}>
+                            Send to Action Shots
+                          </button>
+                        )}
+                      </div>
+                      <button type="button" className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
+                        onClick={() => void handleDeleteShot(s.id)} title="Delete baked shot">✕</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Grok Shot Creator ─────────────────────────── */}
+      <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
+        <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Create Shot with Grok</h3>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-[11px] text-studio-muted">
+            Shot type
+            <select className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+              value={grokType} onChange={(e) => setGrokType(e.target.value as "body" | "head")}>
+              <option value="body">Body / Torso</option>
+              <option value="head">Head shot</option>
+            </select>
+          </label>
+          <label className="text-[11px] text-studio-muted">
+            Duration
+            <select className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+              value={grokDuration} onChange={(e) => setGrokDuration(Number(e.target.value))}>
+              <option value={4}>4 sec</option>
+              <option value={6}>6 sec</option>
+              <option value={8}>8 sec</option>
+              <option value={10}>10 sec</option>
+            </select>
+          </label>
+          <label className="text-[11px] text-studio-muted">
+            Reference
+            <select className="ml-2 max-w-[160px] rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+              value={grokRefShotId} onChange={(e) => setGrokRefShotId(e.target.value)}>
+              <option value="">Character reference</option>
+              {allShots.map((s) => (
+                <option key={s.id} value={s.id}>{s.name || s.id}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex-1 text-[11px] text-studio-muted">
+            Prompt
+            <input
+              type="text"
+              className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+              placeholder={grokType === "body" ? "cowboy standing with arms out (neck added automatically)" : "cowboy head talking, green screen"}
+              value={grokPrompt}
+              onChange={(e) => setGrokPrompt(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void handleGrokCreate(); }}
+            />
+          </label>
+          <button
+            type="button"
+            className="rounded-md bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+            disabled={grokBusy || !grokPrompt.trim()}
+            onClick={() => void handleGrokCreate()}
+          >
+            {grokBusy ? "Creating…" : `Create ${grokType} shot`}
+          </button>
+        </div>
+        {grokMsg ? (
+          <p className={`mt-2 text-sm font-medium ${/error|fail/i.test(grokMsg) ? "text-red-400" : "text-emerald-300"}`}>{grokMsg}</p>
+        ) : null}
+        <p className="mt-1 text-[10px] text-studio-muted">
+          {grokType === "body"
+            ? "Creates a torso/body shot with neck included. Head will be overlaid separately."
+            : "Creates a head shot (mouth moving, expressions). Will be overlaid onto body."}
+          {" "}Pick a specific prior shot as the reference for consistency across takes, just like reusing a take on grok.com.
+        </p>
+      </div>
+    </div>
   );
 
   if (inline) return content;
@@ -1590,24 +1275,137 @@ export default function HeadRigModal({
           <div>
             <h2 className="text-sm font-semibold text-white">Build Character</h2>
             <p className="text-[11px] text-studio-muted">
-              Pick a body shot and a head shot. Drag the head to position it, scroll to resize. Save the rig for each angle.
+              Add body and head clips to the timeline, trim and position them, then bake into an Action Shot.
             </p>
           </div>
-          <button type="button" className="text-sm text-studio-muted hover:text-white" onClick={onClose}>
-            Close
-          </button>
+          <button type="button" className="text-sm text-studio-muted hover:text-white" onClick={onClose}>Close</button>
         </div>
         {content}
         <div className="flex justify-end gap-2 border-t border-studio-border px-4 py-3">
-          <button
-            type="button"
-            className="rounded-md border border-studio-border px-3 py-1.5 text-xs text-neutral-200"
-            onClick={onClose}
-          >
-            Done
-          </button>
+          <button type="button" className="rounded-md border border-studio-border px-3 py-1.5 text-xs text-neutral-200" onClick={onClose}>Done</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Track row sub-component ─────────────────────────────────────────
+
+function TrackRow({
+  label, code, codeClass, bg, ringClass, segments, maxFrames, shotsById, project, characterId,
+  isSelected, onSelect, onSegMouseDown, playheadPct,
+}: {
+  label: string;
+  code: string;
+  codeClass: string;
+  bg: string;
+  ringClass: string;
+  segments: Segment[];
+  maxFrames: number;
+  shotsById: Map<string, ShotInfo>;
+  project: string;
+  characterId: string;
+  isSelected: (id: string) => boolean;
+  onSelect: (id: string) => void;
+  onSegMouseDown: (e: React.MouseEvent, seg: Segment, edge?: "in" | "out") => void;
+  playheadPct: string;
+}) {
+  return (
+    <div className="flex">
+      <div className="flex w-[120px] shrink-0 items-center gap-2 border-b border-r border-[#222] bg-[#161616] px-3 py-2">
+        <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold text-white ${codeClass}`}>{code}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-medium text-neutral-300">{label}</div>
+          <div className="text-[9px] text-neutral-500">{segments.length} clip{segments.length === 1 ? "" : "s"}</div>
+        </div>
+      </div>
+      <div className="relative flex-1 overflow-hidden border-b border-[#222]" style={{ height: 80, background: bg }}>
+        {segments.map((seg) => {
+          const shot = shotsById.get(seg.shotId);
+          const left = `${((seg.start - 1) / Math.max(maxFrames, 1)) * 100}%`;
+          const width = `${(segLength(seg) / Math.max(maxFrames, 1)) * 100}%`;
+          const selected = isSelected(seg.id);
+          return (
+            <div
+              key={seg.id}
+              className={`absolute inset-y-0 cursor-move overflow-hidden rounded-sm border ${selected ? `border-[#e0a040] ring-1 ring-inset ${ringClass}` : "border-black/40"}`}
+              style={{ left, width, zIndex: selected ? 6 : 2 }}
+              onMouseDown={(e) => onSegMouseDown(e, seg)}
+              onClick={(e) => { e.stopPropagation(); onSelect(seg.id); }}
+              title={`${shot?.name || seg.shotId} · frames ${seg.inFrame}-${seg.outFrame}`}
+            >
+              <div className="flex h-full">
+                {Array.from({ length: Math.min(segLength(seg), 24) }, (_, i) => {
+                  const frac = Math.min(segLength(seg), 24) <= 1 ? 0 : i / (Math.min(segLength(seg), 24) - 1);
+                  const frame = Math.round(seg.inFrame + frac * (segLength(seg) - 1));
+                  const pad = String(frame).padStart(4, "0");
+                  return (
+                    <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`)} alt=""
+                      className="h-full shrink-0 object-contain" style={{ width: `${100 / Math.min(segLength(seg), 24)}%`, background: "#0a0a0a" }}
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                  );
+                })}
+              </div>
+              <div className="pointer-events-none absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-1 py-0.5">
+                <span className="text-[9px] font-medium text-neutral-200">{shot?.name || seg.shotId}</span>
+              </div>
+              {/* Trim handles */}
+              <div className="absolute inset-y-0 left-0 flex w-2 cursor-ew-resize items-center justify-center bg-[#e0a040]/60 hover:bg-[#e0a040]"
+                onMouseDown={(e) => onSegMouseDown(e, seg, "in")} />
+              <div className="absolute inset-y-0 right-0 flex w-2 cursor-ew-resize items-center justify-center bg-[#e0a040]/60 hover:bg-[#e0a040]"
+                onMouseDown={(e) => onSegMouseDown(e, seg, "out")} />
+            </div>
+          );
+        })}
+        <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500" style={{ left: playheadPct, zIndex: 10 }} />
+      </div>
+    </div>
+  );
+}
+
+// ── Shot grid sub-component ───────────────────────────────────────────
+
+function ShotGrid({
+  shots, project, characterId, onAdd, onDelete,
+}: {
+  shots: ShotInfo[];
+  project: string;
+  characterId: string;
+  onAdd: (s: ShotInfo) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {shots.map((s) => (
+        <div key={s.id} className="group relative" style={{ width: 80, height: 80 }}>
+          <button
+            type="button"
+            className="relative overflow-hidden rounded-md border-2 border-studio-border hover:border-[#e0a040]"
+            style={{ width: 80, height: 80 }}
+            onClick={() => onAdd(s)}
+            title={`Add "${s.name || s.id}" to track`}
+          >
+            <img
+              src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+              alt={s.name || s.id}
+              className="h-full w-full object-cover"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+            <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
+              {s.name || s.id}
+            </span>
+            <span className="absolute left-0.5 top-0.5 rounded bg-black/70 px-1 text-[9px] font-bold text-[#e0a040]">+</span>
+          </button>
+          <button
+            type="button"
+            className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
+            onClick={(e) => { e.stopPropagation(); onDelete(s.id); }}
+            title="Delete shot"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

@@ -741,6 +741,125 @@ async function resizeHead(projectDir, characterId, shotIdStr, opts = {}) {
   return { ok: true, ...parsed };
 }
 
+// ── Multi-segment timeline bake ─────────────────────────────────────
+
+/**
+ * Validate + normalize one segment entry from the client.
+ * Looks up the referenced shot so we can bound inFrame/outFrame against
+ * its real frameCount and resolve its cut/ directory.
+ */
+function normalizeSegment(projectDir, characterId, raw, isHead) {
+  if (!raw || typeof raw !== "object") throw shotError("Invalid segment");
+  const shotId = String(raw.shotId || "").trim();
+  if (!shotId) throw shotError("Segment is missing shotId");
+
+  const dir = shotDir(projectDir, characterId, shotId);
+  const info = readShotJson(dir);
+  if (!info) throw shotError(`Segment references missing shot "${shotId}"`, "ENOENT");
+  const cutDir = path.join(dir, "cut");
+  if (!fs.existsSync(cutDir)) throw shotError(`Shot "${shotId}" has no frames`);
+
+  const frameCount = Number(info.frameCount) || 0;
+  const inFrame = Math.max(1, Math.min(Number(raw.inFrame) || 1, frameCount || 1));
+  const outFrame = Math.max(inFrame, Math.min(Number(raw.outFrame) || frameCount || inFrame, frameCount || inFrame));
+  const start = Math.max(1, Number(raw.start) || 1);
+
+  const seg = { shotId, cutDir, inFrame, outFrame, start };
+  if (isHead) {
+    seg.anchorX = Math.max(0, Math.min(1, Number(raw.anchorX) ?? 0.5));
+    seg.anchorY = Math.max(0, Math.min(1, Number(raw.anchorY) ?? 0.15));
+    seg.headScale = Math.max(0.1, Math.min(3.0, Number(raw.headScale) || 1.0));
+  }
+  return seg;
+}
+
+/**
+ * Bake a multi-segment body/head timeline (the Character-page "scratch
+ * board") into one new combined shot. Segments reference existing shots
+ * by id + frame range; the source shots are never modified or consumed,
+ * so the same recipe can be re-baked later after edits.
+ */
+async function bakeTimeline(projectDir, characterId, opts = {}) {
+  const rawBody = Array.isArray(opts.bodySegments) ? opts.bodySegments : [];
+  const rawHead = Array.isArray(opts.headSegments) ? opts.headSegments : [];
+  if (!rawBody.length && !rawHead.length) throw shotError("Add at least one segment before baking.");
+
+  const bodySegments = rawBody.map((s) => normalizeSegment(projectDir, characterId, s, false));
+  const headSegments = rawHead.map((s) => normalizeSegment(projectDir, characterId, s, true));
+
+  const fps = Number(opts.fps) || 24;
+  const name = opts.name || "";
+
+  const baseName = slugName(name || "timeline");
+  const combinedId = uniqueShotId(projectDir, characterId, baseName);
+  const outDir = shotDir(projectDir, characterId, combinedId);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const specPath = path.join(outDir, "_bake_spec.json");
+  fs.writeFileSync(specPath, JSON.stringify({
+    bodySegments: bodySegments.map((s) => ({ cutDir: s.cutDir, inFrame: s.inFrame, outFrame: s.outFrame, start: s.start })),
+    headSegments: headSegments.map((s) => ({ cutDir: s.cutDir, inFrame: s.inFrame, outFrame: s.outFrame, start: s.start, anchorX: s.anchorX, anchorY: s.anchorY, headScale: s.headScale })),
+    fps,
+  }));
+
+  const pythonBin = resolvePythonBin();
+  const args = [
+    "-m", "compositor.shot_timeline_bake",
+    "--spec", specPath,
+    "--out-dir", outDir,
+    "--fps", String(fps),
+  ];
+
+  const { code, stdout, stderr } = await spawnCmd(pythonBin, args, { cwd: PYTHON_DIR });
+  const trimmed = stdout.trim();
+  let parsed = null;
+  if (trimmed) {
+    const lines = trimmed.split("\n");
+    const lastLine = lines[lines.length - 1];
+    try { parsed = JSON.parse(lastLine); } catch {}
+  }
+  try { fs.unlinkSync(specPath); } catch {}
+
+  if (code !== 0 || !parsed) {
+    try { fs.rmSync(outDir, { recursive: true, force: true }); } catch {}
+    const msg = (stderr || "").trim().split("\n").pop() || "Bake failed";
+    throw shotError(msg);
+  }
+  if (parsed.error) {
+    try { fs.rmSync(outDir, { recursive: true, force: true }); } catch {}
+    throw shotError(parsed.error);
+  }
+
+  // The python baker only writes frames/preview/poster -- write shot.json
+  // ourselves so we can also persist the editable segment recipe.
+  const info = {
+    id: combinedId,
+    name: name || combinedId,
+    filename: "",
+    prompt: "timeline bake",
+    refImage: "",
+    background: "auto",
+    fps: parsed.fps || fps,
+    frameCount: parsed.frameCount,
+    in: 1,
+    out: parsed.frameCount,
+    category: inferCategory(name),
+    shotType: "combined",
+    createdAt: new Date().toISOString(),
+    status: "ready",
+    // Editable recipe: lets the Character-page timeline reload this exact
+    // bake and keep adjusting it, since the source shots are untouched.
+    timeline: {
+      bodySegments: rawBody.map((s, i) => ({ ...s, ...bodySegments[i], cutDir: undefined })),
+      headSegments: rawHead.map((s, i) => ({ ...s, ...headSegments[i], cutDir: undefined })),
+      fps,
+    },
+  };
+  writeShotJson(outDir, info);
+
+  return { id: combinedId, fps: info.fps, frameCount: info.frameCount, poster: parsed.poster, preview: parsed.preview };
+}
+
 module.exports = {
   listShots,
   getShot,
@@ -755,4 +874,5 @@ module.exports = {
   serveMedia,
   combineShots,
   resizeHead,
+  bakeTimeline,
 };
