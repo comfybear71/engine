@@ -87,10 +87,21 @@ def mouth_features(frame: np.ndarray) -> dict:
     b = bgr[:, :, 0].astype(np.float32)
     g = bgr[:, :, 1].astype(np.float32)
     r = bgr[:, :, 2].astype(np.float32)
-    cavity = opaque & (gray < 58)
-    teeth = opaque & (gray > 175) & (np.abs(r - g) < 28) & (np.abs(g - b) < 28)
-    # Pink/magenta blob, not warm skin (skin is reddish but green-heavy).
-    tongue = opaque & (r > g + 40) & (r > b + 40) & (g < 110) & (gray < 145) & (gray > 35)
+    ih, iw = gray.shape[:2]
+    inner = np.zeros_like(opaque)
+    inner[int(ih * 0.18) : max(int(ih * 0.18) + 2, int(ih * 0.86)), int(iw * 0.16) : max(int(iw * 0.16) + 2, int(iw * 0.84))] = True
+    cavity = opaque & inner & (gray < 58)
+    teeth = opaque & inner & (gray > 175) & (np.abs(r - g) < 28) & (np.abs(g - b) < 28)
+    # Pink/magenta blob in the mouth well — not warm skin.
+    tongue = (
+        opaque
+        & inner
+        & (r > g + 40)
+        & (r > b + 40)
+        & (g < 110)
+        & (gray < 145)
+        & (gray > 35)
+    )
     roi_n = max(1, int(np.count_nonzero(opaque)))
     cavity_n = int(np.count_nonzero(cavity))
     ys, xs = np.where(cavity)
@@ -135,13 +146,17 @@ def classify_viseme(features: dict | None = None, frame: np.ndarray | None = Non
     roundness = float(feats["roundness"])
     aspect = float(feats["aspect"]) if feats.get("aspect") is not None else (cw / max(1, ch))
 
+    # A shadow field across the lower face is not a mouth.
+    spurious = (cw >= rw * 0.60 and ch >= rh * 0.32) or (op >= 0.22 and roundness < 0.62 and aspect > 1.35)
     localized_tongue = 0.015 <= tongue <= 0.40
-    if localized_tongue:
+    if localized_tongue and not spurious:
         scores["H"] = 0.90 + min(0.08, tongue)
-    if teeth >= 0.02 and op < 0.35:
+    if teeth >= 0.02 and op < 0.35 and not spurious:
         scores["G"] = 0.88 + min(0.08, teeth)
 
-    if ch >= rh * 0.42 or op >= 0.16:
+    if spurious:
+        scores["X"] = 0.72
+    elif ch >= rh * 0.42 or op >= 0.16:
         scores["D"] = 0.86 + min(0.1, op)
     elif roundness >= 0.82 and cw <= rw * 0.28:
         scores["F"] = 0.88

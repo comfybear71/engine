@@ -183,6 +183,13 @@ def test_fit_torso_and_arm_and_existing_overlay():
     assert mouth["fullHead"] is False
 
 
+def test_rest_head_without_a_mouth_is_not_a_tongue():
+    src = _head()
+    shape, score, scores = classify_viseme(frame=src)
+    assert shape != "H", scores
+    assert shape in {"X", "A"}
+
+
 def test_mouth_features_openness_grows():
     closed = mouth_features(_viseme("X"))
     open_c = mouth_features(_viseme("C"))
