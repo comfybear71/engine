@@ -216,12 +216,30 @@ function saveHeadRig(projectDir, globalAssetsDir, characterId, body) {
   if (!Number.isFinite(headScale) || headScale <= 0 || headScale > 5)
     throw localError("headScale must be > 0 and <= 5");
 
+  // Validate keyframes if provided
+  let keyframes = undefined;
+  if (Array.isArray(patch.keyframes) && patch.keyframes.length > 0) {
+    keyframes = patch.keyframes.map((kf) => {
+      const frame = Number(kf.frame);
+      const kfAx = Number(kf.anchorX);
+      const kfAy = Number(kf.anchorY);
+      const kfScale = Number(kf.headScale);
+      if (!Number.isFinite(frame) || frame < 1) throw localError("keyframe.frame must be >= 1");
+      if (!Number.isFinite(kfAx)) throw localError("keyframe.anchorX must be a number");
+      if (!Number.isFinite(kfAy)) throw localError("keyframe.anchorY must be a number");
+      if (!Number.isFinite(kfScale) || kfScale <= 0) throw localError("keyframe.headScale must be > 0");
+      return { frame, anchorX: kfAx, anchorY: kfAy, headScale: kfScale };
+    });
+  }
+
   const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
   if (!character.headRig) character.headRig = {};
-  character.headRig[key] = { anchorX, anchorY, headScale };
+  const entry = { anchorX, anchorY, headScale };
+  if (keyframes) entry.keyframes = keyframes;
+  character.headRig[key] = entry;
 
   writeCharacterJson(projectDir, characterId, character, null);
-  return { ok: true, key, anchorX, anchorY, headScale, rigs: character.headRig };
+  return { ok: true, key, anchorX, anchorY, headScale, keyframes, rigs: character.headRig };
 }
 
 /**

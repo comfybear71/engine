@@ -18,6 +18,14 @@ interface RigEntry {
   anchorX: number;
   anchorY: number;
   headScale: number;
+  keyframes?: Keyframe[];
+}
+
+interface Keyframe {
+  frame: number;
+  anchorX: number;
+  anchorY: number;
+  headScale: number;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -67,6 +75,51 @@ export default function HeadRigModal({
   const bodyFramesRef = useRef<Map<number, HTMLImageElement>>(new Map());
   const headFramesRef = useRef<Map<number, HTMLImageElement>>(new Map());
   const [previewLoading, setPreviewLoading] = useState(false);
+
+  // Keyframe timeline state
+  const [keyframes, setKeyframes] = useState<Keyframe[]>([]);
+  const [scrubFrame, setScrubFrame] = useState(1); // current frame when scrubbing (not playing)
+
+  // Interpolate anchor/scale at a given frame from keyframes
+  function interpAt(f: number): { ax: number; ay: number; sc: number } {
+    if (keyframes.length === 0) return { ax: anchorX, ay: anchorY, sc: headScale };
+    if (keyframes.length === 1) return { ax: keyframes[0].anchorX, ay: keyframes[0].anchorY, sc: keyframes[0].headScale };
+    // Sort by frame
+    const sorted = [...keyframes].sort((a, b) => a.frame - b.frame);
+    // Before first keyframe
+    if (f <= sorted[0].frame) return { ax: sorted[0].anchorX, ay: sorted[0].anchorY, sc: sorted[0].headScale };
+    // After last keyframe
+    if (f >= sorted[sorted.length - 1].frame) {
+      const last = sorted[sorted.length - 1];
+      return { ax: last.anchorX, ay: last.anchorY, sc: last.headScale };
+    }
+    // Find surrounding keyframes and lerp
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if (f >= sorted[i].frame && f <= sorted[i + 1].frame) {
+        const t = (f - sorted[i].frame) / (sorted[i + 1].frame - sorted[i].frame);
+        return {
+          ax: sorted[i].anchorX + t * (sorted[i + 1].anchorX - sorted[i].anchorX),
+          ay: sorted[i].anchorY + t * (sorted[i + 1].anchorY - sorted[i].anchorY),
+          sc: sorted[i].headScale + t * (sorted[i + 1].headScale - sorted[i].headScale),
+        };
+      }
+    }
+    return { ax: anchorX, ay: anchorY, sc: headScale };
+  }
+
+  // Add or update keyframe at current scrub position
+  function addKeyframe() {
+    const f = scrubFrame;
+    setKeyframes((prev) => {
+      const filtered = prev.filter((k) => k.frame !== f);
+      return [...filtered, { frame: f, anchorX, anchorY, headScale }].sort((a, b) => a.frame - b.frame);
+    });
+  }
+
+  // Remove a keyframe
+  function removeKeyframe(frame: number) {
+    setKeyframes((prev) => prev.filter((k) => k.frame !== frame));
+  }
 
   // Grok shot creator state
   const [grokType, setGrokType] = useState<"body" | "head">("body");
@@ -118,6 +171,9 @@ export default function HeadRigModal({
       setAnchorX(entry.anchorX);
       setAnchorY(entry.anchorY);
       setHeadScale(entry.headScale);
+      setKeyframes(entry.keyframes || []);
+    } else {
+      setKeyframes([]);
     }
   }, [rigKey, rigs]);
 
@@ -333,6 +389,7 @@ export default function HeadRigModal({
             anchorX: Math.round(anchorX * 1000) / 1000,
             anchorY: Math.round(anchorY * 1000) / 1000,
             headScale: Math.round(headScale * 1000) / 1000,
+            keyframes: keyframes.length > 0 ? keyframes : undefined,
           }),
         }
       );
@@ -463,10 +520,12 @@ export default function HeadRigModal({
 
         const headImg = headFramesRef.current.get(hf) || headImgRef.current;
         if (headImg && headNat.w > 0) {
-          const hw = headNat.w * headScale * scale;
-          const hh = headNat.h * headScale * scale;
-          const hx = bx + anchorX * bw - hw / 2;
-          const hy = by + anchorY * bh - hh / 2;
+          // Use keyframe interpolation if keyframes exist
+          const interp = interpAt(bf);
+          const hw = headNat.w * interp.sc * scale;
+          const hh = headNat.h * interp.sc * scale;
+          const hx = bx + interp.ax * bw - hw / 2;
+          const hy = by + interp.ay * bh - hh / 2;
           ctx.drawImage(headImg, hx, hy, hw, hh);
         }
 
@@ -474,6 +533,9 @@ export default function HeadRigModal({
         ctx.fillStyle = "#e0a040";
         ctx.font = "12px monospace";
         ctx.fillText(`Body ${bf}/${bodyFrameCount} @ ${bodyFps}fps  Head ${hf}/${headFrameCount} @ ${headFps}fps`, 8, ch - 8);
+        if (keyframes.length > 0) {
+          ctx.fillText(`Keyframes: ${keyframes.length}`, 8, ch - 22);
+        }
       }
 
       playRafRef.current = requestAnimationFrame(tick);
@@ -481,7 +543,8 @@ export default function HeadRigModal({
 
     playRafRef.current = requestAnimationFrame(tick);
     return () => { if (playRafRef.current) cancelAnimationFrame(playRafRef.current); };
-  }, [playing, bodyFps, headFps, bodyNat, headNat, anchorX, anchorY, headScale, bodyFrameCount, headFrameCount]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, bodyFps, headFps, bodyNat, headNat, anchorX, anchorY, headScale, bodyFrameCount, headFrameCount, keyframes]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -638,6 +701,102 @@ export default function HeadRigModal({
               <p className="mt-1 text-[10px] text-studio-muted">
                 Click = set position · Drag head = move · Corner handles = scale · Scroll = resize
               </p>
+
+              {/* ── Timeline with keyframes ──────────────── */}
+              {bodyFrameCount > 0 ? (
+                <div className="mt-2 rounded-md border border-studio-border bg-[#1a1a1a] p-2">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-[10px] font-semibold text-studio-muted">TIMELINE — Frame {scrubFrame}/{bodyFrameCount}</span>
+                    <div className="flex gap-1">
+                      <button
+                        type="button"
+                        className="rounded bg-[#e0a040] px-2 py-0.5 text-[10px] font-semibold text-black hover:bg-[#f0b050]"
+                        onClick={addKeyframe}
+                        title="Set keyframe at current frame with current head position"
+                      >
+                        + Keyframe
+                      </button>
+                    </div>
+                  </div>
+                  {/* Scrub bar */}
+                  <div className="relative">
+                    <input
+                      type="range"
+                      min={1}
+                      max={bodyFrameCount}
+                      step={1}
+                      value={scrubFrame}
+                      onChange={(e) => {
+                        const f = Number(e.target.value);
+                        setScrubFrame(f);
+                        // Load that body frame into the canvas for positioning
+                        if (!playing && bodyFramesRef.current.size > 0) {
+                          const img = bodyFramesRef.current.get(f);
+                          if (img) { bodyImgRef.current = img; draw(); }
+                        }
+                        // Apply keyframe values if one exists at this frame
+                        const kf = keyframes.find((k) => k.frame === f);
+                        if (kf) {
+                          setAnchorX(kf.anchorX);
+                          setAnchorY(kf.anchorY);
+                          setHeadScale(kf.headScale);
+                        }
+                      }}
+                      className="studio-scrubber w-full"
+                      disabled={playing}
+                    />
+                    {/* Keyframe markers on the scrub bar */}
+                    <div className="pointer-events-none absolute inset-x-0 top-0 h-4">
+                      {keyframes.map((kf) => (
+                        <div
+                          key={kf.frame}
+                          className="absolute top-0 h-4 w-1 bg-[#e0a040]"
+                          style={{ left: `${((kf.frame - 1) / Math.max(bodyFrameCount - 1, 1)) * 100}%` }}
+                          title={`Keyframe @ frame ${kf.frame}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  {/* Keyframe list */}
+                  {keyframes.length > 0 ? (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {keyframes.map((kf) => (
+                        <span
+                          key={kf.frame}
+                          className="inline-flex items-center gap-1 rounded bg-studio-raised px-1.5 py-0.5 text-[9px] text-neutral-300"
+                        >
+                          <button
+                            type="button"
+                            className="font-medium text-[#e0a040] hover:text-white"
+                            onClick={() => {
+                              setScrubFrame(kf.frame);
+                              setAnchorX(kf.anchorX);
+                              setAnchorY(kf.anchorY);
+                              setHeadScale(kf.headScale);
+                            }}
+                          >
+                            F{kf.frame}
+                          </button>
+                          <span className="text-studio-muted">
+                            x={kf.anchorX.toFixed(2)} y={kf.anchorY.toFixed(2)} s={kf.headScale.toFixed(2)}
+                          </span>
+                          <button
+                            type="button"
+                            className="text-red-400 hover:text-red-300"
+                            onClick={() => removeKeyframe(kf.frame)}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-[9px] text-studio-muted">
+                      Scrub to a frame, position the head, click + Keyframe. Head will move between keyframes during playback.
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </div>
 
             {/* Controls + saved rigs */}
