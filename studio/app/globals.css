@@ -2616,3 +2616,37 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 .shots-detail-strip .shots-strip-thumb {
   height: 48px;
 }
+
+/* ── Combine panel ─────────────────────────────────────────────── */
+
+.shots-combine-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+}
+
+.shots-combine-layout {
+  display: flex;
+  gap: 16px;
+}
+
+.shots-combine-preview {
+  flex: 0 0 auto;
+}
+
+.shots-combine-preview canvas {
+  display: block;
+  background: #111;
+}
+
+.shots-combine-controls {
+  flex: 1 1 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 320px;
+}

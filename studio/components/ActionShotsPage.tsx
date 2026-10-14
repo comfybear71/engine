@@ -534,6 +534,102 @@ function CombinePanel({
   const [combineName, setCombineName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const bodyImgRef = useRef<HTMLImageElement | null>(null);
+  const headImgRef = useRef<HTMLImageElement | null>(null);
+
+  // Draw preview whenever inputs change
+  const drawPreview = useCallback(() => {
+    const cvs = canvasRef.current;
+    if (!cvs) return;
+    const ctx = cvs.getContext("2d");
+    if (!ctx) return;
+
+    // Clear to dark bg
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, cvs.width, cvs.height);
+
+    const bodyImg = bodyImgRef.current;
+    if (!bodyImg || !bodyImg.complete || !bodyImg.naturalWidth) {
+      ctx.fillStyle = "#555";
+      ctx.font = "13px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Pick a body and head shot", cvs.width / 2, cvs.height / 2);
+      return;
+    }
+
+    // Fit body into canvas
+    const bw = bodyImg.naturalWidth;
+    const bh = bodyImg.naturalHeight;
+    const scale = Math.min(cvs.width / bw, cvs.height / bh);
+    const dx = (cvs.width - bw * scale) / 2;
+    const dy = (cvs.height - bh * scale) / 2;
+    ctx.drawImage(bodyImg, dx, dy, bw * scale, bh * scale);
+
+    // Draw head if loaded
+    const headImg = headImgRef.current;
+    if (headImg && headImg.complete && headImg.naturalWidth) {
+      const hw = headImg.naturalWidth * headScale;
+      const hh = headImg.naturalHeight * headScale;
+      // Anchor in body-image coords, then to canvas coords
+      const cx = dx + anchorX * bw * scale;
+      const cy = dy + anchorY * bh * scale;
+      ctx.drawImage(headImg, cx - (hw * scale) / 2, cy - (hh * scale) / 2, hw * scale, hh * scale);
+    }
+
+    // Draw crosshair at anchor
+    const ax = dx + anchorX * bw * scale;
+    const ay = dy + anchorY * bh * scale;
+    ctx.strokeStyle = "#e0a040";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(ax - 10, ay); ctx.lineTo(ax + 10, ay);
+    ctx.moveTo(ax, ay - 10); ctx.lineTo(ax, ay + 10);
+    ctx.stroke();
+  }, [anchorX, anchorY, headScale]);
+
+  // Load body frame 1 when bodyId changes
+  useEffect(() => {
+    bodyImgRef.current = null;
+    if (!bodyId) { drawPreview(); return; }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => { bodyImgRef.current = img; drawPreview(); };
+    img.src = shotMediaUrl(project, characterId, bodyId, "cut/f_0001.png");
+  }, [bodyId, project, characterId, drawPreview]);
+
+  // Load head frame 1 when headId changes
+  useEffect(() => {
+    headImgRef.current = null;
+    if (!headId) { drawPreview(); return; }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => { headImgRef.current = img; drawPreview(); };
+    img.src = shotMediaUrl(project, characterId, headId, "cut/f_0001.png");
+  }, [headId, project, characterId, drawPreview]);
+
+  // Redraw when anchor/scale changes
+  useEffect(() => { drawPreview(); }, [drawPreview]);
+
+  // Click on canvas to set anchor
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const cvs = canvasRef.current;
+    const bodyImg = bodyImgRef.current;
+    if (!cvs || !bodyImg || !bodyImg.naturalWidth) return;
+    const rect = cvs.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    // Reverse the body fit math
+    const bw = bodyImg.naturalWidth;
+    const bh = bodyImg.naturalHeight;
+    const scale = Math.min(cvs.width / bw, cvs.height / bh);
+    const dx = (cvs.width - bw * scale) / 2;
+    const dy = (cvs.height - bh * scale) / 2;
+    const nx = Math.max(0, Math.min(1, (mx - dx) / (bw * scale)));
+    const ny = Math.max(0, Math.min(1, (my - dy) / (bh * scale)));
+    setAnchorX(Math.round(nx * 100) / 100);
+    setAnchorY(Math.round(ny * 100) / 100);
+  };
 
   const handleCombine = async () => {
     if (!bodyId || !headId) { setError("Pick both a body and head shot"); return; }
@@ -567,84 +663,102 @@ function CombinePanel({
   };
 
   return (
-    <div className="shots-new-panel">
+    <div className="shots-combine-panel">
       <div className="shots-new-header">
         <span>Combine head + body</span>
         <button type="button" className="shots-close-btn" onClick={onClose}>✕</button>
       </div>
 
-      <div className="shots-field">
-        Body shot
-        <select value={bodyId} onChange={(e) => setBodyId(e.target.value)}>
-          <option value="">— pick body —</option>
-          {readyShots.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name || s.id} ({s.frameCount}f)
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="shots-field">
-        Head shot
-        <select value={headId} onChange={(e) => setHeadId(e.target.value)}>
-          <option value="">— pick head —</option>
-          {readyShots.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name || s.id} ({s.frameCount}f)
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="shots-field">
-        Combined name (optional)
-        <input
-          value={combineName}
-          onChange={(e) => setCombineName(e.target.value)}
-          placeholder="e.g. rodney_talk_front"
-        />
-      </div>
-
-      <div className="shots-row">
-        <div className="shots-field">
-          Anchor X
-          <input
-            type="number" min={0} max={1} step={0.05}
-            value={anchorX} onChange={(e) => setAnchorX(+e.target.value)}
+      <div className="shots-combine-layout">
+        {/* Left: preview */}
+        <div className="shots-combine-preview">
+          <canvas
+            ref={canvasRef}
+            width={400}
+            height={500}
+            onClick={handleCanvasClick}
+            style={{ cursor: "crosshair", borderRadius: 4, border: "1px solid #333" }}
           />
+          <div style={{ fontSize: 10, color: "#666", marginTop: 4, textAlign: "center" }}>
+            Click to place head anchor · Orange crosshair = anchor point
+          </div>
         </div>
-        <div className="shots-field">
-          Anchor Y
-          <input
-            type="number" min={0} max={1} step={0.05}
-            value={anchorY} onChange={(e) => setAnchorY(+e.target.value)}
-          />
-        </div>
-        <div className="shots-field">
-          Head scale
-          <input
-            type="number" min={0.1} max={3} step={0.05}
-            value={headScale} onChange={(e) => setHeadScale(+e.target.value)}
-          />
+
+        {/* Right: controls */}
+        <div className="shots-combine-controls">
+          <div className="shots-field">
+            Body shot
+            <select value={bodyId} onChange={(e) => setBodyId(e.target.value)}>
+              <option value="">— pick body —</option>
+              {readyShots.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id} ({s.frameCount}f)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="shots-field">
+            Head shot
+            <select value={headId} onChange={(e) => setHeadId(e.target.value)}>
+              <option value="">— pick head —</option>
+              {readyShots.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id} ({s.frameCount}f)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="shots-field">
+            Name (optional)
+            <input
+              value={combineName}
+              onChange={(e) => setCombineName(e.target.value)}
+              placeholder="e.g. rodney_talk_front"
+            />
+          </div>
+
+          <div className="shots-row">
+            <div className="shots-field">
+              Anchor X
+              <input
+                type="number" min={0} max={1} step={0.05}
+                value={anchorX} onChange={(e) => setAnchorX(+e.target.value)}
+              />
+            </div>
+            <div className="shots-field">
+              Anchor Y
+              <input
+                type="number" min={0} max={1} step={0.05}
+                value={anchorY} onChange={(e) => setAnchorY(+e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="shots-field">
+            Head scale
+            <input
+              type="range" min={0.1} max={2} step={0.05}
+              value={headScale}
+              onChange={(e) => setHeadScale(+e.target.value)}
+              style={{ width: "100%" }}
+            />
+            <span style={{ fontSize: 11, color: "#aaa" }}>{headScale.toFixed(2)}×</span>
+          </div>
+
+          {error && <div className="shots-error">{error}</div>}
+
+          <button
+            type="button"
+            className="shots-make-btn"
+            disabled={busy || !bodyId || !headId}
+            onClick={handleCombine}
+          >
+            {busy ? "Combining…" : "Combine all frames"}
+          </button>
         </div>
       </div>
-
-      <div style={{ fontSize: 11, color: "#888", padding: "2px 0" }}>
-        Anchor = where head sits on body (0,0 top-left → 1,1 bottom-right).
-        Default 0.5, 0.15 = centred near top. Head loops if fewer frames.
-      </div>
-
-      {error && <div className="shots-error">{error}</div>}
-
-      <button
-        type="button"
-        className="shots-make-btn"
-        disabled={busy || !bodyId || !headId}
-        onClick={handleCombine}
-      >
-        {busy ? "Combining…" : "Combine"}
-      </button>
     </div>
   );
 }
