@@ -22,6 +22,9 @@ interface ShotInfo {
   error?: string;
   actionId?: string;
   _thumbCount?: number;
+  shotType?: string;        // "head" | "body" | "full" | "combined"
+  sourceBody?: string;
+  sourceHead?: string;
 }
 
 interface ShotFrame {
@@ -457,13 +460,21 @@ function ShotDetailView({
             if (!confirm("Delete this entire shot?")) return;
             setSaving(true);
             try {
-              await workerFetch(
+              const res = await workerFetch(
                 `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}`,
                 { method: "DELETE" }
               );
+              if (!res.ok) {
+                const body = await res.json().catch(() => ({ error: "Delete failed" }));
+                setError(body.error || "Delete failed");
+                setSaving(false);
+                return;
+              }
               onReload();
               onBack();
-            } catch {}
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Delete failed");
+            }
             setSaving(false);
           }}
           disabled={saving}
@@ -499,6 +510,145 @@ function ShotDetailView({
   );
 }
 
+// ── Combine Panel ──────────────────────────────────────────────────
+
+function CombinePanel({
+  project,
+  characterId,
+  shots,
+  onClose,
+  onCreated,
+}: {
+  project: string;
+  characterId: string;
+  shots: ShotInfo[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const readyShots = shots.filter((s) => s.status === "ready");
+  const [bodyId, setBodyId] = useState("");
+  const [headId, setHeadId] = useState("");
+  const [anchorX, setAnchorX] = useState(0.5);
+  const [anchorY, setAnchorY] = useState(0.15);
+  const [headScale, setHeadScale] = useState(1.0);
+  const [combineName, setCombineName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleCombine = async () => {
+    if (!bodyId || !headId) { setError("Pick both a body and head shot"); return; }
+    if (bodyId === headId) { setError("Body and head must be different shots"); return; }
+    setBusy(true);
+    setError("");
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/combine`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bodyId, headId,
+            anchorX, anchorY,
+            headScale,
+            name: combineName || undefined,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Combine failed" }));
+        throw new Error(body.error || "Combine failed");
+      }
+      onCreated();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Combine failed");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="shots-new-panel">
+      <div className="shots-new-header">
+        <span>Combine head + body</span>
+        <button type="button" className="shots-close-btn" onClick={onClose}>✕</button>
+      </div>
+
+      <div className="shots-field">
+        Body shot
+        <select value={bodyId} onChange={(e) => setBodyId(e.target.value)}>
+          <option value="">— pick body —</option>
+          {readyShots.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name || s.id} ({s.frameCount}f)
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="shots-field">
+        Head shot
+        <select value={headId} onChange={(e) => setHeadId(e.target.value)}>
+          <option value="">— pick head —</option>
+          {readyShots.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name || s.id} ({s.frameCount}f)
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="shots-field">
+        Combined name (optional)
+        <input
+          value={combineName}
+          onChange={(e) => setCombineName(e.target.value)}
+          placeholder="e.g. rodney_talk_front"
+        />
+      </div>
+
+      <div className="shots-row">
+        <div className="shots-field">
+          Anchor X
+          <input
+            type="number" min={0} max={1} step={0.05}
+            value={anchorX} onChange={(e) => setAnchorX(+e.target.value)}
+          />
+        </div>
+        <div className="shots-field">
+          Anchor Y
+          <input
+            type="number" min={0} max={1} step={0.05}
+            value={anchorY} onChange={(e) => setAnchorY(+e.target.value)}
+          />
+        </div>
+        <div className="shots-field">
+          Head scale
+          <input
+            type="number" min={0.1} max={3} step={0.05}
+            value={headScale} onChange={(e) => setHeadScale(+e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: "#888", padding: "2px 0" }}>
+        Anchor = where head sits on body (0,0 top-left → 1,1 bottom-right).
+        Default 0.5, 0.15 = centred near top. Head loops if fewer frames.
+      </div>
+
+      {error && <div className="shots-error">{error}</div>}
+
+      <button
+        type="button"
+        className="shots-make-btn"
+        disabled={busy || !bodyId || !headId}
+        onClick={handleCombine}
+      >
+        {busy ? "Combining…" : "Combine"}
+      </button>
+    </div>
+  );
+}
+
 // ── Main Page ───────────────────────────────────────────────────────
 
 export default function ActionShotsPage({
@@ -513,6 +663,7 @@ export default function ActionShotsPage({
   const [shots, setShots] = useState<ShotInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
+  const [showCombine, setShowCombine] = useState(false);
   const [selectedShot, setSelectedShot] = useState<string | null>(null);
   const [importError, setImportError] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -616,6 +767,9 @@ export default function ActionShotsPage({
         <button type="button" className="shots-btn" onClick={handleImport}>
           Import MP4
         </button>
+        <button type="button" className="shots-btn" onClick={() => setShowCombine(true)}>
+          Combine head+body
+        </button>
       </div>
 
       {importError && <div className="shots-error">{importError}</div>}
@@ -625,6 +779,16 @@ export default function ActionShotsPage({
           project={project}
           characterId={characterId}
           onClose={() => setShowNew(false)}
+          onCreated={loadShots}
+        />
+      )}
+
+      {showCombine && (
+        <CombinePanel
+          project={project}
+          characterId={characterId}
+          shots={shots}
+          onClose={() => setShowCombine(false)}
           onCreated={loadShots}
         />
       )}
@@ -660,12 +824,19 @@ export default function ActionShotsPage({
                     onDelete={async () => {
                       if (!confirm("Delete this shot?")) return;
                       try {
-                        await workerFetch(
+                        const res = await workerFetch(
                           `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shot.id)}`,
                           { method: "DELETE" }
                         );
+                        if (!res.ok) {
+                          const body = await res.json().catch(() => ({ error: "Delete failed" }));
+                          alert(body.error || "Delete failed");
+                          return;
+                        }
                         loadShots();
-                      } catch {}
+                      } catch (err) {
+                        alert(err instanceof Error ? err.message : "Delete failed");
+                      }
                     }}
                   />
                 ))}

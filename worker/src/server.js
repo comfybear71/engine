@@ -136,6 +136,7 @@ const {
   useAsActionShot,
   retryShot,
   serveMedia: serveShotMedia,
+  combineShots,
 } = require("./shots");
 const {
   isSafeShowId,
@@ -1305,6 +1306,18 @@ function createApp(options = {}) {
     if (!projectDir) return;
     try {
       res.json(deleteShotFrame(projectDir, req.params.characterId, req.params.shotId, req.params.n));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // ── Combine head + body shots ──────────────────────────────────────
+  app.post("/api/projects/:name/characters/:characterId/shots/combine", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await combineShots(projectDir, req.params.characterId, req.body || {});
+      res.json(result);
     } catch (err) {
       sendFactoryError(res, err);
     }

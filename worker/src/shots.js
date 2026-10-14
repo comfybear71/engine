@@ -226,7 +226,7 @@ function listShots(projectDir, characterId) {
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith("_")) continue;
     const info = readShotJson(path.join(dir, entry.name));
-    if (info) {
+    if (info && info.status !== "deleted") {
       // Add frame list info
       const thumbDir = path.join(dir, entry.name, "thumb");
       if (fs.existsSync(thumbDir)) {
@@ -600,19 +600,100 @@ function serveMedia(projectDir, characterId, req, res) {
 function deleteShot(projectDir, characterId, shotId) {
   const dir = shotDir(projectDir, characterId, shotId);
   if (!fs.existsSync(dir)) throw shotError("Shot not found", "ENOENT");
-  // Move to _deleted/ instead of hard-deleting
+
+  // Try to move to _deleted/ — if rename fails (Windows file locking),
+  // fall back to marking deleted in shot.json so listShots skips it.
   const parent = shotsDir(projectDir, characterId);
   const delDir = path.join(parent, "_deleted");
   fs.mkdirSync(delDir, { recursive: true });
-  const dest = path.join(delDir, shotId);
-  if (fs.existsSync(dest)) {
-    // Already a deleted shot with this name, add timestamp
-    const stamp = Date.now();
-    fs.renameSync(dir, path.join(delDir, `${shotId}_${stamp}`));
-  } else {
+  const stamp = Date.now();
+  const dest = path.join(delDir, fs.existsSync(path.join(delDir, shotId)) ? `${shotId}_${stamp}` : shotId);
+
+  try {
     fs.renameSync(dir, dest);
+  } catch (renameErr) {
+    // Rename failed (likely EPERM on Windows — files locked by browser).
+    // Mark as deleted in shot.json so it won't appear in the list.
+    try {
+      const info = readShotJson(dir) || {};
+      info.status = "deleted";
+      info.deletedAt = new Date().toISOString();
+      writeShotJson(dir, info);
+    } catch (writeErr) {
+      throw shotError(`Could not delete shot: ${renameErr.message}`, "EPERM");
+    }
   }
   return { deleted: shotId };
+}
+
+// ── Combine head + body shots ──────────────────────────────────────
+
+async function combineShots(projectDir, characterId, opts = {}) {
+  const { bodyId, headId, anchorX = 0.5, anchorY = 0.15,
+          headScale = 1.0, bodyIn = 1, bodyOut = 0,
+          headIn = 1, headOut = 0, fps = 24, name = "" } = opts;
+
+  if (!bodyId) throw shotError("bodyId is required");
+  if (!headId) throw shotError("headId is required");
+
+  const bodyDir = path.join(shotDir(projectDir, characterId, bodyId), "cut");
+  const headDir = path.join(shotDir(projectDir, characterId, headId), "cut");
+  if (!fs.existsSync(bodyDir)) throw shotError("Body shot cut/ not found");
+  if (!fs.existsSync(headDir)) throw shotError("Head shot cut/ not found");
+
+  // Build combined shot name
+  const baseName = slugName(name || `combined_${bodyId}_${headId}`);
+  const combinedId = uniqueShotId(projectDir, characterId, baseName);
+  const outDir = shotDir(projectDir, characterId, combinedId);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const pythonBin = resolvePythonBin();
+  const args = [
+    "-m", "compositor.shot_combine",
+    "--body-dir", bodyDir,
+    "--head-dir", headDir,
+    "--out-dir", outDir,
+    "--anchor-x", String(anchorX),
+    "--anchor-y", String(anchorY),
+    "--head-scale", String(headScale),
+    "--body-in", String(bodyIn),
+    "--body-out", String(bodyOut),
+    "--head-in", String(headIn),
+    "--head-out", String(headOut),
+    "--fps", String(fps),
+    "--name", name || `${bodyId} + ${headId}`,
+  ];
+
+  const { code, stdout, stderr } = await spawnCmd(pythonBin, args, { cwd: PYTHON_DIR });
+  const trimmed = stdout.trim();
+  let parsed = null;
+  if (trimmed) {
+    const lines = trimmed.split("\n");
+    const lastLine = lines[lines.length - 1];
+    try { parsed = JSON.parse(lastLine); } catch {}
+  }
+  if (code !== 0 || !parsed) {
+    // Clean up empty folder on failure
+    try { fs.rmSync(outDir, { recursive: true, force: true }); } catch {}
+    const msg = (stderr || "").trim().split("\n").pop() || "Combine failed";
+    throw shotError(msg);
+  }
+  if (parsed.error) {
+    try { fs.rmSync(outDir, { recursive: true, force: true }); } catch {}
+    throw shotError(parsed.error);
+  }
+
+  // Update shot.json with combine metadata
+  const info = readShotJson(outDir) || {};
+  info.shotType = "combined";
+  info.sourceBody = bodyId;
+  info.sourceHead = headId;
+  info.anchorX = anchorX;
+  info.anchorY = anchorY;
+  info.headScale = headScale;
+  writeShotJson(outDir, info);
+
+  return { id: combinedId, ...parsed };
 }
 
 module.exports = {
@@ -627,4 +708,5 @@ module.exports = {
   useAsActionShot,
   retryShot,
   serveMedia,
+  combineShots,
 };
