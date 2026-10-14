@@ -298,7 +298,8 @@ export default function HeadRigModal({
       ctx.moveTo(ax, ay - 10); ctx.lineTo(ax, ay + 10);
       ctx.stroke();
     }
-  }, [bodyNat, headNat, anchorX, anchorY, headScale]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bodyNat, headNat, anchorX, anchorY, headScale, bodyId, headId]);
 
   useEffect(() => { draw(); }, [draw]);
 
