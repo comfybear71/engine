@@ -70,15 +70,109 @@ const STANDARD_SLOTS = [
     views: ["front", "back"],
   },
   {
-    slot: "hand",
-    aliases: ["hand", "hands", "right_hand", "left_hand", "hand_L", "hand_R"],
-    label: "Hands",
-    drawings: ["open", "palm", "point", "fist", "mic"],
-    views: ["front"],
+    slot: "arm",
+    aliases: [
+      "arm",
+      "arms",
+      "arm_L",
+      "arm_R",
+      "hand",
+      "hands",
+      "right_hand",
+      "left_hand",
+      "hand_L",
+      "hand_R",
+      "mic_arm",
+    ],
+    label: "Arms",
+    drawings: ["rest_L", "rest_R"],
+    optional: [
+      "reach_L",
+      "grasp_L",
+      "grip_mic_L",
+      "hold_mic_L",
+      "point_up_L",
+      "raised_high_L",
+      "grip_mic_R",
+      "point_up_R",
+      "raised_high_R",
+    ],
+    views: FACTORY_VIEWS,
   },
 ];
 
-const FRONT_ARM_PIECES = ["arm_upper", "arm_lower", "overlay"];
+const FRONT_ARM_PIECES = [];
+
+const SLOT_NAME_ALIASES = {
+  hand: "arm_L",
+  hands: "arm_L",
+  hand_L: "arm_L",
+  left_hand: "arm_L",
+  right_hand: "arm_R",
+  hand_R: "arm_R",
+  arm: "arm_L",
+  arms: "arm_L",
+  arm_upper: "arm_L",
+  arm_upper_L: "arm_L",
+  arm_lower_L: "arm_L",
+  arm_upper_R: "arm_R",
+  arm_lower_R: "arm_R",
+  arm_upper_near: "arm_L",
+  arm_lower_near: "arm_L",
+  arm_upper_far: "arm_R",
+  arm_lower_far: "arm_R",
+  mic_arm: "arm_L",
+};
+
+const DRAWING_NAME_ALIASES = {
+  open: { L: "rest_L", R: "rest_R" },
+  rest: { L: "rest_L", R: "rest_R" },
+  palm: { L: "grasp_L", R: "grasp_R" },
+  mic: { L: "grip_mic_L", R: "grip_mic_R" },
+  point: { L: "point_up_L", R: "point_up_R" },
+  point_up: { L: "point_up_L", R: "point_up_R" },
+  raised_high: { L: "raised_high_L", R: "raised_high_R" },
+  mic_chest: { L: "grip_mic_L", R: "grip_mic_R" },
+  fist: { L: "grasp_L", R: "grasp_R" },
+};
+
+function resolveSlotName(slotName, config) {
+  const raw = String(slotName || "").trim();
+  if (!raw) return raw;
+  if (config) {
+    if (config.slots && config.slots[raw]) return raw;
+    for (const child of config.children || []) {
+      if (child.slots && child.slots[raw]) return raw;
+    }
+  }
+  return SLOT_NAME_ALIASES[raw] || SLOT_NAME_ALIASES[raw.toLowerCase()] || raw;
+}
+
+function armSideFromName(name, slotName) {
+  const drawing = String(name || "");
+  if (/_R$/i.test(drawing) || /\bright\b/i.test(drawing)) return "R";
+  if (/_L$/i.test(drawing) || /\bleft\b/i.test(drawing)) return "L";
+  const slot = String(slotName || "");
+  if (/(?:^|_)r(?:_|$)/i.test(slot) || /\bright\b/i.test(slot)) return "R";
+  if (/(?:^|_)l(?:_|$)/i.test(slot) || /\bleft\b/i.test(slot)) return "L";
+  return null;
+}
+
+function resolveDrawingAlias(slotName, drawingName) {
+  const raw = String(drawingName || "").trim();
+  if (!raw) return raw;
+  const side = armSideFromName(raw, slotName) || "L";
+  const mapped = DRAWING_NAME_ALIASES[raw];
+  if (mapped) return mapped[side] || mapped.L || raw;
+  if (/_(L|R)$/i.test(raw)) return raw;
+  const kind = standardForSlot(slotName);
+  if (kind && kind.slot === "arm") return `${raw}_${side}`;
+  return raw;
+}
+
+function armLabelSide(name, slotName) {
+  return armSideFromName(name, slotName);
+}
 
 function normalizeView(view) {
   const id = String(view || "front")
@@ -239,11 +333,10 @@ function isOverlayPiece(child) {
 function childRowLabel(child) {
   const text = childText(child);
   const side = childSideSuffix(child);
-  if (/hand/.test(text) && !/arm/.test(text)) return "Hands";
-  if (/leg|thigh|shin|boot/.test(text) && !/arm/.test(text)) return `Legs${side}`.trimEnd();
+  if (/leg|thigh|shin|boot/.test(text) && !/arm|hand/.test(text)) return `Legs${side}`.trimEnd();
   if (isOverlayPiece(child)) return "Overlays";
   if (/torso_rig|\btorso\b|\bbody\b/.test(text) && !/arm|hand|leg/.test(text)) return "Torso";
-  if (/arm|forearm|sleeve|shoulder/.test(text)) return `Arm rig${side}`.trimEnd();
+  if (/arm|forearm|sleeve|shoulder|hand/.test(text)) return "Arms";
   if (/head/.test(text)) return "Head";
   return (child && (child.id || child.asset)) || "Piece";
 }
@@ -318,6 +411,8 @@ module.exports = {
   HEAD_OVERLAY_VIEWS,
   STANDARD_SLOTS,
   FRONT_ARM_PIECES,
+  SLOT_NAME_ALIASES,
+  DRAWING_NAME_ALIASES,
   STATUS_STATES,
   STATUS_STATE_ALIASES,
   normalizeView,
@@ -334,6 +429,10 @@ module.exports = {
   statusKeyAliases,
   lookupStatusState,
   drawingBadge,
+  resolveSlotName,
+  resolveDrawingAlias,
+  armSideFromName,
+  armLabelSide,
   isOverlayPiece,
   childRowLabel,
   isFaceOverlaySlot,

@@ -1416,12 +1416,20 @@ class ScriptParser {
   }
 
   _findSlotOwner(config, slotName) {
+    const { resolveSlotName } = require("../factoryStandard");
+    const wanted = resolveSlotName(slotName, config);
+    if (config.slots && config.slots[wanted]) {
+      return { ownerType: "layer", slotConfig: config.slots[wanted], slotName: wanted };
+    }
     if (config.slots && config.slots[slotName]) {
-      return { ownerType: "layer", slotConfig: config.slots[slotName] };
+      return { ownerType: "layer", slotConfig: config.slots[slotName], slotName };
     }
     for (const child of config.children || []) {
+      if (child.slots && child.slots[wanted]) {
+        return { ownerType: "child", childId: child.id, slotConfig: child.slots[wanted], slotName: wanted };
+      }
       if (child.slots && child.slots[slotName]) {
-        return { ownerType: "child", childId: child.id, slotConfig: child.slots[slotName] };
+        return { ownerType: "child", childId: child.id, slotConfig: child.slots[slotName], slotName };
       }
     }
     return null;
@@ -1528,18 +1536,19 @@ class ScriptParser {
   }
 
   _writeSlotKeyframe(segment, owner, slotName, keyframe) {
+    const key = (owner && owner.slotName) || slotName;
     let bucket;
     if (owner.ownerType === "layer") {
-      bucket = segment.slotKeyframes.get(slotName) || [];
-      segment.slotKeyframes.set(slotName, bucket);
+      bucket = segment.slotKeyframes.get(key) || [];
+      segment.slotKeyframes.set(key, bucket);
     } else {
       let childMap = segment.childSlotKeyframes.get(owner.childId);
       if (!childMap) {
         childMap = new Map();
         segment.childSlotKeyframes.set(owner.childId, childMap);
       }
-      bucket = childMap.get(slotName) || [];
-      childMap.set(slotName, bucket);
+      bucket = childMap.get(key) || [];
+      childMap.set(key, bucket);
     }
     const existingIdx = bucket.findIndex((k) => k.frame === keyframe.frame);
     if (existingIdx !== -1) bucket[existingIdx] = keyframe;

@@ -170,8 +170,11 @@ clobber the project's `timeline.json`.
   `missing`) come from `characters/<id>/status.json` plus the standard rig
   (present with no review is draft; missing = expected, no file). View tabs
   show present-file counts. Slot rows are grouped Head / Eyes / Mouth /
-  Torso / Arm rig / Hands / Legs — torso, body, torso_rig, and shirt/shorts
-  overlays share one Torso row. **Validate** lints the current script;
+  Torso / Overlays / Arms / Legs — torso and body share Torso; shirt, shorts,
+  and cape sit under Overlays; Arm rig / Arm rig L / Hands are one **Arms**
+  row of whole-arm drawings with an L/R badge. After whole arms, **shirt / shorts /
+  cape overlays stay** (they dress the armless torso). `torso_rig` can go once
+  nothing parents split arm pieces to it. **Validate** lints the current script;
   **Open folder** opens the character folder. Factory thumbs are
   `GET .../asset?factory=1` (alpha crop + pad; `over=` composites a face
   overlay on that view's head_base). When nothing is selected the inspector

@@ -62,7 +62,8 @@ describe("factory standard catalog", () => {
       "lift_screenR",
     ]);
     assert.deepEqual(expectedDrawings("legs", "left_34"), []);
-    assert.equal(standardForSlot("right_hand").label, "Hands");
+    assert.equal(standardForSlot("right_hand").label, "Arms");
+    assert.equal(standardForSlot("arm_L").label, "Arms");
     assert.deepEqual(candidateDrawingsDirs("eyes", "front", "eyes"), ["eyes", "eyes_front"]);
     assert.deepEqual(candidateDrawingsDirs("mouth", "left_34", "mouth"), ["mouth_left_34"]);
   });
@@ -85,7 +86,9 @@ describe("factory standard catalog", () => {
     assert.equal(childRowLabel({ id: "torso_rig", asset: "parts/torso_rig.png" }), "Overlays");
     assert.equal(childRowLabel({ id: "cape_overlay_L", asset: "parts/cape_overlay_L.png" }), "Overlays");
     assert.equal(childRowLabel({ id: "body", asset: "body.png" }), "Torso");
-    assert.equal(childRowLabel({ id: "arm_upper_L", asset: "parts/arm_upper.png" }), "Arm rig L");
+    assert.equal(childRowLabel({ id: "arm_upper_L", asset: "parts/arm_upper.png" }), "Arms");
+    assert.equal(childRowLabel({ id: "hand_L", asset: "hand/open.png" }), "Arms");
+    assert.equal(childRowLabel({ id: "arm_L", asset: "arm/rest_L.png" }), "Arms");
   });
 });
 
@@ -214,7 +217,7 @@ describe("character status.json", () => {
     const mouth = factory.rows.find((row) => row.slot === "mouth");
     assert.ok(mouth.drawings.some((d) => d.name === "B" && d.missing));
     assert.ok(mouth.drawings.some((d) => d.name === "X" && d.rel));
-    const arms = factory.rows.find((row) => row.label === "Arm rig L");
+    const arms = factory.rows.find((row) => row.label === "Arms");
     assert.ok(arms);
     assert.ok(arms.drawings.some((d) => d.name === "arm_upper" && d.rel));
     assert.ok(factory.counts.missing > 0);
@@ -327,5 +330,6 @@ describe("character status.json", () => {
     assert.ok(walk);
     assert.equal(walk.thumbRel, "characters/walker/torso/walk.png");
     assert.equal(walk.name, "walk_side");
+    assert.equal(walk.category, "walks");
   });
 });

@@ -40,6 +40,10 @@ describe("factory hidden prompt pack", () => {
   });
 
   test("context-aware Factory hints and slot header", () => {
+    assert.match(
+      factoryHint("character", { character: { id: "rodney", display_name: "Rodney", style: "", slots: [] } }),
+      /Import MP4/
+    );
     assert.equal(factoryHint("prop"), "Type the prop you want (e.g. guitar, bar stool)");
     assert.equal(factoryHint("new-character"), "Describe a new character (e.g. grumpy old barman)");
     assert.equal(factoryHint("slot", { slot: "eyes" }), "Type an expression, e.g. angry, sleepy");
@@ -61,5 +65,31 @@ describe("factory hidden prompt pack", () => {
     });
     assert.match(hidden, /ONLY the eyes/i);
     assert.match(hidden, /Never draw a full head/i);
+    assert.equal(
+      factoryHint("slot", { slot: "arm", label: "Arms" }),
+      "Type a whole-arm pose, e.g. grip mic, point. Labelled L or R."
+    );
+    assert.equal(
+      factoryModeTitle({
+        mode: "slot",
+        character: { id: "rodney", display_name: "Rodney", style: "" },
+        slot: "arm",
+        view: "front",
+        label: "Arms",
+      }),
+      "Rodney / Front / Arms"
+    );
+    const arm = assembleHiddenPrompt({
+      mode: "slot",
+      character: { id: "rodney", display_name: "Rodney", style: "" },
+      userPrompt: "grip mic",
+      slot: "arm",
+      view: "front",
+      label: "Arms",
+    });
+    assert.match(arm, /whole arm/i);
+    assert.match(arm, /knuckles face OUT/i);
+    assert.match(arm, /thumb on top/i);
+    assert.doesNotMatch(arm, /two heads/i);
   });
 });

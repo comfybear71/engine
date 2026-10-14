@@ -587,12 +587,14 @@ def process_image(
     trim: bool = True,
     detect_gaps: bool = False,
     normalize: bool = False,
+    drop_extras: bool = True,
 ) -> list[np.ndarray]:
     """Key, despill, split, keep the main figure per grid cell, and trim.
 
     ``grid`` is ``(cols, rows)``. ``detect_gaps`` splits on green/transparent
     gutters instead of equal-area slices. ``normalize`` pads/scales cells to
-    the median filled-head size.
+    the median filled-head size. ``drop_extras`` False keeps every figure so
+    a walk validator can reject extra bodies instead of silently dropping them.
     """
     img = bgr
     if img.ndim == 2:
@@ -614,8 +616,9 @@ def process_image(
         cells = split_grid_robust(keyed, cols, rows) if detect_gaps else split_grid(keyed, cols, rows)
         if key:
             cells = [remove_watermark(cell) for cell in cells]
-        cells = [keep_main_figure(cell) for cell in cells]
-        cells = [remove_stray_islands(cell) for cell in cells]
+        if drop_extras:
+            cells = [keep_main_figure(cell) for cell in cells]
+            cells = [remove_stray_islands(cell) for cell in cells]
 
     if trim:
         cells = [trim_alpha(cell) for cell in cells]
@@ -669,6 +672,11 @@ def main(argv: list[str] | None = None) -> int:
         "--normalize",
         action="store_true",
         help="Pad/scale each cell to the median filled-head size",
+    )
+    parser.add_argument(
+        "--keep-extras",
+        action="store_true",
+        help="Do not drop extra figures in a cell (walk jobs validate them instead)",
     )
     parser.add_argument("--no-key", action="store_true", help="Skip chroma key (background plates)")
     parser.add_argument("--no-trim", action="store_true")
@@ -736,6 +744,7 @@ def main(argv: list[str] | None = None) -> int:
             trim=not args.no_trim,
             detect_gaps=bool(args.detect_gaps and grid),
             normalize=False,
+            drop_extras=not args.keep_extras,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

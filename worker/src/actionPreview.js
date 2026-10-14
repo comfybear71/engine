@@ -17,7 +17,7 @@ const { encodeRgbaPng } = require("./pngFlip");
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 
 const SIZE = 256;
-const CACHE_VERSION = "v3-character-only";
+const CACHE_VERSION = "v4-poster-whole-arm";
 const inFlight = new Map();
 
 function actionPreviewSeconds(frames, fps) {
@@ -61,12 +61,21 @@ function rigFiles(projectDir, globalAssetsDir, characterId, actionId) {
     }
   }
   const action = loadAction(projectDir, globalAssetsDir, characterId, actionId);
-  if (action && action.set_slots && typeof action.set_slots === "object") {
-    for (const [slot, drawing] of Object.entries(action.set_slots)) {
-      for (const root of roots) {
-        files.push(path.join(root, "characters", characterId, slot, `${drawing}.png`));
+  function addSlotFiles(map) {
+    if (!map || typeof map !== "object") return;
+    for (const [slot, drawing] of Object.entries(map)) {
+      const names = Array.isArray(drawing) ? drawing : [drawing];
+      for (const name of names) {
+        for (const root of roots) {
+          files.push(path.join(root, "characters", characterId, slot, `${name}.png`));
+          files.push(path.join(root, "characters", characterId, "arm", `${name}.png`));
+        }
       }
     }
+  }
+  if (action) {
+    addSlotFiles(action.set_slots);
+    addSlotFiles(action.slot_frames);
   }
   return files;
 }
@@ -151,6 +160,12 @@ function spawnActionPreview(timelinePath, projectDir, outputPath, options = {}) 
     "--size",
     String(options.size || SIZE),
   ];
+  if (options.aspect) args.push("--aspect", String(options.aspect));
+  if (options.previewWidth) args.push("--width", String(options.previewWidth));
+  if (options.previewHeight) args.push("--height", String(options.previewHeight));
+  if (options.sampleFps) args.push("--sample-fps", String(options.sampleFps));
+  if (options.cycleFrames) args.push("--cycle-frames", String(options.cycleFrames));
+  if (options.dumpFramesDir) args.push("--dump-frames", path.resolve(options.dumpFramesDir));
   return new Promise((resolve, reject) => {
     const child = spawn(pythonBin, args, {
       cwd: PYTHON_DIR,
@@ -205,13 +220,14 @@ async function renderActionPreview(projectDir, globalAssetsDir, characterId, act
   if (!character) throw new Error(`Unknown character ${characterId}`);
   const stage = pickPreviewStage(projectDir, globalAssetsDir, action, options);
   if (!stage.locationId) throw new Error("No location to stage an action preview");
-  const seconds = actionPreviewSeconds(action.frames, action.fps);
+  const seconds =
+    Number(options.seconds) > 0 ? Number(options.seconds) : actionPreviewSeconds(action.frames, action.fps);
   const displayName = character.display_name || characterId;
   const bindProp = actionNeedsBoundProp(action) ? stage.prop : null;
-  const scripts = [
-    buildActionPreviewScript(displayName, stage.locationId, actionId, seconds, { prop: bindProp }),
-    buildStandingPreviewScript(displayName, stage.locationId),
-  ];
+  const scripts = [buildActionPreviewScript(displayName, stage.locationId, actionId, seconds, { prop: bindProp })];
+  if (options.allowStandingFallback !== false) {
+    scripts.push(buildStandingPreviewScript(displayName, stage.locationId));
+  }
   let lastError = null;
   for (const scriptText of scripts) {
     try {
@@ -221,6 +237,10 @@ async function renderActionPreview(projectDir, globalAssetsDir, characterId, act
     }
   }
   throw lastError || new Error(`Could not render action preview ${characterId}/${actionId}`);
+}
+
+function posterPathFor(mp4Path) {
+  return String(mp4Path || "").replace(/\.mp4$/i, ".jpg");
 }
 
 async function ensureActionPreview(projectDir, globalAssetsDir, characterId, actionId, options = {}) {
@@ -235,6 +255,13 @@ async function ensureActionPreview(projectDir, globalAssetsDir, characterId, act
   return job;
 }
 
+async function ensureActionPoster(projectDir, globalAssetsDir, characterId, actionId, options = {}) {
+  const mp4 = await ensureActionPreview(projectDir, globalAssetsDir, characterId, actionId, options);
+  const poster = posterPathFor(mp4);
+  if (fs.existsSync(poster) && fs.statSync(poster).size > 0) return poster;
+  return mp4;
+}
+
 module.exports = {
   SIZE,
   CACHE_VERSION,
@@ -247,5 +274,7 @@ module.exports = {
   stripNonCharacterLayers,
   contentFiles: rigFiles,
   ensureActionPreview,
+  ensureActionPoster,
+  posterPathFor,
   renderActionPreview,
 };

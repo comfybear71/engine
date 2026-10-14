@@ -8,7 +8,8 @@
  * `/api/projects/:name/import-audio` (ElevenLabs Speech-to-Text + Rhubarb).
  */
 
-require("dotenv").config({ path: require("path").resolve(__dirname, "..", "..", ".env") });
+const { loadDotenv } = require("./engineSettings");
+loadDotenv();
 
 const fs = require("fs");
 const os = require("os");
@@ -26,7 +27,7 @@ const { listCharacters, listGlobalCharacters, listStaging, summarizeStage } = re
 const { describeFactoryCharacter, applyStatusBody, listProjectActions, inspectorForPiece } = require("./characterStatus");
 const { listProjectAudio } = require("./studioAudio");
 const { trashAsset } = require("./projectTrash");
-const { ensureActionPreview } = require("./actionPreview");
+const { ensureActionPreview, ensureActionPoster } = require("./actionPreview");
 const { renderFactoryThumb } = require("./factoryThumb");
 const { openProjectRel } = require("./factoryOpen");
 const { buildLaneBlocks, clampFrame } = require("./studioLanes");
@@ -107,6 +108,21 @@ const {
   tickFactoryJob,
   redoFactoryJob,
 } = require("./factoryJob");
+const { startImportMp4, buildImportMp4, resolveImportStrip, readImportMp4Request } = require("./factoryImportMp4");
+const {
+  describeLibrary,
+  addCategory,
+  patchClipCategory,
+  patchActionCategory,
+  actionFrameList,
+  flagActionFrame,
+  deleteActionFrame,
+  saveFrameToSlot,
+  saveLibraryFrameToSlot,
+  extractFaceFromClip,
+  tickLibraryClip,
+  listCategories,
+} = require("./factoryLibrary");
 const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
 const {
   isSafeShowId,
@@ -1027,16 +1043,26 @@ function createApp(options = {}) {
     if (!projectDir) return;
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
-      const file = await ensureActionPreview(
-        projectDir,
-        globalAssetsDir,
-        req.params.characterId,
-        req.params.actionId,
-        options.pythonBin ? { pythonBin: options.pythonBin } : {}
-      );
+      const wantPoster = req.query.poster === "1" || req.query.poster === "true";
+      const file = wantPoster
+        ? await ensureActionPoster(
+            projectDir,
+            globalAssetsDir,
+            req.params.characterId,
+            req.params.actionId,
+            options.pythonBin ? { pythonBin: options.pythonBin } : {}
+          )
+        : await ensureActionPreview(
+            projectDir,
+            globalAssetsDir,
+            req.params.characterId,
+            req.params.actionId,
+            options.pythonBin ? { pythonBin: options.pythonBin } : {}
+          );
+      const type = /\.jpe?g$/i.test(file) ? "image/jpeg" : /\.png$/i.test(file) ? "image/png" : "video/mp4";
       res.setHeader("Cache-Control", "private, max-age=30");
       res.sendFile(path.resolve(file), {
-        headers: { "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
+        headers: { "Content-Type": type, "Accept-Ranges": "bytes" },
       });
     } catch (err) {
       if (!res.headersSent) res.status(500).json({ error: err.message || "Action preview failed" });
@@ -1048,6 +1074,220 @@ function createApp(options = {}) {
     const status = err.code === "ENOTFOUND" || err.code === "ENOENT" ? 404 : err.code === "EINVAL" ? 400 : 500;
     if (!res.headersSent) res.status(status).json({ error: err.message || "Factory failed" });
   }
+
+  app.post("/api/projects/:name/factory/import-mp4", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const parsed = await readImportMp4Request(req);
+      if (!parsed.characterId) return res.status(400).json({ error: "Pick a character first." });
+      const result = await startImportMp4(projectDir, globalAssetsDir, parsed, {
+        fetchFn,
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/factory/:characterId/:jobId/import-mp4/build", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await buildImportMp4(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.jobId,
+        req.body || {},
+        { fetchFn, pythonBin: options.pythonBin }
+      );
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/library", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(describeLibrary(projectDir, globalAssetsDir, req.params.characterId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/library/categories", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const categories = addCategory(projectDir, req.params.characterId, req.body && req.body.label);
+      res.json({ ok: true, categories });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.patch("/api/projects/:name/characters/:characterId/library/:clipId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const index = patchClipCategory(projectDir, req.params.characterId, req.params.clipId, req.body && req.body.category);
+      res.json({ ok: true, clip: index });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/library/:clipId/frames/:index/save-slot", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await saveLibraryFrameToSlot(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.clipId,
+        Number(req.params.index),
+        String((req.body && req.body.slot) || "torso"),
+        (req.body && req.body.view) || undefined,
+        (req.body && req.body.name) || undefined,
+        (req.body && req.body.side) || undefined,
+        { pythonBin: options.pythonBin }
+      );
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/library/:clipId/extract-face", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await extractFaceFromClip(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.clipId,
+        (req.body && req.body.kind) || "mouth",
+        { pythonBin: options.pythonBin }
+      );
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/library/:clipId/tick", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await tickLibraryClip(projectDir, globalAssetsDir, req.params.characterId, req.params.clipId, {
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/actions/:characterId/:actionId/frames", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(actionFrameList(projectDir, req.params.characterId, req.params.actionId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.patch("/api/projects/:name/actions/:characterId/:actionId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const action = patchActionCategory(
+        projectDir,
+        req.params.characterId,
+        req.params.actionId,
+        req.body && req.body.category
+      );
+      res.json({ ok: true, action, categories: listCategories(projectDir, req.params.characterId) });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/actions/:characterId/:actionId/frames/:index/flag", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const detail = flagActionFrame(
+        projectDir,
+        req.params.characterId,
+        req.params.actionId,
+        Number(req.params.index),
+        req.body && req.body.issue
+      );
+      res.json(detail);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.delete("/api/projects/:name/actions/:characterId/:actionId/frames/:index", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(deleteActionFrame(projectDir, req.params.characterId, req.params.actionId, Number(req.params.index)));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/actions/:characterId/:actionId/frames/:index/save-slot", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = saveFrameToSlot(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.actionId,
+        Number(req.params.index),
+        String((req.body && req.body.slot) || "torso"),
+        (req.body && req.body.view) || undefined
+      );
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/factory/:characterId/:jobId/strip/:stripName", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const file = resolveImportStrip(projectDir, req.params.characterId, req.params.jobId, req.params.stripName);
+      res.setHeader("Cache-Control", "private, max-age=30");
+      res.sendFile(path.resolve(file), { headers: { "Content-Type": "image/png" } });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
 
   app.post("/api/projects/:name/factory", async (req, res) => {
     req.setTimeout(5 * 60 * 1000);

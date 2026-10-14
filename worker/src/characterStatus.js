@@ -41,7 +41,7 @@ const {
   sumCounts,
   namedPivotPoint,
   defaultFactoryCanvas,
-  FRONT_ARM_PIECES,
+  armLabelSide,
 } = require("./factoryStandard");
 
 const STATUS_FILENAME = "status.json";
@@ -290,7 +290,7 @@ function mtimeForRel(projectDir, globalAssetsDir, rel, options) {
   }
 }
 
-function makePiece({ name, key, rel, drawingsDir, statusMap, expected, optional, mtime, compositeRel, faceGroup }) {
+function makePiece({ name, key, rel, drawingsDir, statusMap, expected, optional, mtime, compositeRel, faceGroup, slotName }) {
   const hasFile = Boolean(rel);
   const badge = drawingBadge(statusMap, key, hasFile, expected);
   return {
@@ -305,6 +305,7 @@ function makePiece({ name, key, rel, drawingsDir, statusMap, expected, optional,
     mtime: mtime || null,
     compositeRel: compositeRel || null,
     faceGroup: faceGroup || null,
+    side: armLabelSide(name, slotName || drawingsDir),
   };
 }
 
@@ -354,6 +355,7 @@ function buildSlotRow(projectDir, globalAssetsDir, characterId, slotName, spec, 
       mtime: file ? mtimeForRel(projectDir, globalAssetsDir, file.rel, options) : null,
       compositeRel: faceGroup ? headBaseRel || null : null,
       faceGroup,
+      slotName,
     });
   });
   return {
@@ -414,38 +416,12 @@ function buildChildRows(projectDir, globalAssetsDir, characterId, character, vie
           statusMap,
           expected: true,
           mtime: mtimeForRel(projectDir, globalAssetsDir, rel, options),
+          slotName: child.id,
         })
       );
     }
-    if (label.startsWith("Arm rig") && view === "front") {
-      for (const piece of FRONT_ARM_PIECES) {
-        if (drawings.some((d) => d.name === piece || d.drawingsDir === piece)) continue;
-        const hit = lookupDrawing(projectDir, globalAssetsDir, characterId, [piece, `parts/${piece}`], piece, options);
-        if (hit) {
-          drawings.push(
-            makePiece({
-              name: piece,
-              key: statusKey(hit.drawingsDir, piece),
-              rel: hit.rel,
-              drawingsDir: hit.drawingsDir,
-              statusMap,
-              expected: true,
-              mtime: mtimeForRel(projectDir, globalAssetsDir, hit.rel, options),
-            })
-          );
-        } else if (!drawings.some((d) => d.name === piece)) {
-          drawings.push(
-            makePiece({
-              name: piece,
-              key: statusKey(piece, piece),
-              rel: null,
-              drawingsDir: piece,
-              statusMap,
-              expected: true,
-            })
-          );
-        }
-      }
+    if (label === "Arms" && children.every((child) => child.slots && Object.keys(child.slots).length)) {
+      continue;
     }
     if (drawings.length === 0) continue;
     rows.push({
@@ -467,10 +443,7 @@ function rowSortKey(row) {
     "Mouth",
     "Torso",
     "Overlays",
-    "Arm rig",
-    "Arm rig L",
-    "Arm rig R",
-    "Hands",
+    "Arms",
     "Legs",
     "Legs L",
     "Legs R",
@@ -485,10 +458,7 @@ const CANONICAL_SLOT = {
   Mouth: "mouth",
   Torso: "torso",
   Overlays: "overlay",
-  "Arm rig": "arm",
-  "Arm rig L": "arm_L",
-  "Arm rig R": "arm_R",
-  Hands: "hand",
+  Arms: "arm",
   Legs: "legs",
   "Legs L": "legs_L",
   "Legs R": "legs_R",
@@ -643,6 +613,9 @@ function collectFactoryRows(projectDir, globalAssetsDir, character, characterId,
   }
   rows.push(...buildChildRows(projectDir, globalAssetsDir, characterId, character, view, statusMap, options));
   const merged = mergeFactoryRows(rows);
+  for (const row of merged) {
+    if (row.label === "Arms") row.owner = null;
+  }
   merged.sort((a, b) => rowSortKey(a) - rowSortKey(b) || a.label.localeCompare(b.label));
   return merged;
 }
@@ -791,9 +764,12 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
   const seen = new Set();
   const includeGlobal = options.includeGlobal === true || !isProjectIndependent(projectDir);
 
-  function add(label, id, characterId, source, rel, thumbRel) {
+  function add(label, id, characterId, source, rel, thumbRel, meta) {
     if (!id || seen.has(label)) return;
     seen.add(label);
+    const frames = meta && Number(meta.frames) > 0 ? Number(meta.frames) : 1;
+    const drawings = meta && Number(meta.drawings) > 0 ? Number(meta.drawings) : frames;
+    const warnings = (meta && meta.warnings) || [];
     actions.push({
       id,
       characterId: characterId || null,
@@ -802,7 +778,44 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
       source,
       rel,
       thumbRel: thumbRel || null,
+      frames,
+      drawings,
+      still: frames <= 1,
+      category: (meta && meta.category) || "other",
+      view: (meta && meta.view) || null,
+      warnings,
+      flagged: Boolean(meta && meta.flagged),
     });
+  }
+
+  function actionMeta(action, id) {
+    if (!action) return { frames: 1, drawings: 1, category: "other", view: null, warnings: [], flagged: false };
+    const frames = Math.max(1, Number(action.frames) || 1);
+    const fromSlots = Object.values(action.slot_frames || {}).flat().filter(Boolean);
+    const unique = new Set(fromSlots);
+    const drawings = unique.size || frames;
+    const text = `${id || action.id || ""}`.toLowerCase();
+    let category = action.category;
+    if (!category) {
+      if (/walk|stride|gait/.test(text)) category = "walks";
+      else if (/mic/.test(text)) category = "mic";
+      else if (/head/.test(text)) category = "head_moves";
+      else if (/turn|look/.test(text)) category = "turns_looks";
+      else if (/idle|stand/.test(text)) category = "idle_stand";
+      else if (/arm|gesture/.test(text)) category = "arms_gestures";
+      else if (/insert/.test(text)) category = "inserts";
+      else category = "other";
+    }
+    const flags = Object.values(action.frame_flags || {}).flat();
+    const warnings = [...(action.warnings || []), ...flags.filter(Boolean)];
+    return {
+      frames,
+      drawings,
+      category,
+      view: action.view || null,
+      warnings,
+      flagged: warnings.length > 0 || flags.length > 0,
+    };
   }
 
   const roots = [];
@@ -815,7 +828,7 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
       if (path.extname(file).toLowerCase() !== ".json") continue;
       const id = path.basename(file, ".json");
       if (!isSafeFolderName(id)) continue;
-      add(`shared/${id}`, id, null, root.source, `actions/${file}`, null);
+      add(`shared/${id}`, id, null, root.source, `actions/${file}`, null, { frames: 1, drawings: 1 });
     }
   }
 
@@ -827,7 +840,8 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
         characterId,
         "character",
         `characters/${characterId}/actions/${id}.json`,
-        actionThumbRel(projectDir, globalAssetsDir, characterId, id, options)
+        actionThumbRel(projectDir, globalAssetsDir, characterId, id, options),
+        actionMeta(loadAction(projectDir, globalAssetsDir, characterId, id, options), id)
       );
     }
   }

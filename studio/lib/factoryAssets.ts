@@ -156,6 +156,13 @@ export type ActionShot = {
   thumbRel?: string | null;
   rel?: string;
   source?: string;
+  frames?: number;
+  drawings?: number;
+  still?: boolean;
+  category?: string;
+  view?: string | null;
+  warnings?: string[];
+  flagged?: boolean;
 };
 
 export type ActionShotGroup = { characterId: string | null; characterName: string; actions: ActionShot[] };
@@ -169,6 +176,13 @@ export function groupActionsByCharacter(
     thumbRel?: string | null;
     rel?: string;
     source?: string;
+    frames?: number;
+    drawings?: number;
+    still?: boolean;
+    category?: string;
+    view?: string | null;
+    warnings?: string[];
+    flagged?: boolean;
   }>,
   characters: Array<{ id: string; display_name: string }>
 ): ActionShotGroup[] {
@@ -180,14 +194,13 @@ export function groupActionsByCharacter(
     const characterName = characterId ? names.get(characterId) || characterId : "Shared";
     if (!groups.has(key)) groups.set(key, { characterId, characterName, actions: [] });
     groups.get(key)!.actions.push({
+      ...action,
       id: action.label || `${characterId || "shared"}/${action.id}`,
       name: action.name || action.id,
       label: action.name || action.id,
       characterId,
       characterName,
       thumbRel: action.thumbRel || null,
-      rel: action.rel,
-      source: action.source,
     });
   }
   return [...groups.values()].sort((a, b) => {
@@ -335,4 +348,16 @@ export function actionPreviewSeconds(frames: number, fps: number): number {
   const cycle = Math.max(1, Number(frames) || 1) / Math.max(1, Number(fps) || 12);
   const loops = Math.max(1, Math.round(2 / cycle));
   return Math.min(3, Math.max(1, Number((loops * cycle).toFixed(1))));
+}
+
+export function actionShotCaption(action: {
+  still?: boolean;
+  frames?: number;
+  drawings?: number;
+} | null | undefined): string {
+  if (!action) return "";
+  if (action.still || (action.frames != null && action.frames <= 1)) return "still";
+  const frames = Number(action.frames) || Number(action.drawings) || 0;
+  if (frames <= 0) return "";
+  return `${frames} shot${frames === 1 ? "" : "s"}`;
 }

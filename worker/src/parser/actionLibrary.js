@@ -34,11 +34,27 @@ function _findChild(config, id) {
   );
 }
 
+function resolveActionDrawing(slotName, drawing, drawings) {
+  const { resolveDrawingAlias } = require("../factoryStandard");
+  const raw = String(drawing == null ? "" : drawing).trim();
+  if (!raw || raw.toLowerCase() === "none") return raw || "";
+  if (drawings && drawings.has(raw)) return raw;
+  const aliased = resolveDrawingAlias(slotName, raw);
+  if (aliased && drawings && drawings.has(aliased)) return aliased;
+  return raw;
+}
+
 function _findSlot(config, slotName) {
+  const { resolveSlotName } = require("../factoryStandard");
+  const wanted = resolveSlotName(slotName, config);
+  if (config.slots && config.slots[wanted]) {
+    return config.slots[wanted];
+  }
   if (config.slots && config.slots[slotName]) {
     return config.slots[slotName];
   }
   for (const child of config.children || []) {
+    if (child.slots && child.slots[wanted]) return child.slots[wanted];
     if (child.slots && child.slots[slotName]) return child.slots[slotName];
   }
   return null;
@@ -219,7 +235,7 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
       );
     }
     const drawings = slotDrawingNames(projectDir, globalAssetsDir, characterId, slotName, slotConfig);
-    const drawingName = String(drawing == null ? "" : drawing).trim();
+    const drawingName = resolveActionDrawing(slotName, drawing, drawings);
     if (drawingName.toLowerCase() === "none") {
       setSlots[slotName] = "none";
       continue;
@@ -321,7 +337,7 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
       const drawings = slotDrawingNames(projectDir, globalAssetsDir, characterId, slotName, slotConfig);
       const available = [...drawings].join(", ") || "(none)";
       slotFrames[slotName] = items.map((item, i) => {
-        const drawingName = String(item == null ? "" : item).trim();
+        const drawingName = resolveActionDrawing(slotName, item, drawings);
         if (drawingName.toLowerCase() === "none") return "none";
         if (!drawingName || !drawings.has(drawingName)) {
           throw new ScriptError(
@@ -354,6 +370,7 @@ function validateAction(action, { characterId, config, lineNumber, projectDir, g
     bob: Array.isArray(bob) ? bob.map(Number) : null,
     body_rotation: bodyRotation,
     prop_events: propEvents,
+    hide_children: Boolean(action.hide_children),
     end: endRaw,
   };
 }

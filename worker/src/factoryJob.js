@@ -34,6 +34,8 @@ const {
   clampFactoryFrames,
   buildFactoryPack,
   inferFactoryIntent,
+  walkPhases,
+  assembleWalkPhasePrompt,
   normalizeFactoryMode,
   PROJECT_OWNER,
   slugFactoryId,
@@ -45,6 +47,8 @@ const {
   expectedDrawingsDir,
   defaultFactoryCanvas,
   normalizeView,
+  standardForSlot,
+  armSideFromName,
 } = require("./factoryStandard");
 const { renderActionPreview } = require("./actionPreview");
 const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
@@ -103,24 +107,21 @@ function collectSlotNames(character) {
 
 function resolveActionDest(character, intent) {
   const names = collectSlotNames(character);
-  const view = (intent && intent.view) || "right_side";
   if (intent && intent.kind === "walk") {
-    if (names.has("legs_side")) {
-      const spec = findSlotSpec(character, "legs_side");
-      return { kind: "slot", slot: "legs_side", drawings_dir: (spec && spec.drawings_dir) || "legs_side" };
-    }
-    if (names.has("legs")) {
-      return {
-        kind: "slot",
-        slot: "legs",
-        drawings_dir: view === "left_side" ? "legs_left_side" : "legs_right_side",
-      };
+    // Whole-body walk frames on the SIDE view, like walk_side_01..08.
+    // Never dest to legs or the front torso folder.
+    const view = (intent && intent.view) || "right_side";
+    if (names.has("torso")) {
+      const spec = findSlotSpec(character, "torso");
+      const base = (spec && spec.drawings_dir) || "torso";
+      return { kind: "slot", slot: "torso", drawings_dir: expectedDrawingsDir("torso", view, base) };
     }
     if (names.has("body")) {
       const spec = findSlotSpec(character, "body");
-      return { kind: "slot", slot: "body", drawings_dir: (spec && spec.drawings_dir) || "body" };
+      const base = (spec && spec.drawings_dir) || "body";
+      return { kind: "slot", slot: "body", drawings_dir: expectedDrawingsDir("body", view, base) };
     }
-    return { kind: "slot", slot: "legs", drawings_dir: "legs_side" };
+    return { kind: "slot", slot: "torso", drawings_dir: expectedDrawingsDir("torso", view, "torso") };
   }
   if (names.has("body")) {
     const spec = findSlotSpec(character, "body");
@@ -173,10 +174,74 @@ function writeManifest(dir, manifest) {
 
 function findAlignRef(projectDir, characterId, dest) {
   if (!dest || dest.kind !== "slot") return null;
-  const dir = path.join(characterDir(projectDir, characterId), dest.drawings_dir || dest.slot);
-  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return null;
-  const names = fs.readdirSync(dir).filter((name) => /\.png$/i.test(name)).sort();
-  return names[0] ? path.join(dir, names[0]) : null;
+  const root = characterDir(projectDir, characterId);
+  const dirs = [];
+  const add = (name) => {
+    if (name && !dirs.includes(name)) dirs.push(name);
+  };
+  add(dest.drawings_dir || dest.slot);
+  add(dest.slot);
+  if (dest.slot === "legs") {
+    add("legs_right_side");
+    add("legs_left_side");
+    add("legs");
+  }
+  for (const dirName of dirs) {
+    const dir = path.join(root, dirName);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+    const names = fs
+      .readdirSync(dir)
+      .filter((name) => /\.png$/i.test(name))
+      .sort();
+    const preferred = names.filter((name) => !/^none\.png$/i.test(name));
+    const pick = preferred[0] || names[0];
+    if (pick) return path.join(dir, pick);
+  }
+  return null;
+}
+
+function findTorsoRef(projectDir, characterId, view) {
+  const name = pickSideTorsoDrawing(projectDir, characterId, view);
+  if (!name) return null;
+  const root = characterDir(projectDir, characterId);
+  for (const dir of [`torso_${view || "right_side"}`, "torso"]) {
+    const abs = path.join(root, dir, `${name}.png`);
+    if (fs.existsSync(abs)) return abs;
+  }
+  return null;
+}
+
+function findFirstPng(root, dirs, options = {}) {
+  const skipWalk = Boolean(options.skipWalk);
+  const skipNone = options.skipNone !== false;
+  for (const dirName of dirs) {
+    const dir = path.join(root, dirName);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+    let names = fs
+      .readdirSync(dir)
+      .filter((name) => /\.png$/i.test(name))
+      .sort();
+    if (skipNone) names = names.filter((name) => !/^none\.png$/i.test(name));
+    if (skipWalk) names = names.filter((name) => !/^(walk|run|approach)/i.test(name.replace(/\.png$/i, "")));
+    const pick = names[0];
+    if (pick) return path.join(dir, pick);
+  }
+  return null;
+}
+
+function findLegsRef(projectDir, characterId, view) {
+  const root = characterDir(projectDir, characterId);
+  const side = view === "left_side" ? "left_side" : "right_side";
+  return (
+    findFirstPng(root, [`legs_${side}`, "legs", "legs_side"], { skipWalk: true, skipNone: true }) ||
+    findFirstPng(root, [`legs_${side}`, "legs", "legs_side"], { skipWalk: false, skipNone: true })
+  );
+}
+
+function isWalkValidationFailure(err) {
+  return /extra figures|zoomed crop|giant legs|too many boots|scale mismatch|ground line|near-identical|duplicated|rig base|more than one head|rig layers|preview frames|Factory fit failed/i.test(
+    String((err && err.message) || "")
+  );
 }
 
 function slotCanvas(character, dest) {
@@ -255,7 +320,7 @@ function copyCharacterForPreview(srcDir, destDir, options = {}) {
       if (!rel || rel === ".") return true;
       const top = rel.split(path.sep)[0];
       if (!replaceDirs.has(top)) return true;
-      // Keep the folder, drop existing drawings so new legs replace old ones.
+      // Keep the folder, drop existing drawings so new walk frames replace old ones.
       return rel === top;
     },
   });
@@ -285,13 +350,435 @@ function pickSideTorsoDrawing(projectDir, characterId, view) {
   return null;
 }
 
-function walkSetSlots(character, projectDir, characterId, view) {
-  const names = collectSlotNames(character);
+function isHeadSlotName(name) {
+  return /^(head_base|head|face|eyes|mouth|hat|hair|collar)$/i.test(String(name || ""));
+}
+
+function walkSetSlots(character, dest, options = {}) {
+  // Only top-level character.slots — child ids like hand_rig_L are not
+  // set_slots targets (validateAction would reject them).
+  const names = Object.keys((character && character.slots) || {});
   const setSlots = {};
-  if (names.has("body")) setSlots.body = "none";
-  const torso = pickSideTorsoDrawing(projectDir, characterId, view);
-  if (torso && names.has("torso")) setSlots.torso = torso;
+  const destSlot = dest && dest.slot;
+  const keepHead = Boolean(options.keepHead);
+  for (const name of names) {
+    if (name === destSlot) continue;
+    // Mouth is dialogue-driven; [Do:] / [Action:] cannot set it.
+    if (String(name).toLowerCase() === "mouth") continue;
+    if (keepHead && isHeadSlotName(name)) continue;
+    setSlots[name] = "none";
+  }
   return setSlots;
+}
+
+function projectRelFromAbs(projectDir, abs) {
+  const rel = path.relative(projectDir, abs).replace(/\\/g, "/");
+  if (!rel || rel.startsWith("..")) return null;
+  return rel;
+}
+
+function collectWalkSidePngs(root, dirs) {
+  const byIndex = [];
+  for (const dir of dirs) {
+    const folder = path.join(root, dir);
+    if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) continue;
+    for (const name of fs.readdirSync(folder)) {
+      const match = /^walk_side_(\d{2})\.png$/i.exec(name);
+      if (!match) continue;
+      const index = Number(match[1]) - 1;
+      if (index < 0 || index > 15 || byIndex[index]) continue;
+      byIndex[index] = path.join(folder, name);
+    }
+  }
+  return byIndex.filter(Boolean);
+}
+
+function loadLocalCharacterJson(projectDir, characterId) {
+  const abs = path.join(characterDir(projectDir, characterId), "character.json");
+  if (!fs.existsSync(abs)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(abs, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function loadLocalWalkAction(projectDir, characterId, view) {
+  const ids = view === "left_side" ? ["walk_left_side", "walk_side"] : ["walk_side", "walk_left_side"];
+  const root = characterDir(projectDir, characterId);
+  for (const id of ids) {
+    const abs = path.join(root, "actions", `${id}.json`);
+    if (!fs.existsSync(abs)) continue;
+    try {
+      return JSON.parse(fs.readFileSync(abs, "utf8"));
+    } catch {
+      /* ignore a broken action and try the next id */
+    }
+  }
+  return null;
+}
+
+function iterSlotSpecs(character) {
+  const out = [];
+  if (!character) return out;
+  for (const [name, spec] of Object.entries(character.slots || {})) out.push([name, spec]);
+  for (const child of character.children || []) {
+    for (const [name, spec] of Object.entries((child && child.slots) || {})) out.push([name, spec]);
+  }
+  return out;
+}
+
+function walkActionIds(view) {
+  return view === "left_side" ? ["walk_left_side", "walk_side"] : ["walk_side", "walk_left_side"];
+}
+
+function drawingNameFromRef(item) {
+  let raw = item;
+  if (item && typeof item === "object") {
+    raw = item.drawing || item.name || item.id || item.src || "";
+  }
+  const stripped = String(raw || "")
+    .replace(/\\/g, "/")
+    .replace(/\.png$/i, "");
+  return stripped.split("/").filter(Boolean).pop() || "";
+}
+
+function isWalkSideDrawingName(name) {
+  return /^walk_side_\d{2}$/i.test(drawingNameFromRef(name));
+}
+
+function drawingRefsFromAction(action) {
+  if (!action || !action.slot_frames || typeof action.slot_frames !== "object") return [];
+  const prefer = ["body", "torso"];
+  const slots = [...prefer, ...Object.keys(action.slot_frames).filter((name) => !prefer.includes(name))];
+  for (const slot of slots) {
+    const list = action.slot_frames[slot];
+    if (!Array.isArray(list) || !list.length) continue;
+    const refs = [];
+    for (const item of list) {
+      const name = drawingNameFromRef(item);
+      if (!isWalkSideDrawingName(name)) continue;
+      refs.push({ slot, name });
+    }
+    if (refs.length) return refs;
+  }
+  return [];
+}
+
+function drawingRefsFromCycles(character, view) {
+  const want = walkActionIds(view);
+  const ranked = iterSlotSpecs(character).sort(([a], [b]) => {
+    const rank = (name) => (name === "body" ? 0 : name === "torso" ? 1 : 2);
+    return rank(a) - rank(b);
+  });
+  for (const [slot, spec] of ranked) {
+    const cycles = (spec && spec.cycles) || {};
+    for (const id of want) {
+      const cycle = cycles[id];
+      const drawings = Array.isArray(cycle) ? cycle : cycle && cycle.drawings;
+      if (!Array.isArray(drawings) || !drawings.length) continue;
+      const refs = drawings
+        .map((item) => ({ slot, name: drawingNameFromRef(item) }))
+        .filter((item) => isWalkSideDrawingName(item.name));
+      if (refs.length) return refs;
+    }
+  }
+  return [];
+}
+
+function addWalkDir(dirs, name) {
+  if (name && !dirs.includes(name)) dirs.push(name);
+}
+
+function addSlotWalkDirs(dirs, slotName, spec, view) {
+  const side = view === "left_side" ? "left_side" : "right_side";
+  const base = (spec && spec.drawings_dir) || slotName;
+  if (base) {
+    for (const dir of candidateDrawingsDirs(slotName || base, side, base)) addWalkDir(dirs, dir);
+    addWalkDir(dirs, base);
+    addWalkDir(dirs, `${base}_${side}`);
+  }
+  if (slotName) {
+    addWalkDir(dirs, slotName);
+    addWalkDir(dirs, `${slotName}_${side}`);
+  }
+}
+
+function wholeBodyWalkDirs(character, view) {
+  const side = view === "left_side" ? "left_side" : "right_side";
+  const dirs = [];
+  const seenSlots = new Set();
+  for (const [slotName, spec] of iterSlotSpecs(character)) {
+    const cycles = (spec && spec.cycles) || {};
+    const hasWalk = walkActionIds(side).some((id) => {
+      const cycle = cycles[id];
+      return Array.isArray(cycle) || (cycle && Array.isArray(cycle.drawings) && cycle.drawings.length);
+    });
+    if (slotName !== "body" && slotName !== "torso" && !hasWalk) continue;
+    seenSlots.add(slotName);
+    addSlotWalkDirs(dirs, slotName, spec, side);
+  }
+  for (const slotName of ["body", "torso"]) {
+    if (seenSlots.has(slotName)) continue;
+    const spec = character ? findSlotSpec(character, slotName) : null;
+    addSlotWalkDirs(dirs, slotName, spec, side);
+  }
+  addWalkDir(dirs, `body_${side}`);
+  addWalkDir(dirs, "body");
+  addWalkDir(dirs, `torso_${side}`);
+  addWalkDir(dirs, "torso");
+  return dirs;
+}
+
+function resolveWalkDrawingAbs(root, character, slotName, drawingName, view) {
+  const spec = character && slotName ? findSlotSpec(character, slotName) : null;
+  const base = (spec && spec.drawings_dir) || slotName;
+  const dirs = [];
+  const add = (name) => {
+    if (name && !dirs.includes(name)) dirs.push(name);
+  };
+  if (base) {
+    for (const dir of candidateDrawingsDirs(slotName || base, view, base)) add(dir);
+    add(base);
+  }
+  if (slotName) add(slotName);
+  for (const dir of wholeBodyWalkDirs(character, view)) add(dir);
+  for (const dir of dirs) {
+    const abs = path.join(root, dir, `${drawingName}.png`);
+    if (fs.existsSync(abs)) return abs;
+  }
+  return null;
+}
+
+function findWalkSideSources(projectDir, characterId, view, character) {
+  const root = characterDir(projectDir, characterId);
+  const side = view === "left_side" ? "left_side" : "right_side";
+  const live = character || loadLocalCharacterJson(projectDir, characterId);
+  const namedLists = [
+    drawingRefsFromAction(loadLocalWalkAction(projectDir, characterId, side)),
+    drawingRefsFromCycles(live, side),
+  ];
+  for (const refs of namedLists) {
+    if (!refs.length) continue;
+    const seen = new Set();
+    const resolved = [];
+    for (const ref of refs) {
+      if (seen.has(ref.name)) continue;
+      const abs = resolveWalkDrawingAbs(root, live, ref.slot, ref.name, side);
+      if (!abs) continue;
+      seen.add(ref.name);
+      resolved.push(abs);
+    }
+    if (resolved.length >= 2) return resolved;
+  }
+  // Walk the rig's whole-body drawings_dir (body / torso), not a hardcoded pair.
+  const torsoOrBody = collectWalkSidePngs(root, wholeBodyWalkDirs(live, side));
+  if (torsoOrBody.length) return torsoOrBody;
+  return collectWalkSidePngs(root, [`legs_${side}`, "legs_right_side"]);
+}
+
+function runFactoryWalkRig(args, options = {}) {
+  const pythonBin = options.pythonBin || resolvePythonBin();
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonBin, ["-m", "compositor.factory_walk_rig", ...args], {
+      cwd: PYTHON_DIR,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => {
+      stdout += d;
+    });
+    child.stderr.on("data", (d) => {
+      stderr += d;
+    });
+    child.on("error", (err) => {
+      reject(new Error(`Failed to spawn walk rig (${pythonBin}): ${err.message}`));
+    });
+    child.on("close", (code) => {
+      const trimmed = stdout.trim();
+      let parsed = null;
+      if (trimmed) {
+        try {
+          parsed = JSON.parse(trimmed.split("\n").pop());
+        } catch {
+          parsed = null;
+        }
+      }
+      if (code !== 0 || !parsed || parsed.ok === false) {
+        const detail =
+          (parsed && parsed.error) || (stderr || stdout).trim().split("\n").pop() || `exited ${code}`;
+        reject(factoryError(`Walk rig failed: ${detail}`, "EINVAL"));
+        return;
+      }
+      resolve(parsed);
+    });
+  });
+}
+
+async function generateRigWalkCells(projectDir, character, frames, view, dest, canvas, dir, options) {
+  const sources = findWalkSideSources(projectDir, character.id, view, character);
+  if (sources.length < 2) {
+    throw factoryError(
+      "Need at least two ticked walk_side_01..08 drawings (from the walk_side action/cycle on body, torso_right_side, or torso) to build a long-stride walk without Grok.",
+      "ENOENT"
+    );
+  }
+  const cellsDir = path.join(dir, "cells");
+  const alignedDir = path.join(dir, "aligned");
+  fs.mkdirSync(cellsDir, { recursive: true });
+  fs.mkdirSync(alignedDir, { recursive: true });
+  const args = [
+    "--out-dir",
+    alignedDir,
+    "--frames",
+    String(frames),
+    "--canvas-w",
+    String(canvas.w),
+    "--canvas-h",
+    String(canvas.h),
+  ];
+  for (const abs of sources) args.push("--src", abs);
+  const torsoRefAbs = findTorsoRef(projectDir, character.id, view);
+  const legsRefAbs = findLegsRef(projectDir, character.id, view);
+  const refAbs = findAlignRef(projectDir, character.id, dest);
+  if (legsRefAbs) args.push("--ref", legsRefAbs);
+  else if (refAbs) args.push("--ref", refAbs);
+  if (torsoRefAbs) args.push("--torso-ref", torsoRefAbs);
+  const built = await runFactoryWalkRig(args, options);
+  const cells = [];
+  for (const row of built.written || []) {
+    const alignedPath = row.src;
+    if (!alignedPath || !fs.existsSync(alignedPath)) continue;
+    const destName = path.basename(alignedPath);
+    const cellPath = path.join(cellsDir, destName);
+    fs.copyFileSync(alignedPath, cellPath);
+    cells.push({ path: cellPath, empty: false, warnings: [] });
+  }
+  return {
+    cells,
+    warnings: built.problems || [],
+    distance_per_cycle: Number(built.distance_per_cycle) || 96,
+    sources: sources.length,
+  };
+}
+
+function findWalkPoseGuides(projectDir, characterId, view, count) {
+  const root = characterDir(projectDir, characterId);
+  const found = [];
+  for (const dir of [`body_${view}`, "body", `torso_${view}`, "torso", `legs_${view}`, "legs_right_side"]) {
+    for (let i = 1; i <= 16; i += 1) {
+      const abs = path.join(root, dir, `walk_side_${String(i).padStart(2, "0")}.png`);
+      if (fs.existsSync(abs)) found[i - 1] = abs;
+    }
+  }
+  const available = found.filter(Boolean);
+  const out = [];
+  for (let i = 0; i < count; i += 1) {
+    if (found[i]) out.push(found[i]);
+    else if (available.length) out.push(available[i % available.length]);
+    else out.push(null);
+  }
+  return out;
+}
+
+function findSideReferenceAbs(projectDir, characterId, view) {
+  const root = characterDir(projectDir, characterId);
+  const side = view === "left_side" ? "left_side" : "right_side";
+  const candidates = [
+    path.join(root, "_reference", "side.png"),
+    path.join(root, `torso_${side}`, "neutral.png"),
+    path.join(root, `torso_${side}`, "stand.png"),
+    path.join(root, "body", "walk_side_01.png"),
+    path.join(root, "body", "walk_side_02.png"),
+    path.join(root, "torso", "walk_side_02.png"),
+    path.join(root, "torso", "walk_side_01.png"),
+    path.join(root, "_reference", "full.png"),
+    path.join(root, "torso", "neutral.png"),
+  ];
+  return candidates.find((abs) => fs.existsSync(abs)) || null;
+}
+
+async function generateWalkPhaseCells(projectDir, globalAssetsDir, character, userPrompt, frames, view, dir, options) {
+  const phases = walkPhases(frames);
+  const guides = findWalkPoseGuides(projectDir, character.id, view, frames);
+  const sideAbs = findSideReferenceAbs(projectDir, character.id, view);
+  const cellsDir = path.join(dir, "cells");
+  fs.mkdirSync(cellsDir, { recursive: true });
+  fs.mkdirSync(path.join(dir, "raw"), { recursive: true });
+  const cells = [];
+  const warnings = [];
+  for (let i = 0; i < frames; i += 1) {
+    const prompt = assembleWalkPhasePrompt({
+      character,
+      userPrompt,
+      frames,
+      phase: phases[i],
+      index: i,
+      projectStyle: readProjectStyle(projectDir),
+    });
+    const referenceRels = [];
+    if (sideAbs) {
+      const rel = projectRelFromAbs(projectDir, sideAbs);
+      if (rel) referenceRels.push({ kind: "reference", rel });
+    }
+    if (guides[i]) {
+      const rel = projectRelFromAbs(projectDir, guides[i]);
+      if (rel && !referenceRels.some((item) => item.rel === rel)) {
+        referenceRels.push({ kind: "body", rel });
+      }
+    }
+    const generated = await generateProjectImage(
+      projectDir,
+      globalAssetsDir,
+      {
+        characterId: character.id,
+        needId: "factory_action",
+        n: 1,
+        prompt,
+        frames: 1,
+        referenceRels: referenceRels.length ? referenceRels : undefined,
+        skipReferences: true,
+      },
+      options
+    );
+    const first = generated.images && generated.images[0];
+    if (!first || !first.imageBase64) throw factoryError("xAI returned no image.", "EXAI");
+    const buf = decodeImage({ imageBase64: first.imageBase64 });
+    const rawPath = path.join(dir, "raw", `phase_${String(i + 1).padStart(2, "0")}.png`);
+    fs.writeFileSync(rawPath, buf);
+    const phaseDir = path.join(dir, "phase_cells", String(i + 1).padStart(2, "0"));
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const cut = await runCutout(
+      ["--input", rawPath, "--out-dir", phaseDir, "--grid", "1x1", "--detect-gaps", "--keep-extras"],
+      options
+    );
+    const cell = (cut.cells || []).find((item) => item && !item.empty && item.path && fs.existsSync(item.path));
+    if (!cell) {
+      warnings.push(`Phase ${i + 1} (${phases[i].id}) was empty after cut-out.`);
+      continue;
+    }
+    const destName = `cell_${String(i).padStart(2, "0")}.png`;
+    const destPath = path.join(cellsDir, destName);
+    fs.copyFileSync(cell.path, destPath);
+    cells.push({ path: destPath, empty: false, warnings: cut.warnings || [] });
+  }
+  return { cells, warnings };
+}
+
+async function validateWalkPreview(alignedDir, dumpDir, options = {}) {
+  if (!dumpDir || !fs.existsSync(dumpDir)) {
+    throw factoryError("Walk preview frames were not dumped for validation.", "EINVAL");
+  }
+  const args = [
+    "--validate-preview",
+    "--preview-frames",
+    dumpDir,
+    "--cell-dir",
+    alignedDir,
+  ];
+  return runFactoryFit(args, options);
 }
 
 async function renderJobPreview(projectDir, globalAssetsDir, character, job, options = {}) {
@@ -309,9 +796,29 @@ async function renderJobPreview(projectDir, globalAssetsDir, character, job, opt
     }
     const characterJson = readWritableCharacter(projectDir, globalAssetsDir, character.id);
     ensureSlot(characterJson, job.dest);
+    const spec = findSlotSpec(characterJson, job.dest.slot);
+    if (spec && job.dest.drawings_dir) {
+      spec.drawings_dir = job.dest.drawings_dir;
+      if (/_(left_side|right_side|left_34|right_34|back)$/.test(job.dest.drawings_dir)) {
+        spec.views = true;
+      }
+    }
+    const walk = Boolean(job.action && job.action.hide_children);
+    if (walk) {
+      characterJson.children = [];
+      const keepHead = Boolean(job.keepHead);
+      for (const [name, slotSpec] of Object.entries(characterJson.slots || {})) {
+        if (name === job.dest.slot) continue;
+        if (keepHead && isHeadSlotName(name)) continue;
+        slotSpec.default_drawing = "none";
+        // A leftover walk_side cycle on body/ would stack on the new torso
+        // dest and read as a second head in the 16:9 preview.
+        if (slotSpec.cycles) delete slotSpec.cycles;
+      }
+    }
     if (job.dest.slot === "body" && job.cycle) {
-      const spec = findSlotSpec(characterJson, "body");
-      mergeCycles(spec, { [job.cycle.name]: job.cycle });
+      const bodySpec = findSlotSpec(characterJson, "body");
+      mergeCycles(bodySpec, { [job.cycle.name]: job.cycle });
     }
     fs.writeFileSync(path.join(tmpChar, "character.json"), `${JSON.stringify(characterJson, null, 2)}\n`);
     fs.mkdirSync(path.join(tmpChar, "actions"), { recursive: true });
@@ -322,10 +829,23 @@ async function renderJobPreview(projectDir, globalAssetsDir, character, job, opt
     fs.writeFileSync(path.join(bgDir, "bg.png"), encodeRgbaPng(8, 8, Buffer.alloc(8 * 8 * 4)));
     fs.writeFileSync(
       path.join(bgDir, "staging.json"),
-      `${JSON.stringify({ marks: { centre: { x: 960, y: 1080, scale: 1 } }, auto_order: ["centre"] }, null, 2)}\n`
+      `${JSON.stringify({ marks: { centre: { x: 960, y: 760, scale: 0.7 } }, auto_order: ["centre"] }, null, 2)}\n`
     );
     const dest = path.join(jobDir(projectDir, character.id, job.id), "preview.mp4");
-    await renderActionPreview(tmp, null, character.id, job.actionId, dest, options);
+    const dumpDir = path.join(jobDir(projectDir, character.id, job.id), "preview_frames");
+    const cycleFrames = Math.max(2, (job.drawings || []).length || (job.action && job.action.frames) || 8);
+    const previewOpts = {
+      ...options,
+      aspect: "16:9",
+      previewWidth: 854,
+      previewHeight: 480,
+      seconds: Number((cycleFrames / 12).toFixed(3)),
+      sampleFps: 12,
+      cycleFrames,
+      dumpFramesDir: dumpDir,
+      allowStandingFallback: false,
+    };
+    await renderActionPreview(tmp, null, character.id, job.actionId, dest, previewOpts);
     return dest;
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -359,6 +879,13 @@ function summarizeJob(job, characterId) {
     title: job.title || null,
     ticked: Boolean(job.ticked),
     usedFixture: Boolean(job.usedFixture),
+    usedRig: Boolean(job.usedRig),
+    usedGrok: Boolean(job.usedGrok),
+    usedImport: Boolean(job.usedImport),
+    keepHead: Boolean(job.keepHead),
+    importMp4: job.importMp4 || null,
+    category: job.category || (job.action && job.action.category) || null,
+    libraryClip: job.libraryClip || (job.action && job.action.libraryClip) || null,
     styleBlock: job.styleBlock,
     rigRules: job.rigRules,
     greenScreen: job.greenScreen,
@@ -529,7 +1056,14 @@ async function runContextFactoryJob(projectDir, globalAssetsDir, body, mode, opt
 
   let drawingPath = cell.path;
   const warnings = [...(cut.warnings || [])];
-  const drawingName = slugFactoryId(userPrompt, mode === "slot" ? slot || "drawing" : mode);
+  let drawingName = slugFactoryId(userPrompt, mode === "slot" ? slot || "drawing" : mode);
+  if (mode === "slot" && dest.slot && standardForSlot(dest.slot) && standardForSlot(dest.slot).slot === "arm") {
+    drawingName = drawingName.replace(/_l$/i, "_L").replace(/_r$/i, "_R");
+    const side =
+      armSideFromName(drawingName, dest.slot) ||
+      (/\bright\b/i.test(userPrompt) && !/\bleft\b/i.test(userPrompt) ? "R" : "L");
+    if (!/_[LR]$/.test(drawingName)) drawingName = `${drawingName}_${side}`;
+  }
 
   if (mode === "slot") {
     const writable = readWritableCharacter(projectDir, globalAssetsDir, character.id);
@@ -691,6 +1225,22 @@ function tickStillJob(projectDir, globalAssetsDir, job) {
 
 async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   const mode = normalizeFactoryMode((body && body.mode) || ((body && body.slot) ? "slot" : "character"));
+  const useGrok = Boolean(body && body.useGrok);
+  const useRigWalk = Boolean((body && body.useRigWalk) || (body && body.walkSet));
+  if (useRigWalk && body && body.walkSet && !body._walkFrame && !useGrok && !decodeImage(body)) {
+    const jobs = [];
+    for (const frames of [8, 12, 16]) {
+      jobs.push(
+        await runFactoryJob(
+          projectDir,
+          globalAssetsDir,
+          { ...body, frames, walkSet: true, _walkFrame: frames, mode: "character", useGrok: false },
+          options
+        )
+      );
+    }
+    return { ok: true, walkSet: true, jobs };
+  }
   if (mode !== "character") {
     return runContextFactoryJob(projectDir, globalAssetsDir, body, mode, options);
   }
@@ -723,63 +1273,148 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   }
 
   const fixture = decodeImage(body);
-  let sheetBuf = fixture;
-  let usedFixture = Boolean(fixture);
-  if (!sheetBuf) {
-    const generated = await generateProjectImage(
-      projectDir,
-      globalAssetsDir,
-      {
-        characterId: character.id,
-        needId: "factory_action",
-        n: 1,
-        prompt: pack.hiddenPrompt,
-        frames,
-      },
-      options
-    );
-    const first = generated.images && generated.images[0];
-    if (!first || !first.imageBase64) throw factoryError("xAI returned no image.", "EXAI");
-    sheetBuf = decodeImage({ imageBase64: first.imageBase64 });
-    usedFixture = false;
-  }
-
   const jobId = stampJobId();
   const dir = jobDir(projectDir, character.id, jobId);
-  fs.mkdirSync(path.join(dir, "cells"), { recursive: true });
-  const sheetPath = path.join(dir, "sheet.png");
-  fs.writeFileSync(sheetPath, sheetBuf);
-
-  const cut = await runCutout(
-    ["--input", sheetPath, "--out-dir", path.join(dir, "cells"), "--grid", `${pack.grid.cols}x${pack.grid.rows}`, "--detect-gaps"],
-    options
-  );
-
   const canvas = slotCanvas(writable, dest);
   const refAbs = findAlignRef(projectDir, character.id, dest);
-  const alignedDir = path.join(dir, "aligned");
-  fs.mkdirSync(alignedDir, { recursive: true });
-  const fitArgs = [
-    "--src-dir",
-    path.join(dir, "cells"),
-    "--out-dir",
-    alignedDir,
-    "--canvas-w",
-    String(canvas.w),
-    "--canvas-h",
-    String(canvas.h),
-  ];
-  if (refAbs) fitArgs.push("--ref", refAbs);
-  if (isOverlayDest(dest)) fitArgs.push("--check-head");
-  if (intent.kind === "walk") {
-    fitArgs.push("--extract-legs", "--validate-walk", "--expect-face", intent.view === "left_side" ? "left" : "right");
-  }
-  const fitted = await runFactoryFit(fitArgs, options);
+  const torsoRefAbs = intent.kind === "walk" ? findTorsoRef(projectDir, character.id, intent.view) : null;
+  const legsRefAbs = intent.kind === "walk" ? findLegsRef(projectDir, character.id, intent.view) : null;
+  let cut = null;
+  let fitted = null;
+  let usedFixture = Boolean(fixture);
+  let usedRig = false;
+  let rigDistance = null;
 
-  const actionId = uniqueActionId(projectDir, character.id, pack.actionId);
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(path.join(dir, "cells"), { recursive: true });
+    let sheetBuf = fixture;
+    usedFixture = Boolean(fixture);
+    if (intent.kind === "walk" && !sheetBuf && !useGrok && !useRigWalk) {
+      throw factoryError(
+        "Import an MP4 of the walk (Factory → Import MP4), or open Advanced to use Grok Imagine or the parked rig long-stride path.",
+        "EINVAL"
+      );
+    }
+    if (intent.kind === "walk" && !sheetBuf && !useGrok && useRigWalk) {
+      const generated = await generateRigWalkCells(
+        projectDir,
+        writable,
+        frames,
+        intent.view,
+        dest,
+        canvas,
+        dir,
+        options
+      );
+      cut = { cells: generated.cells, warnings: generated.warnings || [] };
+      fitted = {
+        written: (generated.cells || []).map((item) => ({ src: item.path, problems: [] })),
+        warnings: generated.warnings || [],
+      };
+      usedRig = true;
+      rigDistance = generated.distance_per_cycle;
+    } else if (intent.kind === "walk" && !sheetBuf) {
+      const generated = await generateWalkPhaseCells(
+        projectDir,
+        globalAssetsDir,
+        character,
+        userPrompt,
+        frames,
+        intent.view,
+        dir,
+        options
+      );
+      cut = { cells: generated.cells, warnings: generated.warnings || [] };
+      usedFixture = false;
+    } else {
+      if (!sheetBuf) {
+        const generated = await generateProjectImage(
+          projectDir,
+          globalAssetsDir,
+          {
+            characterId: character.id,
+            needId: "factory_action",
+            n: 1,
+            prompt: pack.hiddenPrompt,
+            frames,
+          },
+          options
+        );
+        const first = generated.images && generated.images[0];
+        if (!first || !first.imageBase64) throw factoryError("xAI returned no image.", "EXAI");
+        sheetBuf = decodeImage({ imageBase64: first.imageBase64 });
+        usedFixture = false;
+      }
+      const sheetPath = path.join(dir, "sheet.png");
+      fs.writeFileSync(sheetPath, sheetBuf);
+
+      const cutArgs = [
+        "--input",
+        sheetPath,
+        "--out-dir",
+        path.join(dir, "cells"),
+        "--grid",
+        `${pack.grid.cols}x${pack.grid.rows}`,
+        "--detect-gaps",
+      ];
+      if (intent.kind === "walk") cutArgs.push("--keep-extras");
+      cut = await runCutout(cutArgs, options);
+    }
+
+    if (!usedRig) {
+      const alignedDir = path.join(dir, "aligned");
+      fs.mkdirSync(alignedDir, { recursive: true });
+      const fitArgs = [
+        "--src-dir",
+        path.join(dir, "cells"),
+        "--out-dir",
+        alignedDir,
+        "--canvas-w",
+        String(canvas.w),
+        "--canvas-h",
+        String(canvas.h),
+      ];
+      if (intent.kind === "walk") {
+        if (legsRefAbs) fitArgs.push("--ref", legsRefAbs);
+        else if (refAbs) fitArgs.push("--ref", refAbs);
+        if (torsoRefAbs) fitArgs.push("--torso-ref", torsoRefAbs);
+        fitArgs.push(
+          "--validate-walk",
+          "--fail-closed",
+          "--expect-face",
+          intent.view === "left_side" ? "left" : "right"
+        );
+      } else {
+        if (refAbs) fitArgs.push("--ref", refAbs);
+        if (isOverlayDest(dest)) fitArgs.push("--check-head");
+      }
+      fitted = await runFactoryFit(fitArgs, options);
+    }
+  } catch (err) {
+    if (intent.kind === "walk" && isWalkValidationFailure(err)) {
+      throw factoryError(
+        `Walk sheet failed validation (${String(err.message || err).replace(/^Factory fit failed: /, "")}). Extra figures, cropped legs, identical poses, and scale mismatches are rejected automatically — hit Redo.`,
+        err.code || "EINVAL"
+      );
+    }
+    throw err;
+  }
+  if (!cut || !fitted) {
+    throw factoryError("Walk sheet failed validation. Hit Redo.", "EINVAL");
+  }
+
+  const alignedDir = path.join(dir, "aligned");
+  const actionBase = usedRig
+    ? `walk_side_long_${frames}`
+    : intent.kind === "walk" && body._walkFrame
+      ? `${pack.actionId}_${frames}`
+      : pack.actionId;
+  const actionId = uniqueActionId(projectDir, character.id, actionBase);
   const names = drawingNames(actionId, frames);
   const drawings = [];
   const warnings = [...(cut.warnings || []), ...((fitted && fitted.warnings) || [])];
+  const fatalWalk = [];
   for (let i = 0; i < frames; i += 1) {
     const cell = (cut.cells || [])[i];
     const alignedName = cell ? path.basename(cell.path) : `cell_${String(i).padStart(2, "0")}.png`;
@@ -787,15 +1422,21 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
     const row = (fitted.written || []).find((item) => path.basename(item.src) === alignedName);
     if (!cell || cell.empty || !fs.existsSync(alignedPath)) {
       warnings.push(`Frame ${i + 1} was empty after cut-out.`);
+      if (intent.kind === "walk") fatalWalk.push(`Frame ${i + 1} empty`);
       continue;
     }
     if (isOverlayDest(dest) && (fitted.warnings || []).some((line) => line.includes(alignedName))) {
       throw factoryError("Eyes and mouths must be overlays, never full heads.", "EINVAL");
     }
     const problems = (row && row.problems) || [];
-    const rejected = problems.some((line) => /too many boots|facing /.test(String(line)));
+    const rejected = problems.some((line) =>
+      /too many boots|facing |extra figures|zoomed crop|giant legs|scale mismatch|ground line|near-identical|duplicated|rig base|more than one head|rig layers/.test(
+        String(line)
+      )
+    );
     if (rejected) {
       warnings.push(`Frame ${i + 1} rejected: ${problems.join("; ")}`);
+      fatalWalk.push(`Frame ${i + 1}: ${problems.join("; ")}`);
       continue;
     }
     drawings.push({
@@ -804,20 +1445,33 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
       problems,
     });
   }
+  if (intent.kind === "walk" && fatalWalk.length) {
+    throw factoryError(
+      `Walk sheet failed validation (${fatalWalk.slice(0, 4).join("; ")}). Extra figures, cropped legs, identical poses, and scale mismatches are rejected automatically — hit Redo.`,
+      "EINVAL"
+    );
+  }
   if (drawings.length < 2) throw factoryError("Cut-out did not produce enough frames. Try Redo.", "EINVAL");
+  if (intent.kind === "walk" && drawings.length < frames) {
+    throw factoryError(
+      `Walk sheet lost ${frames - drawings.length} frame(s) after validation. Hit Redo.`,
+      "EINVAL"
+    );
+  }
 
   const cycleName = intent.kind === "walk" ? (intent.view === "left_side" ? "walk_left_side" : "walk_side") : actionId;
-  const setSlots = intent.kind === "walk" ? walkSetSlots(writable, projectDir, character.id, intent.view) : {};
+  const setSlots = intent.kind === "walk" ? walkSetSlots(writable, dest) : {};
   const action = {
     id: actionId,
     view: intent.view,
     faces: intent.view === "left_side" ? "left" : "right",
     fps: 12,
     frames: drawings.length,
-    distance_per_cycle: intent.kind === "walk" ? 96 : undefined,
+    distance_per_cycle: intent.kind === "walk" ? rigDistance || 96 : undefined,
     slot_frames: { [dest.slot]: drawings.map((item) => item.name) },
     bob: walkBob(drawings.length),
   };
+  if (intent.kind === "walk") action.hide_children = true;
   if (Object.keys(setSlots).length) action.set_slots = setSlots;
   if (!action.distance_per_cycle) delete action.distance_per_cycle;
 
@@ -838,6 +1492,9 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
     drawings,
     warnings,
     usedFixture,
+    usedRig,
+    usedGrok: Boolean(useGrok && !usedFixture && !usedRig),
+    walkSet: Boolean(body && body.walkSet),
     ticked: false,
     createdAt: new Date().toISOString(),
   };
@@ -847,7 +1504,17 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
     await renderJobPreview(projectDir, globalAssetsDir, character, job, options);
     job.previewRel = posixJoin("characters", character.id, "_factory", jobId, "preview.mp4");
     writeManifest(dir, job);
+    if (intent.kind === "walk") {
+      const dumpDir = path.join(dir, "preview_frames");
+      await validateWalkPreview(alignedDir, dumpDir, options);
+    }
   } catch (err) {
+    if (intent.kind === "walk" && isWalkValidationFailure(err)) {
+      throw factoryError(
+        `Walk preview failed validation (${String(err.message || err).replace(/^Factory fit failed: /, "")}). Extra heads, frozen frames, and rig overlays are rejected — hit Redo.`,
+        err.code || "EINVAL"
+      );
+    }
     job.warnings.push(err.message || "Preview clip failed");
     writeManifest(dir, job);
   }
@@ -884,6 +1551,17 @@ function tickFactoryJob(projectDir, globalAssetsDir, characterId, jobId) {
 
   const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
   ensureSlot(character, job.dest);
+  if (job.dest && job.dest.slot && /_(left_side|right_side|left_34|right_34|back)$/.test(String(job.dest.drawings_dir || ""))) {
+    const spec = findSlotSpec(character, job.dest.slot);
+    if (spec) {
+      spec.views = true;
+      const base = String(job.dest.drawings_dir).replace(
+        /_(left_side|right_side|left_34|right_34|back)$/,
+        ""
+      );
+      if (base && spec.drawings_dir !== base) spec.drawings_dir = spec.drawings_dir || base;
+    }
+  }
   if (job.cycle && job.dest.slot === "body") {
     mergeCycles(findSlotSpec(character, "body"), { [job.cycle.name]: job.cycle });
   }
@@ -896,7 +1574,10 @@ function tickFactoryJob(projectDir, globalAssetsDir, characterId, jobId) {
     const abs = path.join(projectDir, target.rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.copyFileSync(drawing.path, abs);
-    setDrawingState(projectDir, characterId, `${job.dest.drawings_dir}/${target.name}`, "ticked");
+    const asDraft = Boolean(
+      (job.action && /walk/.test(String(job.actionId || ""))) || job.walkSet || job.usedImport
+    );
+    setDrawingState(projectDir, characterId, `${job.dest.drawings_dir}/${target.name}`, asDraft ? "draft" : "ticked");
     drawing.writtenName = target.name;
     drawing.writtenRel = target.rel;
   }
@@ -915,6 +1596,9 @@ function tickFactoryJob(projectDir, globalAssetsDir, characterId, jobId) {
 async function redoFactoryJob(projectDir, globalAssetsDir, characterId, jobId, body, options = {}) {
   const previous = readManifest(projectDir, characterId, jobId);
   if (previous.ticked) throw factoryError("This one is already ticked. Type a new prompt to make another.");
+  if (previous.usedImport) {
+    throw factoryError("Import a new MP4 to redo this walk.", "EINVAL");
+  }
   fs.rmSync(jobDir(projectDir, characterId, jobId), { recursive: true, force: true });
   return runFactoryJob(
     projectDir,
@@ -929,6 +1613,9 @@ async function redoFactoryJob(projectDir, globalAssetsDir, characterId, jobId, b
       frames: (body && body.frames) || previous.frames,
       advancedPrompt: body && body.advancedPrompt,
       imageBase64: body && body.imageBase64,
+      useGrok: body && Object.prototype.hasOwnProperty.call(body, "useGrok") ? body.useGrok : previous.usedGrok,
+      useRigWalk: body && Object.prototype.hasOwnProperty.call(body, "useRigWalk") ? body.useRigWalk : previous.usedRig,
+      walkSet: previous.walkSet,
     },
     options
   );
@@ -946,12 +1633,24 @@ module.exports = {
   walkBob,
   drawingNames,
   pickSideTorsoDrawing,
+  findTorsoRef,
+  findLegsRef,
   walkSetSlots,
+  isHeadSlotName,
+  findWalkSideSources,
+  findSideReferenceAbs,
   runFactoryJob,
   describeFactoryJob,
   resolveFactoryPreview,
   tickFactoryJob,
   redoFactoryJob,
   factoryPreviewUrl,
+  stampJobId,
+  jobDir,
+  writeManifest,
+  readManifest,
+  slotCanvas,
+  renderJobPreview,
   GenerateImageError,
+  findHeadBaseAbs,
 };

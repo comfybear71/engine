@@ -4,10 +4,13 @@ const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   assembleHiddenPrompt,
+  assembleWalkPhasePrompt,
   clampFactoryFrames,
   factoryGrid,
+  factoryHint,
   inferFactoryIntent,
   slugActionId,
+  walkPhases,
   buildFactoryPack,
 } = require("../src/factoryPrompt");
 
@@ -19,6 +22,7 @@ describe("factory hidden prompt pack", () => {
     const intent = inferFactoryIntent("Rodney walking long stride");
     assert.equal(intent.kind, "walk");
     assert.equal(slugActionId("Rodney walking long stride", intent), "walk_side_long_stride");
+    assert.match(factoryHint("character", { character: { display_name: "Rodney" } }), /Import MP4/);
   });
 
   test("silently adds locked style, green screen, and rig rules", () => {
@@ -31,6 +35,33 @@ describe("factory hidden prompt pack", () => {
     assert.match(pack.hiddenPrompt, /fedora|painted caricature/);
     assert.match(pack.hiddenPrompt, /#00FF00/);
     assert.match(pack.hiddenPrompt, /Only one head/);
+    assert.match(pack.hiddenPrompt, /Never zoom into legs/);
+    assert.match(pack.hiddenPrompt, /never a close-up of legs/);
+    assert.match(pack.hiddenPrompt, /WALK CYCLE/);
+    assert.match(pack.hiddenPrompt, /8 DISTINCT phases/);
+    const phases = walkPhases(8);
+    assert.equal(phases.length, 8);
+    const contact = assembleWalkPhasePrompt({
+      character: { id: "rodney", display_name: "Rodney" },
+      userPrompt: "long strides",
+      frames: 8,
+      phase: phases[0],
+      index: 0,
+    });
+    const opposite = assembleWalkPhasePrompt({
+      character: { id: "rodney", display_name: "Rodney" },
+      userPrompt: "long strides",
+      frames: 8,
+      phase: phases[4],
+      index: 4,
+    });
+    assert.match(contact, /gait phase 1 of 8/);
+    assert.match(contact, /right heel striking/);
+    assert.match(opposite, /gait phase 5 of 8/);
+    assert.match(opposite, /left heel striking/);
+    assert.notEqual(contact, opposite);
+    assert.match(pack.hiddenPrompt, /right heel striking/);
+    assert.match(pack.hiddenPrompt, /left leg swinging past/);
     assert.equal(pack.greenScreen, "#00FF00");
     assert.equal(pack.references[0].rel, "characters/rodney/_reference/full.png");
     assert.equal(assembleHiddenPrompt({
@@ -86,5 +117,16 @@ describe("factory hidden prompt pack", () => {
     assert.match(eyes.hiddenPrompt, /ONLY the eyes/i);
     assert.match(eyes.hiddenPrompt, /Never draw a full head/i);
     assert.match(eyes.hiddenPrompt, /1024/);
+
+    const arms = buildFactoryPack({
+      mode: "slot",
+      slot: "arm",
+      view: "front",
+      label: "Arms",
+      character: { id: "rodney", display_name: "Rodney" },
+      userPrompt: "grip mic",
+    });
+    assert.match(arms.hiddenPrompt, /whole arm/i);
+    assert.match(arms.hiddenPrompt, /knuckles face OUT/i);
   });
 });

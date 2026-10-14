@@ -101,6 +101,25 @@ function torsoRgba(kind) {
   return rgba;
 }
 
+function walkSideRgba(phase) {
+  const rgba = Buffer.alloc(1024 * 1024 * 4);
+  // 8-phase walk: contact A → passing → contact B → passing. Figure is
+  // ~252px tall so Factory proof cells stay readable (>=240px).
+  const strides = [36, 18, 0, -18, -36, -18, 0, 18];
+  const stride = strides[((phase % 8) + 8) % 8];
+  const x = 420;
+  const y = 290;
+  fillRect(rgba, 1024, x + 6, y + 52, 24, 170, 180, 20, 20, 255);
+  fillRect(rgba, 1024, x + 72 + Math.min(stride, 10), y + 4, 50, 22, 40, 20, 16, 255);
+  fillRect(rgba, 1024, x + 78 + Math.min(stride, 10), y + 24, 38, 38, 196, 140, 96, 255);
+  fillRect(rgba, 1024, x + 52, y + 62, 64, 100, 150, 28, 28, 255);
+  fillRect(rgba, 1024, x + 40 + stride, y + 162, 22, 76, 140, 70, 40, 255);
+  fillRect(rgba, 1024, x + 90 - stride, y + 162, 22, 76, 140, 70, 40, 255);
+  fillRect(rgba, 1024, x + 32 + stride, y + 234, 30, 22, 70, 40, 24, 255);
+  fillRect(rgba, 1024, x + 84 - stride, y + 234, 30, 22, 70, 40, 24, 255);
+  return rgba;
+}
+
 function buildRodneyTestProject(projectDir) {
   const rodney = path.join(projectDir, "characters", "rodney");
   writeJson(path.join(projectDir, "studio.json"), { independent: true });
@@ -136,6 +155,12 @@ function buildRodneyTestProject(projectDir) {
     fillRect(rgba, 1024, 488, 620, 70, 70, 120, 24, 28, 255);
     return rgba;
   })());
+  const walkNames = [];
+  for (let i = 1; i <= 8; i += 1) {
+    const name = `walk_side_${String(i).padStart(2, "0")}`;
+    walkNames.push(name);
+    writePng(path.join(rodney, "body", `${name}.png`), walkSideRgba(i - 1));
+  }
   writePng(path.join(rodney, "body", "walk.png"), torsoRgba("walk"));
   writePng(path.join(rodney, "legs_right_side", "walk_side_01.png"), (() => {
     const rgba = Buffer.alloc(1024 * 1024 * 4);
@@ -195,7 +220,11 @@ function buildRodneyTestProject(projectDir) {
         canvas: { w: 1024, h: 1024, pivot: { x: 509, y: 457 } },
       },
       torso: { drawings_dir: "torso", default_drawing: "neutral" },
-      body: { drawings_dir: "body", default_drawing: "walk" },
+      body: {
+        drawings_dir: "body",
+        default_drawing: "walk",
+        cycles: { walk_side: { drawings: walkNames, fps: 12 } },
+      },
       hand: { drawings_dir: "hand", default_drawing: "open" },
       legs: { drawings_dir: "legs", default_drawing: "none" },
     },
@@ -206,12 +235,27 @@ function buildRodneyTestProject(projectDir) {
       { id: "arm_upper_L", asset: "parts/arm_upper.png", z: 2, offset: { x: 10, y: -20 }, pivot: { x: 582, y: 546 } },
     ],
   });
+  writeJson(path.join(rodney, "actions", "walk_side.json"), {
+    id: "walk_side",
+    view: "right_side",
+    fps: 12,
+    frames: 8,
+    slot_frames: { body: walkNames },
+  });
   writeJson(path.join(rodney, "status.json"), {
     "head_base/neutral": "ticked",
     "eyes_front/open": "ticked",
     "eyes_front/surprised": "ticked",
     "mouth_front/A": "draft",
     "torso/neutral": "ticked",
+    "body/walk_side_01": "ticked",
+    "body/walk_side_02": "ticked",
+    "body/walk_side_03": "ticked",
+    "body/walk_side_04": "ticked",
+    "body/walk_side_05": "ticked",
+    "body/walk_side_06": "ticked",
+    "body/walk_side_07": "ticked",
+    "body/walk_side_08": "ticked",
     _redos: { "mouth_front/A": "wider smile, keep the fedora lined up" },
   });
   writeWav(path.join(projectDir, "audio", "big_red_nude_truck", "001_rodney.wav"));
