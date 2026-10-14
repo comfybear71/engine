@@ -1078,410 +1078,249 @@ export default function HeadRigModal({
             ) : null}
           </div>
 
-          {/* ── DaVinci Resolve-style Timeline — FULL WIDTH ──────── */}
+          {/* ══════════ DaVinci Resolve-style Timeline ══════════ */}
           {(bodyFrameCount > 0 || headFrameCount > 0) ? (
-            <div className="mt-3 rounded-md border border-studio-border bg-[#111] p-2">
-              {/* Timeline header — Resolve style */}
-              <div className="mb-2 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-lg font-bold tracking-tight text-neutral-200">
-                    {String(Math.floor((scrubFrame - 1) / (bodyFps * 60))).padStart(2, "0")}
-                    :{String(Math.floor(((scrubFrame - 1) / bodyFps) % 60)).padStart(2, "0")}
-                    :{String(Math.floor((scrubFrame - 1) % bodyFps)).padStart(2, "0")}
-                  </span>
-                  <span className="font-mono text-[10px] text-neutral-500">
-                    F{scrubFrame}/{maxFrames}
-                  </span>
+            <div className="mt-4 overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#0d0d0d]">
+
+              {/* ── Transport bar (like Resolve's center toolbar) ── */}
+              <div className="flex items-center justify-between border-b border-[#222] bg-[#181818] px-4 py-2">
+                {/* Timecode */}
+                <div className="font-mono text-xl font-bold tracking-wider text-neutral-100" style={{ minWidth: 120 }}>
+                  {String(Math.floor((scrubFrame - 1) / (bodyFps * 60))).padStart(2, "0")}
+                  <span className="text-neutral-500">:</span>
+                  {String(Math.floor(((scrubFrame - 1) / bodyFps) % 60)).padStart(2, "0")}
+                  <span className="text-neutral-500">:</span>
+                  {String(Math.floor((scrubFrame - 1) % bodyFps)).padStart(2, "0")}
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="rounded bg-neutral-700 px-2 py-1 text-[11px] font-bold text-white hover:bg-neutral-600"
-                    onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))}
-                    title="Zoom out"
-                  >
-                    −
-                  </button>
-                  <span className="text-[10px] text-neutral-400">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
-                  <button
-                    type="button"
-                    className="rounded bg-neutral-700 px-2 py-1 text-[11px] font-bold text-white hover:bg-neutral-600"
-                    onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))}
-                    title="Zoom in"
-                  >
-                    +
-                  </button>
-                  <button
-                    type="button"
-                    className={`rounded px-3 py-1 text-[11px] font-semibold disabled:opacity-40 ${
-                      playing
-                        ? "bg-red-600 text-white hover:bg-red-500"
-                        : "bg-emerald-600 text-white hover:bg-emerald-500"
-                    }`}
+
+                {/* Transport controls */}
+                <div className="flex items-center gap-1">
+                  <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white"
+                    onClick={() => { setScrubFrame(1); scrubToFrame(1); }} title="Go to start">⏮</button>
+                  <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white"
+                    onClick={() => { const f = Math.max(1, scrubFrame - 1); setScrubFrame(f); scrubToFrame(f); }} title="Previous frame">◀</button>
+                  <button type="button"
+                    className={`rounded-md px-4 py-1.5 text-sm font-semibold ${playing ? "bg-[#c83030] text-white hover:bg-[#a02828]" : "bg-[#2a2a2a] text-neutral-200 hover:bg-[#3a3a3a]"}`}
                     disabled={!bodyId || !headId || previewLoading}
                     onClick={handlePlay}
                   >
-                    {previewLoading ? "Loading…" : playing ? "⏹ Stop" : "▶ Play"}
+                    {previewLoading ? "…" : playing ? "■" : "▶"}
                   </button>
-                  <button
-                    type="button"
-                    className="rounded bg-[#e0a040] px-3 py-1 text-[11px] font-semibold text-black hover:bg-[#f0b050]"
-                    onClick={addKeyframe}
-                    title="Set keyframe at current frame"
-                  >
-                    + Key
-                  </button>
+                  <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white"
+                    onClick={() => { const f = Math.min(maxFrames, scrubFrame + 1); setScrubFrame(f); scrubToFrame(f); }} title="Next frame">▶</button>
+                  <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white"
+                    onClick={() => { setScrubFrame(maxFrames); scrubToFrame(maxFrames); }} title="Go to end">⏭</button>
+                </div>
+
+                {/* Right side — zoom + key */}
+                <div className="flex items-center gap-2">
+                  <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white"
+                    onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))} title="Zoom out">−</button>
+                  <span className="w-8 text-center font-mono text-[10px] text-neutral-500">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
+                  <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white"
+                    onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))} title="Zoom in">+</button>
+                  <div className="mx-1 h-5 w-px bg-[#333]" />
+                  <button type="button" className="rounded bg-[#e0a040]/20 px-2.5 py-1 text-[11px] font-semibold text-[#e0a040] hover:bg-[#e0a040]/30"
+                    onClick={addKeyframe} title="Set keyframe at current frame">◆ Key</button>
                 </div>
               </div>
 
-              {/* Scrollable zoom container for ruler + tracks */}
+              {/* ── Scrollable track area ── */}
               <div className="overflow-x-auto">
               <div style={{ minWidth: timelineZoom > 1 ? `${timelineZoom * 100}%` : undefined }}>
 
-              {/* Frame ruler + red playhead handle */}
-              <div
-                className="relative mb-0.5 h-5 cursor-pointer rounded-t bg-[#1a1a1a]"
-                style={{ marginLeft: 80 }}
-                onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
-              >
-                {Array.from({ length: Math.min(Math.ceil(maxFrames / 10), 30) }, (_, i) => {
-                  const f = (i + 1) * 10;
-                  if (f > maxFrames) return null;
-                  return (
-                    <span
-                      key={f}
-                      className="absolute bottom-0 text-[8px] text-neutral-500"
-                      style={{ left: `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, transform: "translateX(-50%)" }}
-                    >
-                      {f}
-                    </span>
-                  );
-                })}
-                {/* Red playhead handle — triangle */}
+              {/* Ruler */}
+              <div className="flex">
+                <div className="w-[120px] shrink-0 border-r border-[#222] bg-[#141414]" />
                 <div
-                  className="absolute top-0"
-                  style={{ left: playheadPct, zIndex: 20, transform: "translateX(-50%)", cursor: "ew-resize" }}
-                  onMouseDown={(e) => { e.stopPropagation(); setDraggingPlayhead(true); }}
+                  className="relative h-6 flex-1 cursor-pointer border-b border-[#222] bg-[#141414]"
+                  onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                 >
-                  <svg width="14" height="12" viewBox="0 0 14 12" style={{ display: "block" }}>
-                    <polygon points="0,0 14,0 7,12" fill="#e03030" stroke="#ff4444" strokeWidth="1" />
-                  </svg>
+                  {Array.from({ length: Math.min(Math.ceil(maxFrames / 10), 40) }, (_, i) => {
+                    const f = (i + 1) * 10;
+                    if (f > maxFrames) return null;
+                    return (
+                      <div key={`tick-${f}`} className="absolute top-0 h-full w-px bg-[#2a2a2a]" style={{ left: `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%` }} />
+                      <span key={`lbl-${f}`} className="absolute bottom-1 text-[9px] text-neutral-600" style={{ left: `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, transform: "translateX(-50%)" }}>{f}</span>
+                    );
+                  })}
+                  {/* Red playhead handle */}
+                  <div className="absolute top-0" style={{ left: playheadPct, zIndex: 20, transform: "translateX(-50%)", cursor: "ew-resize" }}
+                    onMouseDown={(e) => { e.stopPropagation(); setDraggingPlayhead(true); }}>
+                    <svg width="16" height="20" viewBox="0 0 16 20" style={{ display: "block" }}>
+                      <polygon points="0,0 16,0 16,10 8,20 0,10" fill="#e03030" />
+                    </svg>
+                  </div>
                 </div>
               </div>
 
               {/* Track area — with ref for mouse scrubbing */}
-              <div ref={timelineRef} style={{ marginLeft: 80 }}>
-                {/* ── BODY TRACK ── */}
-                <div className="flex items-stretch" style={{ marginLeft: -80 }}>
-                  {/* Resolve-style track header */}
+              <div className="flex">
+                <div className="w-[120px] shrink-0" />
+                <div ref={timelineRef} className="relative flex-1">
+
+                {/* ── BODY TRACK (V1) ── */}
+                <div className="flex" style={{ marginLeft: -120 }}>
                   <div
-                    className={`flex w-20 shrink-0 flex-col items-start justify-center border-r border-[#333] px-2 py-1 ${selectedTrack === "body" ? "bg-[#1e2a3a]" : "bg-[#1a1a1a]"}`}
+                    className={`flex w-[120px] shrink-0 items-center gap-2 border-b border-r border-[#222] px-3 py-2 ${selectedTrack === "body" ? "bg-[#1a2233]" : "bg-[#161616]"}`}
                     onClick={() => setSelectedTrack("body")}
                     style={{ cursor: "pointer" }}
                   >
-                    <div className="flex items-center gap-1">
-                      <span className="rounded-sm bg-blue-600 px-1 py-px text-[8px] font-bold text-white">V1</span>
+                    <span className="rounded bg-blue-600 px-1.5 py-0.5 text-[9px] font-bold text-white">V1</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-medium text-neutral-300">Body</div>
+                      <div className="text-[9px] text-neutral-500">{bodyFrameCount}f</div>
                     </div>
-                    <span className="mt-0.5 text-[10px] font-medium text-neutral-300">Body</span>
-                    <span className="text-[8px] text-neutral-500">{bodyFrameCount}f · {bodyFps}fps</span>
-                    <input
-                      type="range" min={4} max={30} step={1} value={bodyFps}
-                      onChange={(e) => { e.stopPropagation(); setBodyFps(Number(e.target.value)); }}
-                      className="studio-scrubber mt-0.5 w-full"
-                      onClick={(e) => e.stopPropagation()}
-                    />
                   </div>
                   <div
-                    className={`relative flex-1 cursor-pointer overflow-hidden rounded-r ${selectedTrack === "body" ? "ring-1 ring-blue-400/60" : ""}`}
-                    style={{ height: 72, background: "#1a2a3a" }}
+                    className={`relative flex-1 cursor-pointer overflow-hidden border-b border-[#222] ${selectedTrack === "body" ? "ring-1 ring-inset ring-blue-500/40" : ""}`}
+                    style={{ height: 80, background: "#161e28" }}
                     onClick={() => setSelectedTrack("body")}
                     onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
-                    {/* Frame thumbnails strip */}
+                    {/* Clip with thumbnails */}
                     {bodyFrameCount > 0 ? (
-                      <div
-                        className="absolute inset-y-0 left-0 flex"
-                        style={{ width: `${(bodyFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
-                      >
-                        {Array.from({ length: Math.min(bodyFrameCount, 60) }, (_, i) => {
-                          const frame = Math.max(1, Math.round((i / Math.min(bodyFrameCount, 60)) * bodyFrameCount));
-                          const pad = String(frame).padStart(4, "0");
-                          return (
-                            <img
-                              key={i}
-                              src={shotMediaUrl(project, characterId, bodyId, `cut/f_${pad}.png`)}
-                              alt=""
-                              className="h-full shrink-0 object-cover"
-                              style={{ width: `${100 / Math.min(bodyFrameCount, 60)}%`, opacity: 0.85 }}
-                              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                            />
-                          );
-                        })}
+                      <div className="absolute inset-y-0 left-0 border-y border-blue-500/30" style={{ width: `${(bodyFrameCount / Math.max(maxFrames, 1)) * 100}%` }}>
+                        <div className="flex h-full">
+                          {Array.from({ length: Math.min(bodyFrameCount, 60) }, (_, i) => {
+                            const frame = Math.max(1, Math.round((i / Math.min(bodyFrameCount, 60)) * bodyFrameCount));
+                            const pad = String(frame).padStart(4, "0");
+                            return (
+                              <img key={i} src={shotMediaUrl(project, characterId, bodyId, `cut/f_${pad}.png`)} alt=""
+                                className="h-full shrink-0 object-cover" style={{ width: `${100 / Math.min(bodyFrameCount, 60)}%` }}
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                            );
+                          })}
+                        </div>
+                        {/* Clip name label (like Resolve) */}
+                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-0.5">
+                          <span className="text-[9px] font-medium text-blue-300">{bodyShot?.name || bodyId}</span>
+                        </div>
                       </div>
                     ) : null}
-                    {/* Dimmed regions outside trim range */}
+                    {/* Dimmed regions outside trim */}
                     {bodyFrameCount > 0 && bodyInEff > 1 ? (
                       <div className="absolute inset-y-0 left-0 bg-black/60" style={{ width: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
                     {bodyFrameCount > 0 && bodyOutEff < bodyFrameCount ? (
                       <div className="absolute inset-y-0 right-0 bg-black/60" style={{ left: `${(bodyOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
-                    {/* ── Resolve-style trim handles (draggable) ── */}
-                    {bodyFrameCount > 0 ? (
-                      <div
-                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-l-sm"
-                        style={{
-                          left: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`,
-                          width: 8, zIndex: 8,
-                          background: "linear-gradient(to right, #e0a040, #c89030)",
-                        }}
-                        title={`In: F${bodyInEff} — drag to trim`}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "in" }); setSelectedTrack("body"); }}
-                      >
-                        <div className="h-5 w-0.5 rounded bg-yellow-900/60" />
+                    {/* Trim handles */}
+                    {bodyFrameCount > 0 ? (<>
+                      <div className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center"
+                        style={{ left: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, width: 7, zIndex: 8, background: "#e0a040", borderRadius: "3px 0 0 3px" }}
+                        title={`In: F${bodyInEff}`}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "in" }); setSelectedTrack("body"); }}>
+                        <div className="h-6 w-px bg-[#000]/30" />
                       </div>
-                    ) : null}
-                    {bodyFrameCount > 0 ? (
-                      <div
-                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-r-sm"
-                        style={{
-                          left: `${((bodyOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`,
-                          width: 8, zIndex: 8, transform: "translateX(-8px)",
-                          background: "linear-gradient(to left, #e0a040, #c89030)",
-                        }}
-                        title={`Out: F${bodyOutEff} — drag to trim`}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "out" }); setSelectedTrack("body"); }}
-                      >
-                        <div className="h-5 w-0.5 rounded bg-yellow-900/60" />
+                      <div className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center"
+                        style={{ left: `${((bodyOutEff) / Math.max(maxFrames, 1)) * 100}%`, width: 7, zIndex: 8, background: "#e0a040", borderRadius: "0 3px 3px 0", transform: "translateX(-7px)" }}
+                        title={`Out: F${bodyOutEff}`}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "out" }); setSelectedTrack("body"); }}>
+                        <div className="h-6 w-px bg-[#000]/30" />
                       </div>
-                    ) : null}
-                    {/* Red playhead line */}
-                    <div
-                      className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500"
-                      style={{ left: playheadPct, zIndex: 10 }}
-                    />
-                    <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-blue-300/80" style={{ zIndex: 6 }}>
-                      {bodyShot?.name || bodyId || "no body"}
-                    </span>
+                    </>) : null}
+                    {/* Playhead */}
+                    <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500" style={{ left: playheadPct, zIndex: 10 }} />
                   </div>
                 </div>
 
-                {/* ── HEAD TRACK ── */}
-                <div className="mt-0.5 flex items-stretch" style={{ marginLeft: -80 }}>
-                  {/* Resolve-style track header */}
+                {/* ── HEAD TRACK (V2) ── */}
+                <div className="flex" style={{ marginLeft: -120 }}>
                   <div
-                    className={`flex w-20 shrink-0 flex-col items-start justify-center border-r border-[#333] px-2 py-1 ${selectedTrack === "head" ? "bg-[#1a2a1a]" : "bg-[#1a1a1a]"}`}
+                    className={`flex w-[120px] shrink-0 items-center gap-2 border-b border-r border-[#222] px-3 py-2 ${selectedTrack === "head" ? "bg-[#1a2a1a]" : "bg-[#161616]"}`}
                     onClick={() => setSelectedTrack("head")}
                     style={{ cursor: "pointer" }}
                   >
-                    <div className="flex items-center gap-1">
-                      <span className="rounded-sm bg-green-600 px-1 py-px text-[8px] font-bold text-white">V2</span>
+                    <span className="rounded bg-green-600 px-1.5 py-0.5 text-[9px] font-bold text-white">V2</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-medium text-neutral-300">Head</div>
+                      <div className="text-[9px] text-neutral-500">{headFrameCount}f</div>
                     </div>
-                    <span className="mt-0.5 text-[10px] font-medium text-neutral-300">Head</span>
-                    <span className="text-[8px] text-neutral-500">{headFrameCount}f · {headFps}fps</span>
-                    <input
-                      type="range" min={4} max={30} step={1} value={headFps}
-                      onChange={(e) => { e.stopPropagation(); setHeadFps(Number(e.target.value)); }}
-                      className="studio-scrubber mt-0.5 w-full"
-                      onClick={(e) => e.stopPropagation()}
-                    />
                   </div>
                   <div
-                    className={`relative flex-1 cursor-pointer overflow-hidden rounded-r ${selectedTrack === "head" ? "ring-1 ring-green-400/60" : ""}`}
-                    style={{ height: 72, background: "#1a2a1a" }}
+                    className={`relative flex-1 cursor-pointer overflow-hidden border-b border-[#222] ${selectedTrack === "head" ? "ring-1 ring-inset ring-green-500/40" : ""}`}
+                    style={{ height: 80, background: "#161e16" }}
                     onClick={() => setSelectedTrack("head")}
                     onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
-                    {/* Frame thumbnails strip */}
+                    {/* Clip with thumbnails */}
                     {headFrameCount > 0 ? (
-                      <div
-                        className="absolute inset-y-0 left-0 flex"
-                        style={{ width: `${(headFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
-                      >
-                        {Array.from({ length: Math.min(headFrameCount, 60) }, (_, i) => {
-                          const frame = Math.max(1, Math.round((i / Math.min(headFrameCount, 60)) * headFrameCount));
-                          const pad = String(frame).padStart(4, "0");
-                          return (
-                            <img
-                              key={i}
-                              src={shotMediaUrl(project, characterId, headId, `cut/f_${pad}.png`)}
-                              alt=""
-                              className="h-full shrink-0 object-cover"
-                              style={{ width: `${100 / Math.min(headFrameCount, 60)}%`, opacity: 0.85 }}
-                              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                            />
-                          );
-                        })}
+                      <div className="absolute inset-y-0 left-0 border-y border-green-500/30" style={{ width: `${(headFrameCount / Math.max(maxFrames, 1)) * 100}%` }}>
+                        <div className="flex h-full">
+                          {Array.from({ length: Math.min(headFrameCount, 60) }, (_, i) => {
+                            const frame = Math.max(1, Math.round((i / Math.min(headFrameCount, 60)) * headFrameCount));
+                            const pad = String(frame).padStart(4, "0");
+                            return (
+                              <img key={i} src={shotMediaUrl(project, characterId, headId, `cut/f_${pad}.png`)} alt=""
+                                className="h-full shrink-0 object-cover" style={{ width: `${100 / Math.min(headFrameCount, 60)}%` }}
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                            );
+                          })}
+                        </div>
+                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-0.5">
+                          <span className="text-[9px] font-medium text-green-300">{headShot?.name || headId}</span>
+                        </div>
                       </div>
                     ) : null}
-                    {/* Dimmed regions outside trim range */}
+                    {/* Dimmed regions outside trim */}
                     {headFrameCount > 0 && headInEff > 1 ? (
                       <div className="absolute inset-y-0 left-0 bg-black/60" style={{ width: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
                     {headFrameCount > 0 && headOutEff < headFrameCount ? (
                       <div className="absolute inset-y-0 right-0 bg-black/60" style={{ left: `${(headOutEff / Math.max(maxFrames, 1)) * 100}%`, zIndex: 3 }} />
                     ) : null}
-                    {/* ── Resolve-style trim handles (draggable) ── */}
-                    {headFrameCount > 0 ? (
-                      <div
-                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-l-sm"
-                        style={{
-                          left: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`,
-                          width: 8, zIndex: 8,
-                          background: "linear-gradient(to right, #e0a040, #c89030)",
-                        }}
-                        title={`In: F${headInEff} — drag to trim`}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "in" }); setSelectedTrack("head"); }}
-                      >
-                        <div className="h-5 w-0.5 rounded bg-yellow-900/60" />
+                    {/* Trim handles */}
+                    {headFrameCount > 0 ? (<>
+                      <div className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center"
+                        style={{ left: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`, width: 7, zIndex: 8, background: "#e0a040", borderRadius: "3px 0 0 3px" }}
+                        title={`In: F${headInEff}`}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "in" }); setSelectedTrack("head"); }}>
+                        <div className="h-6 w-px bg-[#000]/30" />
                       </div>
-                    ) : null}
-                    {headFrameCount > 0 ? (
-                      <div
-                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-r-sm"
-                        style={{
-                          left: `${((headOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`,
-                          width: 8, zIndex: 8, transform: "translateX(-8px)",
-                          background: "linear-gradient(to left, #e0a040, #c89030)",
-                        }}
-                        title={`Out: F${headOutEff} — drag to trim`}
-                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "out" }); setSelectedTrack("head"); }}
-                      >
-                        <div className="h-5 w-0.5 rounded bg-yellow-900/60" />
+                      <div className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center"
+                        style={{ left: `${((headOutEff) / Math.max(maxFrames, 1)) * 100}%`, width: 7, zIndex: 8, background: "#e0a040", borderRadius: "0 3px 3px 0", transform: "translateX(-7px)" }}
+                        title={`Out: F${headOutEff}`}
+                        onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "out" }); setSelectedTrack("head"); }}>
+                        <div className="h-6 w-px bg-[#000]/30" />
                       </div>
-                    ) : null}
+                    </>) : null}
                     {/* Keyframe markers */}
                     {keyframes.map((kf) => (
-                      <div
-                        key={kf.frame}
-                        className="absolute top-1 bottom-1 w-1.5 cursor-pointer rounded-sm bg-[#e0a040] hover:bg-[#f0c060]"
-                        style={{ left: `${((kf.frame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 5 }}
-                        title={`Keyframe F${kf.frame}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setScrubFrame(kf.frame);
-                          setAnchorX(kf.anchorX);
-                          setAnchorY(kf.anchorY);
-                          setHeadScale(kf.headScale);
-                          scrubToFrame(kf.frame);
-                        }}
-                      />
+                      <div key={kf.frame} className="absolute top-1 bottom-1 w-1.5 cursor-pointer rounded-sm bg-[#e0a040] hover:bg-[#f0c060]"
+                        style={{ left: `${((kf.frame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 5 }} title={`Key F${kf.frame}`}
+                        onClick={(e) => { e.stopPropagation(); setScrubFrame(kf.frame); setAnchorX(kf.anchorX); setAnchorY(kf.anchorY); setHeadScale(kf.headScale); scrubToFrame(kf.frame); }} />
                     ))}
-                    {/* Red playhead line */}
-                    <div
-                      className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500"
-                      style={{ left: playheadPct, zIndex: 10 }}
-                    />
-                    <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-green-300/80" style={{ zIndex: 6 }}>
-                      {headShot?.name || headId || "no head"}
-                    </span>
+                    {/* Playhead */}
+                    <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500" style={{ left: playheadPct, zIndex: 10 }} />
                   </div>
                 </div>
-              </div>
+
+                </div>{/* end timelineRef inner */}
+              </div>{/* end track flex */}
               </div>{/* end zoom inner */}
               </div>{/* end scroll wrapper */}
 
-              {/* Keyframe chips */}
-              {keyframes.length > 0 ? (
-                <div className="mt-1 flex flex-wrap gap-1" style={{ marginLeft: 80 }}>
-                  {keyframes.map((kf) => (
-                    <span
-                      key={kf.frame}
-                      className="inline-flex items-center gap-1 rounded bg-studio-raised px-1.5 py-0.5 text-[9px] text-neutral-300"
-                    >
-                      <button
-                        type="button"
-                        className="font-medium text-[#e0a040] hover:text-white"
-                        onClick={() => {
-                          setScrubFrame(kf.frame);
-                          setAnchorX(kf.anchorX);
-                          setAnchorY(kf.anchorY);
-                          setHeadScale(kf.headScale);
-                          scrubToFrame(kf.frame);
-                        }}
-                      >
-                        F{kf.frame}
+              {/* ── Bottom bar: keyframes + shortcuts ── */}
+              <div className="flex items-center justify-between border-t border-[#222] bg-[#141414] px-4 py-1.5">
+                <div className="flex items-center gap-2">
+                  {keyframes.length > 0 ? keyframes.map((kf) => (
+                    <span key={kf.frame} className="inline-flex items-center gap-1 rounded bg-[#222] px-1.5 py-0.5 text-[9px] text-neutral-400">
+                      <button type="button" className="font-medium text-[#e0a040] hover:text-white"
+                        onClick={() => { setScrubFrame(kf.frame); setAnchorX(kf.anchorX); setAnchorY(kf.anchorY); setHeadScale(kf.headScale); scrubToFrame(kf.frame); }}>
+                        ◆ F{kf.frame}
                       </button>
-                      <button
-                        type="button"
-                        className="text-red-400 hover:text-red-300"
-                        onClick={() => removeKeyframe(kf.frame)}
-                        title="Remove keyframe"
-                      >
-                        ×
-                      </button>
+                      <button type="button" className="text-red-400/60 hover:text-red-300" onClick={() => removeKeyframe(kf.frame)} title="Remove">×</button>
                     </span>
-                  ))}
+                  )) : (
+                    <span className="text-[9px] text-neutral-600">
+                      <b className="text-neutral-500">I</b> In  <b className="text-neutral-500">O</b> Out  <b className="text-neutral-500">Ctrl+B</b> Cut  <b className="text-neutral-500">Del</b> Remove  <b className="text-neutral-500">Ctrl+C/V</b> Copy/Paste
+                    </span>
+                  )}
                 </div>
-              ) : (
-                <p className="mt-1 text-[9px] text-studio-muted" style={{ marginLeft: 80 }}>
-                  Drag playhead to scrub. Drag yellow handles to trim. <b>I</b>=In <b>O</b>=Out <b>Ctrl+B</b>=Cut <b>Del</b>=Remove <b>Ctrl+C/V</b>=Copy/Paste
-                </p>
-              )}
-
-              {/* ── Trim controls ── */}
-              <div className="mt-2 flex flex-wrap items-center gap-4 border-t border-[#333] pt-2" style={{ marginLeft: 80 }}>
-                <span className="text-[10px] font-semibold text-neutral-400">TRIM</span>
-                {selectedTrack && (
-                  <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${selectedTrack === "body" ? "bg-blue-900/50 text-blue-400" : "bg-green-900/50 text-green-400"}`}>
-                    {selectedTrack.toUpperCase()} selected
-                  </span>
-                )}
-                <label className="flex items-center gap-1 text-[10px] text-blue-400">
-                  Body In
-                  <input
-                    type="number" min={1} max={bodyFrameCount || 1}
-                    value={bodyIn}
-                    onChange={(e) => setBodyIn(clamp(Number(e.target.value), 1, bodyFrameCount || 1))}
-                    className="w-14 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
-                  />
-                  Out
-                  <input
-                    type="number" min={1} max={bodyFrameCount || 1}
-                    value={bodyOut > 0 ? bodyOut : bodyFrameCount}
-                    onChange={(e) => setBodyOut(clamp(Number(e.target.value), 1, bodyFrameCount || 1))}
-                    className="w-14 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
-                  />
-                  {bodyTrimCount < bodyFrameCount ? (
-                    <button type="button" className="text-[9px] text-yellow-400 hover:text-yellow-200" onClick={() => { setBodyIn(1); setBodyOut(0); }}>Reset</button>
-                  ) : null}
-                </label>
-                <label className="flex items-center gap-1 text-[10px] text-green-400">
-                  Head In
-                  <input
-                    type="number" min={1} max={headFrameCount || 1}
-                    value={headIn}
-                    onChange={(e) => setHeadIn(clamp(Number(e.target.value), 1, headFrameCount || 1))}
-                    className="w-14 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
-                  />
-                  Out
-                  <input
-                    type="number" min={1} max={headFrameCount || 1}
-                    value={headOut > 0 ? headOut : headFrameCount}
-                    onChange={(e) => setHeadOut(clamp(Number(e.target.value), 1, headFrameCount || 1))}
-                    className="w-14 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
-                  />
-                  {headTrimCount < headFrameCount ? (
-                    <button type="button" className="text-[9px] text-yellow-400 hover:text-yellow-200" onClick={() => { setHeadIn(1); setHeadOut(0); }}>Reset</button>
-                  ) : null}
-                </label>
-                <button
-                  type="button"
-                  className="rounded bg-blue-700 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-blue-600"
-                  onClick={() => { setBodyIn(scrubFrame); }}
-                  title="Set body in-point to current frame"
-                >
-                  Set In
-                </button>
-                <button
-                  type="button"
-                  className="rounded bg-blue-700 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-blue-600"
-                  onClick={() => { setBodyOut(scrubFrame); setHeadOut(scrubFrame); }}
-                  title="Set out-point to current frame"
-                >
-                  Set Out
-                </button>
+                <span className="font-mono text-[9px] text-neutral-600">F{scrubFrame} / {maxFrames}</span>
               </div>
+
             </div>
           ) : null}
 
