@@ -1185,7 +1185,7 @@ export default function HeadRigModal({
                   </div>
                   <div
                     className={`relative flex-1 cursor-pointer overflow-hidden rounded-r ${selectedTrack === "body" ? "ring-1 ring-blue-400/60" : ""}`}
-                    style={{ height: 48, background: "#1a2a3a" }}
+                    style={{ height: 72, background: "#1a2a3a" }}
                     onClick={() => setSelectedTrack("body")}
                     onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
@@ -1221,28 +1221,30 @@ export default function HeadRigModal({
                     {/* ── Resolve-style trim handles (draggable) ── */}
                     {bodyFrameCount > 0 ? (
                       <div
-                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-l bg-yellow-500 hover:bg-yellow-300"
+                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-l-sm"
                         style={{
                           left: `${((bodyInEff - 1) / Math.max(maxFrames, 1)) * 100}%`,
-                          width: 6, zIndex: 8,
+                          width: 8, zIndex: 8,
+                          background: "linear-gradient(to right, #e0a040, #c89030)",
                         }}
                         title={`In: F${bodyInEff} — drag to trim`}
                         onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "in" }); setSelectedTrack("body"); }}
                       >
-                        <div className="h-3 w-0.5 rounded bg-yellow-900" />
+                        <div className="h-5 w-0.5 rounded bg-yellow-900/60" />
                       </div>
                     ) : null}
                     {bodyFrameCount > 0 ? (
                       <div
-                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-r bg-yellow-500 hover:bg-yellow-300"
+                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-r-sm"
                         style={{
                           left: `${((bodyOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`,
-                          width: 6, zIndex: 8, transform: "translateX(-6px)",
+                          width: 8, zIndex: 8, transform: "translateX(-8px)",
+                          background: "linear-gradient(to left, #e0a040, #c89030)",
                         }}
                         title={`Out: F${bodyOutEff} — drag to trim`}
                         onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "body", edge: "out" }); setSelectedTrack("body"); }}
                       >
-                        <div className="h-3 w-0.5 rounded bg-yellow-900" />
+                        <div className="h-5 w-0.5 rounded bg-yellow-900/60" />
                       </div>
                     ) : null}
                     {/* Red playhead line */}
@@ -1274,7 +1276,7 @@ export default function HeadRigModal({
                   </div>
                   <div
                     className={`relative flex-1 cursor-pointer overflow-hidden rounded-r ${selectedTrack === "head" ? "ring-1 ring-green-400/60" : ""}`}
-                    style={{ height: 48, background: "#1a2a1a" }}
+                    style={{ height: 72, background: "#1a2a1a" }}
                     onClick={() => setSelectedTrack("head")}
                     onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
@@ -1310,28 +1312,30 @@ export default function HeadRigModal({
                     {/* ── Resolve-style trim handles (draggable) ── */}
                     {headFrameCount > 0 ? (
                       <div
-                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-l bg-yellow-500 hover:bg-yellow-300"
+                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-l-sm"
                         style={{
                           left: `${((headInEff - 1) / Math.max(maxFrames, 1)) * 100}%`,
-                          width: 6, zIndex: 8,
+                          width: 8, zIndex: 8,
+                          background: "linear-gradient(to right, #e0a040, #c89030)",
                         }}
                         title={`In: F${headInEff} — drag to trim`}
                         onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "in" }); setSelectedTrack("head"); }}
                       >
-                        <div className="h-3 w-0.5 rounded bg-yellow-900" />
+                        <div className="h-5 w-0.5 rounded bg-yellow-900/60" />
                       </div>
                     ) : null}
                     {headFrameCount > 0 ? (
                       <div
-                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-r bg-yellow-500 hover:bg-yellow-300"
+                        className="absolute inset-y-0 flex cursor-ew-resize items-center justify-center rounded-r-sm"
                         style={{
                           left: `${((headOutEff - 1) / Math.max(maxFrames - 1, 1)) * 100}%`,
-                          width: 6, zIndex: 8, transform: "translateX(-6px)",
+                          width: 8, zIndex: 8, transform: "translateX(-8px)",
+                          background: "linear-gradient(to left, #e0a040, #c89030)",
                         }}
                         title={`Out: F${headOutEff} — drag to trim`}
                         onMouseDown={(e) => { e.stopPropagation(); setDraggingTrim({ track: "head", edge: "out" }); setSelectedTrack("head"); }}
                       >
-                        <div className="h-3 w-0.5 rounded bg-yellow-900" />
+                        <div className="h-5 w-0.5 rounded bg-yellow-900/60" />
                       </div>
                     ) : null}
                     {/* Keyframe markers */}
