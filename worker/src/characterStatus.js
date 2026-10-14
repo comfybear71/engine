@@ -769,6 +769,7 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
     seen.add(label);
     const frames = meta && Number(meta.frames) > 0 ? Number(meta.frames) : 1;
     const drawings = meta && Number(meta.drawings) > 0 ? Number(meta.drawings) : frames;
+    const warnings = (meta && meta.warnings) || [];
     actions.push({
       id,
       characterId: characterId || null,
@@ -780,16 +781,41 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
       frames,
       drawings,
       still: frames <= 1,
+      category: (meta && meta.category) || "other",
+      view: (meta && meta.view) || null,
+      warnings,
+      flagged: Boolean(meta && meta.flagged),
     });
   }
 
-  function actionMeta(action) {
-    if (!action) return { frames: 1, drawings: 1 };
+  function actionMeta(action, id) {
+    if (!action) return { frames: 1, drawings: 1, category: "other", view: null, warnings: [], flagged: false };
     const frames = Math.max(1, Number(action.frames) || 1);
     const fromSlots = Object.values(action.slot_frames || {}).flat().filter(Boolean);
     const unique = new Set(fromSlots);
     const drawings = unique.size || frames;
-    return { frames, drawings };
+    const text = `${id || action.id || ""}`.toLowerCase();
+    let category = action.category;
+    if (!category) {
+      if (/walk|stride|gait/.test(text)) category = "walks";
+      else if (/mic/.test(text)) category = "mic";
+      else if (/head/.test(text)) category = "head_moves";
+      else if (/turn|look/.test(text)) category = "turns_looks";
+      else if (/idle|stand/.test(text)) category = "idle_stand";
+      else if (/arm|gesture/.test(text)) category = "arms_gestures";
+      else if (/insert/.test(text)) category = "inserts";
+      else category = "other";
+    }
+    const flags = Object.values(action.frame_flags || {}).flat();
+    const warnings = [...(action.warnings || []), ...flags.filter(Boolean)];
+    return {
+      frames,
+      drawings,
+      category,
+      view: action.view || null,
+      warnings,
+      flagged: warnings.length > 0 || flags.length > 0,
+    };
   }
 
   const roots = [];
@@ -815,7 +841,7 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
         "character",
         `characters/${characterId}/actions/${id}.json`,
         actionThumbRel(projectDir, globalAssetsDir, characterId, id, options),
-        actionMeta(loadAction(projectDir, globalAssetsDir, characterId, id, options))
+        actionMeta(loadAction(projectDir, globalAssetsDir, characterId, id, options), id)
       );
     }
   }

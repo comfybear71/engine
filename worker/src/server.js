@@ -109,6 +109,17 @@ const {
   redoFactoryJob,
 } = require("./factoryJob");
 const { startImportMp4, buildImportMp4, resolveImportStrip, readImportMp4Request } = require("./factoryImportMp4");
+const {
+  describeLibrary,
+  addCategory,
+  patchClipCategory,
+  patchActionCategory,
+  actionFrameList,
+  flagActionFrame,
+  deleteActionFrame,
+  saveFrameToSlot,
+  listCategories,
+} = require("./factoryLibrary");
 const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
 const {
   isSafeShowId,
@@ -1094,6 +1105,112 @@ function createApp(options = {}) {
         req.params.jobId,
         req.body || {},
         { fetchFn, pythonBin: options.pythonBin }
+      );
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/library", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(describeLibrary(projectDir, globalAssetsDir, req.params.characterId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/library/categories", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const categories = addCategory(projectDir, req.params.characterId, req.body && req.body.label);
+      res.json({ ok: true, categories });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.patch("/api/projects/:name/characters/:characterId/library/:clipId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const index = patchClipCategory(projectDir, req.params.characterId, req.params.clipId, req.body && req.body.category);
+      res.json({ ok: true, clip: index });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/actions/:characterId/:actionId/frames", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(actionFrameList(projectDir, req.params.characterId, req.params.actionId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.patch("/api/projects/:name/actions/:characterId/:actionId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const action = patchActionCategory(
+        projectDir,
+        req.params.characterId,
+        req.params.actionId,
+        req.body && req.body.category
+      );
+      res.json({ ok: true, action, categories: listCategories(projectDir, req.params.characterId) });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/actions/:characterId/:actionId/frames/:index/flag", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const detail = flagActionFrame(
+        projectDir,
+        req.params.characterId,
+        req.params.actionId,
+        Number(req.params.index),
+        req.body && req.body.issue
+      );
+      res.json(detail);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.delete("/api/projects/:name/actions/:characterId/:actionId/frames/:index", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(deleteActionFrame(projectDir, req.params.characterId, req.params.actionId, Number(req.params.index)));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/actions/:characterId/:actionId/frames/:index/save-slot", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = saveFrameToSlot(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.actionId,
+        Number(req.params.index),
+        String((req.body && req.body.slot) || "torso"),
+        (req.body && req.body.view) || undefined
       );
       res.json(result);
     } catch (err) {

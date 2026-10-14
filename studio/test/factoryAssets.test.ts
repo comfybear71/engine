@@ -116,7 +116,7 @@ describe("factory Assets helpers", () => {
   test("action shots group under the character and hide missing tiles by default", () => {
     const groups = groupActionsByCharacter(
       [
-        { id: "walk_side", label: "rodney/walk_side", characterId: "rodney", name: "walk_side", frames: 8, drawings: 8, still: false },
+        { id: "walk_side", label: "rodney/walk_side", characterId: "rodney", name: "walk_side", frames: 8, drawings: 8, still: false, category: "walks", warnings: ["upside down on 1 frame(s)"], flagged: true },
         { id: "nod", label: "rodney/nod", characterId: "rodney", name: "nod", frames: 1, drawings: 1, still: true },
         { id: "blink", label: "shared/blink", characterId: null, name: "blink" },
       ],
@@ -129,6 +129,8 @@ describe("factory Assets helpers", () => {
     );
     assert.equal(groups[0].actions[0].frames, 8);
     assert.equal(groups[0].actions[0].still, false);
+    assert.equal(groups[0].actions[0].category, "walks");
+    assert.equal(groups[0].actions[0].flagged, true);
     assert.equal(groups[0].actions[1].still, true);
     assert.equal(sectionLabel("actions"), "Action Shots");
     assert.deepEqual(
@@ -148,8 +150,9 @@ describe("factory Assets helpers", () => {
     assert.equal(FACTORY_THUMB_WIDE_PX, 256);
     assert.equal(FACTORY_THUMB_COMPACT_PX, 88);
     assert.equal(actionShotCaption({ still: true, frames: 1 }), "still");
-    assert.equal(actionShotCaption({ frames: 4, drawings: 4 }), "4 frames");
-    assert.equal(actionShotCaption({ frames: 8, drawings: 4 }), "4 drawings · 8 frames");
+    assert.equal(actionShotCaption({ frames: 4, drawings: 4 }), "4 shots");
+    assert.equal(actionShotCaption({ frames: 8, drawings: 4 }), "8 shots");
+    assert.equal(actionShotCaption({ frames: 1 }), "still");
   });
 
   test("numbered walk frames leave Torso as standalone poses and group under the action", () => {

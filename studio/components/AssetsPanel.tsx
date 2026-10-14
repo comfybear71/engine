@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import ActionShotsSection, { ActionShotDetail } from "@/components/ActionShotsSection";
 import AlignHeadModal from "@/components/AlignHeadModal";
 import AssetEditorOverlay from "@/components/AssetEditorOverlay";
+import CharacterLibraryTab from "@/components/CharacterLibraryTab";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
 import {
   cleanIslandsDrawing,
@@ -30,13 +32,11 @@ import {
   sourceLabel,
   visibleDrawings,
   splitSlotActionFrames,
-  actionShotCaption,
   type AssetsSection,
 } from "@/lib/factoryAssets";
+import { mergeCategories } from "@/lib/actionLibrary";
 import { alignableSlots } from "@/lib/headAlign";
 import {
-  actionPosterUrl,
-  actionPreviewUrl,
   addLibraryCharacter,
   assetUrl,
   trashProjectAsset,
@@ -52,6 +52,7 @@ import {
   makeProjectIndependent,
   mediaUrl,
   openProjectFolder,
+  patchActionCategory,
   saveFactoryStatus,
   saveStudioSettings,
   type Character,
@@ -160,73 +161,6 @@ function AddTile({
   return (
     <button type="button" className="studio-factory-add" data-testid={testId} data-wide={wide ? "true" : "false"} onClick={onClick} title={label || "Add"}>
       <span>+</span>
-    </button>
-  );
-}
-
-function ActionShotTile({
-  project,
-  action,
-  many,
-  onClick,
-}: {
-  project: string;
-  action: {
-    id: string;
-    name?: string;
-    label: string;
-    characterId: string | null;
-    thumbRel?: string | null;
-    frames?: number;
-    drawings?: number;
-    still?: boolean;
-  };
-  many: boolean;
-  onClick: () => void;
-}) {
-  const preview = actionPreviewUrl(project, action.characterId, action.name || action.id);
-  const poster = actionPosterUrl(project, action.characterId, action.name || action.id);
-  const fallback = assetUrl(project, action.thumbRel || null, { factory: true });
-  const [failed, setFailed] = useState(false);
-  const showVideo = Boolean(preview && !failed);
-  const caption = actionShotCaption(action);
-  return (
-    <button
-      type="button"
-      className="studio-factory-cell"
-      data-testid={`assets-action-${action.name}`}
-      data-still={action.still ? "true" : "false"}
-      onClick={onClick}
-    >
-      <span className="studio-factory-cell-thumb studio-checker">
-        {showVideo ? (
-          <video
-            src={preview || undefined}
-            muted
-            loop
-            playsInline
-            preload="none"
-            poster={fallback || poster || undefined}
-            onError={() => setFailed(true)}
-            onMouseEnter={(event) => {
-              void event.currentTarget.play();
-            }}
-            onMouseLeave={(event) => {
-              event.currentTarget.pause();
-              event.currentTarget.currentTime = 0;
-            }}
-          />
-        ) : fallback ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={fallback} alt="" />
-        ) : null}
-      </span>
-      <span className="studio-factory-cell-label">{action.label}</span>
-      {caption ? (
-        <span className="studio-factory-cell-meta" data-testid={`assets-action-meta-${action.name}`}>
-          {caption}
-        </span>
-      ) : null}
     </button>
   );
 }
@@ -797,7 +731,7 @@ export default function AssetsPanel({
   useEffect(() => {
     if (!project || !workerUp || !selectedId || pool) return;
     let cancelled = false;
-    loadFactoryCharacter(project, selectedId, view, selectedKey || undefined)
+    loadFactoryCharacter(project, selectedId, view === "library" ? "front" : view, selectedKey || undefined)
       .then((next) => {
         if (cancelled) return;
         setFactory(next);
@@ -1064,11 +998,19 @@ export default function AssetsPanel({
   const pivotAt = inspector ? pivotPercent(inspector.pivot, inspector.canvas) : null;
   const selectedProp = librarySel?.kind === "props" ? (staging?.props || []).find((p) => `${p.location}:${p.id}` === librarySel.id) : null;
   const selectedBg = librarySel?.kind === "backgrounds" ? (staging?.backgrounds || []).find((b) => b.id === librarySel.id) : null;
-  const selectedAction = librarySel?.kind === "actions" ? actions.find((a) => a.label === librarySel.id) : null;
+  const selectedAction =
+    nav.page === "action"
+      ? actions.find((a) => a.label === nav.id || a.id === nav.id)
+      : librarySel?.kind === "actions"
+        ? actions.find((a) => a.label === librarySel.id || a.id === librarySel.id)
+        : null;
   const visibleCharacters = independent
     ? characters.filter((character) => character.source !== "global")
     : characters;
-  const factoryTabs = factory?.views?.length ? factory.views : FACTORY_VIEW_TABS;
+  const factoryTabs = [
+    ...(factory?.views?.length ? factory.views : FACTORY_VIEW_TABS),
+    { id: "library", label: "Library" },
+  ];
   const factoryCounts = factory?.counts || { ticked: 0, locked: 0, draft: 0, missing: 0 };
   const actionGroups = useMemo(
     () => groupActionsByCharacter(actions, visibleCharacters),
@@ -1622,54 +1564,27 @@ export default function AssetsPanel({
             <AddTile testId="assets-new-backgrounds" wide onClick={() => onNew("backgrounds")} />
           </div>
         ) : nav.page === "section" && nav.section === "actions" ? (
-          <div className="studio-factory-rows" data-testid="assets-section-actions">
-            {actionGroups.length === 0 ? (
-              <div className="studio-factory-thumbs">
-                <AddTile testId="assets-new-actions" onClick={() => onNew("actions")} />
-              </div>
-            ) : null}
-            {actionGroups.map((group) => (
-              <section key={group.characterId || "shared"} className="studio-factory-row">
-                <div className="studio-factory-row-head">
-                  <h4 className="studio-factory-row-title">{group.characterName}</h4>
-                  <span className="studio-factory-row-meta">{group.actions.length}</span>
-                </div>
-                <div className="studio-factory-thumbs">
-                  {group.actions.map((action) => {
-                    const many = actions.length > 8;
-                    return (
-                      <div key={action.id} className="studio-factory-tile-wrap">
-                        <ActionShotTile
-                          project={project}
-                          action={action}
-                          many={many}
-                          onClick={() => {
-                            setLibrarySel({ kind: "actions", id: action.id });
-                            setNav({ page: "action", id: action.id });
-                          }}
-                        />
-                        <TrashButton
-                          testId={`assets-trash-action-${action.name}`}
-                          onClick={() =>
-                            void onTrash(
-                              {
-                                kind: "action",
-                                id: action.name || action.id,
-                                characterId: action.characterId,
-                                confirm: true,
-                              },
-                              action.label
-                            )
-                          }
-                        />
-                      </div>
-                    );
-                  })}
-                  <AddTile testId="assets-new-actions" onClick={() => onNew("actions")} />
-                </div>
-              </section>
-            ))}
-          </div>
+          <ActionShotsSection
+            project={project}
+            groups={actionGroups}
+            onOpen={(action) => {
+              setLibrarySel({ kind: "actions", id: action.id });
+              setNav({ page: "action", id: action.id });
+            }}
+            onTrash={(action) =>
+              void onTrash(
+                {
+                  kind: "action",
+                  id: action.name || action.id,
+                  characterId: action.characterId,
+                  confirm: true,
+                },
+                action.label
+              )
+            }
+            onNew={() => onNew("actions")}
+            onReload={() => setReloadKey((n) => n + 1)}
+          />
         ) : nav.page === "section" && nav.section === "sounds" ? (
           <div className="studio-factory-sounds" data-testid="assets-section-sounds">
             {audio.map((file) => (
@@ -1710,6 +1625,12 @@ export default function AssetsPanel({
             <div className="studio-factory-rows">
               {!selected ? (
                 <p className="text-[11px] text-studio-muted">No character in this project yet.</p>
+              ) : view === "library" ? (
+                <CharacterLibraryTab
+                  project={project}
+                  characterId={selected.id}
+                  onImported={() => setReloadKey((n) => n + 1)}
+                />
               ) : factory ? (
                 factory.rows.map((row) => (
                   <FactoryRowBlock
@@ -1724,8 +1645,8 @@ export default function AssetsPanel({
                       const hit = actions.find((item) => (item.name || item.id) === actionId && item.characterId === selected.id)
                         || actions.find((item) => (item.name || item.id) === actionId);
                       if (!hit) return;
-                      setLibrarySel({ kind: "actions", id: hit.id });
-                      setNav({ page: "action", id: hit.id });
+                      setLibrarySel({ kind: "actions", id: hit.label });
+                      setNav({ page: "action", id: hit.label });
                     }}
                     onSelect={(piece) => {
                       setSelectedKey(piece.key);
@@ -1789,9 +1710,19 @@ export default function AssetsPanel({
               />
             ) : null}
             {nav.page === "action" && selectedAction ? (
-              <ActionFitPreview
+              <ActionShotDetail
                 project={project}
                 action={selectedAction}
+                categories={mergeCategories()}
+                onCategory={(id) => {
+                  if (!selectedAction.characterId) return;
+                  void patchActionCategory(
+                    project,
+                    selectedAction.characterId,
+                    selectedAction.name || selectedAction.id,
+                    id
+                  ).then(() => setReloadKey((n) => n + 1));
+                }}
               />
             ) : null}
             {nav.page === "sound" ? (
@@ -1941,35 +1872,6 @@ function FitPreview({ src, label, cover = false }: { src: string | null; label: 
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt={label} />
-      ) : (
-        <p className="text-[11px] text-studio-muted">No picture</p>
-      )}
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function ActionFitPreview({ project, action }: { project: string; action: ProjectAction }) {
-  const preview = actionPreviewUrl(project, action.characterId, action.name || action.id);
-  const fallback = assetUrl(project, action.thumbRel || null, { factory: true });
-  const [failed, setFailed] = useState(false);
-  const label = action.name || action.id;
-  return (
-    <div className="studio-factory-fit">
-      {preview && !failed ? (
-        <video
-          src={preview}
-          muted
-          loop
-          playsInline
-          autoPlay
-          preload="auto"
-          poster={fallback || undefined}
-          onError={() => setFailed(true)}
-        />
-      ) : fallback ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={fallback} alt={label} />
       ) : (
         <p className="text-[11px] text-studio-muted">No picture</p>
       )}

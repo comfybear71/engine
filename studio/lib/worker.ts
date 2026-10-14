@@ -564,6 +564,54 @@ export type ProjectAction = {
   frames?: number;
   drawings?: number;
   still?: boolean;
+  category?: string;
+  view?: string | null;
+  warnings?: string[];
+  flagged?: boolean;
+};
+
+export type LibraryFrame = {
+  index: number;
+  rel: string;
+  thumbRel?: string | null;
+  kind?: string;
+  view?: string;
+  yaw?: number;
+  action?: string;
+  phase?: string;
+  quality?: number;
+  issues?: string[];
+};
+
+export type LibraryClip = {
+  id: string;
+  filename: string;
+  kind: string;
+  action: string;
+  category: string;
+  frameCount: number;
+  view?: string;
+  warnings: string[];
+  issues: string[];
+  frames: LibraryFrame[];
+};
+
+export type CharacterLibrary = {
+  characterId: string;
+  categories: { id: string; label: string }[];
+  clips: LibraryClip[];
+};
+
+export type ActionFrameDetail = {
+  actionId: string;
+  characterId: string;
+  category: string;
+  view: string | null;
+  frames: number;
+  still: boolean;
+  warnings: string[];
+  libraryClip: string | null;
+  drawings: { index: number; number: number; name: string; slot: string; rel: string | null; issues: string[] }[];
 };
 
 export async function loadFactoryCharacter(
@@ -605,6 +653,90 @@ export async function loadProjectActions(name: string): Promise<ProjectAction[]>
   if (!res.ok) throw new Error(await readError(res));
   const body = (await res.json()) as { actions?: ProjectAction[] };
   return body.actions || [];
+}
+
+export async function loadCharacterLibrary(project: string, characterId: string): Promise<CharacterLibrary> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/library`
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<CharacterLibrary>;
+}
+
+export async function addActionCategory(project: string, characterId: string, label: string): Promise<{ id: string; label: string }[]> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/library/categories`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label }) }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { categories?: { id: string; label: string }[] };
+  return body.categories || [];
+}
+
+export async function patchActionCategory(
+  project: string,
+  characterId: string,
+  actionId: string,
+  category: string
+): Promise<void> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/actions/${encodeURIComponent(characterId)}/${encodeURIComponent(actionId)}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category }) }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+}
+
+export async function loadActionFrames(project: string, characterId: string, actionId: string): Promise<ActionFrameDetail> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/actions/${encodeURIComponent(characterId)}/${encodeURIComponent(actionId)}/frames`
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<ActionFrameDetail>;
+}
+
+export async function flagActionFrame(
+  project: string,
+  characterId: string,
+  actionId: string,
+  index: number,
+  issue: string
+): Promise<ActionFrameDetail> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/actions/${encodeURIComponent(characterId)}/${encodeURIComponent(actionId)}/frames/${index}/flag`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue }) }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<ActionFrameDetail>;
+}
+
+export async function deleteActionFrame(
+  project: string,
+  characterId: string,
+  actionId: string,
+  index: number
+): Promise<ActionFrameDetail> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/actions/${encodeURIComponent(characterId)}/${encodeURIComponent(actionId)}/frames/${index}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<ActionFrameDetail>;
+}
+
+export async function saveActionFrameToSlot(
+  project: string,
+  characterId: string,
+  actionId: string,
+  index: number,
+  slot: string,
+  view?: string
+): Promise<{ rel: string; name: string; state: string }> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/actions/${encodeURIComponent(characterId)}/${encodeURIComponent(actionId)}/frames/${index}/save-slot`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slot, view }) }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<{ rel: string; name: string; state: string }>;
 }
 
 export function actionPreviewUrl(project: string, characterId: string | null | undefined, actionId: string): string | null {

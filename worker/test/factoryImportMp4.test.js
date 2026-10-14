@@ -105,6 +105,16 @@ describe("factory import mp4", { concurrency: false }, () => {
     assert.equal(fs.existsSync(preview), true, "preview.mp4 must render");
     assert.ok(fs.statSync(preview).size > 1000);
     assert.ok(job.previewRel);
+    assert.equal(job.category, "walks");
+    assert.ok(job.libraryClip);
+    const libIndex = path.join(projectDir, "characters", "rodney", "library", job.libraryClip, "index.json");
+    assert.equal(fs.existsSync(libIndex), true, "library catalog index.json");
+    const clip = JSON.parse(fs.readFileSync(libIndex, "utf8"));
+    assert.equal(clip.kind, "body");
+    assert.equal(clip.category, "walks");
+    assert.ok(Array.isArray(clip.frames) && clip.frames.length > 0);
+    assert.ok(clip.frames[0].view);
+    assert.ok(clip.frames[0].phase);
 
     const rebuilt = await buildImportMp4(
       projectDir,
@@ -124,6 +134,8 @@ describe("factory import mp4", { concurrency: false }, () => {
     assert.equal(action.id, "silly_walk_side");
     assert.equal(action.view, "right_side");
     assert.equal(action.hide_children, true);
+    assert.equal(action.category, "walks");
+    assert.ok(action.libraryClip);
     assert.equal(action.set_slots.head_base, undefined);
     const destDir = path.join(projectDir, "characters", "rodney", "torso_right_side");
     for (let i = 1; i <= 8; i += 1) {

@@ -159,6 +159,10 @@ export type ActionShot = {
   frames?: number;
   drawings?: number;
   still?: boolean;
+  category?: string;
+  view?: string | null;
+  warnings?: string[];
+  flagged?: boolean;
 };
 
 export type ActionShotGroup = { characterId: string | null; characterName: string; actions: ActionShot[] };
@@ -175,6 +179,10 @@ export function groupActionsByCharacter(
     frames?: number;
     drawings?: number;
     still?: boolean;
+    category?: string;
+    view?: string | null;
+    warnings?: string[];
+    flagged?: boolean;
   }>,
   characters: Array<{ id: string; display_name: string }>
 ): ActionShotGroup[] {
@@ -186,17 +194,13 @@ export function groupActionsByCharacter(
     const characterName = characterId ? names.get(characterId) || characterId : "Shared";
     if (!groups.has(key)) groups.set(key, { characterId, characterName, actions: [] });
     groups.get(key)!.actions.push({
+      ...action,
       id: action.label || `${characterId || "shared"}/${action.id}`,
       name: action.name || action.id,
       label: action.name || action.id,
       characterId,
       characterName,
       thumbRel: action.thumbRel || null,
-      rel: action.rel,
-      source: action.source,
-      frames: action.frames,
-      drawings: action.drawings,
-      still: action.still,
     });
   }
   return [...groups.values()].sort((a, b) => {
@@ -353,10 +357,7 @@ export function actionShotCaption(action: {
 } | null | undefined): string {
   if (!action) return "";
   if (action.still || (action.frames != null && action.frames <= 1)) return "still";
-  const drawings = Number(action.drawings) || 0;
-  const frames = Number(action.frames) || 0;
-  if (drawings > 0 && drawings !== frames) return `${drawings} drawings · ${frames} frames`;
-  if (frames > 0) return `${frames} frames`;
-  if (drawings > 0) return `${drawings} drawings`;
-  return "";
+  const frames = Number(action.frames) || Number(action.drawings) || 0;
+  if (frames <= 0) return "";
+  return `${frames} shot${frames === 1 ? "" : "s"}`;
 }

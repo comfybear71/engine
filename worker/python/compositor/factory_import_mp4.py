@@ -17,13 +17,14 @@ import numpy as np
 
 from .align import alpha_bbox
 from .asset_cache import _to_bgra
-from .cutout import key_green, remove_stray_islands
+from .cutout import despill, key_green, remove_stray_islands
 from .factory_fit import (
     _blit,
     _boot_xs,
     _resize_uniform,
     count_boots,
     count_figures,
+    facing_direction,
     rig_ground_and_height,
 )
 from .factory_walk_rig import plant_to_ground, travel_distance
@@ -95,7 +96,7 @@ def key_black(bgr: np.ndarray, luma_max: int = LUMA_BG, protect: int = EDGE_PROT
 def key_frame(bgr: np.ndarray, background: str | None = None) -> np.ndarray:
     kind = background or detect_background([bgr])
     if kind == "green":
-        keyed = key_green(bgr)
+        keyed = despill(key_green(bgr))
     else:
         keyed = key_black(bgr)
     return remove_stray_islands(_to_bgra(keyed))
@@ -453,12 +454,333 @@ def build_from_indices(
     return info
 
 
+VIEW_YAW = {
+    "front": 0.0,
+    "right_34": 45.0,
+    "right_side": 90.0,
+    "back": 180.0,
+    "left_side": -90.0,
+    "left_34": -45.0,
+}
+
+WALK_PHASES = ("contact_R", "down_R", "passing_R", "up_R", "contact_L", "down_L", "passing_L", "up_L")
+
+
+def infer_clip_meta(filename: str, prompt: str = "") -> dict:
+    text = f"{filename} {prompt}".lower().replace("_", " ")
+    if any(word in text for word in ("walk", "stride", "step", "gait")):
+        return {"kind": "body", "action": "walk", "category": "walks"}
+    if "mic" in text:
+        return {"kind": "body", "action": "mic", "category": "mic"}
+    if any(word in text for word in ("head", "face", "look", "turn")):
+        cat = "turns_looks" if any(word in text for word in ("look", "turn", "glance")) else "head_moves"
+        return {"kind": "head", "action": "turn", "category": cat}
+    if any(word in text for word in ("arm", "gesture", "wave", "point")):
+        return {"kind": "body", "action": "gesture", "category": "arms_gestures"}
+    if any(word in text for word in ("idle", "stand", "neutral")):
+        return {"kind": "body", "action": "stand", "category": "idle_stand"}
+    if any(word in text for word in ("eye", "mouth", "smile", "expression")):
+        return {"kind": "head", "action": "expression", "category": "expressions"}
+    return {"kind": "body", "action": "action", "category": "other"}
+
+
+def yaw_to_view(yaw: float) -> str:
+    best = "front"
+    best_d = 999.0
+    for name, value in VIEW_YAW.items():
+        d = abs(((yaw - value + 180) % 360) - 180)
+        if d < best_d:
+            best_d = d
+            best = name
+    return best
+
+
+def estimate_yaw(frame: np.ndarray, kind: str = "body") -> float:
+    facing = facing_direction(frame)
+    src = _to_bgra(frame)
+    box = alpha_bbox(src)
+    if box is None:
+        return 0.0
+    width = max(1, box[2] - box[0])
+    height = max(1, box[3] - box[1])
+    aspect = width / float(height)
+    profile = 0.48 if kind == "head" else 0.42
+    three_q = 0.36 if kind == "head" else 0.32
+    if facing == "right":
+        if aspect >= profile:
+            return 90.0
+        if aspect >= three_q:
+            return 45.0
+        return 20.0
+    if facing == "left":
+        if aspect >= profile:
+            return -90.0
+        if aspect >= three_q:
+            return -45.0
+        return -20.0
+    if aspect >= profile * 1.05:
+        return 180.0
+    return 0.0
+
+
+def classify_phase(action: str, index: int, features: dict, cycle_len: int) -> str:
+    if action == "walk" and cycle_len > 0:
+        return WALK_PHASES[int(index) % len(WALK_PHASES)]
+    if action == "mic":
+        span = float(features.get("w") or 0)
+        height = float(features.get("h") or 1)
+        return "raise" if span > height * 0.55 else "hold"
+    if action == "turn":
+        return "turn"
+    if action == "stand":
+        return "stand"
+    return action or "hold"
+
+
+def detect_frame_issues(frame: np.ndarray, kind: str, view: str) -> list[str]:
+    issues: list[str] = []
+    src = _to_bgra(frame)
+    box = alpha_bbox(src)
+    if box is None:
+        return ["empty"]
+    x0, y0, x1, y1 = box
+    crop = src[y0:y1, x0:x1]
+    h = max(1, y1 - y0)
+    top = crop[: max(1, h // 3), :, 3]
+    bot = crop[(h * 2) // 3 :, :, 3]
+    top_mass = int(np.count_nonzero(top > 16))
+    bot_mass = int(np.count_nonzero(bot > 16))
+    if kind == "body":
+        boots_top = count_boots(crop[: max(8, h // 3)])
+        if top_mass > bot_mass * 1.35 and boots_top >= 1:
+            issues.append("upside_down")
+    else:
+        top_w = _row_width(crop[:, :, 3], 0.08)
+        bot_w = _row_width(crop[:, :, 3], 0.92)
+        if top_w > 4 and bot_w > 4 and top_w < bot_w * 0.62:
+            issues.append("upside_down")
+    facing = facing_direction(src)
+    if view in {"right_side", "right_34"} and facing == "left":
+        issues.append("mirrored")
+    if view in {"left_side", "left_34"} and facing == "right":
+        issues.append("mirrored")
+    if kind == "body":
+        mid = crop[h // 4 : (h * 3) // 4, :, 3] > 16
+        ys, xs = np.where(mid)
+        if xs.size > 8:
+            cx = float(xs.mean())
+            # Raised mass on the far side of a profile view is often the wrong arm.
+            if view in {"right_side", "right_34"} and cx < crop.shape[1] * 0.28:
+                issues.append("arm_side")
+            if view in {"left_side", "left_34"} and cx > crop.shape[1] * 0.72:
+                issues.append("arm_side")
+    return issues
+
+
+def _alpha_over(dst: np.ndarray, src: np.ndarray) -> np.ndarray:
+    out = dst.copy()
+    src = _to_bgra(src)
+    if src.shape[:2] != out.shape[:2]:
+        canvas = np.zeros_like(out)
+        h = min(src.shape[0], canvas.shape[0])
+        w = min(src.shape[1], canvas.shape[1])
+        canvas[:h, :w] = src[:h, :w]
+        src = canvas
+    a = src[:, :, 3:4].astype(np.float32) / 255.0
+    out[:, :, :3] = (src[:, :, :3].astype(np.float32) * a + out[:, :, :3].astype(np.float32) * (1.0 - a)).astype(np.uint8)
+    out[:, :, 3] = np.clip(out[:, :, 3].astype(np.float32) * (1.0 - a[:, :, 0]) + src[:, :, 3].astype(np.float32) * a[:, :, 0], 0, 255).astype(np.uint8)
+    return out
+
+
+def place_head_at_neck(head: np.ndarray, canvas_w: int, canvas_h: int, neck_y: int, neck_x: int | None = None) -> np.ndarray:
+    src = _to_bgra(head)
+    box = alpha_bbox(src)
+    out = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+    if box is None:
+        return out
+    piece = src[box[1] : box[3], box[0] : box[2]]
+    ph, pw = piece.shape[:2]
+    target_h = max(24, int(neck_y * 0.42))
+    scale = min(target_h / max(1, ph), (canvas_w - 16) / max(1, pw))
+    resized = _resize_uniform(piece, float(scale))
+    rh, rw = resized.shape[:2]
+    x = int(round((neck_x if neck_x is not None else canvas_w / 2.0) - rw / 2.0))
+    y = int(round(neck_y - rh))
+    x = max(0, min(x, canvas_w - rw))
+    y = max(0, min(y, canvas_h - rh))
+    _blit(out, resized, x, y)
+    return out
+
+
+def compose_body_head(
+    body: np.ndarray,
+    head: np.ndarray | None,
+    canvas_w: int,
+    canvas_h: int,
+    *,
+    torso_ref: np.ndarray | None = None,
+    legs_ref: np.ndarray | None = None,
+    neck_y: int | None = None,
+) -> tuple[np.ndarray, list[str]]:
+    """Head first (neck at collar), body over so collar/mic/hand cover the chin."""
+
+    body_fit, problems = fit_import_body(
+        body,
+        canvas_w,
+        canvas_h,
+        torso_ref=torso_ref,
+        legs_ref=legs_ref,
+        neck_y=neck_y,
+    )
+    out = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+    neck = int(neck_y) if neck_y is not None else 457
+    bbox = alpha_bbox(body_fit)
+    neck_x = int((bbox[0] + bbox[2]) / 2) if bbox is not None else canvas_w // 2
+    if head is not None and alpha_bbox(_to_bgra(head)) is not None:
+        placed = place_head_at_neck(head, canvas_w, canvas_h, neck, neck_x)
+        out = _alpha_over(out, placed)
+    out = _alpha_over(out, body_fit)
+    return out, problems
+
+
+def nearest_head_index(body_yaw: float, heads: list[dict]) -> int | None:
+    if not heads:
+        return None
+    best_i = 0
+    best_d = 999.0
+    for i, item in enumerate(heads):
+        yaw = float(item.get("yaw") or 0)
+        d = abs(((body_yaw - yaw + 180) % 360) - 180)
+        if d < best_d:
+            best_d = d
+            best_i = i
+    return best_i
+
+
+def catalog_frames(frame_paths: list[Path], out_dir: Path, *, filename: str = "", prompt: str = "") -> dict:
+    """Key every frame, tag kind/view/phase/quality, write library layout."""
+
+    meta = infer_clip_meta(filename, prompt)
+    raw = [_load(p) for p in frame_paths]
+    background = detect_background(raw)
+    keyed = [key_frame(img, background) for img in raw]
+    features = [frame_features(raw[i], keyed[i]) for i in range(len(raw))]
+    head_votes = sum(1 for f in features if f.get("has_head") and f.get("boots", 0) < 2 and f.get("h", 0) < 160)
+    if meta["kind"] != "head" and head_votes >= max(3, len(features) * 0.55) and not any(f.get("boots", 0) >= 2 for f in features):
+        meta = {**meta, "kind": "head", "action": "turn", "category": "head_moves"}
+    frames_dir = out_dir / "frames"
+    strip_dir = out_dir / "strip"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    strip_dir.mkdir(parents=True, exist_ok=True)
+    tagged = []
+    warnings: list[str] = []
+    for i, src in enumerate(keyed):
+        name = f"frame_{i:04d}.png"
+        cv2.imwrite(str(frames_dir / name), src)
+        write_thumb(src, strip_dir / name)
+        yaw = estimate_yaw(src, meta["kind"])
+        view = yaw_to_view(yaw)
+        issues = detect_frame_issues(src, meta["kind"], view)
+        quality = max(0.0, min(1.0, (score_key(features, i) + 8.0) / 16.0))
+        if issues:
+            quality = max(0.0, quality - 0.25 * len(issues))
+            warnings.extend(issues)
+        tagged.append(
+            {
+                "index": i,
+                "file": f"frames/{name}",
+                "rel": f"strip/{name}",
+                "kind": meta["kind"],
+                "view": view,
+                "yaw": round(yaw, 1),
+                "action": meta["action"],
+                "phase": classify_phase(meta["action"], i, features[i], max(8, len(features) // 3)),
+                "quality": round(quality, 3),
+                "issues": issues,
+                **{k: features[i][k] for k in ("h", "w", "foot_span", "blobs", "boots", "has_head")},
+            }
+        )
+    unique_warn = list(dict.fromkeys(warnings))
+    info = {
+        "ok": True,
+        "kind": meta["kind"],
+        "action": meta["action"],
+        "category": meta["category"],
+        "background": background,
+        "frameCount": len(tagged),
+        "hasHead": any(item.get("has_head") for item in tagged),
+        "warnings": [
+            f"{w.replace('_', ' ')} on {sum(1 for item in tagged if w in item['issues'])} frame(s)"
+            for w in unique_warn
+        ],
+        "frames": tagged,
+    }
+    (out_dir / "index.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf8")
+    return info
+
+
+def compose_from_library(
+    body_dir: Path,
+    body_indices: list[int],
+    out_dir: Path,
+    canvas_w: int,
+    canvas_h: int,
+    *,
+    heads: list[tuple[int, np.ndarray, float]] | None = None,
+    torso_ref: np.ndarray | None = None,
+    legs_ref: np.ndarray | None = None,
+    neck_y: int | None = None,
+) -> dict:
+    head_rows = [{"yaw": yaw, "index": i} for i, _img, yaw in (heads or [])]
+    written = []
+    problems: list[str] = []
+    frames: list[np.ndarray] = []
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for i, index in enumerate(body_indices):
+        src = _load(body_dir / f"frame_{int(index):04d}.png")
+        head_img = None
+        if heads:
+            yaw = estimate_yaw(src, "body")
+            pick = nearest_head_index(yaw, head_rows)
+            if pick is not None:
+                head_img = heads[pick][1]
+        fitted, probs = compose_body_head(
+            src,
+            head_img,
+            canvas_w,
+            canvas_h,
+            torso_ref=torso_ref,
+            legs_ref=legs_ref,
+            neck_y=neck_y,
+        )
+        problems.extend(probs)
+        name = f"cell_{i:02d}.png"
+        dest = out_dir / name
+        cv2.imwrite(str(dest), fitted)
+        written.append({"src": str(dest), "name": name, "index": int(index), "problems": probs})
+        frames.append(fitted)
+    return {
+        "ok": True,
+        "frames": len(frames),
+        "distance_per_cycle": travel_distance(frames) if len(frames) >= 2 else 96,
+        "problems": list(dict.fromkeys(problems)),
+        "written": written,
+        "pairedHead": bool(heads),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Analyse or fit an imported walk MP4.")
+    parser = argparse.ArgumentParser(description="Analyse, catalogue, or fit an imported walk MP4.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     an = sub.add_parser("analyze")
     an.add_argument("--frames-dir", type=Path, required=True)
     an.add_argument("--out-dir", type=Path, required=True)
+    an.add_argument("--filename", default="")
+    cat = sub.add_parser("catalog")
+    cat.add_argument("--frames-dir", type=Path, required=True)
+    cat.add_argument("--out-dir", type=Path, required=True)
+    cat.add_argument("--filename", default="")
+    cat.add_argument("--prompt", default="")
     bd = sub.add_parser("build")
     bd.add_argument("--keyed-dir", type=Path, required=True)
     bd.add_argument("--out-dir", type=Path, required=True)
@@ -468,6 +790,9 @@ def main(argv: list[str] | None = None) -> int:
     bd.add_argument("--torso-ref", type=Path)
     bd.add_argument("--legs-ref", type=Path)
     bd.add_argument("--neck-y", type=int)
+    bd.add_argument("--head-dir", type=Path)
+    bd.add_argument("--head-indices", default="")
+    bd.add_argument("--head-yaws", default="")
     args = parser.parse_args(argv)
     try:
         if args.cmd == "analyze":
@@ -475,19 +800,46 @@ def main(argv: list[str] | None = None) -> int:
             info = analyze_frames(paths, args.out_dir)
             print(json.dumps(info))
             return 0
+        if args.cmd == "catalog":
+            paths = sorted(p for p in args.frames_dir.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"})
+            info = catalog_frames(paths, args.out_dir, filename=args.filename, prompt=args.prompt)
+            print(json.dumps(info))
+            return 0
         indices = [int(x) for x in str(args.indices).split(",") if str(x).strip() != ""]
         torso = _load(args.torso_ref) if args.torso_ref else None
         legs = _load(args.legs_ref) if args.legs_ref else None
-        info = build_from_indices(
-            args.keyed_dir,
-            indices,
-            args.out_dir,
-            args.canvas_w,
-            args.canvas_h,
-            torso_ref=torso,
-            legs_ref=legs,
-            neck_y=args.neck_y,
-        )
+        heads = None
+        if args.head_dir and str(args.head_indices).strip():
+            h_idx = [int(x) for x in str(args.head_indices).split(",") if str(x).strip() != ""]
+            yaws = [float(x) for x in str(args.head_yaws).split(",") if str(x).strip() != ""]
+            heads = []
+            for i, index in enumerate(h_idx):
+                path = args.head_dir / f"frame_{int(index):04d}.png"
+                yaw = yaws[i] if i < len(yaws) else 0.0
+                heads.append((index, _load(path), yaw))
+        if heads:
+            info = compose_from_library(
+                args.keyed_dir,
+                indices,
+                args.out_dir,
+                args.canvas_w,
+                args.canvas_h,
+                heads=heads,
+                torso_ref=torso,
+                legs_ref=legs,
+                neck_y=args.neck_y,
+            )
+        else:
+            info = build_from_indices(
+                args.keyed_dir,
+                indices,
+                args.out_dir,
+                args.canvas_w,
+                args.canvas_h,
+                torso_ref=torso,
+                legs_ref=legs,
+                neck_y=args.neck_y,
+            )
         print(json.dumps(info))
         return 0 if info.get("ok") else 1
     except Exception as err:  # noqa: BLE001

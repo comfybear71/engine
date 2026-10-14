@@ -330,5 +330,6 @@ describe("character status.json", () => {
     assert.ok(walk);
     assert.equal(walk.thumbRel, "characters/walker/torso/walk.png");
     assert.equal(walk.name, "walk_side");
+    assert.equal(walk.category, "walks");
   });
 });

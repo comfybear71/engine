@@ -5,11 +5,17 @@ from __future__ import annotations
 import numpy as np
 
 from compositor.align import alpha_bbox
+import cv2
+
 from compositor.factory_import_mp4 import (
+    catalog_frames,
+    compose_body_head,
     detect_background,
+    detect_frame_issues,
     detect_steady_section,
     fit_import_body,
     frame_features,
+    infer_clip_meta,
     key_black,
     key_frame,
     looks_like_has_head,
@@ -145,3 +151,68 @@ def test_fit_plants_feet_and_eases_collar_to_neck():
     headed = key_frame(_body(headed=True, stride=4), "black")
     _, head_problems = fit_import_body(headed, canvas_w, canvas_h, neck_y=neck_y)
     assert any("head" in item for item in head_problems)
+
+
+def test_infer_clip_meta_from_desktop_filenames():
+    walk = infer_clip_meta("generated_video_silly_walk.mp4")
+    assert walk["kind"] == "body"
+    assert walk["category"] == "walks"
+    head = infer_clip_meta("generated_video_head only movement.mp4")
+    assert head["kind"] == "head"
+    assert head["category"] == "head_moves"
+    mic = infer_clip_meta("generated_video_mic.mp4")
+    assert mic["kind"] == "body"
+    assert mic["category"] == "mic"
+
+
+def test_detect_upside_down_and_arm_side_warnings():
+    flipped = np.zeros((180, 80, 4), dtype=np.uint8)
+    flipped[4:70, 18:62] = (40, 36, 170, 255)
+    flipped[48:62, 16:32] = (32, 36, 42, 255)
+    flipped[48:62, 48:64] = (32, 36, 42, 255)
+    flipped[150:176, 36:44] = (40, 36, 170, 255)
+    issues = detect_frame_issues(flipped, "body", "front")
+    assert "upside_down" in issues
+
+    arm = np.zeros((160, 100, 4), dtype=np.uint8)
+    arm[20:140, 4:28] = (40, 36, 170, 255)
+    arm[30:70, 4:40] = (50, 80, 150, 255)
+    arm[130:150, 8:22] = (32, 36, 42, 255)
+    issues = detect_frame_issues(arm, "body", "right_side")
+    assert "arm_side" in issues
+
+
+def test_catalog_tags_kind_view_phase(tmp_path):
+    frames = []
+    for i in range(4):
+        path = tmp_path / f"src_{i:04d}.png"
+        cv2.imwrite(str(path), _body(stride=i * 2))
+        frames.append(path)
+    out = tmp_path / "clip"
+    info = catalog_frames(frames, out, filename="generated_video_silly_walk.mp4")
+    assert info["ok"] is True
+    assert info["kind"] == "body"
+    assert info["category"] == "walks"
+    assert info["action"] == "walk"
+    assert (out / "index.json").is_file()
+    assert (out / "frames" / "frame_0000.png").is_file()
+    tagged = info["frames"][0]
+    assert tagged["view"]
+    assert tagged["phase"]
+    assert "quality" in tagged
+    assert tagged["kind"] == "body"
+
+
+def test_compose_body_covers_head_at_collar():
+    body = np.zeros((64, 64, 4), dtype=np.uint8)
+    body[18:58, 18:46] = (0, 0, 220, 255)
+    head = np.zeros((64, 64, 4), dtype=np.uint8)
+    head[0:36, 20:44] = (0, 220, 0, 255)
+    out, problems = compose_body_head(body, head, 64, 64, neck_y=24)
+    box = alpha_bbox(out)
+    assert box is not None
+    assert "blank drawing" not in problems
+    sample = out[24, 32]
+    assert int(sample[3]) > 16
+    # Body (red in BGR) is painted over the head (green) at the collar.
+    assert int(sample[2]) > int(sample[1])

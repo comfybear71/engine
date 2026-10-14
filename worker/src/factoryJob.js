@@ -884,6 +884,8 @@ function summarizeJob(job, characterId) {
     usedImport: Boolean(job.usedImport),
     keepHead: Boolean(job.keepHead),
     importMp4: job.importMp4 || null,
+    category: job.category || (job.action && job.action.category) || null,
+    libraryClip: job.libraryClip || (job.action && job.action.libraryClip) || null,
     styleBlock: job.styleBlock,
     rigRules: job.rigRules,
     greenScreen: job.greenScreen,
