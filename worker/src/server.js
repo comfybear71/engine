@@ -125,6 +125,18 @@ const {
 } = require("./factoryLibrary");
 const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
 const {
+  listShots,
+  getShot,
+  makeShot,
+  importShot,
+  patchShot,
+  deleteFrame: deleteShotFrame,
+  saveFrameToSlot: saveShotFrameToSlot,
+  useAsActionShot,
+  retryShot,
+  serveMedia: serveShotMedia,
+} = require("./shots");
+const {
   isSafeShowId,
   resolveEpisodeDir,
   assertShow,
@@ -1196,6 +1208,134 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
       const result = await tickLibraryClip(projectDir, globalAssetsDir, req.params.characterId, req.params.clipId, {
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // ── Action Shots routes ──────────────────────────────────────────
+
+  app.get("/api/projects/:name/characters/:characterId/shots", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(listShots(projectDir, req.params.characterId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/make", async (req, res) => {
+    req.setTimeout(15 * 60 * 1000);
+    res.setTimeout(15 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await makeShot(projectDir, req.params.characterId, req.body || {}, {
+        fetchFn,
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/import", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await importShot(projectDir, req.params.characterId, req, {
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/shots/media", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      serveShotMedia(projectDir, req.params.characterId, req, res);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/shots/:shotId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(getShot(projectDir, req.params.characterId, req.params.shotId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.patch("/api/projects/:name/characters/:characterId/shots/:shotId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(patchShot(projectDir, req.params.characterId, req.params.shotId, req.body || {}));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.delete("/api/projects/:name/characters/:characterId/shots/:shotId/frames/:n", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(deleteShotFrame(projectDir, req.params.characterId, req.params.shotId, req.params.n));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/frames/:n/save-slot", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(
+        saveShotFrameToSlot(
+          projectDir,
+          req.params.characterId,
+          req.params.shotId,
+          req.params.n,
+          (req.body && req.body.slot) || "body",
+          (req.body && req.body.view) || "front"
+        )
+      );
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/use", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(useAsActionShot(projectDir, req.params.characterId, req.params.shotId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/retry", async (req, res) => {
+    req.setTimeout(15 * 60 * 1000);
+    res.setTimeout(15 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await retryShot(projectDir, req.params.characterId, req.params.shotId, {
+        fetchFn,
         pythonBin: options.pythonBin,
       });
       res.json(result);

@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import ActionShotsSection, { ActionShotDetail } from "@/components/ActionShotsSection";
+import ActionShotsPage from "@/components/ActionShotsPage";
+import { ActionShotDetail } from "@/components/ActionShotsSection";
 import AlignHeadModal from "@/components/AlignHeadModal";
 import AssetEditorOverlay from "@/components/AssetEditorOverlay";
-import CharacterLibraryTab from "@/components/CharacterLibraryTab";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
 import {
   cleanIslandsDrawing,
@@ -1009,7 +1009,6 @@ export default function AssetsPanel({
     : characters;
   const factoryTabs = [
     ...(factory?.views?.length ? factory.views : FACTORY_VIEW_TABS),
-    { id: "library", label: "Library" },
   ];
   const factoryCounts = factory?.counts || { ticked: 0, locked: 0, draft: 0, missing: 0 };
   const actionGroups = useMemo(
@@ -1564,25 +1563,9 @@ export default function AssetsPanel({
             <AddTile testId="assets-new-backgrounds" wide onClick={() => onNew("backgrounds")} />
           </div>
         ) : nav.page === "section" && nav.section === "actions" ? (
-          <ActionShotsSection
+          <ActionShotsPage
             project={project}
-            groups={actionGroups}
-            onOpen={(action) => {
-              setLibrarySel({ kind: "actions", id: action.id });
-              setNav({ page: "action", id: action.id });
-            }}
-            onTrash={(action) =>
-              void onTrash(
-                {
-                  kind: "action",
-                  id: action.name || action.id,
-                  characterId: action.characterId,
-                  confirm: true,
-                },
-                action.label
-              )
-            }
-            onNew={() => onNew("actions")}
+            characterId={selected?.id || ""}
             onReload={() => setReloadKey((n) => n + 1)}
           />
         ) : nav.page === "section" && nav.section === "sounds" ? (
@@ -1625,12 +1608,6 @@ export default function AssetsPanel({
             <div className="studio-factory-rows">
               {!selected ? (
                 <p className="text-[11px] text-studio-muted">No character in this project yet.</p>
-              ) : view === "library" ? (
-                <CharacterLibraryTab
-                  project={project}
-                  characterId={selected.id}
-                  onImported={() => setReloadKey((n) => n + 1)}
-                />
               ) : factory ? (
                 factory.rows.map((row) => (
                   <FactoryRowBlock
