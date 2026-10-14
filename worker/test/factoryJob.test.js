@@ -198,11 +198,19 @@ describe("factory dest and names", () => {
     assert.equal(setSlots.eyes, "none");
     assert.equal(setSlots.mouth, undefined);
     assert.equal(setSlots.hat, "none");
-    assert.equal(setSlots.cape, "none");
-    assert.equal(setSlots.arm_L, "none");
+    assert.equal(setSlots.cape, undefined, "child slots are not set_slots (hide_children covers them)");
+    assert.equal(setSlots.arm_L, undefined);
     assert.equal(setSlots.legs, "none");
     assert.equal(setSlots.body, "none");
     assert.equal(setSlots.torso, undefined);
+    const keepHead = walkSetSlots(
+      { slots: { torso: {}, head_base: {}, eyes: {}, mouth: {}, legs: {} } },
+      { slot: "torso" },
+      { keepHead: true }
+    );
+    assert.equal(keepHead.head_base, undefined);
+    assert.equal(keepHead.eyes, undefined);
+    assert.equal(keepHead.legs, "none");
   });
 
   test("side walk reference prefers a side drawing over the front full.png", () => {
@@ -669,6 +677,16 @@ describe("factory walk from ticked walk_side frames (no Grok)", () => {
             characterId: "rodney",
             prompt: "Rodney walking long stride",
             frames: 8,
+          }),
+        /Import an MP4/i
+      );
+      await assert.rejects(
+        () =>
+          runFactoryJob(dir, null, {
+            characterId: "rodney",
+            prompt: "Rodney walking long stride",
+            frames: 8,
+            useRigWalk: true,
           }),
         /Need at least two ticked walk_side/i
       );

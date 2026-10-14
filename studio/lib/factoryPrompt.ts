@@ -254,7 +254,7 @@ export function factoryHint(
     return `Type a ${slotLabel(opts.slot, opts.label)} drawing`;
   }
   const name = (opts.character && (opts.character.display_name || opts.character.id)) || "the character";
-  return `Type what ${name} should do. A walk builds 8/12/16 long-stride loops from the existing side walk — no Grok. Open Advanced to use Imagine.`;
+  return `Type what ${name} should do. For a walk, Import MP4 (no API). Advanced can still use Grok or the parked rig long-stride path.`;
 }
 
 export function factoryPlaceholder(

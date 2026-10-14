@@ -42,7 +42,7 @@ describe("factory hidden prompt pack", () => {
   test("context-aware Factory hints and slot header", () => {
     assert.match(
       factoryHint("character", { character: { id: "rodney", display_name: "Rodney", style: "", slots: [] } }),
-      /no Grok/
+      /Import MP4/
     );
     assert.equal(factoryHint("prop"), "Type the prop you want (e.g. guitar, bar stool)");
     assert.equal(factoryHint("new-character"), "Describe a new character (e.g. grumpy old barman)");

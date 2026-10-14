@@ -108,6 +108,7 @@ const {
   tickFactoryJob,
   redoFactoryJob,
 } = require("./factoryJob");
+const { startImportMp4, buildImportMp4, resolveImportStrip, readImportMp4Request } = require("./factoryImportMp4");
 const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
 const {
   isSafeShowId,
@@ -1059,6 +1060,58 @@ function createApp(options = {}) {
     const status = err.code === "ENOTFOUND" || err.code === "ENOENT" ? 404 : err.code === "EINVAL" ? 400 : 500;
     if (!res.headersSent) res.status(status).json({ error: err.message || "Factory failed" });
   }
+
+  app.post("/api/projects/:name/factory/import-mp4", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const parsed = await readImportMp4Request(req);
+      if (!parsed.characterId) return res.status(400).json({ error: "Pick a character first." });
+      const result = await startImportMp4(projectDir, globalAssetsDir, parsed, {
+        fetchFn,
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/factory/:characterId/:jobId/import-mp4/build", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      const result = await buildImportMp4(
+        projectDir,
+        globalAssetsDir,
+        req.params.characterId,
+        req.params.jobId,
+        req.body || {},
+        { fetchFn, pythonBin: options.pythonBin }
+      );
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/factory/:characterId/:jobId/strip/:stripName", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const file = resolveImportStrip(projectDir, req.params.characterId, req.params.jobId, req.params.stripName);
+      res.setHeader("Cache-Control", "private, max-age=30");
+      res.sendFile(path.resolve(file), { headers: { "Content-Type": "image/png" } });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
 
   app.post("/api/projects/:name/factory", async (req, res) => {
     req.setTimeout(5 * 60 * 1000);

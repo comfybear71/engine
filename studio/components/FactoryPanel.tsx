@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   FACTORY_FRAMES,
   assembleHiddenPrompt,
@@ -13,7 +13,10 @@ import {
   type FactoryModeKind,
 } from "@/lib/factoryPrompt";
 import {
+  buildFactoryImportMp4,
   factoryPreviewUrl,
+  factoryStripUrl,
+  importFactoryMp4,
   redoFactoryJob,
   startFactoryJob,
   tickFactoryJob,
@@ -45,14 +48,26 @@ export default function FactoryPanel({
   const [advancedPrompt, setAdvancedPrompt] = useState("");
   const [advancedTouched, setAdvancedTouched] = useState(false);
   const [useGrok, setUseGrok] = useState(false);
+  const [useRigWalk, setUseRigWalk] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<FactoryJob | null>(null);
   const [walkJobs, setWalkJobs] = useState<FactoryJob[]>([]);
+  const [selectedKeys, setSelectedKeys] = useState<number[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const showFrames = factoryUsesFrames(mode);
   const hint = factoryHint(mode, { character, slot, label });
   const placeholder = factoryPlaceholder(mode, { character, slot, label });
+  const canImport = mode === "character" && Boolean(character);
+  const importJob = Boolean(job?.usedImport);
+  const thumbs = job?.importMp4?.thumbs || [];
+  const steady = job?.importMp4?.steady;
+  const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+  const selectedDirty =
+    importJob &&
+    JSON.stringify([...(job?.importMp4?.selected || [])].sort((a, b) => a - b)) !==
+      JSON.stringify([...selectedKeys].sort((a, b) => a - b));
 
   const assembled = useMemo(
     () =>
@@ -70,8 +85,22 @@ export default function FactoryPanel({
     [mode, character, prompt, frames, advancedPrompt, advancedTouched, slot, view, label, name]
   );
 
+  useEffect(() => {
+    if (job?.importMp4?.selected) setSelectedKeys(job.importMp4.selected.slice());
+  }, [job?.jobId, (job?.importMp4?.selected || []).join(",")]);
+
   function jobOwner(current: FactoryJob | null): string {
     return current?.characterId || character?.id || "project";
+  }
+
+  function walkFlags(text: string) {
+    const walkIntent = mode === "character" && inferFactoryIntent(text).kind === "walk";
+    return {
+      walkIntent,
+      walkSet: walkIntent && useRigWalk && !useGrok,
+      useRigWalk: walkIntent && useRigWalk && !useGrok,
+      useGrok: walkIntent && useGrok,
+    };
   }
 
   async function onGenerate() {
@@ -87,6 +116,11 @@ export default function FactoryPanel({
       setError("Open a slot on a character first.");
       return;
     }
+    const flags = walkFlags(prompt.trim());
+    if (flags.walkIntent && !flags.useGrok && !flags.useRigWalk) {
+      setError("Import an MP4 of the walk (Factory → Import MP4), or open Advanced to use Grok Imagine or the parked rig long-stride path.");
+      return;
+    }
     setBusy("Generating…");
     setError(null);
     try {
@@ -100,8 +134,9 @@ export default function FactoryPanel({
         prompt: prompt.trim(),
         frames: showFrames ? frames : 1,
         advancedPrompt: advancedTouched ? advancedPrompt : undefined,
-        walkSet: mode === "character" && inferFactoryIntent(prompt.trim()).kind === "walk" && !useGrok,
-        useGrok: mode === "character" && inferFactoryIntent(prompt.trim()).kind === "walk" && useGrok,
+        walkSet: flags.walkSet,
+        useGrok: flags.useGrok,
+        useRigWalk: flags.useRigWalk,
       });
       if (result.walkSet && result.jobs && result.jobs.length) {
         setWalkJobs(result.jobs);
@@ -115,6 +150,75 @@ export default function FactoryPanel({
       setError(err instanceof Error ? err.message : "Generate failed");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function onImportFile(file: File | undefined) {
+    if (!file) return;
+    if (!character) {
+      setError("Pick a character first.");
+      return;
+    }
+    setBusy("Importing…");
+    setError(null);
+    try {
+      const result = await importFactoryMp4(project, {
+        characterId: character.id,
+        file,
+        prompt: prompt.trim() || file.name.replace(/\.[^.]+$/, ""),
+        frames,
+        view: view || undefined,
+      });
+      setWalkJobs([]);
+      setJob(result);
+      setSelectedKeys((result.importMp4?.selected || []).slice());
+      if (result.warnings?.length) setError(result.warnings.join(" "));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Import MP4 failed");
+    } finally {
+      setBusy(null);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function rebuildImport(indices: number[], count: FactoryFrames) {
+    if (!job) return;
+    if (indices.length < 2) {
+      setError("Tick at least two key frames in the strip.");
+      return;
+    }
+    setBusy("Generating…");
+    setError(null);
+    try {
+      const result = await buildFactoryImportMp4(project, jobOwner(job), job.jobId, {
+        indices,
+        frames: count,
+      });
+      setJob(result);
+      setSelectedKeys((result.importMp4?.selected || indices).slice());
+      if (result.warnings?.length) setError(result.warnings.join(" "));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Rebuild failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function toggleKey(index: number) {
+    setSelectedKeys((prev) => {
+      const next = prev.includes(index) ? prev.filter((item) => item !== index) : [...prev, index].sort((a, b) => a - b);
+      return next;
+    });
+  }
+
+  function onFramesChange(count: FactoryFrames) {
+    setFrames(count);
+    if (job?.usedImport) {
+      const suggested = job.importMp4?.suggested?.[String(count)];
+      if (suggested && suggested.length >= 2) {
+        setSelectedKeys(suggested.slice());
+        void rebuildImport(suggested, count);
+      }
     }
   }
 
@@ -139,6 +243,10 @@ export default function FactoryPanel({
   }
 
   async function onRedo() {
+    if (job?.usedImport) {
+      fileRef.current?.click();
+      return;
+    }
     if (!job || (walkJobs.length > 1 && !useGrok)) {
       void onGenerate();
       return;
@@ -151,6 +259,7 @@ export default function FactoryPanel({
         frames: showFrames ? frames : 1,
         advancedPrompt: advancedTouched ? advancedPrompt : undefined,
         useGrok,
+        useRigWalk,
       });
       setJob(result);
     } catch (err) {
@@ -210,7 +319,7 @@ export default function FactoryPanel({
                   type="radio"
                   name="factory-frames"
                   checked={frames === count}
-                  onChange={() => setFrames(clampFactoryFrames(count))}
+                  onChange={() => onFramesChange(clampFactoryFrames(count))}
                   data-testid={`factory-frames-${count}`}
                 />
                 {count}
@@ -227,6 +336,27 @@ export default function FactoryPanel({
         >
           {busy === "Generating…" ? "Generating…" : "Generate"}
         </button>
+        {canImport ? (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="video/mp4,video/*"
+              className="hidden"
+              data-testid="factory-import-file"
+              onChange={(event) => void onImportFile(event.target.files?.[0])}
+            />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={busy != null}
+              className="rounded-md border border-studio-border px-3 py-1.5 text-xs font-semibold text-neutral-100 hover:text-white disabled:opacity-40"
+              data-testid="factory-import-mp4"
+            >
+              {busy === "Importing…" ? "Importing…" : "Import MP4"}
+            </button>
+          </>
+        ) : null}
       </div>
 
       <details
@@ -239,7 +369,8 @@ export default function FactoryPanel({
           Advanced
         </summary>
         <p className="mt-2 text-[11px] text-studio-muted">
-          Hidden pack for this project only. Walks use the existing side-walk drawings unless you turn Grok on.
+          Hidden pack for this project only. Walks use Import MP4 (no API). Grok Imagine and the parked rig long-stride
+          path stay here, off by default.
         </p>
         <label className="mt-2 flex items-center gap-2 text-xs text-neutral-200">
           <input
@@ -249,6 +380,15 @@ export default function FactoryPanel({
             data-testid="factory-use-grok"
           />
           Use Grok Imagine for walks (costs credits)
+        </label>
+        <label className="mt-2 flex items-center gap-2 text-xs text-neutral-200">
+          <input
+            type="checkbox"
+            checked={useRigWalk}
+            onChange={(event) => setUseRigWalk(event.target.checked)}
+            data-testid="factory-use-rig-walk"
+          />
+          Parked: build from ticked walk_side frames (rig long-stride)
         </label>
         <textarea
           value={advancedTouched ? advancedPrompt : assembled}
@@ -267,6 +407,51 @@ export default function FactoryPanel({
       <div className="min-h-[160px] rounded-md border border-studio-border bg-black/40 p-3" data-testid="factory-results">
         {job ? (
           <div className="space-y-3">
+            {importJob && thumbs.length && !job.ticked ? (
+              <div data-testid="factory-import-strip">
+                <p className="mb-1 text-[11px] text-studio-muted">
+                  Tick clean keys through one gait cycle. Dim frames are the intro stand/turn.
+                </p>
+                <div className="studio-factory-import-strip">
+                  {thumbs.map((thumb) => {
+                    const inSteady =
+                      !steady || (thumb.index >= (steady.start || 0) && thumb.index < (steady.end || thumbs.length));
+                    const checked = selectedSet.has(thumb.index);
+                    const name = String(thumb.rel || "").split("/").pop() || `frame_${String(thumb.index).padStart(4, "0")}.png`;
+                    return (
+                      <label
+                        key={thumb.index}
+                        className="studio-factory-import-cell"
+                        data-selected={checked ? "true" : "false"}
+                        data-steady={inSteady ? "true" : "false"}
+                        data-testid={`factory-import-key-${thumb.index}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={busy != null}
+                          onChange={() => toggleKey(thumb.index)}
+                        />
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={factoryStripUrl(project, jobOwner(job), job.jobId, name)} alt="" />
+                        <span>{String(thumb.index).padStart(2, "0")}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {selectedDirty ? (
+                  <button
+                    type="button"
+                    onClick={() => void rebuildImport(selectedKeys, frames)}
+                    disabled={busy != null || selectedKeys.length < 2}
+                    className="mt-2 rounded-md border border-studio-border px-3 py-1.5 text-xs text-neutral-200 hover:text-white disabled:opacity-40"
+                    data-testid="factory-import-rebuild"
+                  >
+                    Rebuild preview
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {walkJobs.length > 1 && !job.ticked ? (
               <div className="studio-factory-walk-row" data-testid="factory-walk-set">
                 {walkJobs.map((item) => (
@@ -295,7 +480,7 @@ export default function FactoryPanel({
                 />
               ) : (
                 <video
-                  key={job.jobId}
+                  key={`${job.jobId}-${job.previewRel || ""}`}
                   src={preview}
                   muted
                   loop
@@ -337,7 +522,9 @@ export default function FactoryPanel({
             </div>
           </div>
         ) : (
-          <p className="text-[12px] text-studio-muted">Results show here after Generate.</p>
+          <p className="text-[12px] text-studio-muted">
+            {canImport ? "Import an MP4, or results show here after Generate." : "Results show here after Generate."}
+          </p>
         )}
       </div>
     </section>

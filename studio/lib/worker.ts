@@ -648,7 +648,63 @@ export type FactoryJob = {
   greenScreen: string | null;
   walkSet?: boolean;
   jobs?: FactoryJob[];
+  usedImport?: boolean;
+  keepHead?: boolean;
+  importMp4?: {
+    background?: string;
+    frameCount?: number;
+    steady?: { start: number; end: number };
+    cycle?: { start: number; end: number; period?: number };
+    suggested?: Record<string, number[]>;
+    selected?: number[];
+    hasHead?: boolean;
+    thumbs?: { index: number; rel: string; hasHead?: boolean; boots?: number; blobs?: number }[];
+  } | null;
 };
+
+export function factoryStripUrl(project: string, characterId: string, jobId: string, name: string): string {
+  return `${WORKER_URL}${withShow(
+    `/api/projects/${encodeURIComponent(project)}/factory/${encodeURIComponent(characterId)}/${encodeURIComponent(jobId)}/strip/${encodeURIComponent(name)}`
+  )}`;
+}
+
+export async function importFactoryMp4(
+  project: string,
+  body: { characterId: string; file: File; prompt?: string; frames?: number; view?: string }
+): Promise<FactoryJob> {
+  const data = new FormData();
+  data.append("characterId", body.characterId);
+  data.append("file", body.file);
+  if (body.prompt) data.append("prompt", body.prompt);
+  if (body.frames) data.append("frames", String(body.frames));
+  if (body.view) data.append("view", body.view);
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(project)}/factory/import-mp4`, {
+    method: "POST",
+    body: data,
+  });
+  const payload = (await res.json().catch(() => ({}))) as FactoryJob & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Import MP4 failed (${res.status})`);
+  return payload;
+}
+
+export async function buildFactoryImportMp4(
+  project: string,
+  characterId: string,
+  jobId: string,
+  body: { indices: number[]; frames?: number }
+): Promise<FactoryJob> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/factory/${encodeURIComponent(characterId)}/${encodeURIComponent(jobId)}/import-mp4/build`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = (await res.json().catch(() => ({}))) as FactoryJob & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Import MP4 build failed (${res.status})`);
+  return payload;
+}
 
 export function factoryPreviewUrl(project: string, characterId: string, jobId: string): string {
   return `${WORKER_URL}${withShow(
@@ -672,6 +728,7 @@ export async function startFactoryJob(
     dryRun?: boolean;
     walkSet?: boolean;
     useGrok?: boolean;
+    useRigWalk?: boolean;
   }
 ): Promise<FactoryJob> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(project)}/factory`, {
@@ -698,7 +755,7 @@ export async function redoFactoryJob(
   project: string,
   characterId: string,
   jobId: string,
-  body: { prompt?: string; frames?: number; advancedPrompt?: string; imageBase64?: string; useGrok?: boolean } = {}
+  body: { prompt?: string; frames?: number; advancedPrompt?: string; imageBase64?: string; useGrok?: boolean; useRigWalk?: boolean } = {}
 ): Promise<FactoryJob> {
   const res = await workerFetch(
     `/api/projects/${encodeURIComponent(project)}/factory/${encodeURIComponent(characterId)}/${encodeURIComponent(jobId)}/redo`,

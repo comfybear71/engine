@@ -604,6 +604,7 @@ module.exports = {
   resolveCharacterId,
   readImportAudioRequest,
   parseMultipartBuffer,
+  collectRawBody,
   ENGINE_SAMPLE_RATE,
   CHUNK_SECONDS,
   VoicesFatalError,

@@ -350,15 +350,22 @@ function pickSideTorsoDrawing(projectDir, characterId, view) {
   return null;
 }
 
-function walkSetSlots(character, dest) {
-  const names = collectSlotNames(character);
+function isHeadSlotName(name) {
+  return /^(head_base|head|face|eyes|mouth|hat|hair|collar)$/i.test(String(name || ""));
+}
+
+function walkSetSlots(character, dest, options = {}) {
+  // Only top-level character.slots — child ids like hand_rig_L are not
+  // set_slots targets (validateAction would reject them).
+  const names = Object.keys((character && character.slots) || {});
   const setSlots = {};
   const destSlot = dest && dest.slot;
+  const keepHead = Boolean(options.keepHead);
   for (const name of names) {
     if (name === destSlot) continue;
-    // Mouth is dialogue-driven; [Do:] / [Action:] cannot set it. The
-    // compositor already skips overlays on a walk_* torso drawing.
+    // Mouth is dialogue-driven; [Do:] / [Action:] cannot set it.
     if (String(name).toLowerCase() === "mouth") continue;
+    if (keepHead && isHeadSlotName(name)) continue;
     setSlots[name] = "none";
   }
   return setSlots;
@@ -799,8 +806,10 @@ async function renderJobPreview(projectDir, globalAssetsDir, character, job, opt
     const walk = Boolean(job.action && job.action.hide_children);
     if (walk) {
       characterJson.children = [];
+      const keepHead = Boolean(job.keepHead);
       for (const [name, slotSpec] of Object.entries(characterJson.slots || {})) {
         if (name === job.dest.slot) continue;
+        if (keepHead && isHeadSlotName(name)) continue;
         slotSpec.default_drawing = "none";
         // A leftover walk_side cycle on body/ would stack on the new torso
         // dest and read as a second head in the 16:9 preview.
@@ -872,6 +881,9 @@ function summarizeJob(job, characterId) {
     usedFixture: Boolean(job.usedFixture),
     usedRig: Boolean(job.usedRig),
     usedGrok: Boolean(job.usedGrok),
+    usedImport: Boolean(job.usedImport),
+    keepHead: Boolean(job.keepHead),
+    importMp4: job.importMp4 || null,
     styleBlock: job.styleBlock,
     rigRules: job.rigRules,
     greenScreen: job.greenScreen,
@@ -1212,7 +1224,8 @@ function tickStillJob(projectDir, globalAssetsDir, job) {
 async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
   const mode = normalizeFactoryMode((body && body.mode) || ((body && body.slot) ? "slot" : "character"));
   const useGrok = Boolean(body && body.useGrok);
-  if (body && body.walkSet && !body._walkFrame && !useGrok && !decodeImage(body)) {
+  const useRigWalk = Boolean((body && body.useRigWalk) || (body && body.walkSet));
+  if (useRigWalk && body && body.walkSet && !body._walkFrame && !useGrok && !decodeImage(body)) {
     const jobs = [];
     for (const frames of [8, 12, 16]) {
       jobs.push(
@@ -1275,7 +1288,13 @@ async function runFactoryJob(projectDir, globalAssetsDir, body, options = {}) {
     fs.mkdirSync(path.join(dir, "cells"), { recursive: true });
     let sheetBuf = fixture;
     usedFixture = Boolean(fixture);
-    if (intent.kind === "walk" && !sheetBuf && !useGrok) {
+    if (intent.kind === "walk" && !sheetBuf && !useGrok && !useRigWalk) {
+      throw factoryError(
+        "Import an MP4 of the walk (Factory → Import MP4), or open Advanced to use Grok Imagine or the parked rig long-stride path.",
+        "EINVAL"
+      );
+    }
+    if (intent.kind === "walk" && !sheetBuf && !useGrok && useRigWalk) {
       const generated = await generateRigWalkCells(
         projectDir,
         writable,
@@ -1553,7 +1572,9 @@ function tickFactoryJob(projectDir, globalAssetsDir, characterId, jobId) {
     const abs = path.join(projectDir, target.rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.copyFileSync(drawing.path, abs);
-    const asDraft = Boolean((job.action && /walk/.test(String(job.actionId || ""))) || job.walkSet);
+    const asDraft = Boolean(
+      (job.action && /walk/.test(String(job.actionId || ""))) || job.walkSet || job.usedImport
+    );
     setDrawingState(projectDir, characterId, `${job.dest.drawings_dir}/${target.name}`, asDraft ? "draft" : "ticked");
     drawing.writtenName = target.name;
     drawing.writtenRel = target.rel;
@@ -1573,6 +1594,9 @@ function tickFactoryJob(projectDir, globalAssetsDir, characterId, jobId) {
 async function redoFactoryJob(projectDir, globalAssetsDir, characterId, jobId, body, options = {}) {
   const previous = readManifest(projectDir, characterId, jobId);
   if (previous.ticked) throw factoryError("This one is already ticked. Type a new prompt to make another.");
+  if (previous.usedImport) {
+    throw factoryError("Import a new MP4 to redo this walk.", "EINVAL");
+  }
   fs.rmSync(jobDir(projectDir, characterId, jobId), { recursive: true, force: true });
   return runFactoryJob(
     projectDir,
@@ -1588,6 +1612,8 @@ async function redoFactoryJob(projectDir, globalAssetsDir, characterId, jobId, b
       advancedPrompt: body && body.advancedPrompt,
       imageBase64: body && body.imageBase64,
       useGrok: body && Object.prototype.hasOwnProperty.call(body, "useGrok") ? body.useGrok : previous.usedGrok,
+      useRigWalk: body && Object.prototype.hasOwnProperty.call(body, "useRigWalk") ? body.useRigWalk : previous.usedRig,
+      walkSet: previous.walkSet,
     },
     options
   );
@@ -1608,6 +1634,7 @@ module.exports = {
   findTorsoRef,
   findLegsRef,
   walkSetSlots,
+  isHeadSlotName,
   findWalkSideSources,
   findSideReferenceAbs,
   runFactoryJob,
@@ -1616,5 +1643,11 @@ module.exports = {
   tickFactoryJob,
   redoFactoryJob,
   factoryPreviewUrl,
+  stampJobId,
+  jobDir,
+  writeManifest,
+  readManifest,
+  slotCanvas,
+  renderJobPreview,
   GenerateImageError,
 };

@@ -1194,6 +1194,56 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   text-align: center;
 }
 
+.studio-factory-import-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 0 8px;
+}
+
+.studio-factory-import-cell {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.studio-factory-import-cell input {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  z-index: 1;
+  margin: 0;
+}
+
+.studio-factory-import-cell img {
+  display: block;
+  width: 44px;
+  height: 72px;
+  object-fit: contain;
+  background: #111;
+  border: 1px solid #404040;
+  border-radius: 4px;
+}
+
+.studio-factory-import-cell[data-selected="true"] img {
+  border-color: #f5c518;
+}
+
+.studio-factory-import-cell[data-steady="false"] {
+  opacity: 0.38;
+}
+
+.studio-factory-import-cell span {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 12px;
+  color: #a3a3a3;
+  text-align: center;
+}
+
 .studio-factory-badge {
   position: absolute;
   right: 3px;
