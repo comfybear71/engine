@@ -1694,6 +1694,21 @@ export default function AssetsPanel({
               )}
             </div>
           </>
+        ) : nav.page === "action" && selectedAction ? (
+          <ActionShotDetail
+            project={project}
+            action={selectedAction}
+            categories={mergeCategories()}
+            onCategory={(id) => {
+              if (!selectedAction.characterId) return;
+              void patchActionCategory(
+                project,
+                selectedAction.characterId,
+                selectedAction.name || selectedAction.id,
+                id
+              ).then(() => setReloadKey((n) => n + 1));
+            }}
+          />
         ) : (
           <div className="studio-factory-fit-pane" data-testid="assets-fit-preview">
             {nav.page === "prop" && selectedProp ? (
@@ -1707,22 +1722,6 @@ export default function AssetsPanel({
                 src={assetUrl(project, selectedBg.thumbRel, { thumb: true, cover: true, v: selectedBg.mtime })}
                 label={selectedBg.id}
                 cover
-              />
-            ) : null}
-            {nav.page === "action" && selectedAction ? (
-              <ActionShotDetail
-                project={project}
-                action={selectedAction}
-                categories={mergeCategories()}
-                onCategory={(id) => {
-                  if (!selectedAction.characterId) return;
-                  void patchActionCategory(
-                    project,
-                    selectedAction.characterId,
-                    selectedAction.name || selectedAction.id,
-                    id
-                  ).then(() => setReloadKey((n) => n + 1));
-                }}
               />
             ) : null}
             {nav.page === "sound" ? (

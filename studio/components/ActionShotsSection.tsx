@@ -390,7 +390,7 @@ export default function ActionShotsSection({
                     data-open={expanded ? "true" : "false"}
                     onClick={() => setOpen((prev) => ({ ...prev, [key]: !expanded }))}
                   >
-                    {expanded ? "▾" : "▸"} {bucket.label}
+                    {expanded ? "▾" : "▸"} {bucket.label}{" "}
                     <span>{bucket.actions.length}</span>
                   </button>
                   {expanded ? (

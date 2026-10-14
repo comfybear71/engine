@@ -1817,9 +1817,9 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   position: absolute;
   right: 4px;
   bottom: 4px;
-  z-index: 1;
+  z-index: 4;
   border-radius: 2px;
-  background: rgba(0, 0, 0, 0.78);
+  background: rgba(0, 0, 0, 0.82);
   color: #f5f5f5;
   font-size: 10px;
   font-style: normal;
@@ -1827,6 +1827,12 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   letter-spacing: 0.02em;
   line-height: 14px;
   padding: 1px 5px;
+  pointer-events: none;
+}
+
+.studio-factory-cell-thumb video {
+  position: relative;
+  z-index: 0;
 }
 
 .studio-factory-shot-warn {
@@ -1867,6 +1873,7 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 }
 
 .studio-factory-cat-toggle span {
+  margin-left: 6px;
   color: #737373;
   font-weight: 500;
 }
@@ -1875,13 +1882,15 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   color: #fff;
 }
 
-.studio-factory-cat-select {
+.studio-factory-cat-select,
+.studio-factory-library-filters select {
   display: block;
   width: 100%;
   margin-top: 4px;
   border: 1px solid #404040;
   background: #161616;
   color: #d4d4d4;
+  color-scheme: dark;
   font-size: 10px;
   line-height: 16px;
 }
@@ -2023,6 +2032,10 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.studio-factory-action-frame-tools button + button {
+  margin-left: 0;
 }
 
 .studio-factory-library-tab {

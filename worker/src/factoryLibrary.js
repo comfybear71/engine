@@ -223,6 +223,26 @@ function patchActionCategory(projectDir, characterId, actionId, category) {
   return action;
 }
 
+function findActionDrawing(root, destSlot, destDir, name) {
+  const fileName = `${name}.png`;
+  const guesses = [destDir, destSlot];
+  const stripped = String(destSlot || "").replace(/_[LR]$/, "");
+  if (stripped && stripped !== destSlot) guesses.push(stripped);
+  for (const dir of guesses) {
+    if (!dir) continue;
+    const abs = path.join(root, dir, fileName);
+    if (fs.existsSync(abs)) return abs;
+  }
+  if (fs.existsSync(root)) {
+    for (const ent of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!ent.isDirectory() || ent.name.startsWith(".") || ent.name === "library" || ent.name === "_factory") continue;
+      const abs = path.join(root, ent.name, fileName);
+      if (fs.existsSync(abs)) return abs;
+    }
+  }
+  return path.join(root, destDir || destSlot || "", fileName);
+}
+
 function actionFrameList(projectDir, characterId, actionId) {
   const action = readActionJson(projectDir, characterId, actionId);
   const flags = action.frame_flags || {};
@@ -232,9 +252,7 @@ function actionFrameList(projectDir, characterId, actionId) {
   const destDir = action.drawings_dir || `${destSlot}${action.view && action.view !== "front" ? `_${action.view}` : ""}`;
   const root = characterDir(projectDir, characterId);
   const frames = names.map((name, index) => {
-    const file = path.join(root, destDir, `${name}.png`);
-    const alt = path.join(root, destSlot, `${name}.png`);
-    const abs = fs.existsSync(file) ? file : fs.existsSync(alt) ? alt : file;
+    const abs = findActionDrawing(root, destSlot, destDir, name);
     const rel = path.relative(projectDir, abs).replace(/\\/g, "/");
     return {
       index,
