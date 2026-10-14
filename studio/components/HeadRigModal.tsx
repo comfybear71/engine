@@ -124,6 +124,7 @@ export default function HeadRigModal({
   // Grok shot creator state
   const [grokType, setGrokType] = useState<"body" | "head">("body");
   const [grokPrompt, setGrokPrompt] = useState("");
+  const [grokDuration, setGrokDuration] = useState(6);
   const [grokBusy, setGrokBusy] = useState(false);
   const [grokMsg, setGrokMsg] = useState("");
 
@@ -443,6 +444,53 @@ export default function HeadRigModal({
     }
   }
 
+  // Load a single frame on demand for scrubbing (fixes jump-back-to-frame-1 bug)
+  function scrubToFrame(f: number) {
+    if (playing) return;
+    // Load body frame
+    if (bodyId && bodyFrameCount > 0) {
+      const cached = bodyFramesRef.current.get(f);
+      if (cached) {
+        bodyImgRef.current = cached;
+      } else {
+        const pad = String(Math.min(f, bodyFrameCount)).padStart(4, "0");
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          bodyFramesRef.current.set(f, img);
+          bodyImgRef.current = img;
+          draw();
+        };
+        img.src = shotMediaUrl(project, characterId, bodyId, `cut/f_${pad}.png`);
+      }
+    }
+    // Load head frame
+    if (headId && headFrameCount > 0) {
+      const hf = Math.min(f, headFrameCount);
+      const cached = headFramesRef.current.get(hf);
+      if (cached) {
+        headImgRef.current = cached;
+      } else {
+        const pad = String(hf).padStart(4, "0");
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          headFramesRef.current.set(hf, img);
+          headImgRef.current = img;
+          draw();
+        };
+        img.src = shotMediaUrl(project, characterId, headId, `cut/f_${pad}.png`);
+      }
+    }
+    // Apply keyframe interpolation at this frame
+    const kf = keyframes.find((k) => k.frame === f);
+    if (kf) {
+      setAnchorX(kf.anchorX);
+      setAnchorY(kf.anchorY);
+      setHeadScale(kf.headScale);
+    }
+  }
+
   function handlePlay() {
     if (playing) {
       // Stop
@@ -569,7 +617,7 @@ export default function HeadRigModal({
     setGrokMsg("");
     try {
       const res = await workerFetch(
-        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots`,
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/make`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -577,7 +625,7 @@ export default function HeadRigModal({
             prompt: grokPrompt.trim(),
             shotType: grokType,
             background: "green",
-            duration: 6,
+            duration: grokDuration,
           }),
         }
       );
@@ -702,64 +750,185 @@ export default function HeadRigModal({
                 Click = set position · Drag head = move · Corner handles = scale · Scroll = resize
               </p>
 
-              {/* ── Timeline with keyframes ──────────────── */}
-              {bodyFrameCount > 0 ? (
-                <div className="mt-2 rounded-md border border-studio-border bg-[#1a1a1a] p-2">
-                  <div className="mb-1 flex items-center justify-between">
-                    <span className="text-[10px] font-semibold text-studio-muted">TIMELINE — Frame {scrubFrame}/{bodyFrameCount}</span>
-                    <div className="flex gap-1">
+              {/* ── DaVinci Resolve-style Two-Track Timeline ──────────────── */}
+              {(bodyFrameCount > 0 || headFrameCount > 0) ? (
+                <div className="mt-2 rounded-md border border-studio-border bg-[#111] p-2" style={{ minWidth: CANVAS_W }}>
+                  {/* Timeline header */}
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] font-semibold text-neutral-300">TIMELINE</span>
+                      <span className="text-[10px] text-studio-muted">Frame {scrubFrame}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        className="rounded bg-[#e0a040] px-2 py-0.5 text-[10px] font-semibold text-black hover:bg-[#f0b050]"
-                        onClick={addKeyframe}
-                        title="Set keyframe at current frame with current head position"
+                        className={`rounded px-2 py-1 text-[10px] font-semibold disabled:opacity-40 ${
+                          playing
+                            ? "bg-red-600 text-white hover:bg-red-500"
+                            : "bg-emerald-600 text-white hover:bg-emerald-500"
+                        }`}
+                        disabled={!bodyId || !headId || previewLoading}
+                        onClick={handlePlay}
                       >
-                        + Keyframe
+                        {previewLoading ? "Loading…" : playing ? "⏹ Stop" : "▶ Play"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded bg-[#e0a040] px-2 py-1 text-[10px] font-semibold text-black hover:bg-[#f0b050]"
+                        onClick={addKeyframe}
+                        title="Set keyframe at current frame"
+                      >
+                        + Key
                       </button>
                     </div>
                   </div>
-                  {/* Scrub bar */}
-                  <div className="relative">
+
+                  {/* Frame ruler */}
+                  <div className="relative mb-1 h-4 rounded-t bg-[#1a1a1a]" style={{ marginLeft: 80 }}>
+                    {Array.from({ length: Math.min(Math.ceil(maxFrames / 10), 20) }, (_, i) => {
+                      const f = (i + 1) * 10;
+                      if (f > maxFrames) return null;
+                      return (
+                        <span
+                          key={f}
+                          className="absolute top-0 text-[8px] text-neutral-500"
+                          style={{ left: `${((f - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, transform: "translateX(-50%)" }}
+                        >
+                          {f}
+                        </span>
+                      );
+                    })}
+                    {/* Playhead marker */}
+                    <div
+                      className="absolute top-0 h-full w-0.5 bg-white"
+                      style={{ left: `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 10 }}
+                    />
+                  </div>
+
+                  {/* ── BODY TRACK ── */}
+                  <div className="flex items-stretch">
+                    <div className="flex w-20 shrink-0 flex-col justify-center rounded-l border-r border-[#333] bg-[#1a1a1a] px-2 py-1">
+                      <span className="text-[10px] font-semibold text-blue-400">BODY</span>
+                      <span className="text-[9px] text-studio-muted">{bodyFrameCount} frames</span>
+                      <label className="mt-0.5 text-[8px] text-studio-muted">
+                        {bodyFps}fps
+                        <input
+                          type="range" min={4} max={30} step={1} value={bodyFps}
+                          onChange={(e) => setBodyFps(Number(e.target.value))}
+                          className="studio-scrubber mt-0.5 w-full"
+                        />
+                      </label>
+                    </div>
+                    <div
+                      className="relative h-10 flex-1 cursor-pointer rounded-r bg-[#1a2a3a]"
+                      onClick={(e) => {
+                        if (playing) return;
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const pct = (e.clientX - rect.left) / rect.width;
+                        const f = Math.max(1, Math.min(maxFrames, Math.round(pct * (maxFrames - 1) + 1)));
+                        setScrubFrame(f);
+                        scrubToFrame(f);
+                      }}
+                    >
+                      {/* Body frame blocks */}
+                      {bodyFrameCount > 0 ? (
+                        <div
+                          className="absolute inset-y-1 left-0 rounded bg-blue-900/60"
+                          style={{ width: `${(bodyFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
+                        />
+                      ) : null}
+                      {/* Playhead on body track */}
+                      <div
+                        className="absolute inset-y-0 w-0.5 bg-white"
+                        style={{ left: `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 10 }}
+                      />
+                      <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-blue-300/60">
+                        {bodyShot?.name || bodyId || "no body"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* ── HEAD TRACK ── */}
+                  <div className="mt-0.5 flex items-stretch">
+                    <div className="flex w-20 shrink-0 flex-col justify-center rounded-l border-r border-[#333] bg-[#1a1a1a] px-2 py-1">
+                      <span className="text-[10px] font-semibold text-green-400">HEAD</span>
+                      <span className="text-[9px] text-studio-muted">{headFrameCount} frames</span>
+                      <label className="mt-0.5 text-[8px] text-studio-muted">
+                        {headFps}fps
+                        <input
+                          type="range" min={4} max={30} step={1} value={headFps}
+                          onChange={(e) => setHeadFps(Number(e.target.value))}
+                          className="studio-scrubber mt-0.5 w-full"
+                        />
+                      </label>
+                    </div>
+                    <div
+                      className="relative h-10 flex-1 cursor-pointer rounded-r bg-[#1a2a1a]"
+                      onClick={(e) => {
+                        if (playing) return;
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const pct = (e.clientX - rect.left) / rect.width;
+                        const f = Math.max(1, Math.min(maxFrames, Math.round(pct * (maxFrames - 1) + 1)));
+                        setScrubFrame(f);
+                        scrubToFrame(f);
+                      }}
+                    >
+                      {/* Head frame blocks */}
+                      {headFrameCount > 0 ? (
+                        <div
+                          className="absolute inset-y-1 left-0 rounded bg-green-900/60"
+                          style={{ width: `${(headFrameCount / Math.max(maxFrames, 1)) * 100}%` }}
+                        />
+                      ) : null}
+                      {/* Keyframe markers on head track */}
+                      {keyframes.map((kf) => (
+                        <div
+                          key={kf.frame}
+                          className="absolute top-1 bottom-1 w-1.5 cursor-pointer rounded-sm bg-[#e0a040] hover:bg-[#f0c060]"
+                          style={{ left: `${((kf.frame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 5 }}
+                          title={`Keyframe F${kf.frame} — x=${kf.anchorX.toFixed(2)} y=${kf.anchorY.toFixed(2)} s=${kf.headScale.toFixed(2)}\nClick to go here`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setScrubFrame(kf.frame);
+                            setAnchorX(kf.anchorX);
+                            setAnchorY(kf.anchorY);
+                            setHeadScale(kf.headScale);
+                            scrubToFrame(kf.frame);
+                          }}
+                        />
+                      ))}
+                      {/* Playhead on head track */}
+                      <div
+                        className="absolute inset-y-0 w-0.5 bg-white"
+                        style={{ left: `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`, zIndex: 10 }}
+                      />
+                      <span className="pointer-events-none absolute bottom-0.5 left-1 text-[8px] text-green-300/60">
+                        {headShot?.name || headId || "no head"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Scrub slider (spans full width below tracks) */}
+                  <div className="mt-1" style={{ marginLeft: 80 }}>
                     <input
                       type="range"
                       min={1}
-                      max={bodyFrameCount}
+                      max={maxFrames || 1}
                       step={1}
                       value={scrubFrame}
                       onChange={(e) => {
                         const f = Number(e.target.value);
                         setScrubFrame(f);
-                        // Load that body frame into the canvas for positioning
-                        if (!playing && bodyFramesRef.current.size > 0) {
-                          const img = bodyFramesRef.current.get(f);
-                          if (img) { bodyImgRef.current = img; draw(); }
-                        }
-                        // Apply keyframe values if one exists at this frame
-                        const kf = keyframes.find((k) => k.frame === f);
-                        if (kf) {
-                          setAnchorX(kf.anchorX);
-                          setAnchorY(kf.anchorY);
-                          setHeadScale(kf.headScale);
-                        }
+                        scrubToFrame(f);
                       }}
                       className="studio-scrubber w-full"
                       disabled={playing}
                     />
-                    {/* Keyframe markers on the scrub bar */}
-                    <div className="pointer-events-none absolute inset-x-0 top-0 h-4">
-                      {keyframes.map((kf) => (
-                        <div
-                          key={kf.frame}
-                          className="absolute top-0 h-4 w-1 bg-[#e0a040]"
-                          style={{ left: `${((kf.frame - 1) / Math.max(bodyFrameCount - 1, 1)) * 100}%` }}
-                          title={`Keyframe @ frame ${kf.frame}`}
-                        />
-                      ))}
-                    </div>
                   </div>
+
                   {/* Keyframe list */}
                   {keyframes.length > 0 ? (
-                    <div className="mt-1 flex flex-wrap gap-1">
+                    <div className="mt-1 flex flex-wrap gap-1" style={{ marginLeft: 80 }}>
                       {keyframes.map((kf) => (
                         <span
                           key={kf.frame}
@@ -773,17 +942,16 @@ export default function HeadRigModal({
                               setAnchorX(kf.anchorX);
                               setAnchorY(kf.anchorY);
                               setHeadScale(kf.headScale);
+                              scrubToFrame(kf.frame);
                             }}
                           >
                             F{kf.frame}
                           </button>
-                          <span className="text-studio-muted">
-                            x={kf.anchorX.toFixed(2)} y={kf.anchorY.toFixed(2)} s={kf.headScale.toFixed(2)}
-                          </span>
                           <button
                             type="button"
                             className="text-red-400 hover:text-red-300"
                             onClick={() => removeKeyframe(kf.frame)}
+                            title="Remove keyframe"
                           >
                             ×
                           </button>
@@ -791,8 +959,8 @@ export default function HeadRigModal({
                       ))}
                     </div>
                   ) : (
-                    <p className="mt-1 text-[9px] text-studio-muted">
-                      Scrub to a frame, position the head, click + Keyframe. Head will move between keyframes during playback.
+                    <p className="mt-1 text-[9px] text-studio-muted" style={{ marginLeft: 80 }}>
+                      Scrub to a frame, position the head, click + Key. Gold bars on HEAD track show keyframes.
                     </p>
                   )}
                 </div>
@@ -813,85 +981,42 @@ export default function HeadRigModal({
                   className="studio-scrubber mt-1 w-full"
                 />
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="text-[11px] text-studio-muted">
-                  Anchor X
-                  <input
-                    type="number"
-                    step={0.01}
-                    min={0}
-                    max={1}
-                    value={anchorX.toFixed(3)}
-                    onChange={(e) => setAnchorX(clamp(Number(e.target.value), 0, 1))}
-                    className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                  />
-                </label>
-                <label className="text-[11px] text-studio-muted">
-                  Anchor Y
-                  <input
-                    type="number"
-                    step={0.01}
-                    min={-0.5}
-                    max={1}
-                    value={anchorY.toFixed(3)}
-                    onChange={(e) => setAnchorY(clamp(Number(e.target.value), -0.5, 1))}
-                    className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                  />
-                </label>
-              </div>
+              <label className="text-[11px] text-studio-muted">
+                X position: {anchorX.toFixed(2)}
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.005}
+                  value={anchorX}
+                  onChange={(e) => setAnchorX(Number(e.target.value))}
+                  className="studio-scrubber mt-1 w-full"
+                />
+              </label>
+              <label className="text-[11px] text-studio-muted">
+                Y position: {anchorY.toFixed(2)}
+                <input
+                  type="range"
+                  min={-0.5}
+                  max={1}
+                  step={0.005}
+                  value={anchorY}
+                  onChange={(e) => setAnchorY(Number(e.target.value))}
+                  className="studio-scrubber mt-1 w-full"
+                />
+              </label>
 
               {error ? <p className="text-xs text-red-400">{error}</p> : null}
               {saved ? <p className="text-xs text-green-400">Saved!</p> : null}
 
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="rounded-md bg-studio-accent px-3 py-2 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
-                  disabled={busy != null || !bodyId || !headId}
-                  onClick={() => void handleSave()}
-                >
-                  {busy || `Save "${rigKey}" rig`}
-                </button>
-                <button
-                  type="button"
-                  className={`rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-40 ${
-                    playing
-                      ? "bg-red-600 text-white hover:bg-red-500"
-                      : "bg-emerald-600 text-white hover:bg-emerald-500"
-                  }`}
-                  disabled={!bodyId || !headId || previewLoading}
-                  onClick={handlePlay}
-                >
-                  {previewLoading ? "Loading…" : playing ? "⏹ Stop" : "▶ Play"}
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <label className="text-[11px] text-studio-muted">
-                  Body speed: {bodyFps} fps
-                  <input
-                    type="range"
-                    min={4}
-                    max={30}
-                    step={1}
-                    value={bodyFps}
-                    onChange={(e) => setBodyFps(Number(e.target.value))}
-                    className="studio-scrubber mt-1 w-full"
-                  />
-                </label>
-                <label className="text-[11px] text-studio-muted">
-                  Head speed: {headFps} fps
-                  <input
-                    type="range"
-                    min={4}
-                    max={30}
-                    step={1}
-                    value={headFps}
-                    onChange={(e) => setHeadFps(Number(e.target.value))}
-                    className="studio-scrubber mt-1 w-full"
-                  />
-                </label>
-              </div>
+              <button
+                type="button"
+                className="rounded-md bg-studio-accent px-3 py-2 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+                disabled={busy != null || !bodyId || !headId}
+                onClick={() => void handleSave()}
+              >
+                {busy || `Save "${rigKey}" rig`}
+              </button>
 
               {/* Saved rigs list */}
               {rigKeys.length > 0 ? (
@@ -1009,6 +1134,19 @@ export default function HeadRigModal({
                   <option value="head">Head shot</option>
                 </select>
               </label>
+              <label className="text-[11px] text-studio-muted">
+                Duration
+                <select
+                  className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
+                  value={grokDuration}
+                  onChange={(e) => setGrokDuration(Number(e.target.value))}
+                >
+                  <option value={4}>4 sec</option>
+                  <option value={6}>6 sec</option>
+                  <option value={8}>8 sec</option>
+                  <option value={10}>10 sec</option>
+                </select>
+              </label>
               <label className="flex-1 text-[11px] text-studio-muted">
                 Prompt
                 <input
@@ -1029,7 +1167,11 @@ export default function HeadRigModal({
                 {grokBusy ? "Creating…" : `Create ${grokType} shot`}
               </button>
             </div>
-            {grokMsg ? <p className="mt-2 text-[11px] text-emerald-300">{grokMsg}</p> : null}
+            {grokMsg ? (
+              <p className={`mt-2 text-sm font-medium ${grokMsg.startsWith("Error") || grokMsg === "Failed" || grokMsg.includes("fail") ? "text-red-400" : "text-emerald-300"}`}>
+                {grokMsg}
+              </p>
+            ) : null}
             <p className="mt-1 text-[10px] text-studio-muted">
               {grokType === "body"
                 ? "Creates a torso/body shot (arms, poses, actions). Head will be added separately."
