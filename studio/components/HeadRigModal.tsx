@@ -57,8 +57,13 @@ export default function HeadRigModal({
 
   // Preview playback state
   const [playing, setPlaying] = useState(false);
-  const [previewFrame, setPreviewFrame] = useState(1);
-  const playTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [bodyFrame, setBodyFrame] = useState(1);
+  const [headFrame, setHeadFrame] = useState(1);
+  const [bodyFps, setBodyFps] = useState(12);
+  const [headFps, setHeadFps] = useState(12);
+  const playRafRef = useRef<number | null>(null);
+  const bodyLastRef = useRef(0);
+  const headLastRef = useRef(0);
   const bodyFramesRef = useRef<Map<number, HTMLImageElement>>(new Map());
   const headFramesRef = useRef<Map<number, HTMLImageElement>>(new Map());
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -384,8 +389,8 @@ export default function HeadRigModal({
   function handlePlay() {
     if (playing) {
       // Stop
-      if (playTimerRef.current) clearInterval(playTimerRef.current);
-      playTimerRef.current = null;
+      if (playRafRef.current) cancelAnimationFrame(playRafRef.current);
+      playRafRef.current = null;
       setPlaying(false);
       return;
     }
@@ -397,70 +402,90 @@ export default function HeadRigModal({
     preloadFrames(headId, headFrameCount, headFramesRef.current);
 
     setPlaying(true);
-    setPreviewFrame(1);
-
-    // Play at ~12fps
-    playTimerRef.current = setInterval(() => {
-      setPreviewFrame((f) => {
-        const next = f + 1;
-        return next > maxFrames ? 1 : next;
-      });
-    }, 83);
+    setBodyFrame(1);
+    setHeadFrame(1);
+    bodyLastRef.current = 0;
+    headLastRef.current = 0;
   }
 
-  // Draw preview frame when playing
+  // rAF playback loop with separate body/head frame rates
   useEffect(() => {
     if (!playing) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const cw = canvas.width;
-    const ch = canvas.height;
-    ctx.clearRect(0, 0, cw, ch);
 
-    // Checkerboard
-    const sz = 12;
-    for (let y = 0; y < ch; y += sz) {
-      for (let x = 0; x < cw; x += sz) {
-        ctx.fillStyle = (Math.floor(x / sz) + Math.floor(y / sz)) % 2 === 0 ? "#1a1a1a" : "#222";
-        ctx.fillRect(x, y, sz, sz);
+    let bf = 1;
+    let hf = 1;
+    let lastBodyTime = performance.now();
+    let lastHeadTime = performance.now();
+
+    function tick(now: number) {
+      const canvas = canvasRef.current;
+      if (!canvas) { playRafRef.current = requestAnimationFrame(tick); return; }
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { playRafRef.current = requestAnimationFrame(tick); return; }
+      const cw = canvas.width;
+      const ch = canvas.height;
+
+      // Advance body frame
+      const bodyInterval = 1000 / bodyFps;
+      if (now - lastBodyTime >= bodyInterval) {
+        lastBodyTime = now;
+        bf = bf >= bodyFrameCount ? 1 : bf + 1;
+        setBodyFrame(bf);
       }
+
+      // Advance head frame
+      const headInterval = 1000 / headFps;
+      if (now - lastHeadTime >= headInterval) {
+        lastHeadTime = now;
+        hf = hf >= headFrameCount ? 1 : hf + 1;
+        setHeadFrame(hf);
+      }
+
+      // Draw
+      ctx.clearRect(0, 0, cw, ch);
+      const sz = 12;
+      for (let y2 = 0; y2 < ch; y2 += sz) {
+        for (let x2 = 0; x2 < cw; x2 += sz) {
+          ctx.fillStyle = (Math.floor(x2 / sz) + Math.floor(y2 / sz)) % 2 === 0 ? "#1a1a1a" : "#222";
+          ctx.fillRect(x2, y2, sz, sz);
+        }
+      }
+
+      const bodyImg = bodyFramesRef.current.get(bf) || bodyImgRef.current;
+      if (bodyImg && bodyNat.w > 0) {
+        const bodyZone = ch * 0.7;
+        const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
+        const bw = bodyNat.w * scale;
+        const bh = bodyNat.h * scale;
+        const bx = (cw - bw) / 2;
+        const by = ch - bh - ch * 0.03;
+        ctx.drawImage(bodyImg, bx, by, bw, bh);
+
+        const headImg = headFramesRef.current.get(hf) || headImgRef.current;
+        if (headImg && headNat.w > 0) {
+          const hw = headNat.w * headScale * scale;
+          const hh = headNat.h * headScale * scale;
+          const hx = bx + anchorX * bw - hw / 2;
+          const hy = by + anchorY * bh - hh / 2;
+          ctx.drawImage(headImg, hx, hy, hw, hh);
+        }
+
+        // Frame counter
+        ctx.fillStyle = "#e0a040";
+        ctx.font = "12px monospace";
+        ctx.fillText(`Body ${bf}/${bodyFrameCount} @ ${bodyFps}fps  Head ${hf}/${headFrameCount} @ ${headFps}fps`, 8, ch - 8);
+      }
+
+      playRafRef.current = requestAnimationFrame(tick);
     }
 
-    // Body frame (loop within body's frame count)
-    const bf = ((previewFrame - 1) % Math.max(bodyFrameCount, 1)) + 1;
-    const bodyImg = bodyFramesRef.current.get(bf) || bodyImgRef.current;
-    if (!bodyImg || bodyNat.w === 0) return;
+    playRafRef.current = requestAnimationFrame(tick);
+    return () => { if (playRafRef.current) cancelAnimationFrame(playRafRef.current); };
+  }, [playing, bodyFps, headFps, bodyNat, headNat, anchorX, anchorY, headScale, bodyFrameCount, headFrameCount]);
 
-    const bodyZone = ch * 0.7;
-    const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
-    const bw = bodyNat.w * scale;
-    const bh = bodyNat.h * scale;
-    const bx = (cw - bw) / 2;
-    const by = ch - bh - ch * 0.03;
-    ctx.drawImage(bodyImg, bx, by, bw, bh);
-
-    // Head frame (loop within head's frame count)
-    const hf = ((previewFrame - 1) % Math.max(headFrameCount, 1)) + 1;
-    const headImg = headFramesRef.current.get(hf) || headImgRef.current;
-    if (headImg && headNat.w > 0) {
-      const hw = headNat.w * headScale * scale;
-      const hh = headNat.h * headScale * scale;
-      const hx = bx + anchorX * bw - hw / 2;
-      const hy = by + anchorY * bh - hh / 2;
-      ctx.drawImage(headImg, hx, hy, hw, hh);
-    }
-
-    // Frame counter
-    ctx.fillStyle = "#e0a040";
-    ctx.font = "12px monospace";
-    ctx.fillText(`Frame ${previewFrame} / ${maxFrames}`, 8, ch - 8);
-  }, [playing, previewFrame, bodyNat, headNat, anchorX, anchorY, headScale, bodyFrameCount, headFrameCount, maxFrames]);
-
-  // Cleanup timer on unmount
+  // Cleanup on unmount
   useEffect(() => {
-    return () => { if (playTimerRef.current) clearInterval(playTimerRef.current); };
+    return () => { if (playRafRef.current) cancelAnimationFrame(playRafRef.current); };
   }, []);
 
   // Reload shots list
@@ -680,6 +705,33 @@ export default function HeadRigModal({
                 >
                   {previewLoading ? "Loading…" : playing ? "⏹ Stop" : "▶ Play"}
                 </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-[11px] text-studio-muted">
+                  Body speed: {bodyFps} fps
+                  <input
+                    type="range"
+                    min={4}
+                    max={30}
+                    step={1}
+                    value={bodyFps}
+                    onChange={(e) => setBodyFps(Number(e.target.value))}
+                    className="studio-scrubber mt-1 w-full"
+                  />
+                </label>
+                <label className="text-[11px] text-studio-muted">
+                  Head speed: {headFps} fps
+                  <input
+                    type="range"
+                    min={4}
+                    max={30}
+                    step={1}
+                    value={headFps}
+                    onChange={(e) => setHeadFps(Number(e.target.value))}
+                    className="studio-scrubber mt-1 w-full"
+                  />
+                </label>
               </div>
 
               {/* Saved rigs list */}
