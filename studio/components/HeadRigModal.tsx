@@ -449,9 +449,7 @@ export default function HeadRigModal({
       const hh = headNat.h * headScale * scale;
       const hx = bx + anchorX * bw - hw / 2;
       const hy = by + anchorY * bh - hh / 2;
-      ctx.globalAlpha = 0.6;
       ctx.drawImage(headImg, hx, hy, hw, hh);
-      ctx.globalAlpha = 1;
     }
 
     // Frame counter
@@ -540,7 +538,7 @@ export default function HeadRigModal({
   const CANVAS_H = 800;
 
   const content = (
-        <div className={inline ? "p-2" : "min-h-0 flex-1 overflow-y-auto p-4"}>
+        <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto p-4"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
           {/* Shot pickers */}
           <div className="mb-3 flex flex-wrap items-end gap-3">
             <label className="text-[11px] text-studio-muted">

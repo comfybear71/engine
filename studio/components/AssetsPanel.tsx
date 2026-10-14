@@ -1108,30 +1108,7 @@ export default function AssetsPanel({
           </button>
         </>
       )}
-      {onOpenImagine && nav.page !== "character" ? (
-        <button
-          type="button"
-          data-testid="imagine-open"
-          onClick={() =>
-            onOpenImagine(
-              nav.page === "section" && nav.section === "props"
-                  ? { mode: "prop" }
-                  : nav.page === "section" && nav.section === "backgrounds"
-                    ? { mode: "background" }
-                    : nav.page === "section" && nav.section === "characters"
-                      ? { mode: "new-character" }
-                      : nav.page === "section" && nav.section === "actions"
-                        ? { mode: "character", characterId: selectedId || undefined }
-                        : selectedId
-                          ? { mode: "character", characterId: selectedId }
-                          : { mode: "character" }
-            )
-          }
-          className={pool ? "rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white" : "studio-header-textbtn"}
-        >
-          Factory
-        </button>
-      ) : null}
+      {/* Factory button removed — replaced by Grok shot creator on character page */}
     </div>
   ) : null;
 
