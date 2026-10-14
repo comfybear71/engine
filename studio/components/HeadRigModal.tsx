@@ -55,6 +55,14 @@ export default function HeadRigModal({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
+  // Preview playback state
+  const [playing, setPlaying] = useState(false);
+  const [previewFrame, setPreviewFrame] = useState(1);
+  const playTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bodyFramesRef = useRef<Map<number, HTMLImageElement>>(new Map());
+  const headFramesRef = useRef<Map<number, HTMLImageElement>>(new Map());
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   // Grok shot creator state
   const [grokType, setGrokType] = useState<"body" | "head">("body");
   const [grokPrompt, setGrokPrompt] = useState("");
@@ -351,6 +359,110 @@ export default function HeadRigModal({
     } catch {}
   }
 
+  // Get frame counts for selected shots
+  const bodyShot = shots.find((s) => s.id === bodyId);
+  const headShot = shots.find((s) => s.id === headId);
+  const bodyFrameCount = bodyShot?.frameCount || 0;
+  const headFrameCount = headShot?.frameCount || 0;
+  const maxFrames = Math.max(bodyFrameCount, headFrameCount);
+
+  // Preload frames for preview
+  function preloadFrames(shotId: string, count: number, cache: Map<number, HTMLImageElement>) {
+    cache.clear();
+    const toLoad = Math.min(count, 200); // cap at 200 frames
+    let loaded = 0;
+    for (let i = 1; i <= toLoad; i++) {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      const pad = String(i).padStart(4, "0");
+      img.onload = () => { cache.set(i, img); loaded++; if (loaded >= toLoad) setPreviewLoading(false); };
+      img.onerror = () => { loaded++; if (loaded >= toLoad) setPreviewLoading(false); };
+      img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
+    }
+  }
+
+  function handlePlay() {
+    if (playing) {
+      // Stop
+      if (playTimerRef.current) clearInterval(playTimerRef.current);
+      playTimerRef.current = null;
+      setPlaying(false);
+      return;
+    }
+    if (!bodyId || !headId || maxFrames === 0) return;
+
+    // Preload frames
+    setPreviewLoading(true);
+    preloadFrames(bodyId, bodyFrameCount, bodyFramesRef.current);
+    preloadFrames(headId, headFrameCount, headFramesRef.current);
+
+    setPlaying(true);
+    setPreviewFrame(1);
+
+    // Play at ~12fps
+    playTimerRef.current = setInterval(() => {
+      setPreviewFrame((f) => {
+        const next = f + 1;
+        return next > maxFrames ? 1 : next;
+      });
+    }, 83);
+  }
+
+  // Draw preview frame when playing
+  useEffect(() => {
+    if (!playing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const cw = canvas.width;
+    const ch = canvas.height;
+    ctx.clearRect(0, 0, cw, ch);
+
+    // Checkerboard
+    const sz = 12;
+    for (let y = 0; y < ch; y += sz) {
+      for (let x = 0; x < cw; x += sz) {
+        ctx.fillStyle = (Math.floor(x / sz) + Math.floor(y / sz)) % 2 === 0 ? "#1a1a1a" : "#222";
+        ctx.fillRect(x, y, sz, sz);
+      }
+    }
+
+    // Body frame (loop within body's frame count)
+    const bf = ((previewFrame - 1) % Math.max(bodyFrameCount, 1)) + 1;
+    const bodyImg = bodyFramesRef.current.get(bf) || bodyImgRef.current;
+    if (!bodyImg || bodyNat.w === 0) return;
+
+    const bodyZone = ch * 0.7;
+    const scale = Math.min(cw / bodyNat.w, bodyZone / bodyNat.h) * 0.9;
+    const bw = bodyNat.w * scale;
+    const bh = bodyNat.h * scale;
+    const bx = (cw - bw) / 2;
+    const by = ch - bh - ch * 0.03;
+    ctx.drawImage(bodyImg, bx, by, bw, bh);
+
+    // Head frame (loop within head's frame count)
+    const hf = ((previewFrame - 1) % Math.max(headFrameCount, 1)) + 1;
+    const headImg = headFramesRef.current.get(hf) || headImgRef.current;
+    if (headImg && headNat.w > 0) {
+      const hw = headNat.w * headScale * scale;
+      const hh = headNat.h * headScale * scale;
+      const hx = bx + anchorX * bw - hw / 2;
+      const hy = by + anchorY * bh - hh / 2;
+      ctx.drawImage(headImg, hx, hy, hw, hh);
+    }
+
+    // Frame counter
+    ctx.fillStyle = "#e0a040";
+    ctx.font = "12px monospace";
+    ctx.fillText(`Frame ${previewFrame} / ${maxFrames}`, 8, ch - 8);
+  }, [playing, previewFrame, bodyNat, headNat, anchorX, anchorY, headScale, bodyFrameCount, headFrameCount, maxFrames]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => { if (playTimerRef.current) clearInterval(playTimerRef.current); };
+  }, []);
+
   // Reload shots list
   async function reloadShots() {
     try {
@@ -547,14 +659,28 @@ export default function HeadRigModal({
               {error ? <p className="text-xs text-red-400">{error}</p> : null}
               {saved ? <p className="text-xs text-green-400">Saved!</p> : null}
 
-              <button
-                type="button"
-                className="rounded-md bg-studio-accent px-3 py-2 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
-                disabled={busy != null || !bodyId || !headId}
-                onClick={() => void handleSave()}
-              >
-                {busy || `Save "${rigKey}" rig`}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="rounded-md bg-studio-accent px-3 py-2 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+                  disabled={busy != null || !bodyId || !headId}
+                  onClick={() => void handleSave()}
+                >
+                  {busy || `Save "${rigKey}" rig`}
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-40 ${
+                    playing
+                      ? "bg-red-600 text-white hover:bg-red-500"
+                      : "bg-emerald-600 text-white hover:bg-emerald-500"
+                  }`}
+                  disabled={!bodyId || !headId || previewLoading}
+                  onClick={handlePlay}
+                >
+                  {previewLoading ? "Loading…" : playing ? "⏹ Stop" : "▶ Play"}
+                </button>
+              </div>
 
               {/* Saved rigs list */}
               {rigKeys.length > 0 ? (
@@ -592,6 +718,69 @@ export default function HeadRigModal({
                 </div>
               ) : null}
             </div>
+          </div>
+
+          {/* ── Shot Browser — pick body & head visually ──── */}
+          <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
+            <h3 className="mb-2 text-xs font-semibold text-neutral-300">Body Shots</h3>
+            {bodyShots.length === 0 && allShots.length === 0 ? (
+              <p className="text-[10px] text-studio-muted">No body shots yet — create one with Grok below</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {(bodyShots.length > 0 ? bodyShots : allShots).map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`group relative overflow-hidden rounded-md border-2 ${
+                      bodyId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
+                    }`}
+                    style={{ width: 80, height: 80 }}
+                    onClick={() => setBodyId(s.id)}
+                    title={s.name || s.id}
+                  >
+                    <img
+                      src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                      alt={s.name || s.id}
+                      className="h-full w-full object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                    <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
+                      {s.name || s.id}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <h3 className="mb-2 mt-3 text-xs font-semibold text-neutral-300">Head Shots</h3>
+            {headShots.length === 0 && allShots.length === 0 ? (
+              <p className="text-[10px] text-studio-muted">No head shots yet — create one with Grok below</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {(headShots.length > 0 ? headShots : allShots).map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`group relative overflow-hidden rounded-md border-2 ${
+                      headId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
+                    }`}
+                    style={{ width: 80, height: 80 }}
+                    onClick={() => setHeadId(s.id)}
+                    title={s.name || s.id}
+                  >
+                    <img
+                      src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                      alt={s.name || s.id}
+                      className="h-full w-full object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                    <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
+                      {s.name || s.id}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* ── Grok Shot Creator ─────────────────────────── */}

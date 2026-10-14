@@ -1156,18 +1156,7 @@ export default function AssetsPanel({
         </div>
       ) : null}
 
-      {alignOpen && selected ? (
-        <AlignHeadModal
-          project={project}
-          character={selected}
-          script={script}
-          onClose={() => setAlignOpen(false)}
-          onChanged={() => {
-            setReloadKey((n) => n + 1);
-            onLibraryChange?.();
-          }}
-        />
-      ) : null}
+      {/* AlignHeadModal removed — head alignment now done inline on character page */}
 
       {importAudioOpen ? (
         <ImportAudioDialog
