@@ -727,6 +727,35 @@ export default function HeadRigModal({
     }
   }
 
+  // Import a video clip from desktop
+  const importRef = useRef<HTMLInputElement>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importType, setImportType] = useState<"body" | "head">("body");
+
+  async function handleImportFile(file: File, shotType: "body" | "head") {
+    setImportBusy(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("shotType", shotType);
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/import`,
+        { method: "POST", body: formData }
+      );
+      if (res.ok) {
+        await reloadShots();
+      } else {
+        const body = await res.text();
+        alert(`Import failed (${res.status}): ${body}`);
+      }
+    } catch (err) {
+      alert(`Import error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setImportBusy(false);
+      if (importRef.current) importRef.current.value = "";
+    }
+  }
+
   // Save a combined head+body shot
   const [combineMsg, setCombineMsg] = useState("");
   const [combineBusy, setCombineBusy] = useState(false);
@@ -1177,7 +1206,6 @@ export default function HeadRigModal({
                     className={`relative flex-1 cursor-pointer overflow-hidden border-b border-[#222] ${selectedTrack === "body" ? "ring-1 ring-inset ring-blue-500/40" : ""}`}
                     style={{ height: 80, background: "#161e28" }}
                     onClick={() => setSelectedTrack("body")}
-                    onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
                     {/* Clip with thumbnails */}
                     {bodyFrameCount > 0 ? (
@@ -1188,7 +1216,7 @@ export default function HeadRigModal({
                             const pad = String(frame).padStart(4, "0");
                             return (
                               <img key={i} src={shotMediaUrl(project, characterId, bodyId, `cut/f_${pad}.png`)} alt=""
-                                className="h-full shrink-0 object-cover" style={{ width: `${100 / Math.min(bodyFrameCount, 60)}%` }}
+                                className="h-full shrink-0 object-contain" style={{ width: `${100 / Math.min(bodyFrameCount, 60)}%`, background: "#0a0a0a" }}
                                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                             );
                           })}
@@ -1243,7 +1271,6 @@ export default function HeadRigModal({
                     className={`relative flex-1 cursor-pointer overflow-hidden border-b border-[#222] ${selectedTrack === "head" ? "ring-1 ring-inset ring-green-500/40" : ""}`}
                     style={{ height: 80, background: "#161e16" }}
                     onClick={() => setSelectedTrack("head")}
-                    onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}
                   >
                     {/* Clip with thumbnails */}
                     {headFrameCount > 0 ? (
@@ -1254,7 +1281,7 @@ export default function HeadRigModal({
                             const pad = String(frame).padStart(4, "0");
                             return (
                               <img key={i} src={shotMediaUrl(project, characterId, headId, `cut/f_${pad}.png`)} alt=""
-                                className="h-full shrink-0 object-cover" style={{ width: `${100 / Math.min(headFrameCount, 60)}%` }}
+                                className="h-full shrink-0 object-contain" style={{ width: `${100 / Math.min(headFrameCount, 60)}%`, background: "#0a0a0a" }}
                                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                             );
                           })}
@@ -1330,6 +1357,22 @@ export default function HeadRigModal({
             <div className="flex gap-4">
               {/* LEFT — Body Shots + Head Shots */}
               <div className="min-w-0 flex-1">
+                {/* Import button */}
+                <div className="mb-3 flex items-center gap-2">
+                  <input ref={importRef} type="file" accept="video/*,.mp4,.mov,.webm" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFile(f, importType); }} />
+                  <select className="rounded border border-studio-border bg-studio-raised px-2 py-1 text-[11px] text-neutral-200"
+                    value={importType} onChange={(e) => setImportType(e.target.value as "body" | "head")}>
+                    <option value="body">Body clip</option>
+                    <option value="head">Head clip</option>
+                  </select>
+                  <button type="button"
+                    className="rounded bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
+                    disabled={importBusy}
+                    onClick={() => importRef.current?.click()}>
+                    {importBusy ? "Importing…" : "📁 Import Clip"}
+                  </button>
+                </div>
                 <h3 className="mb-2 text-xs font-semibold text-neutral-300">Body Shots</h3>
                 {bodyShots.length === 0 && allShots.length === 0 ? (
                   <p className="text-[10px] text-studio-muted">No body shots yet — create one with Grok below</p>
