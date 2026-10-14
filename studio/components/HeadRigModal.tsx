@@ -622,7 +622,9 @@ export default function HeadRigModal({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            prompt: grokPrompt.trim(),
+            prompt: grokType === "body"
+              ? `${grokPrompt.trim()}, include neck and top of shoulders so head can be overlaid`
+              : grokPrompt.trim(),
             shotType: grokType,
             background: "green",
             duration: grokDuration,
@@ -1152,7 +1154,7 @@ export default function HeadRigModal({
                 <input
                   type="text"
                   className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-                  placeholder={grokType === "body" ? "cowboy standing with arms out, green screen" : "cowboy head talking, green screen"}
+                  placeholder={grokType === "body" ? "cowboy standing with arms out (neck added automatically)" : "cowboy head talking, green screen"}
                   value={grokPrompt}
                   onChange={(e) => setGrokPrompt(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") void handleGrokCreate(); }}
@@ -1174,7 +1176,7 @@ export default function HeadRigModal({
             ) : null}
             <p className="mt-1 text-[10px] text-studio-muted">
               {grokType === "body"
-                ? "Creates a torso/body shot (arms, poses, actions). Head will be added separately."
+                ? "Creates a torso/body shot with neck included. Head will be overlaid separately."
                 : "Creates a head shot (mouth moving, expressions). Will be overlaid onto body."}
             </p>
           </div>
