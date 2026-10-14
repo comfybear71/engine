@@ -449,7 +449,9 @@ export default function HeadRigModal({
       const hh = headNat.h * headScale * scale;
       const hx = bx + anchorX * bw - hw / 2;
       const hy = by + anchorY * bh - hh / 2;
+      ctx.globalAlpha = 0.6;
       ctx.drawImage(headImg, hx, hy, hw, hh);
+      ctx.globalAlpha = 1;
     }
 
     // Frame counter
