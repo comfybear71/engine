@@ -12,6 +12,9 @@ interface ShotInfo {
   status: string;
   shotType?: string;
   frameCount: number;
+  actionId?: string;    // set when sent to Action Shots
+  sourceBody?: string;
+  sourceHead?: string;
 }
 
 interface RigEntry {
@@ -248,6 +251,9 @@ export default function HeadRigModal({
       const hx = bx + anchorX * bw - hw / 2;
       const hy = by + anchorY * bh - hh / 2;
 
+      // Draw head twice — keyed PNGs can have semi-transparent pixels from
+      // green-screen removal; a second pass makes them fully opaque.
+      ctx.drawImage(headImg, hx, hy, hw, hh);
       ctx.drawImage(headImg, hx, hy, hw, hh);
 
       // Dashed outline
@@ -591,8 +597,13 @@ export default function HeadRigModal({
           const hh = headNat.h * interp.sc * scale;
           const hx = bx + interp.ax * bw - hw / 2;
           const hy = by + interp.ay * bh - hh / 2;
+          // Double-draw for full opacity (keyed PNGs may have semi-transparent pixels)
+          ctx.drawImage(headImg, hx, hy, hw, hh);
           ctx.drawImage(headImg, hx, hy, hw, hh);
         }
+
+        // Update playhead position during playback
+        setScrubFrame(bf);
 
         // Frame counter
         ctx.fillStyle = "#e0a040";
@@ -682,9 +693,82 @@ export default function HeadRigModal({
     setGrokBusy(false);
   }
 
+  // Delete a shot (moves to _deleted/ on disk)
+  async function handleDeleteShot(shotId: string) {
+    if (!confirm(`Delete shot "${shotId}"?`)) return;
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}`,
+        { method: "DELETE" }
+      );
+      if (res.ok) {
+        // Clear selection if deleted
+        if (bodyId === shotId) setBodyId("");
+        if (headId === shotId) setHeadId("");
+        await reloadShots();
+      }
+    } catch {}
+  }
+
+  // Save a combined head+body shot
+  const [combineMsg, setCombineMsg] = useState("");
+  const [combineBusy, setCombineBusy] = useState(false);
+
+  async function handleCombine() {
+    if (!bodyId || !headId) return;
+    setCombineBusy(true);
+    setCombineMsg("");
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/combine`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bodyId,
+            headId,
+            anchorX: Math.round(anchorX * 1000) / 1000,
+            anchorY: Math.round(anchorY * 1000) / 1000,
+            headScale: Math.round(headScale * 1000) / 1000,
+            bodyIn: bodyInEff,
+            bodyOut: bodyOutEff,
+            headIn: headInEff,
+            headOut: headOutEff,
+            fps: bodyFps,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: "Combine failed" }));
+        setCombineMsg(data.error || "Failed");
+      } else {
+        const data = await res.json();
+        setCombineMsg(`Combined shot "${data.id}" created!`);
+        await reloadShots();
+      }
+    } catch (err) {
+      setCombineMsg(err instanceof Error ? err.message : "Failed");
+    }
+    setCombineBusy(false);
+  }
+
+  // Send a combined shot to Action Shots
+  async function handleSendToAction(shotId: string) {
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}/use`,
+        { method: "POST" }
+      );
+      if (res.ok) {
+        await reloadShots();
+      }
+    } catch {}
+  }
+
   // Filter shots into body/head categories
   const bodyShots = shots.filter((s) => s.shotType === "body" || s.category === "idle_stand" || s.category === "walks" || s.category === "mic");
   const headShots = shots.filter((s) => s.shotType === "head" || s.category === "expressions" || s.category === "head_moves" || s.category === "mouth_tongue");
+  const combinedShots = shots.filter((s) => s.shotType === "combined");
   // If no type/category filtering works, show all
   const allShots = shots;
 
@@ -721,7 +805,10 @@ export default function HeadRigModal({
 
   const content = (
         <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto p-4"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
+        <div className="flex gap-4">
 
+          {/* ── LEFT COLUMN — Editor / Compositor ────────── */}
+          <div className="min-w-0 flex-1">
           {/* ── Centered Viewer (DaVinci Resolve layout) ────────── */}
           <div className="flex flex-col items-center">
             {/* Shot pickers — compact row */}
@@ -1167,26 +1254,35 @@ export default function HeadRigModal({
             ) : (
               <div className="flex flex-wrap gap-2">
                 {(bodyShots.length > 0 ? bodyShots : allShots).map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className={`group relative overflow-hidden rounded-md border-2 ${
-                      bodyId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
-                    }`}
-                    style={{ width: 80, height: 80 }}
-                    onClick={() => setBodyId(s.id)}
-                    title={s.name || s.id}
-                  >
-                    <img
-                      src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
-                      alt={s.name || s.id}
-                      className="h-full w-full object-cover"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                    />
-                    <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
-                      {s.name || s.id}
-                    </span>
-                  </button>
+                  <div key={s.id} className="group relative" style={{ width: 80, height: 80 }}>
+                    <button
+                      type="button"
+                      className={`relative overflow-hidden rounded-md border-2 ${
+                        bodyId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
+                      }`}
+                      style={{ width: 80, height: 80 }}
+                      onClick={() => setBodyId(s.id)}
+                      title={s.name || s.id}
+                    >
+                      <img
+                        src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                        alt={s.name || s.id}
+                        className="h-full w-full object-cover"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
+                      <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
+                        {s.name || s.id}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white opacity-0 shadow transition-opacity hover:bg-red-500 group-hover:opacity-100"
+                      onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
+                      title="Delete shot"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -1197,26 +1293,35 @@ export default function HeadRigModal({
             ) : (
               <div className="flex flex-wrap gap-2">
                 {(headShots.length > 0 ? headShots : allShots).map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className={`group relative overflow-hidden rounded-md border-2 ${
-                      headId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
-                    }`}
-                    style={{ width: 80, height: 80 }}
-                    onClick={() => setHeadId(s.id)}
-                    title={s.name || s.id}
-                  >
-                    <img
-                      src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
-                      alt={s.name || s.id}
-                      className="h-full w-full object-cover"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                    />
-                    <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
-                      {s.name || s.id}
-                    </span>
-                  </button>
+                  <div key={s.id} className="group relative" style={{ width: 80, height: 80 }}>
+                    <button
+                      type="button"
+                      className={`relative overflow-hidden rounded-md border-2 ${
+                        headId === s.id ? "border-[#e0a040]" : "border-studio-border hover:border-neutral-500"
+                      }`}
+                      style={{ width: 80, height: 80 }}
+                      onClick={() => setHeadId(s.id)}
+                      title={s.name || s.id}
+                    >
+                      <img
+                        src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                        alt={s.name || s.id}
+                        className="h-full w-full object-cover"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
+                      <span className="absolute inset-x-0 bottom-0 truncate bg-black/70 px-1 py-0.5 text-[9px] text-neutral-300">
+                        {s.name || s.id}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="absolute -right-1 -top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white opacity-0 shadow transition-opacity hover:bg-red-500 group-hover:opacity-100"
+                      onClick={(e) => { e.stopPropagation(); void handleDeleteShot(s.id); }}
+                      title="Delete shot"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -1281,6 +1386,76 @@ export default function HeadRigModal({
                 : "Creates a head shot (mouth moving, expressions). Will be overlaid onto body."}
             </p>
           </div>
+          </div>{/* end left column */}
+
+          {/* ── RIGHT COLUMN — Saved Combined Outputs ──────────── */}
+          <div className="w-72 shrink-0">
+            <div className="sticky top-0 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
+              <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Combined Outputs</h3>
+
+              {/* Save Combined button */}
+              <button
+                type="button"
+                className="mb-3 w-full rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+                disabled={combineBusy || !bodyId || !headId}
+                onClick={() => void handleCombine()}
+              >
+                {combineBusy ? "Combining…" : "Save Combined Shot"}
+              </button>
+              {combineMsg ? (
+                <p className={`mb-2 text-[10px] font-medium ${combineMsg.includes("failed") || combineMsg.includes("Failed") ? "text-red-400" : "text-emerald-300"}`}>
+                  {combineMsg}
+                </p>
+              ) : null}
+
+              {/* List of combined shots */}
+              {combinedShots.length === 0 ? (
+                <p className="text-[10px] text-studio-muted">No combined shots yet. Pick a body + head, position them, then click Save Combined Shot.</p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {combinedShots.map((s) => (
+                    <div key={s.id} className="group relative rounded-md border border-studio-border bg-[#111] p-2">
+                      <div className="flex items-start gap-2">
+                        <img
+                          src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                          alt={s.name || s.id}
+                          className="h-14 w-14 shrink-0 rounded object-cover"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[10px] font-medium text-neutral-200" title={s.id}>{s.name || s.id}</p>
+                          <p className="text-[9px] text-studio-muted">{s.frameCount}f</p>
+                          {s.actionId ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400">
+                              <span>✓</span> In Action Shots
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="mt-1 rounded bg-blue-700 px-2 py-0.5 text-[9px] font-semibold text-white hover:bg-blue-600"
+                              onClick={() => void handleSendToAction(s.id)}
+                            >
+                              Send to Action Shots
+                            </button>
+                          )}
+                        </div>
+                        {/* Delete button */}
+                        <button
+                          type="button"
+                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] text-red-400 opacity-0 transition-opacity hover:bg-red-600 hover:text-white group-hover:opacity-100"
+                          onClick={() => void handleDeleteShot(s.id)}
+                          title="Delete combined shot"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>{/* end flex row */}
         </div>
 
   );
@@ -1289,7 +1464,7 @@ export default function HeadRigModal({
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
-      <div className="flex max-h-[96vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-studio-border bg-studio-panel shadow-2xl">
+      <div className="flex max-h-[96vh] w-full max-w-7xl flex-col overflow-hidden rounded-md border border-studio-border bg-studio-panel shadow-2xl">
         <div className="flex items-start justify-between gap-3 border-b border-studio-border px-4 py-3">
           <div>
             <h2 className="text-sm font-semibold text-white">Build Character</h2>

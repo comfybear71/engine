@@ -1073,101 +1073,60 @@ export default function ActionShotsPage({
     );
   }
 
-  // Group shots by category
-  const grouped = new Map<string, ShotInfo[]>();
-  for (const shot of shots) {
-    const cat = shot.category || "other";
-    if (!grouped.has(cat)) grouped.set(cat, []);
-    grouped.get(cat)!.push(shot);
-  }
+  // Only show completed combined shots from the Build Character page
+  const combinedShots = shots.filter((s) => s.shotType === "combined" && s.status === "ready");
 
   return (
     <div className="shots-page" data-testid="shots-page">
-      {/* Top bar */}
+      {/* Top bar — simplified: combined shots come from Build Character page */}
       <div className="shots-topbar">
-        <button type="button" className="shots-btn-accent" onClick={() => setShowNew(true)}>
-          + New shot
-        </button>
-        <button type="button" className="shots-btn" onClick={handleImport}>
-          Import MP4
-        </button>
-        <button type="button" className="shots-btn" onClick={() => setShowCombine(true)}>
-          Combine head+body
-        </button>
+        <span style={{ fontSize: 11, color: "#999" }}>
+          Combined clips from Build Character appear here. Use the character page to create new ones.
+        </span>
       </div>
-
-      {importError && <div className="shots-error">{importError}</div>}
-
-      {showNew && (
-        <NewShotPanel
-          project={project}
-          characterId={characterId}
-          onClose={() => setShowNew(false)}
-          onCreated={loadShots}
-        />
-      )}
-
-      {showCombine && (
-        <CombinePanel
-          project={project}
-          characterId={characterId}
-          shots={shots}
-          onClose={() => setShowCombine(false)}
-          onCreated={loadShots}
-        />
-      )}
 
       {loading ? (
         <div className="shots-loading">Loading shots…</div>
-      ) : shots.length === 0 ? (
+      ) : combinedShots.length === 0 ? (
         <div className="shots-empty">
-          No shots yet. Click &quot;+ New shot&quot; to make one with Grok, or &quot;Import MP4&quot; for clips from grok.com.
+          No combined shots yet. Go to the character page to combine head + body shots, then send them here.
         </div>
       ) : (
-        /* Category sections */
-        CATEGORIES.map((cat) => {
-          const catShots = grouped.get(cat.id);
-          if (!catShots || catShots.length === 0) return null;
-          return (
-            <div key={cat.id} className="shots-category" data-testid={`shots-cat-${cat.id}`}>
-              <div className="shots-category-header">{cat.label}</div>
-              <div className="shots-grid">
-                {catShots.map((shot) => (
-                  <ShotCard
-                    key={shot.id}
-                    project={project}
-                    characterId={characterId}
-                    shot={shot}
-                    onClick={() => {
-                      if (shot.status === "error") {
-                        handleRetry(shot.id);
-                      } else if (shot.status === "ready") {
-                        setSelectedShot(shot.id);
-                      }
-                    }}
-                    onDelete={async () => {
-                      if (!confirm("Delete this shot?")) return;
-                      try {
-                        const res = await workerFetch(
-                          `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shot.id)}`,
-                          { method: "DELETE" }
-                        );
-                        if (!res.ok) {
-                          const body = await res.json().catch(() => ({ error: "Delete failed" }));
-                          alert(body.error || "Delete failed");
-                          return;
-                        }
-                        loadShots();
-                      } catch (err) {
-                        alert(err instanceof Error ? err.message : "Delete failed");
-                      }
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          );
-        })
+        <div className="shots-category" data-testid="shots-cat-combined">
+          <div className="shots-category-header">Combined Clips</div>
+          <div className="shots-grid">
+            {combinedShots.map((shot) => (
+              <ShotCard
+                key={shot.id}
+                project={project}
+                characterId={characterId}
+                shot={shot}
+                onClick={() => {
+                  if (shot.status === "ready") {
+                    setSelectedShot(shot.id);
+                  }
+                }}
+                onDelete={async () => {
+                  if (!confirm("Delete this combined shot?")) return;
+                  try {
+                    const res = await workerFetch(
+                      `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shot.id)}`,
+                      { method: "DELETE" }
+                    );
+                    if (!res.ok) {
+                      const body = await res.json().catch(() => ({ error: "Delete failed" }));
+                      alert(body.error || "Delete failed");
+                      return;
+                    }
+                    loadShots();
+                  } catch (err) {
+                    alert(err instanceof Error ? err.message : "Delete failed");
+                  }
+                }}
+              />
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
