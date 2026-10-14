@@ -2617,6 +2617,44 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   height: 48px;
 }
 
+/* ── Resize head panel ─────────────────────────────────────────── */
+
+.shots-resize-panel {
+  padding: 12px;
+  background: #1a1a1a;
+  border: 1px solid #e0a040;
+  border-radius: 6px;
+  margin-top: 8px;
+}
+
+.shots-resize-layout {
+  display: flex;
+  gap: 16px;
+}
+
+.shots-resize-preview {
+  flex: 0 0 auto;
+}
+
+.shots-resize-preview canvas {
+  display: block;
+  background: #111;
+  border-radius: 4px;
+}
+
+.shots-resize-controls {
+  flex: 1 1 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 300px;
+}
+
+.shots-resize-controls input[type="range"] {
+  width: 100%;
+  accent-color: #e0a040;
+}
+
 /* ── Combine panel ─────────────────────────────────────────────── */
 
 .shots-combine-panel {

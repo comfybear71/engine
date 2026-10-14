@@ -137,6 +137,7 @@ const {
   retryShot,
   serveMedia: serveShotMedia,
   combineShots,
+  resizeHead,
 } = require("./shots");
 const {
   isSafeShowId,
@@ -1317,6 +1318,18 @@ function createApp(options = {}) {
     if (!projectDir) return;
     try {
       const result = await combineShots(projectDir, req.params.characterId, req.body || {});
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // ── Resize head in a shot ──────────────────────────────────────────
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/resize-head", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await resizeHead(projectDir, req.params.characterId, req.params.shotId, req.body || {});
       res.json(result);
     } catch (err) {
       sendFactoryError(res, err);

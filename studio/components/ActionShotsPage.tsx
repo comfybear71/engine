@@ -286,6 +286,7 @@ function ShotDetailView({
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [saving, setSaving] = useState(false);
+  const [resizeMode, setResizeMode] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const load = useCallback(async () => {
@@ -442,6 +443,10 @@ function ShotDetailView({
         <button type="button" onClick={() => handleSaveSlot(currentFrame)} className="shots-btn">
           Save to slot
         </button>
+        <button type="button" onClick={() => setResizeMode(!resizeMode)} className="shots-btn"
+          style={{ background: resizeMode ? "#e0a040" : undefined, color: resizeMode ? "#111" : undefined }}>
+          {resizeMode ? "Cancel Resize" : "Resize Head"}
+        </button>
       </div>
 
       {/* Use as Action Shot */}
@@ -489,6 +494,18 @@ function ShotDetailView({
 
       {error && <div className="shots-error">{error}</div>}
 
+      {/* Resize head mode */}
+      {resizeMode && (
+        <ResizeHeadPanel
+          project={project}
+          characterId={characterId}
+          shotId={shotId}
+          frameUrl={currentCutUrl}
+          onDone={() => { setResizeMode(false); load(); onReload(); }}
+          onCancel={() => setResizeMode(false)}
+        />
+      )}
+
       {/* Frame strip at bottom */}
       <div className="shots-detail-strip">
         {detail.frames
@@ -505,6 +522,168 @@ function ShotDetailView({
               onClick={() => setCurrentFrame(f.n)}
             />
           ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Resize Head Panel ──────────────────────────────────────────────
+
+function ResizeHeadPanel({
+  project,
+  characterId,
+  shotId,
+  frameUrl,
+  onDone,
+  onCancel,
+}: {
+  project: string;
+  characterId: string;
+  shotId: string;
+  frameUrl: string;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [neckY, setNeckY] = useState(0.35);
+  const [headScale, setHeadScale] = useState(0.7);
+  const [applying, setApplying] = useState(false);
+  const [error, setError] = useState("");
+  const [imgLoaded, setImgLoaded] = useState(false);
+
+  // Load the frame image
+  useEffect(() => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => { imgRef.current = img; setImgLoaded(true); };
+    img.src = frameUrl;
+  }, [frameUrl]);
+
+  // Draw preview whenever neckY, headScale, or image changes
+  useEffect(() => {
+    if (!imgLoaded || !imgRef.current || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const img = imgRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const maxW = 400;
+    const scale = Math.min(1, maxW / img.width);
+    const dw = Math.round(img.width * scale);
+    const dh = Math.round(img.height * scale);
+    canvas.width = dw;
+    canvas.height = dh;
+
+    // Clear
+    ctx.clearRect(0, 0, dw, dh);
+
+    const splitRow = Math.round(neckY * dh);
+    const headH = splitRow;
+    const bodyY = splitRow;
+    const bodyH = dh - splitRow;
+
+    // Draw scaled head
+    const scaledHeadH = Math.round(headH * headScale);
+    const scaledHeadW = Math.round(dw * headScale);
+    const headX = Math.round((dw - scaledHeadW) / 2);
+    const headY = splitRow - scaledHeadH;
+
+    // Source head region from image
+    const srcSplitRow = Math.round(neckY * img.height);
+    ctx.drawImage(img, 0, 0, img.width, srcSplitRow,
+                  headX, headY, scaledHeadW, scaledHeadH);
+
+    // Draw body unchanged
+    ctx.drawImage(img, 0, srcSplitRow, img.width, img.height - srcSplitRow,
+                  0, bodyY, dw, bodyH);
+
+    // Draw neck line
+    ctx.strokeStyle = "#e0a040";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, splitRow);
+    ctx.lineTo(dw, splitRow);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Label
+    ctx.fillStyle = "#e0a040";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("← neck line", 4, splitRow - 4);
+  }, [imgLoaded, neckY, headScale]);
+
+  // Click on canvas to set neck line
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const y = (e.clientY - rect.top) / rect.height;
+    setNeckY(Math.max(0.05, Math.min(0.95, y)));
+  };
+
+  const handleApply = async () => {
+    setApplying(true);
+    setError("");
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}/resize-head`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ neckY, headScale }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error || "Resize failed");
+      }
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed");
+    }
+    setApplying(false);
+  };
+
+  return (
+    <div className="shots-resize-panel">
+      <div className="shots-resize-layout">
+        <div className="shots-resize-preview">
+          <canvas
+            ref={canvasRef}
+            onClick={handleCanvasClick}
+            style={{ cursor: "crosshair" }}
+          />
+          <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>
+            Click to set neck line position
+          </div>
+        </div>
+        <div className="shots-resize-controls">
+          <label className="shots-field">
+            <span>Neck position: {Math.round(neckY * 100)}%</span>
+            <input type="range" min={5} max={95} value={Math.round(neckY * 100)}
+              onChange={(e) => setNeckY(Number(e.target.value) / 100)} />
+          </label>
+          <label className="shots-field">
+            <span>Head scale: {headScale.toFixed(2)}x</span>
+            <input type="range" min={10} max={200} value={Math.round(headScale * 100)}
+              onChange={(e) => setHeadScale(Number(e.target.value) / 100)} />
+          </label>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button type="button" onClick={handleApply} disabled={applying}
+              className="shots-action-btn" style={{ flex: 1 }}>
+              {applying ? "Applying to all frames…" : "Apply to all frames"}
+            </button>
+            <button type="button" onClick={onCancel} className="shots-btn" style={{ flex: "0 0 auto" }}>
+              Cancel
+            </button>
+          </div>
+          {error && <div className="shots-error" style={{ marginTop: 6 }}>{error}</div>}
+          <div style={{ fontSize: 11, color: "#888", marginTop: 8 }}>
+            Originals backed up to _pre_resize/ folder
+          </div>
+        </div>
       </div>
     </div>
   );

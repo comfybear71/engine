@@ -696,6 +696,49 @@ async function combineShots(projectDir, characterId, opts = {}) {
   return { id: combinedId, ...parsed };
 }
 
+/**
+ * Resize head portion of a shot's frames.
+ * Splits at neckY (0-1 from top), scales head by headScale, overwrites frames.
+ */
+async function resizeHead(projectDir, characterId, shotIdStr, opts = {}) {
+  const { neckY = 0.35, headScale = 0.7 } = opts;
+  if (neckY < 0.05 || neckY > 0.95) throw shotError("neckY must be between 0.05 and 0.95");
+  if (headScale < 0.1 || headScale > 3.0) throw shotError("headScale must be between 0.1 and 3.0");
+
+  const dir = shotDir(projectDir, characterId, shotIdStr);
+  const info = readShotJson(dir);
+  if (!info) throw shotError("Shot not found", "ENOENT");
+
+  const pythonBin = resolvePythonBin();
+  const args = [
+    "-m", "compositor.shot_resize_head",
+    "--shot-dir", dir,
+    "--neck-y", String(neckY),
+    "--head-scale", String(headScale),
+    "--fps", String(info.fps || 24),
+  ];
+
+  const { code, stdout, stderr } = await spawnCmd(pythonBin, args, { cwd: PYTHON_DIR });
+  const trimmed = stdout.trim();
+  let parsed = null;
+  if (trimmed) {
+    const lines = trimmed.split("\n");
+    try { parsed = JSON.parse(lines[lines.length - 1]); } catch {}
+  }
+  if (code !== 0 || !parsed) {
+    const msg = stderr.trim() || "Resize head failed";
+    throw shotError(msg);
+  }
+
+  // Update shot.json
+  info.headResized = true;
+  info.resizeNeckY = neckY;
+  info.resizeHeadScale = headScale;
+  writeShotJson(dir, info);
+
+  return { ok: true, ...parsed };
+}
+
 module.exports = {
   listShots,
   getShot,
@@ -709,4 +752,5 @@ module.exports = {
   retryShot,
   serveMedia,
   combineShots,
+  resizeHead,
 };
