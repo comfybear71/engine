@@ -1081,12 +1081,16 @@ export default function HeadRigModal({
           {/* ── DaVinci Resolve-style Timeline — FULL WIDTH ──────── */}
           {(bodyFrameCount > 0 || headFrameCount > 0) ? (
             <div className="mt-3 rounded-md border border-studio-border bg-[#111] p-2">
-              {/* Timeline header */}
+              {/* Timeline header — Resolve style */}
               <div className="mb-2 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <span className="text-[11px] font-semibold text-neutral-300">TIMELINE</span>
-                  <span className="font-mono text-[11px] text-neutral-400">
-                    F<span className="text-white">{scrubFrame}</span> / {maxFrames}
+                  <span className="font-mono text-lg font-bold tracking-tight text-neutral-200">
+                    {String(Math.floor((scrubFrame - 1) / (bodyFps * 60))).padStart(2, "0")}
+                    :{String(Math.floor(((scrubFrame - 1) / bodyFps) % 60)).padStart(2, "0")}
+                    :{String(Math.floor((scrubFrame - 1) % bodyFps)).padStart(2, "0")}
+                  </span>
+                  <span className="font-mono text-[10px] text-neutral-500">
+                    F{scrubFrame}/{maxFrames}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1169,19 +1173,23 @@ export default function HeadRigModal({
               <div ref={timelineRef} style={{ marginLeft: 80 }}>
                 {/* ── BODY TRACK ── */}
                 <div className="flex items-stretch" style={{ marginLeft: -80 }}>
-                  <div className="flex w-20 shrink-0 flex-col justify-center rounded-l border-r border-[#333] bg-[#1a1a1a] px-2 py-1">
-                    <span className="text-[10px] font-semibold text-blue-400">BODY</span>
-                    <span className="text-[9px] text-studio-muted">
-                      {bodyTrimCount > 0 && bodyTrimCount < bodyFrameCount ? `${bodyTrimCount}/${bodyFrameCount}f` : `${bodyFrameCount}f`}
-                    </span>
-                    <label className="mt-0.5 text-[8px] text-studio-muted">
-                      {bodyFps}fps
-                      <input
-                        type="range" min={4} max={30} step={1} value={bodyFps}
-                        onChange={(e) => setBodyFps(Number(e.target.value))}
-                        className="studio-scrubber mt-0.5 w-full"
-                      />
-                    </label>
+                  {/* Resolve-style track header */}
+                  <div
+                    className={`flex w-20 shrink-0 flex-col items-start justify-center border-r border-[#333] px-2 py-1 ${selectedTrack === "body" ? "bg-[#1e2a3a]" : "bg-[#1a1a1a]"}`}
+                    onClick={() => setSelectedTrack("body")}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span className="rounded-sm bg-blue-600 px-1 py-px text-[8px] font-bold text-white">V1</span>
+                    </div>
+                    <span className="mt-0.5 text-[10px] font-medium text-neutral-300">Body</span>
+                    <span className="text-[8px] text-neutral-500">{bodyFrameCount}f · {bodyFps}fps</span>
+                    <input
+                      type="range" min={4} max={30} step={1} value={bodyFps}
+                      onChange={(e) => { e.stopPropagation(); setBodyFps(Number(e.target.value)); }}
+                      className="studio-scrubber mt-0.5 w-full"
+                      onClick={(e) => e.stopPropagation()}
+                    />
                   </div>
                   <div
                     className={`relative flex-1 cursor-pointer overflow-hidden rounded-r ${selectedTrack === "body" ? "ring-1 ring-blue-400/60" : ""}`}
@@ -1260,19 +1268,23 @@ export default function HeadRigModal({
 
                 {/* ── HEAD TRACK ── */}
                 <div className="mt-0.5 flex items-stretch" style={{ marginLeft: -80 }}>
-                  <div className="flex w-20 shrink-0 flex-col justify-center rounded-l border-r border-[#333] bg-[#1a1a1a] px-2 py-1">
-                    <span className="text-[10px] font-semibold text-green-400">HEAD</span>
-                    <span className="text-[9px] text-studio-muted">
-                      {headTrimCount > 0 && headTrimCount < headFrameCount ? `${headTrimCount}/${headFrameCount}f` : `${headFrameCount}f`}
-                    </span>
-                    <label className="mt-0.5 text-[8px] text-studio-muted">
-                      {headFps}fps
-                      <input
-                        type="range" min={4} max={30} step={1} value={headFps}
-                        onChange={(e) => setHeadFps(Number(e.target.value))}
-                        className="studio-scrubber mt-0.5 w-full"
-                      />
-                    </label>
+                  {/* Resolve-style track header */}
+                  <div
+                    className={`flex w-20 shrink-0 flex-col items-start justify-center border-r border-[#333] px-2 py-1 ${selectedTrack === "head" ? "bg-[#1a2a1a]" : "bg-[#1a1a1a]"}`}
+                    onClick={() => setSelectedTrack("head")}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span className="rounded-sm bg-green-600 px-1 py-px text-[8px] font-bold text-white">V2</span>
+                    </div>
+                    <span className="mt-0.5 text-[10px] font-medium text-neutral-300">Head</span>
+                    <span className="text-[8px] text-neutral-500">{headFrameCount}f · {headFps}fps</span>
+                    <input
+                      type="range" min={4} max={30} step={1} value={headFps}
+                      onChange={(e) => { e.stopPropagation(); setHeadFps(Number(e.target.value)); }}
+                      className="studio-scrubber mt-0.5 w-full"
+                      onClick={(e) => e.stopPropagation()}
+                    />
                   </div>
                   <div
                     className={`relative flex-1 cursor-pointer overflow-hidden rounded-r ${selectedTrack === "head" ? "ring-1 ring-green-400/60" : ""}`}
