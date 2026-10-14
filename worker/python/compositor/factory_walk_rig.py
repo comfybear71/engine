@@ -21,6 +21,8 @@ from .align import alpha_bbox
 from .asset_cache import _to_bgra
 from .factory_fit import (
     _boot_xs,
+    count_boots,
+    count_figures,
     fit_walk_piece,
     normalize_walk_batch,
 )
@@ -154,10 +156,14 @@ def _sample_pair(sources: list[np.ndarray], index: int, count: int) -> tuple[np.
 def _inbetween(a: np.ndarray, b: np.ndarray, frac: float, n_sources: int) -> np.ndarray:
     """Morph adjacent keys when we have a real cycle. Two contact poses
     keep the nearest key and rely on the leg warp for in-betweens — a
-    full blend of opposite strides ghosts extra feet."""
+    full blend of opposite strides ghosts extra feet. If a morph of a
+    longer key set still grows a second body, fall back to the nearest
+    key so 8/12/16 loops stay one-headed."""
 
     if n_sources >= MORPH_MIN_SOURCES and 0.08 < frac < 0.92:
-        return morph_frames(a, b, frac)
+        blended = morph_frames(a, b, frac)
+        if count_figures(blended) == 1 and count_boots(blended) <= 2:
+            return blended
     return a.copy() if frac < 0.5 else b.copy()
 
 

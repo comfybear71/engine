@@ -386,13 +386,187 @@ function collectWalkSidePngs(root, dirs) {
   return byIndex.filter(Boolean);
 }
 
-function findWalkSideSources(projectDir, characterId, view) {
+function loadLocalCharacterJson(projectDir, characterId) {
+  const abs = path.join(characterDir(projectDir, characterId), "character.json");
+  if (!fs.existsSync(abs)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(abs, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function loadLocalWalkAction(projectDir, characterId, view) {
+  const ids = view === "left_side" ? ["walk_left_side", "walk_side"] : ["walk_side", "walk_left_side"];
+  const root = characterDir(projectDir, characterId);
+  for (const id of ids) {
+    const abs = path.join(root, "actions", `${id}.json`);
+    if (!fs.existsSync(abs)) continue;
+    try {
+      return JSON.parse(fs.readFileSync(abs, "utf8"));
+    } catch {
+      /* ignore a broken action and try the next id */
+    }
+  }
+  return null;
+}
+
+function iterSlotSpecs(character) {
+  const out = [];
+  if (!character) return out;
+  for (const [name, spec] of Object.entries(character.slots || {})) out.push([name, spec]);
+  for (const child of character.children || []) {
+    for (const [name, spec] of Object.entries((child && child.slots) || {})) out.push([name, spec]);
+  }
+  return out;
+}
+
+function walkActionIds(view) {
+  return view === "left_side" ? ["walk_left_side", "walk_side"] : ["walk_side", "walk_left_side"];
+}
+
+function drawingNameFromRef(item) {
+  let raw = item;
+  if (item && typeof item === "object") {
+    raw = item.drawing || item.name || item.id || item.src || "";
+  }
+  const stripped = String(raw || "")
+    .replace(/\\/g, "/")
+    .replace(/\.png$/i, "");
+  return stripped.split("/").filter(Boolean).pop() || "";
+}
+
+function isWalkSideDrawingName(name) {
+  return /^walk_side_\d{2}$/i.test(drawingNameFromRef(name));
+}
+
+function drawingRefsFromAction(action) {
+  if (!action || !action.slot_frames || typeof action.slot_frames !== "object") return [];
+  const prefer = ["body", "torso"];
+  const slots = [...prefer, ...Object.keys(action.slot_frames).filter((name) => !prefer.includes(name))];
+  for (const slot of slots) {
+    const list = action.slot_frames[slot];
+    if (!Array.isArray(list) || !list.length) continue;
+    const refs = [];
+    for (const item of list) {
+      const name = drawingNameFromRef(item);
+      if (!isWalkSideDrawingName(name)) continue;
+      refs.push({ slot, name });
+    }
+    if (refs.length) return refs;
+  }
+  return [];
+}
+
+function drawingRefsFromCycles(character, view) {
+  const want = walkActionIds(view);
+  const ranked = iterSlotSpecs(character).sort(([a], [b]) => {
+    const rank = (name) => (name === "body" ? 0 : name === "torso" ? 1 : 2);
+    return rank(a) - rank(b);
+  });
+  for (const [slot, spec] of ranked) {
+    const cycles = (spec && spec.cycles) || {};
+    for (const id of want) {
+      const cycle = cycles[id];
+      const drawings = Array.isArray(cycle) ? cycle : cycle && cycle.drawings;
+      if (!Array.isArray(drawings) || !drawings.length) continue;
+      const refs = drawings
+        .map((item) => ({ slot, name: drawingNameFromRef(item) }))
+        .filter((item) => isWalkSideDrawingName(item.name));
+      if (refs.length) return refs;
+    }
+  }
+  return [];
+}
+
+function addWalkDir(dirs, name) {
+  if (name && !dirs.includes(name)) dirs.push(name);
+}
+
+function addSlotWalkDirs(dirs, slotName, spec, view) {
+  const side = view === "left_side" ? "left_side" : "right_side";
+  const base = (spec && spec.drawings_dir) || slotName;
+  if (base) {
+    for (const dir of candidateDrawingsDirs(slotName || base, side, base)) addWalkDir(dirs, dir);
+    addWalkDir(dirs, base);
+    addWalkDir(dirs, `${base}_${side}`);
+  }
+  if (slotName) {
+    addWalkDir(dirs, slotName);
+    addWalkDir(dirs, `${slotName}_${side}`);
+  }
+}
+
+function wholeBodyWalkDirs(character, view) {
+  const side = view === "left_side" ? "left_side" : "right_side";
+  const dirs = [];
+  const seenSlots = new Set();
+  for (const [slotName, spec] of iterSlotSpecs(character)) {
+    const cycles = (spec && spec.cycles) || {};
+    const hasWalk = walkActionIds(side).some((id) => {
+      const cycle = cycles[id];
+      return Array.isArray(cycle) || (cycle && Array.isArray(cycle.drawings) && cycle.drawings.length);
+    });
+    if (slotName !== "body" && slotName !== "torso" && !hasWalk) continue;
+    seenSlots.add(slotName);
+    addSlotWalkDirs(dirs, slotName, spec, side);
+  }
+  for (const slotName of ["body", "torso"]) {
+    if (seenSlots.has(slotName)) continue;
+    const spec = character ? findSlotSpec(character, slotName) : null;
+    addSlotWalkDirs(dirs, slotName, spec, side);
+  }
+  addWalkDir(dirs, `body_${side}`);
+  addWalkDir(dirs, "body");
+  addWalkDir(dirs, `torso_${side}`);
+  addWalkDir(dirs, "torso");
+  return dirs;
+}
+
+function resolveWalkDrawingAbs(root, character, slotName, drawingName, view) {
+  const spec = character && slotName ? findSlotSpec(character, slotName) : null;
+  const base = (spec && spec.drawings_dir) || slotName;
+  const dirs = [];
+  const add = (name) => {
+    if (name && !dirs.includes(name)) dirs.push(name);
+  };
+  if (base) {
+    for (const dir of candidateDrawingsDirs(slotName || base, view, base)) add(dir);
+    add(base);
+  }
+  if (slotName) add(slotName);
+  for (const dir of wholeBodyWalkDirs(character, view)) add(dir);
+  for (const dir of dirs) {
+    const abs = path.join(root, dir, `${drawingName}.png`);
+    if (fs.existsSync(abs)) return abs;
+  }
+  return null;
+}
+
+function findWalkSideSources(projectDir, characterId, view, character) {
   const root = characterDir(projectDir, characterId);
   const side = view === "left_side" ? "left_side" : "right_side";
-  // Whole-body walk_side_01..08 live on the side torso. Never mix those
-  // with a leftover legs-only walk_side_01.
-  const torso = collectWalkSidePngs(root, [`torso_${side}`, "torso"]);
-  if (torso.length) return torso;
+  const live = character || loadLocalCharacterJson(projectDir, characterId);
+  const namedLists = [
+    drawingRefsFromAction(loadLocalWalkAction(projectDir, characterId, side)),
+    drawingRefsFromCycles(live, side),
+  ];
+  for (const refs of namedLists) {
+    if (!refs.length) continue;
+    const seen = new Set();
+    const resolved = [];
+    for (const ref of refs) {
+      if (seen.has(ref.name)) continue;
+      const abs = resolveWalkDrawingAbs(root, live, ref.slot, ref.name, side);
+      if (!abs) continue;
+      seen.add(ref.name);
+      resolved.push(abs);
+    }
+    if (resolved.length >= 2) return resolved;
+  }
+  // Walk the rig's whole-body drawings_dir (body / torso), not a hardcoded pair.
+  const torsoOrBody = collectWalkSidePngs(root, wholeBodyWalkDirs(live, side));
+  if (torsoOrBody.length) return torsoOrBody;
   return collectWalkSidePngs(root, [`legs_${side}`, "legs_right_side"]);
 }
 
@@ -437,10 +611,10 @@ function runFactoryWalkRig(args, options = {}) {
 }
 
 async function generateRigWalkCells(projectDir, character, frames, view, dest, canvas, dir, options) {
-  const sources = findWalkSideSources(projectDir, character.id, view);
+  const sources = findWalkSideSources(projectDir, character.id, view, character);
   if (sources.length < 2) {
     throw factoryError(
-      "Need at least two ticked walk_side_01..08 drawings (in torso_right_side or torso) to build a long-stride walk without Grok.",
+      "Need at least two ticked walk_side_01..08 drawings (from the walk_side action/cycle on body, torso_right_side, or torso) to build a long-stride walk without Grok.",
       "ENOENT"
     );
   }
@@ -486,7 +660,7 @@ async function generateRigWalkCells(projectDir, character, frames, view, dest, c
 function findWalkPoseGuides(projectDir, characterId, view, count) {
   const root = characterDir(projectDir, characterId);
   const found = [];
-  for (const dir of [`torso_${view}`, "torso", `legs_${view}`, "legs_right_side"]) {
+  for (const dir of [`body_${view}`, "body", `torso_${view}`, "torso", `legs_${view}`, "legs_right_side"]) {
     for (let i = 1; i <= 16; i += 1) {
       const abs = path.join(root, dir, `walk_side_${String(i).padStart(2, "0")}.png`);
       if (fs.existsSync(abs)) found[i - 1] = abs;
@@ -509,6 +683,8 @@ function findSideReferenceAbs(projectDir, characterId, view) {
     path.join(root, "_reference", "side.png"),
     path.join(root, `torso_${side}`, "neutral.png"),
     path.join(root, `torso_${side}`, "stand.png"),
+    path.join(root, "body", "walk_side_01.png"),
+    path.join(root, "body", "walk_side_02.png"),
     path.join(root, "torso", "walk_side_02.png"),
     path.join(root, "torso", "walk_side_01.png"),
     path.join(root, "_reference", "full.png"),

@@ -220,6 +220,105 @@ describe("factory dest and names", () => {
     }
   });
 
+  test("walk_side sources follow the walk_side action onto body/", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-walk-body-"));
+    try {
+      const rodney = path.join(root, "characters", "rodney");
+      fs.mkdirSync(path.join(rodney, "body"), { recursive: true });
+      fs.mkdirSync(path.join(rodney, "actions"), { recursive: true });
+      fs.mkdirSync(path.join(rodney, "torso_right_side"), { recursive: true });
+      fs.mkdirSync(path.join(rodney, "legs_right_side"), { recursive: true });
+      for (let i = 1; i <= 8; i += 1) {
+        const name = `walk_side_${String(i).padStart(2, "0")}.png`;
+        fs.writeFileSync(path.join(rodney, "body", name), `body${i}`);
+      }
+      fs.writeFileSync(path.join(rodney, "legs_right_side", "walk_side_01.png"), "legs");
+      fs.writeFileSync(
+        path.join(rodney, "character.json"),
+        `${JSON.stringify({
+          id: "rodney",
+          slots: { body: { drawings_dir: "body", cycles: { walk_side: { drawings: ["walk_side_01"] } } }, torso: { drawings_dir: "torso" } },
+        })}\n`
+      );
+      fs.writeFileSync(
+        path.join(rodney, "actions", "walk_side.json"),
+        `${JSON.stringify({
+          id: "walk_side",
+          slot_frames: {
+            body: ["walk_side_01", "walk_side_02", "walk_side_03", "walk_side_04", "walk_side_05", "walk_side_06", "walk_side_07", "walk_side_08"],
+          },
+        })}\n`
+      );
+      const found = findWalkSideSources(root, "rodney", "right_side");
+      assert.equal(found.length, 8);
+      assert.ok(found[0].endsWith(path.join("body", "walk_side_01.png")));
+      assert.ok(found[7].endsWith(path.join("body", "walk_side_08.png")));
+      assert.equal(found.some((item) => item.includes("legs_right_side")), false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("walk_side sources follow a body cycle when the action file is missing", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-walk-cycle-"));
+    try {
+      const rodney = path.join(root, "characters", "rodney");
+      fs.mkdirSync(path.join(rodney, "body"), { recursive: true });
+      fs.mkdirSync(path.join(rodney, "legs_right_side"), { recursive: true });
+      const names = [];
+      for (let i = 1; i <= 8; i += 1) {
+        const name = `walk_side_${String(i).padStart(2, "0")}`;
+        names.push(name);
+        fs.writeFileSync(path.join(rodney, "body", `${name}.png`), `body${i}`);
+      }
+      fs.writeFileSync(path.join(rodney, "legs_right_side", "walk_side_01.png"), "legs");
+      fs.writeFileSync(
+        path.join(rodney, "character.json"),
+        `${JSON.stringify({
+          id: "rodney",
+          slots: {
+            body: { drawings_dir: "body", cycles: { walk_side: { drawings: names } } },
+            torso: { drawings_dir: "torso" },
+          },
+        })}\n`
+      );
+      const found = findWalkSideSources(root, "rodney", "right_side");
+      assert.equal(found.length, 8);
+      assert.ok(found[0].endsWith(path.join("body", "walk_side_01.png")));
+      assert.ok(found[7].endsWith(path.join("body", "walk_side_08.png")));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("walk_side sources scan body/ even without action or cycle", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-walk-body-scan-"));
+    try {
+      const rodney = path.join(root, "characters", "rodney");
+      fs.mkdirSync(path.join(rodney, "body"), { recursive: true });
+      fs.mkdirSync(path.join(rodney, "legs_right_side"), { recursive: true });
+      for (let i = 1; i <= 8; i += 1) {
+        fs.writeFileSync(
+          path.join(rodney, "body", `walk_side_${String(i).padStart(2, "0")}.png`),
+          `body${i}`
+        );
+      }
+      fs.writeFileSync(path.join(rodney, "legs_right_side", "walk_side_01.png"), "legs");
+      fs.writeFileSync(
+        path.join(rodney, "character.json"),
+        `${JSON.stringify({
+          id: "rodney",
+          slots: { body: { drawings_dir: "body" }, torso: { drawings_dir: "torso" } },
+        })}\n`
+      );
+      const found = findWalkSideSources(root, "rodney", "right_side");
+      assert.equal(found.length, 8);
+      assert.ok(found.every((item) => item.includes(`${path.sep}body${path.sep}`)));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("walk_side sources prefer torso_right_side over a leftover legs drawing", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "engine-factory-walk-src-"));
     try {
@@ -542,21 +641,6 @@ describe("factory walk from ticked walk_side frames (no Grok)", () => {
     projectDir = path.join(root, "rodney_test");
     fs.mkdirSync(projectDir, { recursive: true });
     buildRodneyTestProject(projectDir);
-    const realTorso = path.join("/workspace/projects/rodney_demo/characters/rodney/torso");
-    const dest = path.join(projectDir, "characters", "rodney", "torso_right_side");
-    const copied = [];
-    for (let i = 1; i <= 8; i += 1) {
-      const name = `walk_side_${String(i).padStart(2, "0")}.png`;
-      const src = path.join(realTorso, name);
-      if (!fs.existsSync(src)) continue;
-      fs.copyFileSync(src, path.join(dest, name));
-      copied.push(name);
-    }
-    if (copied.length >= 2) {
-      for (const name of fs.readdirSync(dest).filter((item) => /^walk_side_\d{2}\.png$/i.test(item))) {
-        if (!copied.includes(name)) fs.unlinkSync(path.join(dest, name));
-      }
-    }
   });
 
   after(() => {
@@ -569,10 +653,16 @@ describe("factory walk from ticked walk_side frames (no Grok)", () => {
       const dir = path.join(empty, "show");
       fs.mkdirSync(dir, { recursive: true });
       buildRodneyTestProject(dir);
-      const side = path.join(dir, "characters", "rodney", "torso_right_side");
-      for (const name of fs.readdirSync(side).filter((item) => /^walk_side_\d{2}\.png$/i.test(item))) {
-        fs.unlinkSync(path.join(side, name));
+      const rodney = path.join(dir, "characters", "rodney");
+      for (const folder of ["torso_right_side", "torso", "body"]) {
+        const side = path.join(rodney, folder);
+        if (!fs.existsSync(side)) continue;
+        for (const name of fs.readdirSync(side).filter((item) => /^walk_side_\d{2}\.png$/i.test(item))) {
+          fs.unlinkSync(path.join(side, name));
+        }
       }
+      const action = path.join(rodney, "actions", "walk_side.json");
+      if (fs.existsSync(action)) fs.unlinkSync(action);
       await assert.rejects(
         () =>
           runFactoryJob(dir, null, {
@@ -629,6 +719,31 @@ describe("factory walk from ticked walk_side frames (no Grok)", () => {
         fs.existsSync(path.join(projectDir, "characters", "rodney", "actions", `${job.actionId}.json`)),
         true
       );
+      const alignedDir = path.join(
+        projectDir,
+        "characters",
+        "rodney",
+        "_factory",
+        job.jobId,
+        "aligned"
+      );
+      const aligned = fs.readdirSync(alignedDir).filter((name) => name.endsWith(".png")).sort();
+      assert.equal(aligned.length, job.frames);
+      const hashes = [];
+      for (const name of aligned) {
+        const decoded = decodeRgbaFile(path.join(alignedDir, name));
+        const box = alphaBounds(decoded.rgba, decoded.width, decoded.height);
+        assert.equal(box.empty, false);
+        assert.ok(box.h >= 240, `${job.actionId} ${name} figure must be readable (>=240px, got ${box.h})`);
+        hashes.push(fs.readFileSync(path.join(alignedDir, name)).toString("base64"));
+      }
+      for (let i = 1; i < hashes.length; i += 1) {
+        assert.notEqual(
+          hashes[i],
+          hashes[i - 1],
+          `${job.actionId} frames ${i} and ${i + 1} must be different strides`
+        );
+      }
     }
   });
 });

@@ -7,9 +7,10 @@ import numpy as np
 import pytest
 
 from compositor.align import alpha_bbox
-from compositor.factory_fit import BOOT_BAND_FRAC, count_boots, count_figures, validate_walk_frame
+from compositor.factory_fit import BOOT_BAND_FRAC, _boot_xs, count_boots, count_figures, validate_walk_frame
 from compositor.factory_walk_rig import (
     BOB_PX,
+    _foot_xs,
     build_long_stride_cycle,
     long_stride_warp,
     plant_to_ground,
@@ -105,6 +106,37 @@ def test_real_walk_side_builds_long_stride_cycle(frames: int):
         assert width < height * 1.15
         assert 250 < height < 500
         assert 740 <= alpha_bbox(frame)[3] <= 830
+
+
+@pytest.mark.skipif(not (REAL_WALK_02.exists() and REAL_WALK_07.exists()), reason="no live walk_side frames")
+def test_eight_real_keys_alternate_readable_strides():
+    """Full 8-key set (Stuart's body/walk_side_01..08 layout) must not
+    collapse to the old 02+07 near-identical / tiny-figure sheet."""
+
+    a = cv2.imread(str(REAL_WALK_02), cv2.IMREAD_UNCHANGED)
+    b = cv2.imread(str(REAL_WALK_07), cv2.IMREAD_UNCHANGED)
+    assert a is not None and b is not None
+    sources = [a, b, a, b, a, b, a, b]
+    torso, legs = _rig_refs()
+    cycle, info = build_long_stride_cycle(sources, 8, 1024, 1024, ref=legs, torso_ref=torso)
+    assert len(cycle) == 8
+    assert info["sources"] == 8
+    leads: list[float] = []
+    for frame in cycle:
+        box = alpha_bbox(frame)
+        assert box is not None
+        assert (box[3] - box[1]) >= 240
+        assert count_figures(frame) == 1
+        assert count_boots(frame) <= 2
+        xs = _boot_xs(frame) or _foot_xs(frame)
+        assert xs, "each 8-key frame must expose a lead foot"
+        leads.append(max(xs))
+    even = float(np.mean([leads[i] for i in range(0, 8, 2)]))
+    odd = float(np.mean([leads[i] for i in range(1, 8, 2)]))
+    assert abs(even - odd) >= 8, f"alternating strides collapsed ({even:.1f} vs {odd:.1f})"
+    for i in range(1, 8):
+        diff = float(np.mean(np.abs(cycle[i].astype(np.float32) - cycle[i - 1].astype(np.float32))))
+        assert diff > 1.5, f"frames {i} and {i + 1} look frozen ({diff:.3f})"
 
 
 def test_painted_sources_build_8_12_16_without_squash_or_a_second_head():
