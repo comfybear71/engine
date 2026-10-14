@@ -205,6 +205,7 @@ export default function HeadRigModal({
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => { bodyImgRef.current = img; setBodyNat({ w: img.naturalWidth, h: img.naturalHeight }); };
+    img.onerror = () => { console.error("Failed to load body frame:", bodyId); };
     img.src = shotMediaUrl(project, characterId, bodyId, "cut/f_0001.png");
     setBodyIn(1);
     setBodyOut(0);
@@ -216,6 +217,7 @@ export default function HeadRigModal({
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => { headImgRef.current = img; setHeadNat({ w: img.naturalWidth, h: img.naturalHeight }); };
+    img.onerror = () => { console.error("Failed to load head frame:", headId); };
     img.src = shotMediaUrl(project, characterId, headId, "cut/f_0001.png");
     setHeadIn(1);
     setHeadOut(0);
