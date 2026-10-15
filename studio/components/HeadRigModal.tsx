@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WORKER_URL, workerFetch } from "@/lib/worker";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -104,6 +104,56 @@ function blobToBase64(blob: Blob): Promise<string> {
     reader.onerror = () => reject(new Error("Could not read image"));
     reader.readAsDataURL(blob);
   });
+}
+
+// ── Thumbnail ref picker ─────────────────────────────────────────────
+
+function RefShotPicker({ allShots, value, onChange, project, characterId }: {
+  allShots: ShotInfo[]; value: string; onChange: (id: string) => void; project: string; characterId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    function h(e: MouseEvent) { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); }
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+  const sel = allShots.find((s) => s.id === value);
+  return (
+    <div ref={wrapRef} className="relative w-full">
+      <button type="button"
+        className="flex w-full items-center gap-2 rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-left text-[12px] text-neutral-200"
+        onClick={() => setOpen(!open)}>
+        {sel ? (
+          <>
+            <img src={shotMediaUrl(project, characterId, sel.id, "poster.jpg")}
+              className="h-7 w-10 rounded object-cover" alt="" />
+            <span className="truncate">{sel.name || sel.id}</span>
+          </>
+        ) : <span className="text-neutral-400">Character ref</span>}
+        <span className="ml-auto text-neutral-500">▾</span>
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded border border-studio-border bg-[#1a1a1a] shadow-lg">
+          <button type="button"
+            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px] text-neutral-400 hover:bg-[#333]"
+            onClick={() => { onChange(""); setOpen(false); }}>
+            None
+          </button>
+          {allShots.map((s) => (
+            <button key={s.id} type="button"
+              className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px] hover:bg-[#333] ${s.id === value ? "bg-[#2a2a2a] text-studio-accent" : "text-neutral-200"}`}
+              onClick={() => { onChange(s.id); setOpen(false); }}>
+              <img src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                className="h-8 w-12 rounded object-cover" alt=""
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+              <span className="truncate">{s.name || s.id}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Component ───────────────────────────────────────────────────────
@@ -1378,11 +1428,8 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
               <option value={10}>10s</option>
             </select>
           </div>
-          <select className="w-full rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
-            value={grokRefShotId} onChange={(e) => setGrokRefShotId(e.target.value)}>
-            <option value="">Character ref</option>
-            {allShots.map((s) => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
-          </select>
+          <RefShotPicker allShots={allShots} value={grokRefShotId}
+            onChange={setGrokRefShotId} project={project} characterId={characterId} />
           <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-[12px] text-neutral-200"
             placeholder={grokType === "body" ? "body prompt…" : "head prompt…"}
             value={grokPrompt} onChange={(e) => setGrokPrompt(e.target.value)}
