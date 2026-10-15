@@ -1423,15 +1423,23 @@ function TrackRow({
               title={`${shot?.name || seg.shotId} · frames ${seg.inFrame}-${seg.outFrame}`}
             >
               <div className="flex h-full">
-                {Array.from({ length: segLength(seg) }, (_, i) => {
-                  const frame = seg.inFrame + i;
-                  const pad = String(frame).padStart(4, "0");
-                  return (
-                    <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`)} alt=""
-                      className="h-full shrink-0 object-cover" style={{ width: `${100 / segLength(seg)}%`, background: "#0a0a0a" }}
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                  );
-                })}
+                {(() => {
+                  // Fixed thumbnail count across the whole timeline so body & head
+                  // thumbnails are the same size and frame-aligned.
+                  const THUMBS_ACROSS_TIMELINE = 48;
+                  const step = Math.max(1, Math.round(maxFrames / THUMBS_ACROSS_TIMELINE));
+                  const len = segLength(seg);
+                  const count = Math.max(1, Math.ceil(len / step));
+                  return Array.from({ length: count }, (_, i) => {
+                    const srcFrame = seg.inFrame + Math.min(i * step, len - 1);
+                    const pad = String(srcFrame).padStart(4, "0");
+                    return (
+                      <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`)} alt=""
+                        className="h-full shrink-0 object-cover" style={{ width: `${100 / count}%`, background: "#0a0a0a" }}
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                    );
+                  });
+                })()}
               </div>
               <div className="pointer-events-none absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-1 py-0.5">
                 <span className="text-[9px] font-medium text-neutral-200">{shot?.name || seg.shotId}</span>
