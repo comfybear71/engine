@@ -15,6 +15,7 @@ import {
 
 const promptKey = (project: string, characterId: string) => `studio.talkingHeadPrompt.${project}.${characterId}`;
 const engineKey = (project: string, characterId: string) => `studio.talkingHeadEngine.${project}.${characterId}`;
+const subjectKey = (project: string, characterId: string) => `studio.talkingHeadSubject.${project}.${characterId}`;
 type TalkEngine = "grok" | "ltx";
 const startKey = (project: string, characterId: string) => `studio.talkingHeadStart.${project}.${characterId}`;
 
@@ -53,6 +54,7 @@ export default function TalkingHeadDialog({
   const [startRel, setStartRel] = useState("");
   const [uploading, setUploading] = useState(false);
   const [engine, setEngine] = useState<TalkEngine>("grok");
+  const [subject, setSubject] = useState("");
   const [comfyConfigured, setComfyConfigured] = useState<boolean | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -96,6 +98,11 @@ export default function TalkingHeadDialog({
       saved = window.localStorage.getItem(engineKey(project, characterId)) || "";
     } catch {
       saved = "";
+    }
+    try {
+      setSubject(window.localStorage.getItem(subjectKey(project, characterId)) || "");
+    } catch {
+      setSubject("");
     }
     loadEngineSettings()
       .then((settings) => {
@@ -155,10 +162,11 @@ export default function TalkingHeadDialog({
         window.localStorage.setItem(promptKey(project, characterId), prompt.trim());
         window.localStorage.setItem(startKey(project, characterId), startRel);
         window.localStorage.setItem(engineKey(project, characterId), engine);
+        window.localStorage.setItem(subjectKey(project, characterId), subject.trim());
       } catch {
         /* optional */
       }
-      await startTalkingHead(project, characterId, { ...range, prompt: prompt.trim(), refRel: startRel, engine });
+      await startTalkingHead(project, characterId, { ...range, prompt: prompt.trim(), refRel: startRel, engine, subject: subject.trim() });
       onStarted(characterId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start the talking head");
@@ -301,7 +309,21 @@ export default function TalkingHeadDialog({
                 ))}
               </ol>
 
-              <label className="block">
+              {ltx ? (
+                <label className="block">
+                  <span className="mb-1 block text-[11px] text-studio-muted">
+                    Who is on screen (name first, then a short look, e.g. &quot;Rodney, a man with a red felt hat and dark beard&quot;)
+                  </span>
+                  <input
+                    className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-xs text-neutral-200"
+                    value={subject}
+                    placeholder={characterId}
+                    data-testid="talking-head-subject"
+                    onChange={(event) => setSubject(event.target.value)}
+                  />
+                </label>
+              ) : null}
+              <label className={ltx ? "hidden" : "block"}>
                 <span className="mb-1 block text-[11px] text-studio-muted">Head prompt (added to every clip)</span>
                 <textarea
                   className="h-16 w-full resize-none rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-xs text-neutral-200"
@@ -333,7 +355,7 @@ export default function TalkingHeadDialog({
             type="button"
             data-testid="talking-head-generate"
             className="rounded bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={!plan || Boolean(blocker) || busy || !prompt.trim()}
+            disabled={!plan || Boolean(blocker) || busy || (!ltx && !prompt.trim())}
             onClick={() => void onGenerate()}
           >
             {busy ? "Starting…" : `Generate ${windows.length || ""} clip${windows.length === 1 ? "" : "s"}`.replace("  ", " ")}

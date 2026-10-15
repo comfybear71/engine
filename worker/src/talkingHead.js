@@ -191,24 +191,38 @@ function planTalkingHead(projectDir, body = {}) {
   };
 }
 
-const LTX_HEAD_SUFFIX =
-  "exactly the same character, art style, framing and crop as the starting image, head and face only, static locked-off camera with no zoom and no camera movement, plain pure black background";
 const HEAD_BLACK_KEY = "head-black";
 
 function normalizeEngine(value) {
   return String(value || "").toLowerCase() === "ltx" ? "ltx" : "grok";
 }
 
+function capitalizeName(id) {
+  const word = String(id || "").trim().replace(/[_-]+/g, " ");
+  return word ? word.charAt(0).toUpperCase() + word.slice(1) : "The character";
+}
+
+/**
+ * The LTX prompt wording that produced real lip-sync and a locked camera in
+ * hand-run Comfy Cloud tests (job e37d91b2). Other wordings (e.g. "lips synced
+ * to the audio, saying ...") gave a closed mouth and a drifting camera, so keep
+ * this structure and only swap the subject and the words.
+ */
+function buildLtxPrompt(talk) {
+  const subject = String(talk.subject || "").trim() || capitalizeName(talk.characterId);
+  const name = subject.split(",")[0].trim() || "The character";
+  const words = String(talk.text || "").trim();
+  const says = words ? `${name} says: "${words}".` : `${name} listens quietly, mouth closed.`;
+  return (
+    "Use the provided start image as the first frame. " +
+    `${subject}, is prominent, mouth and head move naturally while speaking, subtle expression. ` +
+    "Head only, same framing as the start image, plain black background, no neck, no collar, no clothing, no shoulders, nothing new enters frame. " +
+    `${says} Camera holds, locked off, no zoom. Same person as the start image.`
+  );
+}
+
 function buildWindowPrompt(talk) {
-  if (normalizeEngine(talk.engine) === "ltx") {
-    const base = String(talk.basePrompt || DEFAULT_TALK_PROMPT).trim();
-    const words = String(talk.text || "").trim();
-    const speaking = words
-      ? `the character is speaking, lips and mouth synced to the audio, saying: "${words}"`
-      : "the character is speaking naturally, lips synced to the audio";
-    const continuing = talk.index > 0 ? ", continuing the same performance without changing pose or lighting" : "";
-    return `${base}, ${speaking}${continuing}, ${LTX_HEAD_SUFFIX}`;
-  }
+  if (normalizeEngine(talk.engine) === "ltx") return buildLtxPrompt(talk);
   const base = String(talk.basePrompt || DEFAULT_TALK_PROMPT).trim();
   const words = String(talk.text || "").trim();
   const speaking = words
@@ -497,6 +511,7 @@ async function makeTalkingHead(projectDir, characterId, body = {}, options = {})
     throw shotError("COMFY_CLOUD_API_KEY is not configured. Add it to the engine .env file, then restart the engine.", "ENOKEY");
   }
   const basePrompt = String(body.prompt || "").trim() || DEFAULT_TALK_PROMPT;
+  const subject = String(body.subject || "").trim().slice(0, 300);
   const label = path.posix.basename(path.posix.dirname(plan.audioRel));
   const group = uniqueGroupId(projectDir, char, `talk_${slugName(label)}`);
   const wavAbs = path.join(projectDir, plan.audioRel);
@@ -514,7 +529,7 @@ async function makeTalkingHead(projectDir, characterId, body = {}, options = {})
       id,
       name: `${group} (${win.index + 1}/${total})`,
       filename: "",
-      prompt: buildWindowPrompt({ basePrompt, text: win.text, index: win.index, engine }),
+      prompt: buildWindowPrompt({ basePrompt, text: win.text, index: win.index, engine, subject, characterId: char }),
       refImage: refRel,
       engine,
       ...(engine === "ltx" ? { keyMode: HEAD_BLACK_KEY } : {}),
@@ -541,6 +556,8 @@ async function makeTalkingHead(projectDir, characterId, body = {}, options = {})
         audioInSec: plan.inSec + win.start,
         audio: "audio.wav",
         engine,
+        subject,
+        characterId: char,
       },
     });
     shotIds.push(id);
