@@ -196,7 +196,7 @@ def key_flat(bgr: np.ndarray, bg_color: tuple[float, float, float],
 HEAD_BLACK_KEY = "head-black"
 
 
-def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, close_frac: float = 0.115,
+def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, close_frac: float = 0.09,
                       feather_px: float = 1.2) -> np.ndarray:
     """Key a head shot filmed on pure black (an LTX talking head).
 
@@ -204,8 +204,10 @@ def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, close_frac: float =
     and a dark beard are as black as the backdrop, and they touch it, so
     key_flat() eats them. Instead only near-pure black connected to the
     frame border (including any letterbox bars) counts as backdrop, then
-    the head silhouette is closed and its convex hull filled so hair that
-    merges into the black stays solid. Pixel colours are never changed, only alpha.
+    the head silhouette is closed and its outline filled so hair and the shadow
+    under a hat brim stay solid. A convex hull is deliberately not used: it
+    leaves straight-edged black corners around the head once it is composited.
+    Pixel colours are never changed, only alpha.
     """
     h, w = bgr.shape[:2]
     gray = cv2.GaussianBlur(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), (0, 0), 1)
@@ -224,7 +226,7 @@ def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, close_frac: float =
     min_area = 0.002 * h * w
     keep = [c for c in contours if cv2.contourArea(c) >= min_area]
     mask = np.zeros_like(closed)
-    cv2.drawContours(mask, [cv2.convexHull(c) for c in keep], -1, 1, cv2.FILLED)
+    cv2.drawContours(mask, keep, -1, 1, cv2.FILLED)
 
     alpha = (mask * 255).astype(np.uint8)
     if feather_px > 0:
@@ -351,9 +353,36 @@ def _write_poster_and_preview(out: Path, cut_dir: Path, frame_count: int, fps: f
 
 # ── Main pipeline ────────────────────────────────────────────────────
 
+def _size_lock_plan(raw_frames: list[Path], fps: float, target: float) -> tuple[float, dict[int, tuple[float, float, float]]]:
+    """Per-frame scale (factor, cx, cy), keyed by frame number, that holds the head at one size."""
+    from compositor.head_size import measure_head, plan_clip
+
+    metrics = []
+    for raw_path in raw_frames:
+        img = cv2.imread(str(raw_path), cv2.IMREAD_COLOR)
+        metrics.append(measure_head(img) if img is not None else None)
+    resolved, plan = plan_clip(metrics, fps, target)
+    numbers = []
+    for raw_path in raw_frames:
+        try:
+            numbers.append(int(raw_path.stem.split("_")[-1]))
+        except ValueError:
+            numbers.append(-1)
+    return resolved, {n: plan[i] for i, n in enumerate(numbers) if n >= 0}
+
+
+def _apply_size_lock(bgr: np.ndarray, idx: int, plan: dict[int, tuple[float, float, float]] | None) -> np.ndarray:
+    if not plan or idx not in plan:
+        return bgr
+    from compositor.head_size import scale_about
+
+    factor, cx, cy = plan[idx]
+    return scale_about(bgr, factor, cx, cy)
+
+
 def run(video_path: str, out_dir: str, name: str = "", prompt: str = "",
         ref_image: str = "", background: str = "", category: str = "",
-        key_mode: str = "") -> dict:
+        key_mode: str = "", lock_head_size: bool = False, head_size_target: float = 0.0) -> dict:
     video = Path(video_path)
     out = Path(out_dir)
 
@@ -395,12 +424,18 @@ def run(video_path: str, out_dir: str, name: str = "", prompt: str = "",
 
     frame_count = len(raw_frames)
 
+    size_target = 0.0
+    size_plan = None
+    if key_mode == HEAD_BLACK_KEY and (lock_head_size or head_size_target > 0):
+        size_target, size_plan = _size_lock_plan(raw_frames, fps, head_size_target)
+
     # 2. Process each frame
     for i, raw_path in enumerate(raw_frames):
         idx = i + 1
         bgr = cv2.imread(str(raw_path), cv2.IMREAD_COLOR)
         if bgr is None:
             continue
+        bgr = _apply_size_lock(bgr, idx, size_plan)
         _process_and_write_frame(bgr, idx, cut_dir, thumb_dir, bg_hint=background, key_mode=key_mode)
 
     # 3 + 4. poster.jpg and preview.mp4
@@ -416,6 +451,7 @@ def run(video_path: str, out_dir: str, name: str = "", prompt: str = "",
         "refImage": ref_image,
         "background": background or "auto",
         **({"keyMode": key_mode} if key_mode else {}),
+        **({"headSizeTarget": round(size_target, 2)} if size_target > 0 else {}),
         "fps": fps,
         "frameCount": frame_count,
         "in": 1,
@@ -433,6 +469,7 @@ def run(video_path: str, out_dir: str, name: str = "", prompt: str = "",
         "frameCount": frame_count,
         "poster": "poster.jpg",
         "preview": "preview.mp4",
+        **({"headSize": round(size_target, 2)} if size_target > 0 else {}),
     }
 
 
@@ -461,14 +498,20 @@ def reprocess(out_dir: str) -> dict:
     fps = 24.0
     bg_hint = ""
     key_mode = ""
+    size_target = 0.0
     if shot_json_path.exists():
         try:
             shot_info = json.loads(shot_json_path.read_text())
             fps = float(shot_info.get("fps") or 24.0)
             bg_hint = str(shot_info.get("background") or "")
             key_mode = str(shot_info.get("keyMode") or "")
+            size_target = float(shot_info.get("headSizeTarget") or 0.0)
         except Exception:
             pass
+
+    size_plan = None
+    if key_mode == HEAD_BLACK_KEY and size_target > 0:
+        _, size_plan = _size_lock_plan(raw_frames, fps, size_target)
 
     frame_count = 0
     for raw_path in raw_frames:
@@ -480,6 +523,7 @@ def reprocess(out_dir: str) -> dict:
         bgr = cv2.imread(str(raw_path), cv2.IMREAD_COLOR)
         if bgr is None:
             continue
+        bgr = _apply_size_lock(bgr, idx, size_plan)
         _process_and_write_frame(bgr, idx, cut_dir, thumb_dir, bg_hint=bg_hint, key_mode=key_mode)
 
     _write_poster_and_preview(out, cut_dir, frame_count, fps)
@@ -506,6 +550,10 @@ def main():
     parser.add_argument("--background", default="", help="Background type hint (green/black)")
     parser.add_argument("--category", default="", help="Category hint")
     parser.add_argument("--key-mode", default="", help="Keyer override, e.g. head-black for a dark head on black")
+    parser.add_argument("--lock-head-size", action="store_true",
+                         help="Hold the head at one size (head-black only); the opening size is used unless --head-size-target is set")
+    parser.add_argument("--head-size-target", type=float, default=0.0,
+                         help="Head size (sqrt of area in px) to hold; implies --lock-head-size")
     args = parser.parse_args()
 
     try:
@@ -523,6 +571,8 @@ def main():
                 background=args.background,
                 category=args.category,
                 key_mode=args.key_mode,
+                lock_head_size=args.lock_head_size,
+                head_size_target=args.head_size_target,
             )
         print(json.dumps(result))
     except Exception as e:

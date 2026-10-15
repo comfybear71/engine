@@ -119,6 +119,8 @@ async function runShotCapture(videoPath, outDir, meta = {}, options = {}) {
   if (meta.background) args.push("--background", meta.background);
   if (meta.category) args.push("--category", meta.category);
   if (meta.keyMode) args.push("--key-mode", meta.keyMode);
+  if (Number(meta.headSizeTarget) > 0) args.push("--head-size-target", String(meta.headSizeTarget));
+  else if (meta.lockHeadSize) args.push("--lock-head-size");
 
   const { code, stdout, stderr } = await spawnCmd(pythonBin, args, { cwd: PYTHON_DIR });
   const trimmed = stdout.trim();
@@ -373,8 +375,11 @@ async function runGrokShot(dir, info, job) {
       background: info.background,
       category: info.category,
       keyMode: info.keyMode || "",
+      headSizeTarget: job.headSizeTarget || 0,
+      lockHeadSize: job.lockHeadSize === true,
     }, options);
 
+    if (Number(result.headSize) > 0) info.headSizeTarget = result.headSize;
     info.fps = result.fps;
     info.frameCount = result.frameCount;
     info.out = result.frameCount;
