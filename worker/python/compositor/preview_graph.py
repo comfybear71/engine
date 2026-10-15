@@ -24,6 +24,7 @@ from .compositor import (
     _suppressed_head_slots,
     scene_at_frame,
 )
+from .sequence import layer_at_sequence_frame
 from .slots import (
     Slot,
     _find_active_clip,
@@ -191,6 +192,19 @@ def _dump_layer(layer: Layer, project_dir: Path) -> dict[str, Any]:
         },
         "dialogue": _dump_dialogue(layer.dialogue),
         "viewKeyframes": [{"frame": kf.frame, "view": kf.view} for kf in layer.view_keyframes],
+        "sequence": _dump_sequence(layer, project_dir),
+    }
+
+
+def _dump_sequence(layer: Layer, project_dir: Path) -> dict[str, Any] | None:
+    seq = layer.sequence
+    if seq is None:
+        return None
+    # `files` (not `rel`) so the preview does not preload every frame up front.
+    return {
+        "fps": seq.fps,
+        "trimIn": seq.trim_in,
+        "files": [rel_for(frame, project_dir) for frame in seq.frames],
     }
 
 
@@ -370,6 +384,7 @@ def evaluate_draw_ops(timeline: Timeline, frame_index: int) -> dict[str, Any]:
         if not layer.is_visible_at(composed, scene.total_frames):
             continue
         local = composed - layer.start_frame
+        layer = layer_at_sequence_frame(layer, local, fps)
         drawings = _collect_slot_drawings(layer, local, fps)
         suppressed = _suppressed_head_slots(layer)
         layer_view = layer_view_at(layer, local)

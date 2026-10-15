@@ -785,6 +785,7 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
       view: (meta && meta.view) || null,
       warnings,
       flagged: Boolean(meta && meta.flagged),
+      baked: Boolean(meta && meta.baked),
     });
   }
 
@@ -815,6 +816,7 @@ function listProjectActions(projectDir, globalAssetsDir, options = {}) {
       view: action.view || null,
       warnings,
       flagged: warnings.length > 0 || flags.length > 0,
+      baked: Boolean(action.drawingsDir && action.shotId),
     };
   }
 

@@ -56,8 +56,8 @@ function assignActionLane(event) {
   if (lane === "dialogue" || lane === "audio" || lane === "sfx" || lane === "camera" || lane === "mouth" || lane === "inserts") {
     return lane;
   }
-  const doTag = String((event && event.tag) || "").toLowerCase() === "do";
-  if (doTag) return "action";
+  const tagName = String((event && event.tag) || "").toLowerCase();
+  if (tagName === "do" || tagName === "clip") return "action";
   if (lane === "body" || lane === "face" || lane === "props") return lane;
 
   const tag = String((event && event.tag) || "").toLowerCase();

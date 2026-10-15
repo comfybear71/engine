@@ -38,6 +38,24 @@ class AssetCache:
     def __init__(self) -> None:
         self._raw: dict[str, np.ndarray] = {}
         self._variants: dict[tuple[str, float, bool], np.ndarray] = {}
+        self._sequence_last: dict[str, str] = {}
+
+    def evict(self, path: Path) -> None:
+        """Drop a decoded image and its variants (flipbook frames are used once)."""
+
+        key = str(path)
+        self._raw.pop(key, None)
+        for variant_key in [k for k in self._variants if k[0] == key]:
+            del self._variants[variant_key]
+
+    def note_sequence_frame(self, sequence_id: str, path: Path) -> None:
+        """Remember a flipbook's current frame, evicting the one it replaced."""
+
+        key = str(path)
+        previous = self._sequence_last.get(sequence_id)
+        if previous is not None and previous != key:
+            self.evict(Path(previous))
+        self._sequence_last[sequence_id] = key
 
     def get_raw(self, path: Path) -> np.ndarray:
         key = str(path)
