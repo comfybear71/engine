@@ -245,22 +245,34 @@ export default function HeadRigModal({
   // Per-frame image cache (shotId#frame -> Image), with a bump counter to
   // force a redraw once a requested frame finishes loading.
   const frameImgCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
-  const frameImgLoadingRef = useRef<Set<string>>(new Set());
   const [redrawTick, setRedrawTick] = useState(0);
-
   function getFrameImage(shotId: string, frame: number): HTMLImageElement | null {
     const key = `${shotId}#${frame}`;
     const cached = frameImgCacheRef.current.get(key);
-    if (cached) return cached.complete && cached.naturalWidth > 0 ? cached : null;
-    if (frameImgLoadingRef.current.has(key)) return null;
-    frameImgLoadingRef.current.add(key);
+    if (cached) return cached;
     const pad = String(Math.max(1, frame)).padStart(4, "0");
     const img = new Image();
-    img.onload = () => { frameImgCacheRef.current.set(key, img); frameImgLoadingRef.current.delete(key); setRedrawTick((t) => t + 1); };
-    img.onerror = () => { frameImgLoadingRef.current.delete(key); };
+    img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
+    img.onerror = () => { /* prevent infinite retry — frame image missing */ };
     img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
     return null;
   }
+
+  // Preload frame images for all segments so playback doesn't blink
+  useEffect(() => {
+    const segs = [...bodySegments, ...headSegments];
+    for (const seg of segs) {
+      for (let f = seg.inFrame; f <= seg.outFrame; f++) {
+        const key = `${seg.shotId}#${f}`;
+        if (!frameImgCacheRef.current.has(key)) {
+          const pad = String(Math.max(1, f)).padStart(4, "0");
+          const img = new Image();
+          img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
+          img.src = shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`);
+        }
+      }
+    }
+  }, [bodySegments, headSegments, project, characterId]);
 
   // ── Load shots + rigs ──
   useEffect(() => {
@@ -294,8 +306,7 @@ export default function HeadRigModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rigKey, rigs]);
 
-  // Filter out segments referencing deleted shots — separate effect so it
-  // doesn't regenerate IDs or clear selection on every shots refresh.
+  // Remove segments whose shot was deleted
   const shotIdsSet = useMemo(() => new Set(shots.map((s) => s.id)), [shots]);
   useEffect(() => {
     setBodySegments((prev) => {
@@ -337,141 +348,6 @@ export default function HeadRigModal({
     }
     return activeHead;
   }, [selectedSegment, headSegments, activeHead]);
-
-  // ── Client-side background removal (fallback when Python keying misses) ──
-  // Client-side chroma key: detect whether frame has green or black bg from
-  // a border sample, then key out that colour.  Caches result per image src.
-  const chromaCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
-  const stripBg = useCallback((img: HTMLImageElement): HTMLCanvasElement | HTMLImageElement => {
-    try {
-      const cached = chromaCacheRef.current.get(img.src);
-      if (cached) return cached;
-
-      const w = img.naturalWidth;
-      const h = img.naturalHeight;
-      const off = document.createElement("canvas");
-      off.width = w;
-      off.height = h;
-      const c = off.getContext("2d", { willReadFrequently: true })!;
-      c.drawImage(img, 0, 0);
-      const id = c.getImageData(0, 0, w, h);
-      const d = id.data;
-
-      // Sample border pixels (top 8 rows) to detect bg colour
-      const sampleN = Math.min(w * 8, d.length / 4);
-      let gSum = 0, rSum = 0, bSum = 0, vSum = 0;
-      for (let i = 0; i < sampleN; i++) {
-        const off4 = i * 4;
-        rSum += d[off4]; gSum += d[off4 + 1]; bSum += d[off4 + 2];
-        vSum += Math.max(d[off4], d[off4 + 1], d[off4 + 2]);
-      }
-      const rAvg = rSum / sampleN, gAvg = gSum / sampleN, bAvg = bSum / sampleN;
-      const vAvg = vSum / sampleN;
-      const isGreen = gAvg > 80 && gAvg > rAvg + 25 && gAvg > bAvg + 25;
-      const isBlack = vAvg < 35;
-
-      if (isGreen) {
-        // Green screen removal
-        for (let i = 0; i < d.length; i += 4) {
-          const r = d[i], g = d[i + 1], b = d[i + 2];
-          if (g > 80 && g > r + 25 && g > b + 25) {
-            d[i + 3] = 0;
-          } else if (g > 60 && g > r && g > b) {
-            const excess = g - Math.max(r, b);
-            const fade = Math.min(excess / 60, 1);
-            d[i + 3] = Math.round(d[i + 3] * (1 - fade));
-            if (fade > 0) d[i + 1] = Math.min(g, Math.max(r, b));
-          }
-        }
-      } else if (isBlack) {
-        // Black background removal — flood from border through dark pixels
-        // Build a binary mask of dark pixels (value < 30)
-        const dark = new Uint8Array(w * h);
-        for (let i = 0; i < w * h; i++) {
-          const v = Math.max(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
-          if (v < 30) dark[i] = 1;
-        }
-        // BFS flood fill from border dark pixels
-        const bg = new Uint8Array(w * h);
-        const queue: number[] = [];
-        for (let x = 0; x < w; x++) {
-          if (dark[x]) { bg[x] = 1; queue.push(x); }
-          const bot = (h - 1) * w + x;
-          if (dark[bot]) { bg[bot] = 1; queue.push(bot); }
-        }
-        for (let y = 1; y < h - 1; y++) {
-          const l = y * w;
-          if (dark[l]) { bg[l] = 1; queue.push(l); }
-          const r = y * w + w - 1;
-          if (dark[r]) { bg[r] = 1; queue.push(r); }
-        }
-        let qi = 0;
-        while (qi < queue.length) {
-          const idx = queue[qi++];
-          const x = idx % w, y = (idx - x) / w;
-          const neighbors = [
-            y > 0 ? idx - w : -1,
-            y < h - 1 ? idx + w : -1,
-            x > 0 ? idx - 1 : -1,
-            x < w - 1 ? idx + 1 : -1,
-          ];
-          for (const ni of neighbors) {
-            if (ni >= 0 && dark[ni] && !bg[ni]) {
-              bg[ni] = 1;
-              queue.push(ni);
-            }
-          }
-        }
-        // Also flood into slightly-less-dark fringe (v < 45) connected to bg
-        const softDark = new Uint8Array(w * h);
-        for (let i = 0; i < w * h; i++) {
-          const v = Math.max(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
-          if (v < 45) softDark[i] = 1;
-        }
-        let changed = true;
-        for (let pass = 0; pass < 3 && changed; pass++) {
-          changed = false;
-          for (let i = 0; i < w * h; i++) {
-            if (bg[i] || !softDark[i]) continue;
-            const x = i % w, y = (i - x) / w;
-            if ((y > 0 && bg[i - w]) || (y < h - 1 && bg[i + w]) ||
-                (x > 0 && bg[i - 1]) || (x < w - 1 && bg[i + 1])) {
-              bg[i] = 1;
-              changed = true;
-            }
-          }
-        }
-        // Apply: bg pixels become transparent, edge gets feathered
-        for (let i = 0; i < w * h; i++) {
-          if (bg[i]) d[i * 4 + 3] = 0;
-        }
-        // Simple 1px feather on edges
-        for (let i = 0; i < w * h; i++) {
-          if (bg[i]) continue;
-          const x = i % w, y = (i - x) / w;
-          let borderCount = 0;
-          if (x > 0 && bg[i - 1]) borderCount++;
-          if (x < w - 1 && bg[i + 1]) borderCount++;
-          if (y > 0 && bg[i - w]) borderCount++;
-          if (y < h - 1 && bg[i + w]) borderCount++;
-          if (borderCount > 0) {
-            d[i * 4 + 3] = Math.round(d[i * 4 + 3] * (1 - borderCount * 0.2));
-          }
-        }
-      }
-
-      c.putImageData(id, 0, 0);
-      chromaCacheRef.current.set(img.src, off);
-      // Keep cache from growing unbounded
-      if (chromaCacheRef.current.size > 500) {
-        const first = chromaCacheRef.current.keys().next().value;
-        if (first) chromaCacheRef.current.delete(first);
-      }
-      return off;
-    } catch {
-      return img;
-    }
-  }, []);
 
   // ── Canvas drawing ──
   const CANVAS_W = 600;
@@ -516,10 +392,7 @@ export default function HeadRigModal({
         bh = dims.h * scale;
         bx = (cw - bw) / 2;
         by = ch - bh - ch * 0.03;
-        if (img) {
-          const clean = stripBg(img);
-          ctx.drawImage(clean, bx, by, bw, bh);
-        }
+        if (img) ctx.drawImage(img, bx, by, bw, bh);
       }
     }
 
@@ -532,11 +405,10 @@ export default function HeadRigModal({
           const hh = dims.h * head.headScale * scale;
           const hx = bx + head.anchorX * bw - hw / 2;
           const hy = by + head.anchorY * bh - hh / 2;
-          // Strip any residual green, then draw twice so semi-transparent
-          // edge pixels become fully opaque.
-          const cleanHead = stripBg(img);
-          ctx.drawImage(cleanHead, hx, hy, hw, hh);
-          ctx.drawImage(cleanHead, hx, hy, hw, hh);
+          // Draw twice -- keyed PNGs can have semi-transparent pixels from
+          // green-screen removal; a second pass makes them fully opaque.
+          ctx.drawImage(img, hx, hy, hw, hh);
+          ctx.drawImage(img, hx, hy, hw, hh);
 
           const isEditing = selectedRef.current?.track === "head" ? selectedRef.current.id === head.id : true;
           if (isEditing) {
@@ -574,7 +446,7 @@ export default function HeadRigModal({
     const headLabel = head ? `${shotsById.get(head.shotId)?.name || head.shotId} f${sourceFrameOf(head, frame)}` : "— head gap —";
     ctx.fillText(`F${frame}/${maxFrames}  Body: ${bodyLabel}  Head: ${headLabel}`, 8, ch - 8);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shotDims, maxFrames, shotsById, stripBg]);
+  }, [shotDims, maxFrames, shotsById]);
 
   // Redraw whenever the scrub position, segments, selection, or a newly
   // loaded image/dim becomes available (while paused).
@@ -648,18 +520,19 @@ export default function HeadRigModal({
 
     setSelectedSegment({ track: "head", id: head.id });
 
-    // Check if click is near a corner handle for scale drag
+    const rect = canvas.getBoundingClientRect();
+    const cssScale = canvas.width / rect.width;
+    const mx = (e.clientX - rect.left) * cssScale;
+    const my = (e.clientY - rect.top) * cssScale;
     const { scale, bw, bh, bx, by } = layoutBasis(scrubFrame);
+
+    // Check corner handles for scale drag (only if dims known)
     const headDims = shotDims[head.shotId];
     if (headDims && headDims.w > 0) {
       const hw = headDims.w * head.headScale * scale;
       const hh = headDims.h * head.headScale * scale;
       const hx = bx + head.anchorX * bw - hw / 2;
       const hy = by + head.anchorY * bh - hh / 2;
-      const cssScale = canvas.width / canvas.getBoundingClientRect().width;
-      const rect = canvas.getBoundingClientRect();
-      const mx = (e.clientX - rect.left) * cssScale;
-      const my = (e.clientY - rect.top) * cssScale;
       const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
       for (const [cx, cy] of corners) {
         if (Math.abs(mx - cx) < 14 && Math.abs(my - cy) < 14) {
@@ -670,7 +543,7 @@ export default function HeadRigModal({
       }
     }
 
-    // Default: move drag
+    // Default: move drag (works even without dims loaded)
     canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
     e.preventDefault();
   }
@@ -682,19 +555,16 @@ export default function HeadRigModal({
   function onCanvasMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
     const drag = canvasDragRef.current;
     if (!drag || !editingHead) return;
-    const canvas = canvasRef.current;
     const { bw, bh } = layoutBasis(scrubFrame);
-    // Scale CSS pixel deltas to canvas pixel space
-    const cssScale = canvas ? canvas.width / canvas.getBoundingClientRect().width : 1;
     if (drag.kind === "move") {
-      const dx = (e.clientX - drag.startX) * cssScale / bw;
-      const dy = (e.clientY - drag.startY) * cssScale / bh;
+      const dx = (e.clientX - drag.startX) / bw;
+      const dy = (e.clientY - drag.startY) / bh;
       updateHeadSegment(editingHead.id, {
         anchorX: clamp(drag.origAnchorX + dx, 0, 1),
         anchorY: clamp(drag.origAnchorY + dy, -0.5, 1),
       });
     } else if (drag.kind === "scale") {
-      const dy = (drag.startY - e.clientY) * cssScale;
+      const dy = drag.startY - e.clientY;
       const factor = 1 + dy / 200;
       updateHeadSegment(editingHead.id, { headScale: clamp(drag.origScale * factor, 0.1, 3) });
     }
@@ -1185,15 +1055,8 @@ export default function HeadRigModal({
   }
 
   // ── Shot categorization ──
-  // shotType wins — if set, only that bin gets the shot; category is a fallback for untyped shots
-  const bodyShots = shots.filter((s) => {
-    if (s.shotType) return s.shotType === "body";
-    return s.category === "idle_stand" || s.category === "walks" || s.category === "mic";
-  });
-  const headShots = shots.filter((s) => {
-    if (s.shotType) return s.shotType === "head";
-    return s.category === "expressions" || s.category === "head_moves" || s.category === "mouth_tongue";
-  });
+  const bodyShots = shots.filter((s) => s.shotType === "body" || s.category === "idle_stand" || s.category === "walks" || s.category === "mic");
+  const headShots = shots.filter((s) => s.shotType === "head" || s.category === "expressions" || s.category === "head_moves" || s.category === "mouth_tongue");
   const combinedShots = shots.filter((s) => s.shotType === "combined");
   const allShots = shots;
   const rigKeys = Object.keys(rigs);
@@ -1223,8 +1086,8 @@ export default function HeadRigModal({
   }, []);
 
   const content = (
-    <div className={inline ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "flex min-h-0 flex-1 flex-col"}>
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+    <div className={inline ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col"}>
+      <div className="flex min-h-0 flex-1">
         {/* ══════════ LEFT SIDEBAR — Media Bins + Grok ══════════ */}
         <div className={`shrink-0 bg-[#131313] transition-all ${mediaPanelOpen ? "" : "w-0 overflow-hidden"}`} style={mediaPanelOpen ? { width: sidebarWidth } : undefined}>
           <div className="flex h-full flex-col overflow-y-auto">
@@ -1298,7 +1161,7 @@ export default function HeadRigModal({
         )}
 
         {/* ══════════ MAIN AREA — Canvas + Timeline ══════════ */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col">
           {/* Toggle sidebar + Rig controls */}
           <div className="flex items-center gap-3 border-b border-[#222] bg-[#161616] px-3 py-1.5">
             <button type="button" className="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-[#333] hover:text-white"
@@ -1367,7 +1230,7 @@ export default function HeadRigModal({
               width={CANVAS_W}
               height={CANVAS_H}
               className="rounded-md border border-studio-border"
-              style={{ cursor: editingHead ? "crosshair" : "default", maxWidth: "100%", maxHeight: "55vh", aspectRatio: `${CANVAS_W} / ${CANVAS_H}` }}
+              style={{ cursor: editingHead ? "crosshair" : "default", width: CANVAS_W, height: CANVAS_H, maxHeight: "55vh", objectFit: "contain" }}
               onMouseDown={onCanvasMouseDown}
               onMouseMove={onCanvasMouseMove}
               onMouseUp={onCanvasMouseUp}
