@@ -208,6 +208,22 @@ export default function HeadRigModal({
     return null;
   }
 
+  // Preload frame images for all segments so playback doesn't blink
+  useEffect(() => {
+    const segs = [...bodySegments, ...headSegments];
+    for (const seg of segs) {
+      for (let f = seg.inFrame; f <= seg.outFrame; f++) {
+        const key = `${seg.shotId}#${f}`;
+        if (!frameImgCacheRef.current.has(key)) {
+          const pad = String(Math.max(1, f)).padStart(4, "0");
+          const img = new Image();
+          img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
+          img.src = shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`);
+        }
+      }
+    }
+  }, [bodySegments, headSegments, project, characterId]);
+
   // ── Load shots + rigs ──
   useEffect(() => {
     (async () => {
