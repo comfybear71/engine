@@ -387,7 +387,7 @@ async function runGrokShot(dir, info, job) {
   } catch (err) {
     info.status = "error";
     info.error = err.message;
-    if (job.engine === "ltx" && (err.code === "EJOBFAILED" || err.code === "ENOJOB")) delete info.requestId;
+    if (job.engine === "ltx" && (err.code === "EJOBFAILED" || err.code === "ENOJOB" || err.code === "ECANCEL")) delete info.requestId;
     try {
       writeShotJson(dir, info);
     } catch {

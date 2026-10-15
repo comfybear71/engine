@@ -77,6 +77,41 @@ describe("comfyCloud generateLtxVideo", () => {
     });
   });
 
+  test("Stop asks Comfy Cloud to cancel the running job", async () => {
+    const posts = [];
+    const running = { ok: true, status: 200, json: async () => ({ status: "in_progress" }) };
+    const base = fetchWith([running]);
+    const fetchFn = async (url, init = {}) => {
+      const u = String(url);
+      if (u.endsWith("/api/interrupt") || u.endsWith("/api/queue")) {
+        posts.push({ path: new URL(u).pathname, body: JSON.parse(init.body) });
+        return { ok: true, status: 200 };
+      }
+      return base(url, init);
+    };
+    let polls = 0;
+    const isCancelled = () => ++polls > 3;
+    await assert.rejects(
+      run(fetchFn, { options: { fetchFn, pollIntervalMs: 1, isCancelled } }),
+      (err) => err.code === "ECANCEL"
+    );
+    assert.deepEqual(posts[0], { path: "/api/interrupt", body: { prompt_id: "job1" } });
+  });
+
+  test("Stop still ends locally when Comfy Cloud cannot be reached to cancel", async () => {
+    const running = { ok: true, status: 200, json: async () => ({ status: "in_progress" }) };
+    const base = fetchWith([running]);
+    const fetchFn = async (url, init = {}) => {
+      if (String(url).endsWith("/api/interrupt") || String(url).endsWith("/api/queue")) throw netError("ECONNRESET");
+      return base(url, init);
+    };
+    let polls = 0;
+    await assert.rejects(
+      run(fetchFn, { options: { fetchFn, pollIntervalMs: 1, isCancelled: () => ++polls > 2 } }),
+      (err) => err.code === "ECANCEL"
+    );
+  });
+
   test("resuming polls the existing job without uploading or submitting again", async () => {
     const calls = [];
     const ok = { ok: true, status: 200, json: async () => done };
