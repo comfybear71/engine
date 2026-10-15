@@ -1780,7 +1780,7 @@ export function planTalkingHead(name: string, characterId: string, range: Talkin
 export function startTalkingHead(
   name: string,
   characterId: string,
-  body: TalkingHeadRange & { prompt?: string; refRel: string; engine?: "grok" | "ltx" }
+  body: TalkingHeadRange & { prompt?: string; refRel: string; engine?: "grok" | "ltx"; subject?: string }
 ): Promise<{ ok: boolean; group: string; shotIds: string[]; windows: TalkWindow[] }> {
   return talkingHeadPost(`${talkingHeadBase(name, characterId)}/start`, body);
 }

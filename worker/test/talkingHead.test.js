@@ -95,6 +95,32 @@ describe("buildWindowPrompt", () => {
   });
 });
 
+describe("LTX prompt", () => {
+  const words = "And I found out at the end of 2005 that I got a new s- this is true, got a new son I didn't know I had.";
+
+  test("matches, word for word, the prompt that lip-synced in hand-run Comfy Cloud tests", () => {
+    const prompt = buildWindowPrompt({
+      engine: "ltx",
+      index: 0,
+      text: words,
+      subject: "Rodney, a man with a red felt hat and dark beard",
+      characterId: "rodney",
+    });
+    assert.equal(
+      prompt,
+      'Use the provided start image as the first frame. Rodney, a man with a red felt hat and dark beard, is prominent, mouth and head move naturally while speaking, subtle expression. Head only, same framing as the start image, plain black background, no neck, no collar, no clothing, no shoulders, nothing new enters frame. Rodney says: "' +
+        words +
+        '". Camera holds, locked off, no zoom. Same person as the start image.'
+    );
+  });
+
+  test("falls back to the capitalised character id when no description is given", () => {
+    const prompt = buildWindowPrompt({ engine: "ltx", index: 2, text: "Hello.", characterId: "rodney" });
+    assert.match(prompt, /^Use the provided start image as the first frame\. Rodney, is prominent/);
+    assert.match(prompt, /Rodney says: "Hello\."/);
+  });
+});
+
 describe("extractFrameAt", () => {
   const { spawnSync } = require("child_process");
   const hasFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0;

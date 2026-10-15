@@ -114,7 +114,7 @@ function buildWorkflow({ imageName, audioName, prompt, durationSec, negativeProm
   patch(graph, NODE.duration, { value: durationSec });
   patch(graph, NODE.save, { filename_prefix: filenamePrefix || "video/engine_ltx_head" });
   if (negativePrompt) patch(graph, NODE.negative, { text: `${DEFAULT_NEGATIVE}, ${negativePrompt}` });
-  patch(graph, NODE.refine, { strength: 0.6 });
+  patch(graph, NODE.refine, { strength: 1 });
   patch(graph, NODE.promptEnhance, { value: false });
   patch(graph, NODE.baseSeed, { noise_seed: randomSeed() });
   patch(graph, NODE.refineSeed, { noise_seed: randomSeed() });
@@ -273,4 +273,5 @@ module.exports = {
   buildWorkflow,
   pickVideo,
   generateLtxVideo,
+  internals: { requireCredentials, uploadInput, submitWorkflow, pollJob, downloadOutput, loadTemplate },
 };
