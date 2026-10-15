@@ -85,6 +85,7 @@ const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
   { id: "body", label: "Body/Move", bar: "bg-orange-500/80", text: "text-orange-50" },
   { id: "face", label: "Face", bar: "bg-rose-500/80", text: "text-rose-50" },
   { id: "props", label: "Props", bar: "bg-teal-500/80", text: "text-teal-50" },
+  { id: "action", label: "Action", bar: "bg-orange-500/80", text: "text-orange-50" },
   { id: "dialogue", label: "Dialogue", bar: "bg-sky-500/80", text: "text-sky-50" },
   { id: "mouth", label: "Mouth", bar: "bg-red-600/80", text: "text-red-50" },
   { id: "audio", label: "Audio", bar: "bg-emerald-600/80", text: "text-emerald-50" },
@@ -92,6 +93,9 @@ const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
   { id: "camera", label: "Camera", bar: "bg-violet-500/80", text: "text-violet-50" },
   { id: "inserts", label: "Inserts", bar: "bg-fuchsia-500/80", text: "text-fuchsia-50" },
 ];
+
+/** Lanes the Stage no longer shows; their script lines are untouched. */
+const HIDDEN_LANES: ReadonlySet<LaneId> = new Set<LaneId>(["body", "face", "mouth", "inserts"]);
 
 const DRAG_THRESHOLD_PX = 3;
 const SNAP_PX = 8;
@@ -290,7 +294,7 @@ export default function TimelineLanes({
 
   const laneBlocks = useMemo(() => {
     const mouthExpanded = allBlocks.some((block) => isMouthBlock(block) && expandedMouthIds.has(block.id));
-    return LANE_META.map((lane) => {
+    return LANE_META.filter((lane) => !HIDDEN_LANES.has(lane.id)).map((lane) => {
       const list = allBlocks.filter((b) => b.lane === lane.id);
       const extra = lane.id === "mouth" && mouthExpanded ? 18 : 0;
       return { ...lane, blocks: list, height: laneHeightPx(list, laneScale) + extra, rows: laneRowCount(list) };

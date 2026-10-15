@@ -69,20 +69,22 @@ export function classifyClipboardLine(
   line: string,
   lane?: string | null,
   role?: string | null
-): "speech" | "face" | "body" | "prop" | "camera" | "sfx" | "insert" | "other" {
+): "speech" | "face" | "body" | "action" | "prop" | "camera" | "sfx" | "insert" | "other" {
   if (role === "mouth" || lane === "dialogue" || lane === "audio") return "speech";
   const trimmed = line.trim();
   if (/^\[Audio:/i.test(trimmed)) return "speech";
   if (/^\[Prop:/i.test(trimmed)) return "prop";
   if (/^\[Camera:/i.test(trimmed)) return "camera";
   if (/^\[Insert:/i.test(trimmed)) return "insert";
-  if (/^\[(?:Move|Pose|Swing|Do):/i.test(trimmed)) return "body";
+  if (/^\[Do:/i.test(trimmed)) return "action";
+  if (/^\[(?:Move|Pose|Swing):/i.test(trimmed)) return "body";
   if (/^\[Action:/i.test(trimmed)) {
     if (/\b(?:face|eyes|head)=/i.test(trimmed)) return "face";
     return "body";
   }
   if (lane === "face") return "face";
   if (lane === "body") return "body";
+  if (lane === "action") return "action";
   if (lane === "props") return "prop";
   if (lane === "camera") return "camera";
   if (lane === "sfx") return "sfx";
@@ -94,6 +96,7 @@ const LANE_FIT: Record<string, readonly string[]> = {
   speech: ["dialogue", "audio", "face", "mouth"],
   face: ["face"],
   body: ["body"],
+  action: ["action"],
   prop: ["props"],
   camera: ["camera"],
   sfx: ["sfx"],

@@ -116,7 +116,7 @@ export type RenderResponse = {
 };
 export type LintIssue = { level: "error" | "warning"; line: number | null; message: string };
 export type LintResult = { ok: boolean; lint: { errors: LintIssue[]; warnings: LintIssue[] }; saved?: boolean };
-export type LaneId = "body" | "face" | "props" | "dialogue" | "mouth" | "audio" | "sfx" | "camera" | "inserts";
+export type LaneId = "body" | "face" | "props" | "action" | "dialogue" | "mouth" | "audio" | "sfx" | "camera" | "inserts";
 export type LaneTimingKind = "over" | "for" | "pin" | "audio" | "dialogue";
 export type LaneTimingAttr = "over" | "for" | "hold" | "at_time" | "start" | null;
 export type LaneTiming = {
