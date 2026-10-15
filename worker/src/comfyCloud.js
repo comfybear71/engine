@@ -23,6 +23,7 @@ const FRAME_HEIGHT = 720;
 const POLL_INTERVAL_MS = 2500;
 const POLL_TIMEOUT_MS = 20 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 60 * 1000;
+const CANCEL_TIMEOUT_MS = 10 * 1000;
 const TRANSFER_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_POLL_FAILURES = 10;
 const DEFAULT_NEGATIVE = "pc game, console game, video game, cartoon, childish, ugly";
@@ -173,11 +174,31 @@ function transientStatus(status) {
   return status === 429 || status >= 500;
 }
 
+/**
+ * Best effort: ask Comfy Cloud to stop a job so Stop does not keep spending
+ * credits. Errors are swallowed because the local stop must always succeed.
+ */
+async function cancelJob(creds, promptId, fetchFn) {
+  const headers = { "X-API-Key": creds.apiKey, "Content-Type": "application/json" };
+  const attempt = async (urlPath, body) => {
+    try {
+      await request(fetchFn, `${creds.baseUrl}${urlPath}`, { method: "POST", headers, body: JSON.stringify(body) }, `cancelling job ${promptId}`, CANCEL_TIMEOUT_MS);
+    } catch {
+      /* ignore */
+    }
+  };
+  await attempt("/api/interrupt", { prompt_id: promptId });
+  await attempt("/api/queue", { delete: [promptId] });
+}
+
 async function pollJob(creds, promptId, { fetchFn, intervalMs, timeoutMs, isCancelled }) {
   const started = Date.now();
   let failures = 0;
   for (;;) {
-    if (typeof isCancelled === "function" && isCancelled()) throw comfyError("Stopped", "ECANCEL");
+    if (typeof isCancelled === "function" && isCancelled()) {
+      await cancelJob(creds, promptId, fetchFn);
+      throw comfyError("Stopped", "ECANCEL");
+    }
     let job = null;
     try {
       const res = await request(fetchFn, `${creds.baseUrl}/api/jobs/${encodeURIComponent(promptId)}`, {
