@@ -22,6 +22,7 @@ const {
   extractWavSlice,
 } = require("./splitLongAudio");
 const shotsModule = require("./shots");
+const comfyCloud = require("./comfyCloud");
 const { internals } = shotsModule;
 
 const {
@@ -190,7 +191,24 @@ function planTalkingHead(projectDir, body = {}) {
   };
 }
 
+const LTX_HEAD_SUFFIX =
+  "exactly the same character, art style, framing and crop as the starting image, head and face only, static locked-off camera with no zoom and no camera movement, plain pure black background";
+const HEAD_BLACK_KEY = "head-black";
+
+function normalizeEngine(value) {
+  return String(value || "").toLowerCase() === "ltx" ? "ltx" : "grok";
+}
+
 function buildWindowPrompt(talk) {
+  if (normalizeEngine(talk.engine) === "ltx") {
+    const base = String(talk.basePrompt || DEFAULT_TALK_PROMPT).trim();
+    const words = String(talk.text || "").trim();
+    const speaking = words
+      ? `the character is speaking, lips and mouth synced to the audio, saying: "${words}"`
+      : "the character is speaking naturally, lips synced to the audio";
+    const continuing = talk.index > 0 ? ", continuing the same performance without changing pose or lighting" : "";
+    return `${base}, ${speaking}${continuing}, ${LTX_HEAD_SUFFIX}`;
+  }
   const base = String(talk.basePrompt || DEFAULT_TALK_PROMPT).trim();
   const words = String(talk.text || "").trim();
   const speaking = words
@@ -287,8 +305,14 @@ async function runChain(projectDir, characterId, group, startIndex, options = {}
         return;
       }
 
-      const fullPrompt = `${buildWindowPrompt(info.talk)}, ${BG_PROMPT_SUFFIX[info.background] || BG_PROMPT_SUFFIX.green}`;
+      const ltx = normalizeEngine(info.engine) === "ltx";
+      const fullPrompt = ltx
+        ? buildWindowPrompt(info.talk)
+        : `${buildWindowPrompt(info.talk)}, ${BG_PROMPT_SUFFIX[info.background] || BG_PROMPT_SUFFIX.green}`;
       await runGrokShot(dir, info, {
+        engine: ltx ? "ltx" : "grok",
+        audioFile: info.talk.audio,
+        durationSec: Math.max(1, Math.round(info.talk.windowSec * 100) / 100),
         fullPrompt,
         imageBase64,
         dur: info.talk.clipSec,
@@ -468,6 +492,10 @@ async function makeTalkingHead(projectDir, characterId, body = {}, options = {})
     throw shotError("Choose a start image: a head shot of the character with no neck or collar.");
   }
 
+  const engine = normalizeEngine(body.engine);
+  if (engine === "ltx" && !comfyCloud.resolveCredentials()) {
+    throw shotError("COMFY_CLOUD_API_KEY is not configured. Add it to the engine .env file, then restart the engine.", "ENOKEY");
+  }
   const basePrompt = String(body.prompt || "").trim() || DEFAULT_TALK_PROMPT;
   const label = path.posix.basename(path.posix.dirname(plan.audioRel));
   const group = uniqueGroupId(projectDir, char, `talk_${slugName(label)}`);
@@ -486,9 +514,11 @@ async function makeTalkingHead(projectDir, characterId, body = {}, options = {})
       id,
       name: `${group} (${win.index + 1}/${total})`,
       filename: "",
-      prompt: buildWindowPrompt({ basePrompt, text: win.text, index: win.index }),
+      prompt: buildWindowPrompt({ basePrompt, text: win.text, index: win.index, engine }),
       refImage: refRel,
-      background: "green",
+      engine,
+      ...(engine === "ltx" ? { keyMode: HEAD_BLACK_KEY } : {}),
+      background: engine === "ltx" ? "black" : "green",
       fps: 0,
       frameCount: 0,
       in: 1,
@@ -510,6 +540,7 @@ async function makeTalkingHead(projectDir, characterId, body = {}, options = {})
         audioRel: plan.audioRel,
         audioInSec: plan.inSec + win.start,
         audio: "audio.wav",
+        engine,
       },
     });
     shotIds.push(id);
