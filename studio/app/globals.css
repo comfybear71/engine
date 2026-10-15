@@ -2450,6 +2450,18 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: default;
+}
+.shots-card-name-input {
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: #fff;
+  background: #333;
+  border: 1px solid #e0a040;
+  border-radius: 3px;
+  outline: none;
+  box-sizing: border-box;
 }
 
 /* ── Thumb Strip (horizontal scroll) ─────────────────────────── */

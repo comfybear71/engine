@@ -27,17 +27,6 @@ interface ShotInfo {
   sourceHead?: string;
 }
 
-interface ShotFrame {
-  n: number;
-  thumb: string;
-  cut: string;
-  deleted: boolean;
-}
-
-interface ShotDetail extends ShotInfo {
-  frames: ShotFrame[];
-}
-
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -143,27 +132,26 @@ function ShotCard({
   project,
   characterId,
   shot,
-  onClick,
   onDelete,
+  onRename,
 }: {
   project: string;
   characterId: string;
   shot: ShotInfo;
-  onClick: () => void;
   onDelete: () => void;
+  onRename: (newName: string) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [hovering, setHovering] = useState(false);
-  const stripRef = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(shot.name || shot.id);
 
   const posterUrl = shotMediaUrl(project, characterId, shot.id, "poster.jpg");
   const previewUrl = shotMediaUrl(project, characterId, shot.id, "preview.mp4");
-  const isMaking = shot.status === "making";
-  const isError = shot.status === "error";
 
   const handleMouseEnter = () => {
     setHovering(true);
-    if (videoRef.current && shot.status === "ready") {
+    if (videoRef.current) {
       videoRef.current.currentTime = 0;
       videoRef.current.play().catch(() => {});
     }
@@ -176,216 +164,66 @@ function ShotCard({
     }
   };
 
-  // Build thumb URLs
-  const thumbCount = shot._thumbCount || shot.frameCount || 0;
-  const thumbUrls: string[] = [];
-  for (let i = 1; i <= Math.min(thumbCount, shot.out || thumbCount); i++) {
-    if (i < (shot.in || 1)) continue;
-    thumbUrls.push(shotMediaUrl(project, characterId, shot.id, `thumb/f_${String(i).padStart(4, "0")}.jpg`));
-  }
+  const commitRename = () => {
+    const trimmed = editName.trim();
+    if (trimmed && trimmed !== (shot.name || shot.id)) {
+      onRename(trimmed);
+    }
+    setEditing(false);
+  };
 
   return (
     <div
       className="shots-card"
       data-testid={`shot-card-${shot.id}`}
-      data-status={shot.status}
-      onClick={onClick}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
       <div className="shots-card-poster">
-        {isMaking ? (
-          <div className="shots-card-making">
-            <div className="shots-spinner" />
-            <span>Making…</span>
-          </div>
-        ) : isError ? (
-          <div className="shots-card-error">
-            <span>⚠</span>
-            <span className="shots-error-msg">{shot.error || "Failed"}</span>
-          </div>
-        ) : (
-          <>
-            <img src={posterUrl} alt={shot.name} loading="lazy" />
-            {hovering && (
-              <video
-                ref={videoRef}
-                src={previewUrl}
-                muted
-                loop
-                playsInline
-                preload="none"
-                className="shots-card-video"
-              />
-            )}
-          </>
+        <img src={posterUrl} alt={shot.name} loading="lazy" style={{ objectFit: "contain", width: "100%", height: "100%" }} />
+        {hovering && (
+          <video
+            ref={videoRef}
+            src={previewUrl}
+            muted
+            loop
+            playsInline
+            preload="none"
+            className="shots-card-video"
+            style={{ objectFit: "contain" }}
+          />
         )}
-        {shot.status === "ready" && (
-          <span className="shots-badge">{shot.frameCount} frames</span>
-        )}
+        <span className="shots-badge">{shot.frameCount} frames</span>
         <button
           type="button"
           className="shots-card-delete"
           title="Delete shot"
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        >✕</button>
-      </div>
-      <div className="shots-card-name">{shot.name || shot.id}</div>
-      {/* Horizontal scroll strip of thumbnails */}
-      {thumbUrls.length > 0 && (
-        <div className="shots-strip" ref={stripRef}>
-          {thumbUrls.map((url, i) => (
-            <img
-              key={i}
-              src={url}
-              alt=""
-              loading="lazy"
-              className="shots-strip-thumb"
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Shot Detail View ────────────────────────────────────────────────
-
-function ShotDetailView({
-  project,
-  characterId,
-  shotId,
-  onBack,
-  onReload,
-}: {
-  project: string;
-  characterId: string;
-  shotId: string;
-  onBack: () => void;
-  onReload: () => void;
-}) {
-  const [detail, setDetail] = useState<ShotDetail | null>(null);
-  const [error, setError] = useState("");
-  const [currentFrame, setCurrentFrame] = useState(1);
-  const [inFrame, setInFrame] = useState(1);
-  const [outFrame, setOutFrame] = useState(1);
-  const [saving, setSaving] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await workerFetch(
-        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}`
-      );
-      if (!res.ok) throw new Error("Failed to load shot");
-      const data: ShotDetail = await res.json();
-      setDetail(data);
-      setInFrame(data.in || 1);
-      setOutFrame(data.out || data.frameCount);
-      setCurrentFrame(data.in || 1);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed");
-    }
-  }, [project, characterId, shotId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  if (error && !detail) return <div className="shots-error">{error}</div>;
-  if (!detail) return <div className="shots-loading">Loading…</div>;
-
-  const currentCutUrl = shotMediaUrl(
-    project, characterId, shotId,
-    `cut/f_${String(currentFrame).padStart(4, "0")}.png`
-  );
-
-  return (
-    <div className="shots-detail" data-testid="shots-detail">
-      <div className="shots-detail-header">
-        <button type="button" onClick={onBack} className="shots-back-btn">← Back</button>
-        <span className="shots-detail-title">{detail?.name || shotId}</span>
-      </div>
-
-      {/* Big player area */}
-      <div className="shots-detail-player">
-        <img src={currentCutUrl} alt={`Frame ${currentFrame}`} className="shots-detail-frame" />
-        <div className="shots-detail-framenum">Frame {currentFrame} / {detail.frameCount}</div>
-      </div>
-
-      {/* Scrub bar */}
-      <div className="shots-scrub">
-        <input
-          type="range"
-          min={1}
-          max={detail.frameCount}
-          value={currentFrame}
-          onChange={(e) => setCurrentFrame(Number(e.target.value))}
-          className="shots-scrub-slider"
-        />
-      </div>
-
-      {/* In/Out handles */}
-      <div className="shots-inout">
-        <label>
-          In: <input type="number" min={1} max={outFrame} value={inFrame}
-            onChange={(e) => setInFrame(Math.max(1, Math.min(Number(e.target.value), outFrame)))} />
-        </label>
-        <label>
-          Out: <input type="number" min={inFrame} max={detail.frameCount} value={outFrame}
-            onChange={(e) => setOutFrame(Math.max(inFrame, Math.min(Number(e.target.value), detail.frameCount)))} />
-        </label>
-        <span className="shots-inout-count">{outFrame - inFrame + 1} frames selected</span>
-      </div>
-
-      {/* Delete shot */}
-      <div className="shots-use-action">
-        <button
-          type="button"
-          onClick={async () => {
-            if (!confirm("Delete this entire shot?")) return;
-            setSaving(true);
-            try {
-              const res = await workerFetch(
-                `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}`,
-                { method: "DELETE" }
-              );
-              if (!res.ok) {
-                const body = await res.json().catch(() => ({ error: "Delete failed" }));
-                setError(body.error || "Delete failed");
-                setSaving(false);
-                return;
-              }
-              onReload();
-              onBack();
-            } catch (err) {
-              setError(err instanceof Error ? err.message : "Delete failed");
-            }
-            setSaving(false);
-          }}
-          disabled={saving}
-          className="shots-btn-danger"
         >
-          Delete shot
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
         </button>
       </div>
-
-      {error && <div className="shots-error">{error}</div>}
-
-      {/* Frame strip at bottom */}
-      <div className="shots-detail-strip">
-        {detail.frames
-          .filter((f) => !f.deleted)
-          .map((f) => (
-            <img
-              key={f.n}
-              src={shotMediaUrl(project, characterId, shotId, f.thumb)}
-              alt={`Frame ${f.n}`}
-              loading="lazy"
-              className={`shots-strip-thumb ${f.n === currentFrame ? "active" : ""} ${
-                f.n < inFrame || f.n > outFrame ? "trimmed" : ""
-              }`}
-              onClick={() => setCurrentFrame(f.n)}
-            />
-          ))}
-      </div>
+      {editing ? (
+        <input
+          className="shots-card-name-input"
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setEditing(false); }}
+          autoFocus
+        />
+      ) : (
+        <div
+          className="shots-card-name"
+          onDoubleClick={() => { setEditName(shot.name || shot.id); setEditing(true); }}
+          title="Double-click to rename"
+        >
+          {shot.name || shot.id}
+        </div>
+      )}
     </div>
   );
 }
@@ -688,7 +526,6 @@ export default function ActionShotsPage({
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const [showCombine, setShowCombine] = useState(false);
-  const [selectedShot, setSelectedShot] = useState<string | null>(null);
   const [importError, setImportError] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -760,19 +597,6 @@ export default function ActionShotsPage({
     } catch {}
   };
 
-  // If a shot is selected, show detail view
-  if (selectedShot) {
-    return (
-      <ShotDetailView
-        project={project}
-        characterId={characterId}
-        shotId={selectedShot}
-        onBack={() => { setSelectedShot(null); loadShots(); }}
-        onReload={() => { loadShots(); onReload?.(); }}
-      />
-    );
-  }
-
   const readyShots = shots.filter((s) => s.shotType === "combined" && s.status === "ready");
 
   return (
@@ -791,7 +615,19 @@ export default function ActionShotsPage({
               project={project}
               characterId={characterId}
               shot={shot}
-              onClick={() => setSelectedShot(shot.id)}
+              onRename={async (newName) => {
+                try {
+                  await workerFetch(
+                    `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shot.id)}`,
+                    {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ name: newName }),
+                    }
+                  );
+                  loadShots();
+                } catch {}
+              }}
               onDelete={async () => {
                 if (!confirm("Delete this shot?")) return;
                 try {
