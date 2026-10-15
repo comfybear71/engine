@@ -331,10 +331,57 @@ async function runGrokShot(dir, info, job) {
 }
 
 /**
+ * Base64 of the last frame of an existing shot, so a new clip can continue
+ * where it ends. Prefers the untouched Grok video (same look Grok produced),
+ * honours the shot's trimmed out point, and falls back to saved frames for
+ * shots that have no source video (baked/combined shots).
+ */
+async function lastFrameBase64(projectDir, characterId, shotId, options = {}) {
+  const dir = shotDir(projectDir, characterId, shotId);
+  const info = readShotJson(dir);
+  if (!info || info.status === "deleted") throw shotError("The shot to continue from was not found", "ENOENT");
+  if (info.status === "making" || info.status === "queued") throw shotError("The shot to continue from is still being made");
+  const frameCount = Number(info.frameCount) || 0;
+  const out = Number(info.out) > 0 ? Math.min(Number(info.out), frameCount || Number(info.out)) : frameCount;
+  const pad = String(out).padStart(4, "0");
+
+  const sourcePath = path.join(dir, "source.mp4");
+  if (fs.existsSync(sourcePath)) {
+    const tmp = path.join(dir, "._continue_frame.png");
+    const extract = options.extractFrame || (async (video, png, seconds) => {
+      const attempt = async (args) => {
+        fs.rmSync(png, { force: true });
+        const { code } = await spawnCmd("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args, "-i", video, "-frames:v", "1", png]);
+        return code === 0 && fs.existsSync(png) && fs.statSync(png).size > 0;
+      };
+      if (seconds > 0 && (await attempt(["-ss", String(seconds)]))) return true;
+      return attempt(["-sseof", "-0.1"]);
+    });
+    const fps = Number(info.fps) || 0;
+    const seconds = fps > 0 && out > 1 && out < frameCount ? (out - 1) / fps : 0;
+    try {
+      if (await extract(sourcePath, tmp, seconds)) return fs.readFileSync(tmp).toString("base64");
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
+  }
+
+  for (const [sub, ext] of [["raw", ".png"], ["cut", ".png"], ["thumb", ".jpg"]]) {
+    const exact = path.join(dir, sub, `f_${pad}${ext}`);
+    if (fs.existsSync(exact)) return fs.readFileSync(exact).toString("base64");
+    const sub_dir = path.join(dir, sub);
+    if (!fs.existsSync(sub_dir)) continue;
+    const files = fs.readdirSync(sub_dir).filter((n) => n.endsWith(ext)).sort();
+    if (files.length) return fs.readFileSync(path.join(sub_dir, files[files.length - 1])).toString("base64");
+  }
+  throw shotError("Could not read the last frame of that shot");
+}
+
+/**
  * Start making a shot with Grok – returns immediately, processes in background.
  */
 async function makeShot(projectDir, characterId, body, options = {}) {
-  const { prompt, background, duration, refRel, refBase64, shotType } = body;
+  const { prompt, background, duration, refRel, refBase64, shotType, continueShotId } = body;
   if (!prompt) throw shotError("Enter a prompt.");
 
   const bg = background || "green";
@@ -342,7 +389,11 @@ async function makeShot(projectDir, characterId, body, options = {}) {
   const dur = [4, 6, 8, 10].includes(Number(duration)) ? Number(duration) : 6;
 
   // Resolve reference image
-  let imageBase64 = refBase64 || null;
+  let imageBase64 = null;
+  if (continueShotId) {
+    imageBase64 = await lastFrameBase64(projectDir, characterId, String(continueShotId), options);
+  }
+  if (!imageBase64) imageBase64 = refBase64 || null;
   if (!imageBase64 && refRel) {
     const refPath = path.join(projectDir, refRel);
     if (fs.existsSync(refPath)) {
@@ -363,6 +414,7 @@ async function makeShot(projectDir, characterId, body, options = {}) {
     filename: "",
     prompt,
     refImage: refRel || "",
+    ...(continueShotId ? { continuesShot: String(continueShotId) } : {}),
     background: bg,
     fps: 0,
     frameCount: 0,
@@ -968,6 +1020,7 @@ module.exports = {
   resizeHead,
   bakeTimeline,
   internals: {
+    lastFrameBase64,
     runGrokShot,
     shotsDir,
     shotDir,

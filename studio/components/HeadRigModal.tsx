@@ -1396,16 +1396,18 @@ export default function HeadRigModal({
   const [grokMsg, setGrokMsg] = useState("");
   const [grokRefShotId, setGrokRefShotId] = useState(""); // "" = character reference
   const [grokRefFile, setGrokRefFile] = useState<File | null>(null); // custom uploaded ref image
+  const [grokContinue, setGrokContinue] = useState(false); // start from the ref shot's last frame
 
   async function handleGrokCreate() {
     if (!grokPrompt.trim()) return;
     setGrokBusy(true);
     setGrokMsg("");
     try {
+      const continueFrom = grokContinue && !grokRefFile && grokRefShotId ? grokRefShotId : "";
       let refBase64: string | undefined;
       if (grokRefFile) {
         refBase64 = await blobToBase64(grokRefFile);
-      } else if (grokRefShotId) {
+      } else if (grokRefShotId && !grokContinue) {
         const refRes = await workerFetch(
           `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/media?rel=${encodeURIComponent(`${grokRefShotId}/poster.jpg`)}`
         );
@@ -1423,7 +1425,9 @@ export default function HeadRigModal({
             shotType: grokType,
             background: "green",
             duration: grokDuration,
-            ...(refBase64 ? { refBase64 } : charRefRel ? { refRel: charRefRel } : {}),
+            ...(continueFrom
+              ? { continueShotId: continueFrom }
+              : refBase64 ? { refBase64 } : charRefRel ? { refRel: charRefRel } : {}),
           }),
         }
       );
@@ -1432,7 +1436,7 @@ export default function HeadRigModal({
         setGrokMsg(data.error || "Failed to create shot");
       } else {
         const data = await res.json();
-        setGrokMsg(`Creating ${grokType} shot "${data.shotId}" — will appear when ready`);
+        setGrokMsg(`Creating ${grokType} shot "${data.shotId}"${continueFrom ? ` from the last frame of "${continueFrom}"` : ""} — will appear when ready`);
         setGrokPrompt("");
         const poll = setInterval(async () => {
           await reloadShots();
@@ -1719,6 +1723,7 @@ export default function HeadRigModal({
               grokDuration={grokDuration} setGrokDuration={setGrokDuration}
               grokRefShotId={grokRefShotId} setGrokRefShotId={setGrokRefShotId}
               grokRefFile={grokRefFile} setGrokRefFile={setGrokRefFile}
+              grokContinue={grokContinue} setGrokContinue={setGrokContinue}
               grokPrompt={grokPrompt} setGrokPrompt={setGrokPrompt}
               grokBusy={grokBusy} grokMsg={grokMsg}
               allShots={allShots}
@@ -2197,11 +2202,12 @@ function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, o
 
 // ── Grok sidebar section ─────────────────────────────────────────────
 
-function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, grokRefShotId, setGrokRefShotId, grokRefFile, setGrokRefFile, grokPrompt, setGrokPrompt, grokBusy, grokMsg, allShots, onCreate, project, characterId }: {
+function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, grokRefShotId, setGrokRefShotId, grokRefFile, setGrokRefFile, grokContinue, setGrokContinue, grokPrompt, setGrokPrompt, grokBusy, grokMsg, allShots, onCreate, project, characterId }: {
   grokType: "body" | "head"; setGrokType: (v: "body" | "head") => void;
   grokDuration: number; setGrokDuration: (v: number) => void;
   grokRefShotId: string; setGrokRefShotId: (v: string) => void;
   grokRefFile: File | null; setGrokRefFile: (v: File | null) => void;
+  grokContinue: boolean; setGrokContinue: (v: boolean) => void;
   grokPrompt: string; setGrokPrompt: (v: string) => void;
   grokBusy: boolean; grokMsg: string;
   allShots: ShotInfo[];
@@ -2250,6 +2256,21 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
               📷
             </button>
           </div>
+          {grokRefShotId && !grokRefFile && (
+            <div className="flex overflow-hidden rounded border border-studio-border text-[11px]" data-testid="grok-start-frame">
+              <button type="button" data-testid="grok-start-first"
+                className={`flex-1 px-2 py-1 ${!grokContinue ? "bg-studio-accent/20 text-studio-accent" : "bg-studio-raised text-neutral-400 hover:bg-[#333]"}`}
+                onClick={() => setGrokContinue(false)}>
+                Start from its poster
+              </button>
+              <button type="button" data-testid="grok-start-last"
+                title="Grok starts from the final frame of that shot, so the new clip carries on from where it stopped"
+                className={`flex-1 border-l border-studio-border px-2 py-1 ${grokContinue ? "bg-studio-accent/20 text-studio-accent" : "bg-studio-raised text-neutral-400 hover:bg-[#333]"}`}
+                onClick={() => setGrokContinue(true)}>
+                Continue from last frame
+              </button>
+            </div>
+          )}
           {/* Show uploaded ref preview */}
           {grokRefFile && refThumb && (
             <div className="flex items-center gap-2 rounded border border-[#333] bg-[#1a1a1a] px-2 py-1">
@@ -2260,7 +2281,7 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
             </div>
           )}
           <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-[12px] text-neutral-200"
-            placeholder={grokType === "body" ? "body prompt…" : "head prompt…"}
+            placeholder={grokContinue && grokRefShotId && !grokRefFile ? "what happens next…" : grokType === "body" ? "body prompt…" : "head prompt…"}
             value={grokPrompt} onChange={(e) => setGrokPrompt(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") onCreate(); }} />
           <button type="button"
