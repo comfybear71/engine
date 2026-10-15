@@ -57,8 +57,9 @@ type TrackName = "body" | "head";
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-function shotMediaUrl(project: string, characterId: string, shotId: string, rel: string): string {
-  return `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/media?rel=${encodeURIComponent(`${shotId}/${rel}`)}`;
+function shotMediaUrl(project: string, characterId: string, shotId: string, rel: string, v?: number): string {
+  const base = `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/media?rel=${encodeURIComponent(`${shotId}/${rel}`)}`;
+  return v ? `${base}&v=${v}` : base;
 }
 
 function clamp(v: number, lo: number, hi: number) {
@@ -190,19 +191,25 @@ export default function HeadRigModal({
     img.src = shotMediaUrl(project, characterId, shotId, "cut/f_0001.png");
   }
 
-  // Per-frame image cache (shotId#frame -> Image), with a bump counter to
-  // force a redraw once a requested frame finishes loading.
+  // Bumped per-shot whenever a shot's frames are re-keyed on disk (see
+  // handleReprocessShot), so cached <img> elements and the worker's media
+  // cache headers are bypassed and the fixed, transparent frames reload.
+  const [mediaVersion, setMediaVersion] = useState<Record<string, number>>({});
+
+  // Per-frame image cache (shotId#frame#version -> Image), with a bump
+  // counter to force a redraw once a requested frame finishes loading.
   const frameImgCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const [redrawTick, setRedrawTick] = useState(0);
   function getFrameImage(shotId: string, frame: number): HTMLImageElement | null {
-    const key = `${shotId}#${frame}`;
+    const v = mediaVersion[shotId] || 0;
+    const key = `${shotId}#${frame}#${v}`;
     const cached = frameImgCacheRef.current.get(key);
     if (cached) return cached;
     const pad = String(Math.max(1, frame)).padStart(4, "0");
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
-    img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
+    img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`, v);
     return null;
   }
 
@@ -832,6 +839,65 @@ export default function HeadRigModal({
     }
   }
 
+  // ── Re-key a shot's background in place (fixes black/dark backgrounds
+  // left over from an older, less robust keyer — no Grok call needed) ──
+  const [reprocessingShotId, setReprocessingShotId] = useState<string | null>(null);
+  const [reprocessAllBusy, setReprocessAllBusy] = useState(false);
+  const [reprocessMsg, setReprocessMsg] = useState("");
+
+  function bumpMediaVersion(shotId: string) {
+    setMediaVersion((prev) => ({ ...prev, [shotId]: (prev[shotId] || 0) + 1 }));
+  }
+
+  async function handleReprocessShot(shotId: string) {
+    setReprocessingShotId(shotId);
+    setReprocessMsg("");
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}/reprocess`,
+        { method: "POST" }
+      );
+      if (res.ok) {
+        bumpMediaVersion(shotId);
+        await reloadShots();
+      } else {
+        const data = await res.json().catch(() => ({ error: "Reprocess failed" }));
+        alert(`Fix background failed: ${data.error || res.status}`);
+      }
+    } catch (err) {
+      alert(`Fix background error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    setReprocessingShotId(null);
+  }
+
+  async function handleReprocessAll() {
+    if (!confirm("Re-key every body/head shot's background? This re-reads already-captured frames (no new Grok generations) and may take a minute per shot.")) return;
+    setReprocessAllBusy(true);
+    setReprocessMsg("");
+    try {
+      const res = await workerFetch(
+        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/reprocess-all`,
+        { method: "POST" }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const results: Array<{ shotId: string; ok: boolean }> = data.results || [];
+        for (const r of results) if (r.ok) bumpMediaVersion(r.shotId);
+        const failed = results.filter((r) => !r.ok).length;
+        setReprocessMsg(failed
+          ? `Fixed ${results.length - failed} of ${results.length} shots — ${failed} failed.`
+          : `Fixed backgrounds on ${results.length} shot${results.length === 1 ? "" : "s"}.`);
+        await reloadShots();
+      } else {
+        const data = await res.json().catch(() => ({ error: "Reprocess failed" }));
+        setReprocessMsg(data.error || "Failed");
+      }
+    } catch (err) {
+      setReprocessMsg(err instanceof Error ? err.message : "Failed");
+    }
+    setReprocessAllBusy(false);
+  }
+
   const importRef = useRef<HTMLInputElement>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importType, setImportType] = useState<"body" | "head">("body");
@@ -1072,7 +1138,7 @@ export default function HeadRigModal({
                     segments={bodySegments}
                     maxFrames={maxFrames}
                     shotsById={shotsById}
-                    project={project} characterId={characterId}
+                    project={project} characterId={characterId} mediaVersion={mediaVersion}
                     onSelect={(id) => setSelectedSegment({ track: "body", id })}
                     onSegMouseDown={(e, seg, edge) => onSegmentMouseDown(e, "body", seg, edge)}
                     playheadPct={playheadPct}
@@ -1085,7 +1151,7 @@ export default function HeadRigModal({
                     segments={headSegments}
                     maxFrames={maxFrames}
                     shotsById={shotsById}
-                    project={project} characterId={characterId}
+                    project={project} characterId={characterId} mediaVersion={mediaVersion}
                     onSelect={(id) => setSelectedSegment({ track: "head", id })}
                     onSegMouseDown={(e, seg, edge) => onSegmentMouseDown(e, "head", seg, edge)}
                     playheadPct={playheadPct}
@@ -1122,6 +1188,16 @@ export default function HeadRigModal({
                 onClick={() => importRef.current?.click()}>
                 {importBusy ? "Importing…" : "📁 Import Clip"}
               </button>
+              <button type="button"
+                className="rounded bg-neutral-700 px-3 py-1 text-[11px] font-semibold text-white hover:bg-neutral-600 disabled:opacity-40"
+                disabled={reprocessAllBusy}
+                title="Re-key every shot's background from its already-captured frames — no new Grok generations"
+                onClick={() => void handleReprocessAll()}>
+                {reprocessAllBusy ? "Fixing…" : "🩹 Fix All Backgrounds"}
+              </button>
+              {reprocessMsg ? (
+                <span className={`text-[10px] font-medium ${/fail/i.test(reprocessMsg) ? "text-red-400" : "text-emerald-300"}`}>{reprocessMsg}</span>
+              ) : null}
             </div>
 
             <h3 className="mb-2 text-xs font-semibold text-neutral-300">Body Shots <span className="text-neutral-500">— click to add to Body track</span></h3>
@@ -1129,7 +1205,8 @@ export default function HeadRigModal({
               <p className="text-[10px] text-studio-muted">No body shots yet — create one with Grok below</p>
             ) : (
               <ShotGrid shots={bodyShots.length > 0 ? bodyShots : allShots} project={project} characterId={characterId}
-                onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot} />
+                mediaVersion={mediaVersion} reprocessingShotId={reprocessingShotId}
+                onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot} />
             )}
 
             <h3 className="mb-2 mt-3 text-xs font-semibold text-neutral-300">Head Shots <span className="text-neutral-500">— click to add to Head track</span></h3>
@@ -1137,7 +1214,8 @@ export default function HeadRigModal({
               <p className="text-[10px] text-studio-muted">No head shots yet — create one with Grok below</p>
             ) : (
               <ShotGrid shots={headShots.length > 0 ? headShots : allShots} project={project} characterId={characterId}
-                onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot} />
+                mediaVersion={mediaVersion} reprocessingShotId={reprocessingShotId}
+                onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot} />
             )}
           </div>
 
@@ -1173,7 +1251,7 @@ export default function HeadRigModal({
                   <div key={s.id} className="group relative rounded-md border border-studio-border bg-[#111] p-2">
                     <div className="flex items-start gap-2">
                       <img
-                        src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                        src={shotMediaUrl(project, characterId, s.id, "poster.jpg", mediaVersion[s.id])}
                         alt={s.name || s.id}
                         className="h-12 w-12 shrink-0 rounded object-cover"
                         onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -1292,7 +1370,7 @@ export default function HeadRigModal({
 // ── Track row sub-component ─────────────────────────────────────────
 
 function TrackRow({
-  label, code, codeClass, bg, ringClass, segments, maxFrames, shotsById, project, characterId,
+  label, code, codeClass, bg, ringClass, segments, maxFrames, shotsById, project, characterId, mediaVersion,
   isSelected, onSelect, onSegMouseDown, playheadPct,
 }: {
   label: string;
@@ -1305,6 +1383,7 @@ function TrackRow({
   shotsById: Map<string, ShotInfo>;
   project: string;
   characterId: string;
+  mediaVersion: Record<string, number>;
   isSelected: (id: string) => boolean;
   onSelect: (id: string) => void;
   onSegMouseDown: (e: React.MouseEvent, seg: Segment, edge?: "in" | "out") => void;
@@ -1340,7 +1419,7 @@ function TrackRow({
                   const frame = Math.round(seg.inFrame + frac * (segLength(seg) - 1));
                   const pad = String(frame).padStart(4, "0");
                   return (
-                    <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`)} alt=""
+                    <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`, mediaVersion[seg.shotId])} alt=""
                       className="h-full shrink-0 object-contain" style={{ width: `${100 / Math.min(segLength(seg), 24)}%`, background: "#0a0a0a" }}
                       onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                   );
@@ -1366,13 +1445,16 @@ function TrackRow({
 // ── Shot grid sub-component ───────────────────────────────────────────
 
 function ShotGrid({
-  shots, project, characterId, onAdd, onDelete,
+  shots, project, characterId, mediaVersion, reprocessingShotId, onAdd, onDelete, onReprocess,
 }: {
   shots: ShotInfo[];
   project: string;
   characterId: string;
+  mediaVersion: Record<string, number>;
+  reprocessingShotId: string | null;
   onAdd: (s: ShotInfo) => void;
   onDelete: (id: string) => void;
+  onReprocess: (id: string) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -1386,7 +1468,7 @@ function ShotGrid({
             title={`Add "${s.name || s.id}" to track`}
           >
             <img
-              src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+              src={shotMediaUrl(project, characterId, s.id, "poster.jpg", mediaVersion[s.id])}
               alt={s.name || s.id}
               className="h-full w-full object-cover"
               onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -1403,6 +1485,15 @@ function ShotGrid({
             title="Delete shot"
           >
             ✕
+          </button>
+          <button
+            type="button"
+            disabled={reprocessingShotId === s.id}
+            className="absolute -bottom-1 -left-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-800 text-[10px] font-bold text-white shadow hover:bg-neutral-700 disabled:opacity-60"
+            onClick={(e) => { e.stopPropagation(); onReprocess(s.id); }}
+            title="Fix background (re-key this shot's frames, no new Grok generation)"
+          >
+            {reprocessingShotId === s.id ? "…" : "🩹"}
           </button>
         </div>
       ))}

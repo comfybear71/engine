@@ -135,6 +135,8 @@ const {
   saveFrameToSlot: saveShotFrameToSlot,
   useAsActionShot,
   retryShot,
+  reprocessShot,
+  reprocessAllShots,
   serveMedia: serveShotMedia,
   combineShots,
   resizeHead,
@@ -1386,6 +1388,39 @@ function createApp(options = {}) {
     try {
       const result = await retryShot(projectDir, req.params.characterId, req.params.shotId, {
         fetchFn,
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // Re-key an existing shot's raw/ frames in place (no Grok call, no ffmpeg
+  // re-extraction) — fixes shots keyed before a background-keying update.
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/reprocess", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await reprocessShot(projectDir, req.params.characterId, req.params.shotId, {
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // Re-key every shot for a character that has raw/ frames.
+  app.post("/api/projects/:name/characters/:characterId/shots/reprocess-all", async (req, res) => {
+    req.setTimeout(15 * 60 * 1000);
+    res.setTimeout(15 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await reprocessAllShots(projectDir, req.params.characterId, {
         pythonBin: options.pythonBin,
       });
       res.json(result);

@@ -21,8 +21,8 @@ const VIDEO_GENERATIONS_URL = "https://api.x.ai/v1/videos/generations";
 const POLL_INTERVAL = 5000;
 const POLL_TIMEOUT = 10 * 60 * 1000;
 const BG_PROMPT_SUFFIX = {
-  green: "plain solid green background, character stays fully in frame, same character, no text",
-  black: "plain solid black background, character stays fully in frame, same character, no text",
+  green: "the background is pure solid flat chroma-key green (#00FF00), evenly lit studio lighting with no shadows, no gradient, no vignette, no dark corners, no other colors in the background; character stays fully in frame, same character, no text, no watermark, no logo",
+  black: "the background is pure solid flat matte black, evenly lit with no shadows, no gradient, no vignette, no dark-grey or brown tint, no other colors in the background; character stays fully in frame, same character, no text, no watermark, no logo",
 };
 
 function shotError(message, code) {
@@ -577,6 +577,67 @@ async function retryShot(projectDir, characterId, shotId, options = {}) {
 }
 
 /**
+ * Re-key an existing shot's already-extracted raw/ frames in place, without
+ * re-running ffmpeg extraction or calling Grok again. Use this to repair
+ * shots that were captured before a background-keying fix landed (e.g.
+ * dark "cinematic" backdrops that weren't fully transparent) — it's fast
+ * and free since it never touches the Grok API.
+ */
+async function reprocessShot(projectDir, characterId, shotId, options = {}) {
+  const dir = shotDir(projectDir, characterId, shotId);
+  const info = readShotJson(dir);
+  if (!info) throw shotError("Shot not found", "ENOENT");
+  if (!fs.existsSync(path.join(dir, "raw"))) {
+    throw shotError("This shot has no raw/ frames to reprocess (it may be a baked/combined shot).");
+  }
+
+  const pythonBin = options.pythonBin || resolvePythonBin();
+  const args = ["-m", "compositor.shot_capture", "--reprocess", "--out-dir", dir];
+  const { code, stdout, stderr } = await spawnCmd(pythonBin, args, { cwd: PYTHON_DIR });
+  const trimmed = stdout.trim();
+  let parsed = null;
+  if (trimmed) {
+    const lines = trimmed.split("\n");
+    const lastLine = lines[lines.length - 1];
+    try { parsed = JSON.parse(lastLine); } catch {}
+  }
+  if (code !== 0 || !parsed) {
+    const msg = (stderr || "").trim().split("\n").pop() || "Reprocess failed";
+    throw shotError(msg);
+  }
+  if (parsed.error) throw shotError(parsed.error);
+
+  info.fps = parsed.fps;
+  info.frameCount = parsed.frameCount;
+  if (!info.out || info.out > parsed.frameCount) info.out = parsed.frameCount;
+  writeShotJson(dir, info);
+
+  return { ok: true, shotId, fps: info.fps, frameCount: info.frameCount };
+}
+
+/**
+ * Re-key every shot for a character that has raw/ frames (skips baked/
+ * combined shots, which have no raw/ dir). Returns per-shot results.
+ */
+async function reprocessAllShots(projectDir, characterId, options = {}) {
+  const dir = shotsDir(projectDir, characterId);
+  if (!fs.existsSync(dir)) return { ok: true, results: [] };
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const results = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
+    if (!fs.existsSync(path.join(dir, entry.name, "raw"))) continue;
+    try {
+      const result = await reprocessShot(projectDir, characterId, entry.name, options);
+      results.push({ shotId: entry.name, ok: true, ...result });
+    } catch (err) {
+      results.push({ shotId: entry.name, ok: false, error: err.message });
+    }
+  }
+  return { ok: true, results };
+}
+
+/**
  * Serve media files (mp4/jpg/png) with Range support.
  */
 function serveMedia(projectDir, characterId, req, res) {
@@ -871,6 +932,8 @@ module.exports = {
   saveFrameToSlot,
   useAsActionShot,
   retryShot,
+  reprocessShot,
+  reprocessAllShots,
   serveMedia,
   combineShots,
   resizeHead,
