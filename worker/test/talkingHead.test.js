@@ -395,6 +395,42 @@ describe("talking head chain", () => {
       assert.equal(shots[0].headSizeTarget, 312.5);
     });
 
+    test("redoing a later clip of a chain made before the size lock holds it to clip 1's size", async () => {
+      writeAudio(24);
+      const captures = [];
+      const normalized = [];
+      const options = {
+        ...chainOptions(),
+        fetchFn: makeComfyFetch(),
+        padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out),
+        normalizeStart: async (_png, target) => normalized.push(target),
+        measureHead: async () => 0,
+        captureFn: async (_v, _d, meta) => {
+          captures.push(meta);
+          return { fps: 24, frameCount: 240 };
+        },
+      };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 24, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+      assert.ok(captures.every((meta) => !meta.headSizeTarget), "chain made without a saved size");
+      const last = started.windows.length - 1;
+      captures.length = 0;
+      normalized.length = 0;
+
+      const redo = await redoTalkingHeadClip(projectDir, "rodney", started.group, last, { ...options, measureHead: async () => 298.4 });
+      await redo.completion;
+      assert.equal(captures.length, 1);
+      assert.equal(captures[0].headSizeTarget, 298.4, "the size comes from clip 1, not from the redone clip's own start frame");
+      assert.equal(captures[0].lockHeadSize, false);
+      assert.deepEqual(normalized, [298.4]);
+    });
+
     test("retrying a window whose network dropped resumes the same Comfy job instead of paying again", async () => {
       writeAudio(7);
       let pollsFail = true;
