@@ -417,7 +417,7 @@ export default function HeadRigModal({
           ctx.drawImage(img, hx, hy, hw, hh);
           ctx.drawImage(img, hx, hy, hw, hh);
 
-          const isEditing = selectedRef.current?.track === "head" ? selectedRef.current.id === head.id : true;
+          const isEditing = selectedRef.current?.track === "head" && selectedRef.current.id === head.id;
           if (isEditing) {
             ctx.strokeStyle = "#e0a040";
             ctx.lineWidth = 2;
@@ -525,8 +525,6 @@ export default function HeadRigModal({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    setSelectedSegment({ track: "head", id: head.id });
-
     const rect = canvas.getBoundingClientRect();
     const cssScale = canvas.width / rect.width;
     const mx = (e.clientX - rect.left) * cssScale;
@@ -535,6 +533,7 @@ export default function HeadRigModal({
 
     // Check corner handles for scale drag (only if dims known)
     const headDims = shotDims[head.shotId];
+    const hitMargin = 16;
     if (headDims && headDims.w > 0) {
       const hw = headDims.w * head.headScale * scale;
       const hh = headDims.h * head.headScale * scale;
@@ -543,14 +542,25 @@ export default function HeadRigModal({
       const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
       for (const [cx, cy] of corners) {
         if (Math.abs(mx - cx) < 14 && Math.abs(my - cy) < 14) {
+          setSelectedSegment({ track: "head", id: head.id });
           canvasDragRef.current = { kind: "scale", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
           e.preventDefault();
           return;
         }
       }
+
+      // Click fell outside the head's bounding box (plus a small margin) --
+      // treat this as "click away" and deselect instead of starting a drag.
+      const insideBox = mx >= hx - hitMargin && mx <= hx + hw + hitMargin && my >= hy - hitMargin && my <= hy + hh + hitMargin;
+      if (!insideBox) {
+        setSelectedSegment(null);
+        return;
+      }
     }
 
-    // Default: move drag (works even without dims loaded)
+    // Inside the box, or dims not loaded yet (fall back to "drag anywhere" so
+    // repositioning still works before the image has finished loading).
+    setSelectedSegment({ track: "head", id: head.id });
     canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
     e.preventDefault();
   }
@@ -1244,7 +1254,7 @@ export default function HeadRigModal({
         )}
 
         {/* ══════════ MAIN AREA — Canvas + Timeline ══════════ */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Toggle sidebar + Rig controls */}
           <div className="flex items-center gap-3 border-b border-[#222] bg-[#161616] px-3 py-1.5">
             <button type="button" className="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-[#333] hover:text-white"
@@ -1307,13 +1317,13 @@ export default function HeadRigModal({
           </div>
 
           {/* Canvas preview */}
-          <div className="flex flex-1 flex-col items-center justify-center overflow-hidden bg-[#0a0a0a] p-3">
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden bg-[#0a0a0a] p-3">
             <canvas
               ref={canvasRef}
               width={CANVAS_W}
               height={CANVAS_H}
               className="rounded-md border border-studio-border"
-              style={{ cursor: editingHead ? "crosshair" : "default", width: CANVAS_W, height: CANVAS_H, maxHeight: "55vh", objectFit: "contain" }}
+              style={{ cursor: editingHead ? "crosshair" : "default", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
               onMouseDown={onCanvasMouseDown}
               onMouseMove={onCanvasMouseMove}
               onMouseUp={onCanvasMouseUp}

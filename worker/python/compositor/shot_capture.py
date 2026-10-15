@@ -66,18 +66,46 @@ def detect_bg_from_border(bgr: np.ndarray, border_px: int = 12) -> tuple[str, tu
 # ── Green keying ─────────────────────────────────────────────────────
 
 def key_green(bgr: np.ndarray) -> np.ndarray:
-    """HSV chroma-key green pixels → BGRA with alpha."""
+    """HSV chroma-key green pixels → BGRA with alpha.
+
+    Only pixels connected to the frame border through the hard green mask
+    count as background (same flood-fill gating as key_flat()). Green
+    *spill* -- light bounced off a real green screen onto skin, hair, or
+    clothes -- used to make the "soft" excess-based alpha reduction apply
+    across the whole frame, so a character could come out partially
+    translucent everywhere instead of just at the true silhouette edge.
+    The soft blend is now restricted to a thin feather band right at the
+    edge of the connected background, so interior pixels stay fully
+    opaque regardless of any green excess picked up from spill.
+    """
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
     h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
     # Green hue range ~35-85, sat > 40, val > 30
-    mask = ((h >= 35) & (h <= 85) & (s >= 40) & (v >= 30)).astype(np.float32)
-    # Soft edge: expand into partial green
+    hard = ((h >= 35) & (h <= 85) & (s >= 40) & (v >= 30)).astype(np.uint8)
+
+    num_labels, labels = cv2.connectedComponents(hard, connectivity=8)
+    border_labels = set()
+    border_labels.update(labels[0].tolist())
+    border_labels.update(labels[-1].tolist())
+    border_labels.update(labels[:, 0].tolist())
+    border_labels.update(labels[:, -1].tolist())
+    border_labels.discard(0)
+    bg_hard = np.isin(labels, list(border_labels)).astype(np.uint8)
+
     rgb = bgr[:, :, :3].astype(np.float32)
     b_ch, g_ch, r_ch = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
     excess = g_ch - np.maximum(r_ch, b_ch)
     soft = np.clip(excess / 80.0, 0, 1)
-    alpha = 1.0 - np.maximum(mask, soft)
+
+    # Feather band: a few pixels straddling the edge of the connected
+    # background, where the soft excess blend is allowed to apply.
+    k = np.ones((3, 3), np.uint8)
+    feather_zone = (cv2.dilate(bg_hard, k, iterations=4) & (1 - bg_hard)).astype(bool)
+
+    alpha = 1.0 - bg_hard.astype(np.float32)
+    alpha = np.where(feather_zone, np.minimum(alpha, 1.0 - soft), alpha)
     alpha = np.clip(alpha, 0, 1)
+
     out = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
     out[:, :, 3] = (alpha * 255).astype(np.uint8)
     return out
