@@ -185,7 +185,6 @@ export default function HeadRigModal({
     if (!shotId || shotDims[shotId] || shotDimsLoadingRef.current.has(shotId)) return;
     shotDimsLoadingRef.current.add(shotId);
     const img = new Image();
-    img.crossOrigin = "anonymous";
     img.onload = () => {
       setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
     };
@@ -203,8 +202,8 @@ export default function HeadRigModal({
     if (cached) return cached;
     const pad = String(Math.max(1, frame)).padStart(4, "0");
     const img = new Image();
-    img.crossOrigin = "anonymous";
     img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
+    img.onerror = () => { /* prevent infinite retry — frame image missing */ };
     img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
     return null;
   }
