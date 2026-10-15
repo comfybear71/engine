@@ -975,97 +975,158 @@ export default function HeadRigModal({
   const allShots = shots;
   const rigKeys = Object.keys(rigs);
 
+  const [mediaPanelOpen, setMediaPanelOpen] = useState(true);
+
   const content = (
-    <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto p-4"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
-      {/* ── Centered Viewer ── */}
-      <div className="flex flex-col items-center">
-        <div className="mb-2 flex flex-wrap items-end justify-center gap-3">
-          <label className="text-[11px] text-studio-muted">
-            Rig
-            <select
-              className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={rigKey}
-              onChange={(e) => setRigKey(e.target.value)}
-            >
-              <option value="front">front</option>
-              <option value="left_34">left 3/4</option>
-              <option value="right_34">right 3/4</option>
-              <option value="left_side">left side</option>
-              <option value="right_side">right side</option>
-              <option value="back">back</option>
-            </select>
-            <input
-              type="text"
-              className="ml-1 w-16 rounded-md border border-studio-border bg-studio-raised px-1 py-1 text-xs text-neutral-200"
-              placeholder="custom"
-              value={rigKey}
-              onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
-            />
-          </label>
-          <label className="text-[11px] text-studio-muted">
-            FPS
-            <input
-              type="number" min={4} max={60}
-              className="ml-1 w-14 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={fps}
-              onChange={(e) => setFps(clamp(Number(e.target.value) || 24, 4, 60))}
-            />
-          </label>
-        </div>
-
-        <canvas
-          ref={canvasRef}
-          width={CANVAS_W}
-          height={CANVAS_H}
-          className="rounded-md border border-studio-border"
-          style={{ cursor: editingHead ? "crosshair" : "default", width: CANVAS_W, height: CANVAS_H, maxHeight: "60vh", objectFit: "contain" }}
-          onMouseDown={onCanvasMouseDown}
-          onMouseMove={onCanvasMouseMove}
-          onMouseUp={onCanvasMouseUp}
-          onMouseLeave={onCanvasMouseUp}
-          onWheel={onCanvasWheel}
-        />
-        <p className="mt-1 text-[10px] text-studio-muted">
-          {editingHead
-            ? "Drag head = move · Corner handles = scale · Scroll = resize"
-            : "Select or add a head segment on the timeline below to reposition it"}
-        </p>
-
-        <div className="mt-2 flex flex-wrap items-center justify-center gap-4 rounded-md border border-studio-border bg-[#1a1a1a] px-4 py-2">
-          <button
-            type="button"
-            className="rounded-md bg-studio-accent px-3 py-1 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
-            disabled={busy != null || (!bodySegments.length && !headSegments.length)}
-            onClick={() => void handleSave()}
-          >
-            {busy || `Save "${rigKey}"`}
-          </button>
-          {error ? <span className="text-xs text-red-400">{error}</span> : null}
-          {saved ? <span className="text-xs text-green-400">Saved!</span> : null}
-        </div>
-
-        {rigKeys.length > 0 ? (
-          <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
-            <span className="text-[10px] text-studio-muted">Rigs:</span>
-            {rigKeys.map((key) => (
-              <button
-                key={key}
-                type="button"
-                className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] ${
-                  rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-300 hover:text-white"
-                }`}
-                onClick={() => setRigKey(key)}
-              >
-                {key}
-                <span className="ml-1 text-red-400 hover:text-red-300" onClick={(e) => { e.stopPropagation(); void handleDeleteRig(key); }}>×</span>
+    <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
+      <div className="flex h-full">
+        {/* ══════════ LEFT SIDEBAR — Media Bins + Grok ══════════ */}
+        <div className={`shrink-0 border-r border-[#222] bg-[#131313] transition-all ${mediaPanelOpen ? "w-[260px]" : "w-0 overflow-hidden"}`}>
+          <div className="flex h-full flex-col overflow-y-auto">
+            {/* Import clip */}
+            <div className="flex items-center gap-2 border-b border-[#222] px-3 py-2">
+              <input ref={importRef} type="file" accept="video/*,.mp4,.mov,.webm" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFile(f, importType); }} />
+              <select className="rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+                value={importType} onChange={(e) => setImportType(e.target.value as "body" | "head")}>
+                <option value="body">Body</option>
+                <option value="head">Head</option>
+              </select>
+              <button type="button"
+                className="rounded bg-blue-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
+                disabled={importBusy}
+                onClick={() => importRef.current?.click()}>
+                {importBusy ? "Importing…" : "📁 Import Clip"}
               </button>
-            ))}
+            </div>
+
+            {/* Body Shots bin */}
+            <MediaBin
+              title="Body Shots"
+              shots={bodyShots.length > 0 ? bodyShots : allShots}
+              project={project} characterId={characterId}
+              onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot}
+            />
+
+            {/* Head Shots bin */}
+            <MediaBin
+              title="Head Shots"
+              shots={headShots.length > 0 ? headShots : allShots}
+              project={project} characterId={characterId}
+              onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot}
+            />
+
+            {/* Grok Creator — collapsible */}
+            <GrokSection
+              grokType={grokType} setGrokType={setGrokType}
+              grokDuration={grokDuration} setGrokDuration={setGrokDuration}
+              grokRefShotId={grokRefShotId} setGrokRefShotId={setGrokRefShotId}
+              grokPrompt={grokPrompt} setGrokPrompt={setGrokPrompt}
+              grokBusy={grokBusy} grokMsg={grokMsg}
+              allShots={allShots}
+              onCreate={() => void handleGrokCreate()}
+            />
+
+            {/* Bake output — collapsible */}
+            <BakeSection
+              bakeName={bakeName} setBakeName={setBakeName}
+              bakeBusy={bakeBusy} bakeMsg={bakeMsg}
+              bodySegments={bodySegments} headSegments={headSegments}
+              combinedShots={combinedShots}
+              project={project} characterId={characterId}
+              onBake={() => void handleBake()}
+              onSendToAction={(id) => void handleSendToAction(id)}
+              onDeleteShot={handleDeleteShot}
+            />
           </div>
-        ) : null}
-      </div>
+        </div>
+
+        {/* ══════════ MAIN AREA — Canvas + Timeline ══════════ */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* Toggle sidebar + Rig controls */}
+          <div className="flex items-center gap-3 border-b border-[#222] bg-[#161616] px-3 py-1.5">
+            <button type="button" className="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-[#333] hover:text-white"
+              onClick={() => setMediaPanelOpen(!mediaPanelOpen)} title={mediaPanelOpen ? "Hide media panel" : "Show media panel"}>
+              {mediaPanelOpen ? "◀" : "▶"}
+            </button>
+            <label className="text-[11px] text-studio-muted">
+              Rig
+              <select
+                className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-0.5 text-[10px] text-neutral-200"
+                value={rigKey}
+                onChange={(e) => setRigKey(e.target.value)}
+              >
+                <option value="front">front</option>
+                <option value="left_34">left 3/4</option>
+                <option value="right_34">right 3/4</option>
+                <option value="left_side">left side</option>
+                <option value="right_side">right side</option>
+                <option value="back">back</option>
+              </select>
+              <input
+                type="text"
+                className="ml-1 w-16 rounded-md border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+                placeholder="custom"
+                value={rigKey}
+                onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
+              />
+            </label>
+            <label className="text-[11px] text-studio-muted">
+              FPS
+              <input
+                type="number" min={4} max={60}
+                className="ml-1 w-12 rounded-md border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+                value={fps}
+                onChange={(e) => setFps(clamp(Number(e.target.value) || 24, 4, 60))}
+              />
+            </label>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded bg-studio-accent px-2 py-0.5 text-[10px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+                disabled={busy != null || (!bodySegments.length && !headSegments.length)}
+                onClick={() => void handleSave()}
+              >
+                {busy || `Save "${rigKey}"`}
+              </button>
+              {error ? <span className="text-[10px] text-red-400">{error}</span> : null}
+              {saved ? <span className="text-[10px] text-green-400">Saved!</span> : null}
+              {rigKeys.length > 0 && rigKeys.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`rounded px-1.5 py-0.5 text-[9px] ${rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-400 hover:text-white"}`}
+                  onClick={() => setRigKey(key)}
+                >
+                  {key}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Canvas preview */}
+          <div className="flex flex-col items-center bg-[#0a0a0a] p-3">
+            <canvas
+              ref={canvasRef}
+              width={CANVAS_W}
+              height={CANVAS_H}
+              className="rounded-md border border-studio-border"
+              style={{ cursor: editingHead ? "crosshair" : "default", width: CANVAS_W, height: CANVAS_H, maxHeight: "55vh", objectFit: "contain" }}
+              onMouseDown={onCanvasMouseDown}
+              onMouseMove={onCanvasMouseMove}
+              onMouseUp={onCanvasMouseUp}
+              onMouseLeave={onCanvasMouseUp}
+              onWheel={onCanvasWheel}
+            />
+            <p className="mt-1 text-[10px] text-studio-muted">
+              {editingHead
+                ? "Drag head = move · Corner handles = scale · Scroll = resize"
+                : "Select a head segment to reposition it"}
+            </p>
+          </div>
 
       {/* ══════════ Multi-segment DaVinci-style Timeline ══════════ */}
-      <div className="mt-4 overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#0d0d0d]">
+      <div className="select-none overflow-hidden border-t border-[#2a2a2a] bg-[#0d0d0d]">
         <div className="flex items-center justify-between border-b border-[#222] bg-[#181818] px-4 py-2">
           <div className="font-mono text-xl font-bold tracking-wider text-neutral-100" style={{ minWidth: 120 }}>
             {String(Math.floor((scrubFrame - 1) / (fps * 60))).padStart(2, "0")}
@@ -1158,11 +1219,19 @@ export default function HeadRigModal({
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-t border-[#222] bg-[#141414] px-4 py-1.5">
-          <span className="text-[9px] text-neutral-600">
-            <b className="text-neutral-500">Click</b> select · <b className="text-neutral-500">Drag</b> move · <b className="text-neutral-500">Drag edge</b> trim · <b className="text-neutral-500">I/O</b> trim at playhead · <b className="text-neutral-500">Ctrl+B</b> split · <b className="text-neutral-500">Del</b> remove · <b className="text-neutral-500">Ctrl+C/V</b> copy/paste · <b className="text-neutral-500">Right-click</b> menu
-          </span>
-          <span className="font-mono text-[9px] text-neutral-600">F{scrubFrame} / {maxFrames}</span>
+        <div className="flex items-center justify-between border-t border-[#222] bg-[#161616] px-4 py-1">
+          <div className="flex gap-3 text-[10px] text-neutral-500">
+            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Click</kbd> select</span>
+            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Drag</kbd> move</span>
+            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">I/O</kbd> trim</span>
+            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Ctrl+B</kbd> split</span>
+            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Del</kbd> remove</span>
+            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Ctrl+C/V</kbd> copy/paste</span>
+          </div>
+          <div className="flex items-center gap-3 font-mono text-[10px]">
+            <span className="text-neutral-400">Frame <span className="text-neutral-200">{scrubFrame}</span> / {maxFrames}</span>
+            <span className="text-neutral-400">Body <span className="text-blue-400">{bodySegments.length}</span> Head <span className="text-green-400">{headSegments.length}</span></span>
+          </div>
         </div>
       </div>
 
@@ -1190,165 +1259,8 @@ export default function HeadRigModal({
         </div>
       ) : null}
 
-      {/* ── Shot Browser + Bake Outputs ──────────────────────────── */}
-      <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
-        <div className="flex gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="mb-3 flex items-center gap-2">
-              <input ref={importRef} type="file" accept="video/*,.mp4,.mov,.webm" className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFile(f, importType); }} />
-              <select className="rounded border border-studio-border bg-studio-raised px-2 py-1 text-[11px] text-neutral-200"
-                value={importType} onChange={(e) => setImportType(e.target.value as "body" | "head")}>
-                <option value="body">Body clip</option>
-                <option value="head">Head clip</option>
-              </select>
-              <button type="button"
-                className="rounded bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
-                disabled={importBusy}
-                onClick={() => importRef.current?.click()}>
-                {importBusy ? "Importing…" : "📁 Import Clip"}
-              </button>
-            </div>
-
-            <h3 className="mb-2 text-xs font-semibold text-neutral-300">Body Shots <span className="text-neutral-500">— click to add to Body track</span></h3>
-            {bodyShots.length === 0 && allShots.length === 0 ? (
-              <p className="text-[10px] text-studio-muted">No body shots yet — create one with Grok below</p>
-            ) : (
-              <ShotGrid shots={bodyShots.length > 0 ? bodyShots : allShots} project={project} characterId={characterId}
-                onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot} />
-            )}
-
-            <h3 className="mb-2 mt-3 text-xs font-semibold text-neutral-300">Head Shots <span className="text-neutral-500">— click to add to Head track</span></h3>
-            {headShots.length === 0 && allShots.length === 0 ? (
-              <p className="text-[10px] text-studio-muted">No head shots yet — create one with Grok below</p>
-            ) : (
-              <ShotGrid shots={headShots.length > 0 ? headShots : allShots} project={project} characterId={characterId}
-                onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot} />
-            )}
-          </div>
-
-          <div className="w-64 shrink-0 border-l border-studio-border pl-4">
-            <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Bake to Action Shot</h3>
-            <input
-              type="text"
-              className="mb-2 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              placeholder="Shot name (optional)"
-              value={bakeName}
-              onChange={(e) => setBakeName(e.target.value)}
-            />
-            <button
-              type="button"
-              className="mb-3 w-full rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
-              disabled={bakeBusy || (!bodySegments.length && !headSegments.length)}
-              onClick={() => void handleBake()}
-            >
-              {bakeBusy ? "Baking…" : "Bake Timeline"}
-            </button>
-            {bakeMsg ? (
-              <p className={`mb-2 text-[10px] font-medium ${/fail/i.test(bakeMsg) ? "text-red-400" : "text-emerald-300"}`}>{bakeMsg}</p>
-            ) : null}
-            <p className="mb-3 text-[9px] text-studio-muted">
-              Stitches every segment on both tracks into one new shot. The source clips stay untouched, and the segment recipe is saved under this rig key so you can keep editing later.
-            </p>
-
-            {combinedShots.length === 0 ? (
-              <p className="text-[10px] text-studio-muted">No baked shots yet.</p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {combinedShots.map((s) => (
-                  <div key={s.id} className="group relative rounded-md border border-studio-border bg-[#111] p-2">
-                    <div className="flex items-start gap-2">
-                      <img
-                        src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
-                        alt={s.name || s.id}
-                        className="h-12 w-12 shrink-0 rounded object-cover"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-[10px] font-medium text-neutral-200" title={s.id}>{s.name || s.id}</p>
-                        <p className="text-[9px] text-studio-muted">{s.frameCount}f</p>
-                        {s.actionId ? (
-                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400"><span>✓</span> In Action Shots</span>
-                        ) : (
-                          <button type="button" className="mt-1 rounded bg-blue-700 px-2 py-0.5 text-[9px] font-semibold text-white hover:bg-blue-600"
-                            onClick={() => void handleSendToAction(s.id)}>
-                            Send to Action Shots
-                          </button>
-                        )}
-                      </div>
-                      <button type="button" className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
-                        onClick={() => void handleDeleteShot(s.id)} title="Delete baked shot">✕</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Grok Shot Creator ─────────────────────────── */}
-      <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
-        <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Create Shot with Grok</h3>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="text-[11px] text-studio-muted">
-            Shot type
-            <select className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={grokType} onChange={(e) => setGrokType(e.target.value as "body" | "head")}>
-              <option value="body">Body / Torso</option>
-              <option value="head">Head shot</option>
-            </select>
-          </label>
-          <label className="text-[11px] text-studio-muted">
-            Duration
-            <select className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={grokDuration} onChange={(e) => setGrokDuration(Number(e.target.value))}>
-              <option value={4}>4 sec</option>
-              <option value={6}>6 sec</option>
-              <option value={8}>8 sec</option>
-              <option value={10}>10 sec</option>
-            </select>
-          </label>
-          <label className="text-[11px] text-studio-muted">
-            Reference
-            <select className="ml-2 max-w-[160px] rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={grokRefShotId} onChange={(e) => setGrokRefShotId(e.target.value)}>
-              <option value="">Character reference</option>
-              {allShots.map((s) => (
-                <option key={s.id} value={s.id}>{s.name || s.id}</option>
-              ))}
-            </select>
-          </label>
-          <label className="flex-1 text-[11px] text-studio-muted">
-            Prompt
-            <input
-              type="text"
-              className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              placeholder={grokType === "body" ? "cowboy standing with arms out (neck added automatically)" : "cowboy head talking, green screen"}
-              value={grokPrompt}
-              onChange={(e) => setGrokPrompt(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") void handleGrokCreate(); }}
-            />
-          </label>
-          <button
-            type="button"
-            className="rounded-md bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
-            disabled={grokBusy || !grokPrompt.trim()}
-            onClick={() => void handleGrokCreate()}
-          >
-            {grokBusy ? "Creating…" : `Create ${grokType} shot`}
-          </button>
-        </div>
-        {grokMsg ? (
-          <p className={`mt-2 text-sm font-medium ${/error|fail/i.test(grokMsg) ? "text-red-400" : "text-emerald-300"}`}>{grokMsg}</p>
-        ) : null}
-        <p className="mt-1 text-[10px] text-studio-muted">
-          {grokType === "body"
-            ? "Creates a torso/body shot with neck included. Head will be overlaid separately."
-            : "Creates a head shot (mouth moving, expressions). Will be overlaid onto body."}
-          {" "}Pick a specific prior shot as the reference for consistency across takes, just like reusing a take on grok.com.
-        </p>
-      </div>
+        </div>{/* end main area flex-col */}
+      </div>{/* end sidebar+main flex row */}
     </div>
   );
 
@@ -1371,6 +1283,117 @@ export default function HeadRigModal({
           <button type="button" className="rounded-md border border-studio-border px-3 py-1.5 text-xs text-neutral-200" onClick={onClose}>Done</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Grok sidebar section ─────────────────────────────────────────────
+
+function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, grokRefShotId, setGrokRefShotId, grokPrompt, setGrokPrompt, grokBusy, grokMsg, allShots, onCreate }: {
+  grokType: "body" | "head"; setGrokType: (v: "body" | "head") => void;
+  grokDuration: number; setGrokDuration: (v: number) => void;
+  grokRefShotId: string; setGrokRefShotId: (v: string) => void;
+  grokPrompt: string; setGrokPrompt: (v: string) => void;
+  grokBusy: boolean; grokMsg: string;
+  allShots: ShotInfo[];
+  onCreate: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="border-b border-[#222]">
+      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] font-semibold text-[#e0a040] hover:bg-[#222]"
+        onClick={() => setOpen(!open)}>
+        <span className="text-[9px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        Create with Grok
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 px-3 pb-3">
+          <div className="flex gap-2">
+            <select className="flex-1 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+              value={grokType} onChange={(e) => setGrokType(e.target.value as "body" | "head")}>
+              <option value="body">Body</option>
+              <option value="head">Head</option>
+            </select>
+            <select className="rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+              value={grokDuration} onChange={(e) => setGrokDuration(Number(e.target.value))}>
+              <option value={4}>4s</option>
+              <option value={6}>6s</option>
+              <option value={8}>8s</option>
+              <option value={10}>10s</option>
+            </select>
+          </div>
+          <select className="w-full rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+            value={grokRefShotId} onChange={(e) => setGrokRefShotId(e.target.value)}>
+            <option value="">Character ref</option>
+            {allShots.map((s) => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
+          </select>
+          <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1 text-[10px] text-neutral-200"
+            placeholder={grokType === "body" ? "body prompt…" : "head prompt…"}
+            value={grokPrompt} onChange={(e) => setGrokPrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onCreate(); }} />
+          <button type="button"
+            className="w-full rounded bg-studio-accent px-2 py-1 text-[10px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+            disabled={grokBusy || !grokPrompt.trim()} onClick={onCreate}>
+            {grokBusy ? "Creating…" : `Create ${grokType} shot`}
+          </button>
+          {grokMsg && <p className={`text-[10px] font-medium ${/error|fail/i.test(grokMsg) ? "text-red-400" : "text-emerald-300"}`}>{grokMsg}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Bake sidebar section ─────────────────────────────────────────────
+
+function BakeSection({ bakeName, setBakeName, bakeBusy, bakeMsg, bodySegments, headSegments, combinedShots, project, characterId, onBake, onSendToAction, onDeleteShot }: {
+  bakeName: string; setBakeName: (v: string) => void;
+  bakeBusy: boolean; bakeMsg: string;
+  bodySegments: Segment[]; headSegments: HeadSegment[];
+  combinedShots: ShotInfo[];
+  project: string; characterId: string;
+  onBake: () => void;
+  onSendToAction: (id: string) => void;
+  onDeleteShot: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="border-b border-[#222]">
+      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] font-semibold text-emerald-400 hover:bg-[#222]"
+        onClick={() => setOpen(!open)}>
+        <span className="text-[9px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        Bake to Action Shot
+        {combinedShots.length > 0 && <span className="ml-auto text-[9px] font-normal text-neutral-600">{combinedShots.length}</span>}
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 px-3 pb-3">
+          <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1 text-[10px] text-neutral-200"
+            placeholder="Shot name (optional)" value={bakeName} onChange={(e) => setBakeName(e.target.value)} />
+          <button type="button"
+            className="w-full rounded bg-emerald-600 px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+            disabled={bakeBusy || (!bodySegments.length && !headSegments.length)} onClick={onBake}>
+            {bakeBusy ? "Baking…" : "Bake Timeline"}
+          </button>
+          {bakeMsg && <p className={`text-[10px] font-medium ${/fail/i.test(bakeMsg) ? "text-red-400" : "text-emerald-300"}`}>{bakeMsg}</p>}
+          {combinedShots.map((s) => (
+            <div key={s.id} className="group relative flex items-center gap-2 rounded border border-studio-border bg-[#111] p-1.5">
+              <img src={shotMediaUrl(project, characterId, s.id, "poster.jpg")} alt={s.name || s.id}
+                className="h-10 w-10 shrink-0 rounded object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[10px] font-medium text-neutral-200">{s.name || s.id}</p>
+                <p className="text-[9px] text-neutral-500">{s.frameCount}f</p>
+                {s.actionId ? (
+                  <span className="text-[9px] font-semibold text-emerald-400">✓ Action Shots</span>
+                ) : (
+                  <button type="button" className="rounded bg-blue-700 px-1.5 py-0.5 text-[8px] font-semibold text-white hover:bg-blue-600"
+                    onClick={() => onSendToAction(s.id)}>Send to Action Shots</button>
+                )}
+              </div>
+              <button type="button" className="hidden h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-600 text-[8px] font-bold text-white group-hover:flex"
+                onClick={() => onDeleteShot(s.id)}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1458,7 +1481,97 @@ function TrackRow({
   );
 }
 
-// ── Shot grid sub-component ───────────────────────────────────────────
+// ── Collapsible media bin with rectangular hover-preview thumbnails ──
+
+function MediaBin({
+  title, shots, project, characterId, onAdd, onDelete, defaultOpen = true,
+}: {
+  title: string;
+  shots: ShotInfo[];
+  project: string;
+  characterId: string;
+  onAdd: (s: ShotInfo) => void;
+  onDelete: (id: string) => void;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [hoverShot, setHoverShot] = useState<string | null>(null);
+  const [hoverFrame, setHoverFrame] = useState(1);
+  const hoverInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function startHover(shotId: string, frameCount: number) {
+    setHoverShot(shotId);
+    setHoverFrame(1);
+    if (hoverInterval.current) clearInterval(hoverInterval.current);
+    let f = 1;
+    hoverInterval.current = setInterval(() => {
+      f = f >= frameCount ? 1 : f + 1;
+      setHoverFrame(f);
+    }, 120);
+  }
+  function stopHover() {
+    setHoverShot(null);
+    if (hoverInterval.current) { clearInterval(hoverInterval.current); hoverInterval.current = null; }
+  }
+
+  return (
+    <div className="border-b border-[#222]">
+      <button
+        type="button"
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] font-semibold text-neutral-300 hover:bg-[#222]"
+        onClick={() => setOpen(!open)}
+      >
+        <span className="text-[9px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        {title}
+        <span className="ml-auto text-[9px] font-normal text-neutral-600">{shots.length}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-1 px-2 pb-2">
+          {shots.length === 0 ? (
+            <p className="px-1 text-[10px] text-neutral-600">No shots yet</p>
+          ) : shots.map((s) => (
+            <div key={s.id} className="group relative">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded border border-transparent px-1 py-1 text-left hover:border-[#e0a040] hover:bg-[#1e1e1e]"
+                onClick={() => onAdd(s)}
+                onMouseEnter={() => startHover(s.id, s.frameCount || 1)}
+                onMouseLeave={stopHover}
+                title={`Add "${s.name || s.id}" to track`}
+              >
+                <div className="relative h-[42px] w-[72px] shrink-0 overflow-hidden rounded bg-[#0a0a0a]">
+                  <img
+                    src={hoverShot === s.id
+                      ? shotMediaUrl(project, characterId, s.id, `cut/f_${String(hoverFrame).padStart(4, "0")}.png`)
+                      : shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                    alt={s.name || s.id}
+                    className="h-full w-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                  {hoverShot === s.id && (
+                    <span className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1 text-[8px] text-neutral-300">f{hoverFrame}</span>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[10px] font-medium text-neutral-200">{s.name || s.id}</p>
+                  <p className="text-[9px] text-neutral-500">{s.frameCount || "?"}f</p>
+                </div>
+              </button>
+              <button
+                type="button"
+                className="absolute -right-0.5 -top-0.5 z-10 hidden h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[8px] font-bold text-white shadow hover:bg-red-500 group-hover:flex"
+                onClick={(e) => { e.stopPropagation(); onDelete(s.id); }}
+                title="Delete shot"
+              >✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Shot grid sub-component (legacy, kept for compatibility) ─────────
 
 function ShotGrid({
   shots, project, characterId, onAdd, onDelete,
