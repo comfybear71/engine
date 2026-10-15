@@ -142,7 +142,6 @@ function ShotCard({
   onRename: (newName: string) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [hovering, setHovering] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(shot.name || shot.id);
@@ -159,22 +158,21 @@ function ShotCard({
   }
 
   const handleMouseEnter = () => {
-    setHovering(true);
+    const video = videoRef.current;
+    if (!video) return;
+    // React doesn't reliably reflect the `muted` prop onto the DOM element,
+    // and unmuted play() is blocked by autoplay policy.
+    video.muted = true;
+    video.currentTime = 0;
+    video.play().catch(() => {});
   };
 
   const handleMouseLeave = () => {
-    setHovering(false);
+    const video = videoRef.current;
     setPlaying(false);
-    if (videoRef.current) {
-      videoRef.current.pause();
-    }
-  };
-
-  // Play video once it has loaded — only then hide poster
-  const handleVideoReady = () => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = 0;
-      videoRef.current.play().then(() => setPlaying(true)).catch(() => {});
+    if (video) {
+      video.pause();
+      video.currentTime = 0;
     }
   };
 
@@ -198,20 +196,19 @@ function ShotCard({
           src={posterUrl}
           alt={shot.name}
           loading="lazy"
-          style={{ display: playing ? "none" : "block" }}
+          style={{ visibility: playing ? "hidden" : "visible" }}
         />
-        {hovering && (
-          <video
-            ref={videoRef}
-            src={previewUrl}
-            muted
-            loop
-            playsInline
-            preload="none"
-            className="shots-card-video"
-            onLoadedData={handleVideoReady}
-          />
-        )}
+        <video
+          ref={videoRef}
+          src={previewUrl}
+          muted
+          loop
+          playsInline
+          preload="none"
+          className="shots-card-video"
+          style={{ visibility: playing ? "visible" : "hidden" }}
+          onPlaying={() => setPlaying(true)}
+        />
         <span className="shots-badge">{shot.frameCount} frames</span>
         <button
           type="button"
