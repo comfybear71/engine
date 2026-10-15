@@ -27,6 +27,9 @@ const CANCEL_TIMEOUT_MS = 10 * 1000;
 const TRANSFER_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_POLL_FAILURES = 10;
 const DEFAULT_NEGATIVE = "pc game, console game, video game, cartoon, childish, ugly";
+// LTX fills the empty black sides of a head-only frame with blurry extra faces unless told not to.
+const NO_EXTRA_FACES =
+  "extra people, second person, extra faces, duplicate face, background characters, blurry faces in the background, out of focus faces";
 
 const NODE = {
   image: "269",
@@ -114,7 +117,8 @@ function buildWorkflow({ imageName, audioName, prompt, durationSec, negativeProm
   patch(graph, NODE.prompt, { value: prompt });
   patch(graph, NODE.duration, { value: durationSec });
   patch(graph, NODE.save, { filename_prefix: filenamePrefix || "video/engine_ltx_head" });
-  if (negativePrompt) patch(graph, NODE.negative, { text: `${DEFAULT_NEGATIVE}, ${negativePrompt}` });
+  const negative = [DEFAULT_NEGATIVE, NO_EXTRA_FACES, negativePrompt].filter(Boolean).join(", ");
+  patch(graph, NODE.negative, { text: negative });
   patch(graph, NODE.refine, { strength: 1 });
   patch(graph, NODE.promptEnhance, { value: false });
   patch(graph, NODE.baseSeed, { noise_seed: randomSeed() });
