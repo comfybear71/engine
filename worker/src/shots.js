@@ -304,14 +304,22 @@ async function runGrokShot(dir, info, job) {
     throwIfCancelled(options.isCancelled);
     const sourcePath = path.join(dir, "source.mp4");
     if (job.engine === "ltx") {
-      const startPng = path.join(dir, "ltx_start.png");
-      const padInput = path.join(dir, "ltx_start_in.png");
-      fs.writeFileSync(padInput, Buffer.from(imageBase64, "base64"));
-      await (options.padImage || padImageTo16x9)(padInput, startPng);
-      fs.rmSync(padInput, { force: true });
+      const resumePromptId = info.engine === "ltx" && typeof info.requestId === "string" ? info.requestId : "";
+      let imageBytes = Buffer.alloc(0);
+      let audioBytes = Buffer.alloc(0);
+      if (!resumePromptId) {
+        const startPng = path.join(dir, "ltx_start.png");
+        const padInput = path.join(dir, "ltx_start_in.png");
+        fs.writeFileSync(padInput, Buffer.from(imageBase64, "base64"));
+        await (options.padImage || padImageTo16x9)(padInput, startPng);
+        fs.rmSync(padInput, { force: true });
+        imageBytes = fs.readFileSync(startPng);
+        audioBytes = fs.readFileSync(path.join(dir, job.audioFile || "audio.wav"));
+      }
       const { promptId } = await comfyCloud.generateLtxVideo({
-        imageBytes: fs.readFileSync(startPng),
-        audioBytes: fs.readFileSync(path.join(dir, job.audioFile || "audio.wav")),
+        resumePromptId,
+        imageBytes,
+        audioBytes,
         prompt: fullPrompt,
         durationSec: job.durationSec,
         destPath: sourcePath,
@@ -358,6 +366,7 @@ async function runGrokShot(dir, info, job) {
   } catch (err) {
     info.status = "error";
     info.error = err.message;
+    if (job.engine === "ltx" && (err.code === "EJOBFAILED" || err.code === "ENOJOB")) delete info.requestId;
     try {
       writeShotJson(dir, info);
     } catch {
