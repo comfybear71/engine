@@ -149,18 +149,30 @@ function ShotCard({
   const posterUrl = shotMediaUrl(project, characterId, shot.id, "poster.jpg");
   const previewUrl = shotMediaUrl(project, characterId, shot.id, "preview.mp4");
 
+  // Build thumb URLs
+  const thumbCount = shot._thumbCount || shot.frameCount || 0;
+  const thumbUrls: string[] = [];
+  for (let i = 1; i <= Math.min(thumbCount, shot.out || thumbCount); i++) {
+    if (i < (shot.in || 1)) continue;
+    thumbUrls.push(shotMediaUrl(project, characterId, shot.id, `thumb/f_${String(i).padStart(4, "0")}.jpg`));
+  }
+
   const handleMouseEnter = () => {
     setHovering(true);
-    if (videoRef.current) {
-      videoRef.current.currentTime = 0;
-      videoRef.current.play().catch(() => {});
-    }
   };
 
   const handleMouseLeave = () => {
     setHovering(false);
     if (videoRef.current) {
       videoRef.current.pause();
+    }
+  };
+
+  // Play video once it mounts and loads
+  const handleVideoReady = () => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = 0;
+      videoRef.current.play().catch(() => {});
     }
   };
 
@@ -180,7 +192,12 @@ function ShotCard({
       onMouseLeave={handleMouseLeave}
     >
       <div className="shots-card-poster">
-        <img src={posterUrl} alt={shot.name} loading="lazy" style={{ objectFit: "contain", width: "100%", height: "100%" }} />
+        <img
+          src={posterUrl}
+          alt={shot.name}
+          loading="lazy"
+          style={{ objectFit: "contain", width: "100%", height: "100%", display: hovering ? "none" : "block" }}
+        />
         {hovering && (
           <video
             ref={videoRef}
@@ -191,6 +208,7 @@ function ShotCard({
             preload="none"
             className="shots-card-video"
             style={{ objectFit: "contain" }}
+            onLoadedData={handleVideoReady}
           />
         )}
         <span className="shots-badge">{shot.frameCount} frames</span>
@@ -222,6 +240,14 @@ function ShotCard({
           title="Double-click to rename"
         >
           {shot.name || shot.id}
+        </div>
+      )}
+      {/* Horizontal scroll strip of thumbnails */}
+      {thumbUrls.length > 0 && (
+        <div className="shots-strip">
+          {thumbUrls.map((url, i) => (
+            <img key={i} src={url} alt="" loading="lazy" className="shots-strip-thumb" />
+          ))}
         </div>
       )}
     </div>
