@@ -342,44 +342,137 @@ export default function HeadRigModal({
     return activeHead;
   }, [selectedSegment, headSegments, activeHead]);
 
-  // ── Client-side green removal (fallback when Python keying misses) ──
-  const chromaCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const stripGreen = useCallback((img: HTMLImageElement): HTMLCanvasElement | HTMLImageElement => {
+  // ── Client-side background removal (fallback when Python keying misses) ──
+  // Client-side chroma key: detect whether frame has green or black bg from
+  // a border sample, then key out that colour.  Caches result per image src.
+  const chromaCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const stripBg = useCallback((img: HTMLImageElement): HTMLCanvasElement | HTMLImageElement => {
     try {
-      let off = chromaCanvasRef.current;
-      if (!off) {
-        off = document.createElement("canvas");
-        chromaCanvasRef.current = off;
-      }
+      const cached = chromaCacheRef.current.get(img.src);
+      if (cached) return cached;
+
       const w = img.naturalWidth;
       const h = img.naturalHeight;
-      if (off.width !== w || off.height !== h) {
-        off.width = w;
-        off.height = h;
-      }
+      const off = document.createElement("canvas");
+      off.width = w;
+      off.height = h;
       const c = off.getContext("2d", { willReadFrequently: true })!;
-      c.clearRect(0, 0, w, h);
       c.drawImage(img, 0, 0);
       const id = c.getImageData(0, 0, w, h);
       const d = id.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const r = d[i], g = d[i + 1], b = d[i + 2];
-        // Hard green: hue in green range, saturation decent, green dominant
-        if (g > 80 && g > r + 25 && g > b + 25) {
-          d[i + 3] = 0; // fully transparent
-        } else if (g > 60 && g > r && g > b) {
-          // Soft green fringe: reduce alpha proportionally
-          const excess = g - Math.max(r, b);
-          const fade = Math.min(excess / 60, 1);
-          d[i + 3] = Math.round(d[i + 3] * (1 - fade));
-          // Despill: cap green to max(r,b) on partially transparent pixels
-          if (fade > 0) d[i + 1] = Math.min(g, Math.max(r, b));
+
+      // Sample border pixels (top 8 rows) to detect bg colour
+      const sampleN = Math.min(w * 8, d.length / 4);
+      let gSum = 0, rSum = 0, bSum = 0, vSum = 0;
+      for (let i = 0; i < sampleN; i++) {
+        const off4 = i * 4;
+        rSum += d[off4]; gSum += d[off4 + 1]; bSum += d[off4 + 2];
+        vSum += Math.max(d[off4], d[off4 + 1], d[off4 + 2]);
+      }
+      const rAvg = rSum / sampleN, gAvg = gSum / sampleN, bAvg = bSum / sampleN;
+      const vAvg = vSum / sampleN;
+      const isGreen = gAvg > 80 && gAvg > rAvg + 25 && gAvg > bAvg + 25;
+      const isBlack = vAvg < 35;
+
+      if (isGreen) {
+        // Green screen removal
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          if (g > 80 && g > r + 25 && g > b + 25) {
+            d[i + 3] = 0;
+          } else if (g > 60 && g > r && g > b) {
+            const excess = g - Math.max(r, b);
+            const fade = Math.min(excess / 60, 1);
+            d[i + 3] = Math.round(d[i + 3] * (1 - fade));
+            if (fade > 0) d[i + 1] = Math.min(g, Math.max(r, b));
+          }
+        }
+      } else if (isBlack) {
+        // Black background removal — flood from border through dark pixels
+        // Build a binary mask of dark pixels (value < 30)
+        const dark = new Uint8Array(w * h);
+        for (let i = 0; i < w * h; i++) {
+          const v = Math.max(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
+          if (v < 30) dark[i] = 1;
+        }
+        // BFS flood fill from border dark pixels
+        const bg = new Uint8Array(w * h);
+        const queue: number[] = [];
+        for (let x = 0; x < w; x++) {
+          if (dark[x]) { bg[x] = 1; queue.push(x); }
+          const bot = (h - 1) * w + x;
+          if (dark[bot]) { bg[bot] = 1; queue.push(bot); }
+        }
+        for (let y = 1; y < h - 1; y++) {
+          const l = y * w;
+          if (dark[l]) { bg[l] = 1; queue.push(l); }
+          const r = y * w + w - 1;
+          if (dark[r]) { bg[r] = 1; queue.push(r); }
+        }
+        let qi = 0;
+        while (qi < queue.length) {
+          const idx = queue[qi++];
+          const x = idx % w, y = (idx - x) / w;
+          const neighbors = [
+            y > 0 ? idx - w : -1,
+            y < h - 1 ? idx + w : -1,
+            x > 0 ? idx - 1 : -1,
+            x < w - 1 ? idx + 1 : -1,
+          ];
+          for (const ni of neighbors) {
+            if (ni >= 0 && dark[ni] && !bg[ni]) {
+              bg[ni] = 1;
+              queue.push(ni);
+            }
+          }
+        }
+        // Also flood into slightly-less-dark fringe (v < 45) connected to bg
+        const softDark = new Uint8Array(w * h);
+        for (let i = 0; i < w * h; i++) {
+          const v = Math.max(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
+          if (v < 45) softDark[i] = 1;
+        }
+        let changed = true;
+        for (let pass = 0; pass < 3 && changed; pass++) {
+          changed = false;
+          for (let i = 0; i < w * h; i++) {
+            if (bg[i] || !softDark[i]) continue;
+            const x = i % w, y = (i - x) / w;
+            if ((y > 0 && bg[i - w]) || (y < h - 1 && bg[i + w]) ||
+                (x > 0 && bg[i - 1]) || (x < w - 1 && bg[i + 1])) {
+              bg[i] = 1;
+              changed = true;
+            }
+          }
+        }
+        // Apply: bg pixels become transparent, edge gets feathered
+        for (let i = 0; i < w * h; i++) {
+          if (bg[i]) d[i * 4 + 3] = 0;
+        }
+        // Simple 1px feather on edges
+        for (let i = 0; i < w * h; i++) {
+          if (bg[i]) continue;
+          const x = i % w, y = (i - x) / w;
+          let borderCount = 0;
+          if (x > 0 && bg[i - 1]) borderCount++;
+          if (x < w - 1 && bg[i + 1]) borderCount++;
+          if (y > 0 && bg[i - w]) borderCount++;
+          if (y < h - 1 && bg[i + w]) borderCount++;
+          if (borderCount > 0) {
+            d[i * 4 + 3] = Math.round(d[i * 4 + 3] * (1 - borderCount * 0.2));
+          }
         }
       }
+
       c.putImageData(id, 0, 0);
+      chromaCacheRef.current.set(img.src, off);
+      // Keep cache from growing unbounded
+      if (chromaCacheRef.current.size > 500) {
+        const first = chromaCacheRef.current.keys().next().value;
+        if (first) chromaCacheRef.current.delete(first);
+      }
       return off;
     } catch {
-      // Cross-origin or other error — fall back to raw image
       return img;
     }
   }, []);
@@ -428,7 +521,7 @@ export default function HeadRigModal({
         bx = (cw - bw) / 2;
         by = ch - bh - ch * 0.03;
         if (img) {
-          const clean = stripGreen(img);
+          const clean = stripBg(img);
           ctx.drawImage(clean, bx, by, bw, bh);
         }
       }
@@ -445,7 +538,7 @@ export default function HeadRigModal({
           const hy = by + head.anchorY * bh - hh / 2;
           // Strip any residual green, then draw twice so semi-transparent
           // edge pixels become fully opaque.
-          const cleanHead = stripGreen(img);
+          const cleanHead = stripBg(img);
           ctx.drawImage(cleanHead, hx, hy, hw, hh);
           ctx.drawImage(cleanHead, hx, hy, hw, hh);
 
@@ -485,7 +578,7 @@ export default function HeadRigModal({
     const headLabel = head ? `${shotsById.get(head.shotId)?.name || head.shotId} f${sourceFrameOf(head, frame)}` : "— head gap —";
     ctx.fillText(`F${frame}/${maxFrames}  Body: ${bodyLabel}  Head: ${headLabel}`, 8, ch - 8);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shotDims, maxFrames, shotsById, stripGreen]);
+  }, [shotDims, maxFrames, shotsById, stripBg]);
 
   // Redraw whenever the scrub position, segments, selection, or a newly
   // loaded image/dim becomes available (while paused).
