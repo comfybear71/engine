@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import ActionShotsSection, { ActionShotDetail } from "@/components/ActionShotsSection";
+import ActionShotsPage from "@/components/ActionShotsPage";
+import { ActionShotDetail } from "@/components/ActionShotsSection";
 import AlignHeadModal from "@/components/AlignHeadModal";
+import HeadRigModal from "@/components/HeadRigModal";
 import AssetEditorOverlay from "@/components/AssetEditorOverlay";
-import CharacterLibraryTab from "@/components/CharacterLibraryTab";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
 import {
   cleanIslandsDrawing,
@@ -642,6 +643,7 @@ export default function AssetsPanel({
   const [addingId, setAddingId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [alignOpen, setAlignOpen] = useState(false);
+
   const [assetFocus, setAssetFocus] = useState<AssetFocus | null>(null);
   const [independent, setIndependent] = useState(true);
   const [independentBusy, setIndependentBusy] = useState(false);
@@ -1009,7 +1011,6 @@ export default function AssetsPanel({
     : characters;
   const factoryTabs = [
     ...(factory?.views?.length ? factory.views : FACTORY_VIEW_TABS),
-    { id: "library", label: "Library" },
   ];
   const factoryCounts = factory?.counts || { ticked: 0, locked: 0, draft: 0, missing: 0 };
   const actionGroups = useMemo(
@@ -1054,34 +1055,28 @@ export default function AssetsPanel({
     <div className={pool ? "flex shrink-0 flex-wrap items-center justify-end gap-2" : "studio-factory-actions"}>
       {!pool ? (
         <>
-          {nav.page === "character" ? (
-            <div className="studio-factory-pills" data-testid="assets-status-pills">
-              {(["ticked", "locked", "draft", "missing"] as const).map((badge) => (
-                <span key={badge} className="studio-factory-pill" data-badge={badge} data-testid={`assets-pill-${badge}`}>
-                  <i />
-                  {factoryCounts[badge]} {badge}
-                </span>
-              ))}
-            </div>
+          {nav.page !== "character" ? (
+            <>
+              <button
+                type="button"
+                className="studio-header-textbtn"
+                data-testid="assets-validate"
+                disabled={lintBusy}
+                onClick={() => void onValidate()}
+              >
+                {lintBusy ? "Validate…" : lintNote ? `Validate · ${lintNote}` : "Validate"}
+              </button>
+              <button
+                type="button"
+                className="studio-header-textbtn"
+                data-testid="assets-open-folder"
+                disabled={!selectedId || openBusy}
+                onClick={() => void onOpenFolder()}
+              >
+                {openBusy ? "Opening…" : "Open folder"}
+              </button>
+            </>
           ) : null}
-          <button
-            type="button"
-            className="studio-header-textbtn"
-            data-testid="assets-validate"
-            disabled={lintBusy}
-            onClick={() => void onValidate()}
-          >
-            {lintBusy ? "Validate…" : lintNote ? `Validate · ${lintNote}` : "Validate"}
-          </button>
-          <button
-            type="button"
-            className="studio-header-textbtn"
-            data-testid="assets-open-folder"
-            disabled={!selectedId || openBusy}
-            onClick={() => void onOpenFolder()}
-          >
-            {openBusy ? "Opening…" : "Open folder"}
-          </button>
         </>
       ) : (
         <>
@@ -1113,43 +1108,7 @@ export default function AssetsPanel({
           </button>
         </>
       )}
-      {onOpenImagine ? (
-        <button
-          type="button"
-          data-testid="imagine-open"
-          onClick={() =>
-            onOpenImagine(
-              nav.page === "character" && selected
-                ? { mode: "character", characterId: selected.id }
-                : nav.page === "section" && nav.section === "props"
-                  ? { mode: "prop" }
-                  : nav.page === "section" && nav.section === "backgrounds"
-                    ? { mode: "background" }
-                    : nav.page === "section" && nav.section === "characters"
-                      ? { mode: "new-character" }
-                      : nav.page === "section" && nav.section === "actions"
-                        ? { mode: "character", characterId: selectedId || undefined }
-                        : selectedId
-                          ? { mode: "character", characterId: selectedId }
-                          : { mode: "character" }
-            )
-          }
-          className={pool ? "rounded-md border border-studio-border bg-studio-raised px-3 py-1.5 text-xs font-medium text-neutral-200 hover:text-white" : "studio-header-textbtn"}
-        >
-          Factory
-        </button>
-      ) : null}
-      {!pool && selected && alignableSlots(selected.slots).length > 0 ? (
-        <button type="button" data-testid="align-head" onClick={() => setAlignOpen(true)} className="studio-header-textbtn">
-          Align head
-        </button>
-      ) : null}
-      {!pool && nav.page === "character" ? (
-        <label className="studio-factory-toggle" data-testid="assets-show-missing">
-          <input type="checkbox" checked={showMissing} onChange={(event) => setShowMissing(event.target.checked)} />
-          Show missing
-        </label>
-      ) : null}
+      {/* Factory button removed — replaced by Grok shot creator on character page */}
     </div>
   ) : null;
 
@@ -1174,18 +1133,7 @@ export default function AssetsPanel({
         </div>
       ) : null}
 
-      {alignOpen && selected ? (
-        <AlignHeadModal
-          project={project}
-          character={selected}
-          script={script}
-          onClose={() => setAlignOpen(false)}
-          onChanged={() => {
-            setReloadKey((n) => n + 1);
-            onLibraryChange?.();
-          }}
-        />
-      ) : null}
+      {/* AlignHeadModal removed — head alignment now done inline on character page */}
 
       {importAudioOpen ? (
         <ImportAudioDialog
@@ -1394,7 +1342,7 @@ export default function AssetsPanel({
     },
   ];
 
-  const showInspector = nav.page === "character" && Boolean(inspector || selected);
+  const showInspector = false; // old slot inspector disabled — Build Character is now inline
 
   return (
     <div className="studio-factory-page" data-testid="assets-factory">
@@ -1564,25 +1512,9 @@ export default function AssetsPanel({
             <AddTile testId="assets-new-backgrounds" wide onClick={() => onNew("backgrounds")} />
           </div>
         ) : nav.page === "section" && nav.section === "actions" ? (
-          <ActionShotsSection
+          <ActionShotsPage
             project={project}
-            groups={actionGroups}
-            onOpen={(action) => {
-              setLibrarySel({ kind: "actions", id: action.id });
-              setNav({ page: "action", id: action.id });
-            }}
-            onTrash={(action) =>
-              void onTrash(
-                {
-                  kind: "action",
-                  id: action.name || action.id,
-                  characterId: action.characterId,
-                  confirm: true,
-                },
-                action.label
-              )
-            }
-            onNew={() => onNew("actions")}
+            characterId={selected?.id || ""}
             onReload={() => setReloadKey((n) => n + 1)}
           />
         ) : nav.page === "section" && nav.section === "sounds" ? (
@@ -1605,94 +1537,11 @@ export default function AssetsPanel({
           </div>
         ) : nav.page === "character" ? (
           <>
-            <div className="studio-factory-tabs" data-testid="assets-view-tabs">
-              {factoryTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  className="studio-factory-tab"
-                  data-testid={`assets-view-${tab.id}`}
-                  data-active={view === tab.id ? "true" : "false"}
-                  onClick={() => setView(tab.id)}
-                >
-                  {tab.label}
-                  {"count" in tab && tab.count != null ? (
-                    <span className="studio-factory-tab-count">{tab.count}</span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-            <div className="studio-factory-rows">
-              {!selected ? (
-                <p className="text-[11px] text-studio-muted">No character in this project yet.</p>
-              ) : view === "library" ? (
-                <CharacterLibraryTab
-                  project={project}
-                  characterId={selected.id}
-                  onImported={() => setReloadKey((n) => n + 1)}
-                />
-              ) : factory ? (
-                factory.rows.map((row) => (
-                  <FactoryRowBlock
-                    key={row.id}
-                    project={project}
-                    row={row}
-                    selectedKey={selectedKey}
-                    showMissing={showMissing}
-                    actions={actions}
-                    characterId={selected.id}
-                    onOpenAction={(actionId) => {
-                      const hit = actions.find((item) => (item.name || item.id) === actionId && item.characterId === selected.id)
-                        || actions.find((item) => (item.name || item.id) === actionId);
-                      if (!hit) return;
-                      setLibrarySel({ kind: "actions", id: hit.label });
-                      setNav({ page: "action", id: hit.label });
-                    }}
-                    onSelect={(piece) => {
-                      setSelectedKey(piece.key);
-                      setRedoNote(factory.redos[piece.key] || "");
-                      setDetailOpen(false);
-                    }}
-                    onOpenSlot={() => setAssetFocus({ mode: "slot", characterId: selected.id, slot: row.slot, view })}
-                    onOpenDrawing={(piece) =>
-                      setAssetFocus({
-                        mode: "drawing",
-                        characterId: selected.id,
-                        slot: row.slot,
-                        drawing: piece.name,
-                        view,
-                      })
-                    }
-                    onAdd={() =>
-                      onOpenImagine
-                        ? onOpenImagine({
-                            mode: "slot",
-                            characterId: selected.id,
-                            slot: row.slot,
-                            view,
-                            label: row.label,
-                            needId: needIdForSlot(row.slot),
-                          })
-                        : setAssetFocus({ mode: "slot", characterId: selected.id, slot: row.slot, view })
-                    }
-                    onDeleteDrawing={(piece) => void onDeleteDrawing(row.slot, piece)}
-                    onRenameDrawing={(piece, name) => void onRenameDrawing(row.slot, piece, name)}
-                    onCleanDrawing={(piece) => void onCleanDrawing(row.slot, piece)}
-                    onCleanRow={() => void onCleanRow(row.slot)}
-                  />
-                ))
-              ) : (
-                selected.slots.map((slot) => (
-                  <SlotBlock
-                    key={`${slot.owner || "root"}:${slot.name}`}
-                    slot={slot}
-                    project={project}
-                    characterId={selected.id}
-                    onOpen={setAssetFocus}
-                  />
-                ))
-              )}
-            </div>
+            {!selected ? (
+              <p className="p-4 text-[11px] text-studio-muted">No character in this project yet.</p>
+            ) : (
+              <HeadRigModal project={project} characterId={selected.id} inline />
+            )}
           </>
         ) : nav.page === "action" && selectedAction ? (
           <ActionShotDetail

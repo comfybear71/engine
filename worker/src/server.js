@@ -58,7 +58,7 @@ const {
 const { cachedBackgroundThumb, cachedPreviewTexture, isBackgroundAssetPath } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
 const { previewIngest, confirmIngest, cancelIngest, DRAWING_NAME } = require("./assetIngest");
-const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, SLOT_NAME } = require("./characterLocal");
+const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, loadHeadRig, saveHeadRig, deleteHeadRig, SLOT_NAME } = require("./characterLocal");
 const {
   describeSlot,
   describeDrawing,
@@ -124,6 +124,22 @@ const {
   listCategories,
 } = require("./factoryLibrary");
 const { listPackSummaries, packForCharacter, getPack } = require("./promptPacks");
+const {
+  listShots,
+  getShot,
+  makeShot,
+  importShot,
+  patchShot,
+  deleteFrame: deleteShotFrame,
+  deleteShot: deleteShotFull,
+  saveFrameToSlot: saveShotFrameToSlot,
+  useAsActionShot,
+  retryShot,
+  serveMedia: serveShotMedia,
+  combineShots,
+  resizeHead,
+  bakeTimeline,
+} = require("./shots");
 const {
   isSafeShowId,
   resolveEpisodeDir,
@@ -198,7 +214,7 @@ function applyCors(req, res) {
   if (origin && allowedOrigins().has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, DELETE, PATCH, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     res.setHeader("Access-Control-Expose-Headers", [
       "X-Engine-Frame",
@@ -1204,6 +1220,180 @@ function createApp(options = {}) {
     }
   });
 
+  // ── Action Shots routes ──────────────────────────────────────────
+
+  app.get("/api/projects/:name/characters/:characterId/shots", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(listShots(projectDir, req.params.characterId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/make", async (req, res) => {
+    req.setTimeout(15 * 60 * 1000);
+    res.setTimeout(15 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await makeShot(projectDir, req.params.characterId, req.body || {}, {
+        fetchFn,
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/import", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await importShot(projectDir, req.params.characterId, req, {
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/shots/media", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      serveShotMedia(projectDir, req.params.characterId, req, res);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/shots/:shotId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(getShot(projectDir, req.params.characterId, req.params.shotId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.patch("/api/projects/:name/characters/:characterId/shots/:shotId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(patchShot(projectDir, req.params.characterId, req.params.shotId, req.body || {}));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.delete("/api/projects/:name/characters/:characterId/shots/:shotId", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(deleteShotFull(projectDir, req.params.characterId, req.params.shotId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.delete("/api/projects/:name/characters/:characterId/shots/:shotId/frames/:n", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(deleteShotFrame(projectDir, req.params.characterId, req.params.shotId, req.params.n));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // ── Combine head + body shots ──────────────────────────────────────
+  app.post("/api/projects/:name/characters/:characterId/shots/combine", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await combineShots(projectDir, req.params.characterId, req.body || {});
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // ── Resize head in a shot ──────────────────────────────────────────
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/resize-head", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await resizeHead(projectDir, req.params.characterId, req.params.shotId, req.body || {});
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // ── Bake a multi-segment body/head timeline into one shot ──────────
+  app.post("/api/projects/:name/characters/:characterId/shots/bake-timeline", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await bakeTimeline(projectDir, req.params.characterId, req.body || {});
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/frames/:n/save-slot", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(
+        saveShotFrameToSlot(
+          projectDir,
+          req.params.characterId,
+          req.params.shotId,
+          req.params.n,
+          (req.body && req.body.slot) || "body",
+          (req.body && req.body.view) || "front"
+        )
+      );
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/use", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(useAsActionShot(projectDir, req.params.characterId, req.params.shotId));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/retry", async (req, res) => {
+    req.setTimeout(15 * 60 * 1000);
+    res.setTimeout(15 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await retryShot(projectDir, req.params.characterId, req.params.shotId, {
+        fetchFn,
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
   app.get("/api/projects/:name/actions/:characterId/:actionId/frames", (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
@@ -1475,6 +1665,46 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
       res.json(saveSlotAlignment(projectDir, globalAssetsDir, characterId, slotName, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  // ── Head rig (character-level head-on-body sizing) ──────────────
+  app.get("/api/projects/:name/characters/:characterId/head-rig", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(loadHeadRig(projectDir, globalAssetsDir, characterId));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.put("/api/projects/:name/characters/:characterId/head-rig", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(saveHeadRig(projectDir, globalAssetsDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.delete("/api/projects/:name/characters/:characterId/head-rig/:key", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(deleteHeadRig(projectDir, globalAssetsDir, characterId, req.params.key));
     } catch (err) {
       sendIngestError(res, err);
     }

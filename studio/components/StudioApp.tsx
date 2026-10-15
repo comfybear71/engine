@@ -316,22 +316,25 @@ export default function StudioApp({
         onChanged={() => setAssetEpoch((n) => n + 1)}
       />
 
-      <ImagineDock
-        project={project}
-        workerUp={workerUp === true}
-        open={imagineOpen}
-        characterId={assetCharacterId}
-        needId={imagineNeedId}
-        factoryContext={imagineContext}
-        onOpenChange={setImagineOpen}
-        onCharacterId={setAssetCharacterId}
-        onNeedId={setImagineNeedId}
-        refreshToken={assetEpoch}
-        onChanged={() => {
-          setAssetEpoch((n) => n + 1);
-          void refresh();
-        }}
-      />
+      {/* Hide Factory dock on assets tab — character page has its own Grok creator */}
+      {tab !== "assets" ? (
+        <ImagineDock
+          project={project}
+          workerUp={workerUp === true}
+          open={imagineOpen}
+          characterId={assetCharacterId}
+          needId={imagineNeedId}
+          factoryContext={imagineContext}
+          onOpenChange={setImagineOpen}
+          onCharacterId={setAssetCharacterId}
+          onNeedId={setImagineNeedId}
+          refreshToken={assetEpoch}
+          onChanged={() => {
+            setAssetEpoch((n) => n + 1);
+            void refresh();
+          }}
+        />
+      ) : null}
 
       {showVideo && videoSrc ? (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/70 p-6">

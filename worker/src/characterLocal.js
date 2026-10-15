@@ -185,6 +185,135 @@ function saveSlotAlignment(projectDir, globalAssetsDir, characterId, slotName, b
   };
 }
 
+/**
+ * Load saved head-rig entries for a character.
+ * Returns { rigs: { [key]: { anchorX, anchorY, headScale } } }
+ */
+function loadHeadRig(projectDir, globalAssetsDir, characterId) {
+  if (!isSafeFolderName(characterId)) throw localError("Invalid character id");
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  const refRel = character.reference
+    ? posixJoin("characters", characterId, character.reference)
+    : null;
+  return { ok: true, rigs: character.headRig || {}, reference: refRel };
+}
+
+/**
+ * Validate one timeline segment entry before it is persisted on a
+ * character's headRig. Only checks shape/ranges here -- resolving the
+ * referenced shot and its real frame count happens in shots.js at bake
+ * time, since this module has no concept of shots.
+ */
+function normalizeStoredSegment(raw, isHead) {
+  if (!raw || typeof raw !== "object") throw localError("Invalid segment");
+  const shotId = String(raw.shotId || "").trim();
+  if (!shotId) throw localError("segment.shotId is required");
+
+  const inFrame = Number(raw.inFrame);
+  const outFrame = Number(raw.outFrame);
+  const start = Number(raw.start);
+  if (!Number.isFinite(inFrame) || inFrame < 1) throw localError("segment.inFrame must be >= 1");
+  if (!Number.isFinite(outFrame) || outFrame < inFrame) throw localError("segment.outFrame must be >= inFrame");
+  if (!Number.isFinite(start) || start < 1) throw localError("segment.start must be >= 1");
+
+  const seg = { shotId, inFrame, outFrame, start };
+  if (isHead) {
+    const anchorX = raw.anchorX == null ? 0.5 : Number(raw.anchorX);
+    const anchorY = raw.anchorY == null ? 0.15 : Number(raw.anchorY);
+    const headScale = raw.headScale == null ? 1.0 : Number(raw.headScale);
+    if (!Number.isFinite(anchorX) || anchorX < 0 || anchorX > 1) throw localError("segment.anchorX must be 0-1");
+    if (!Number.isFinite(anchorY) || anchorY < -0.5 || anchorY > 1.5) throw localError("segment.anchorY must be -0.5 to 1.5");
+    if (!Number.isFinite(headScale) || headScale <= 0 || headScale > 5) throw localError("segment.headScale must be > 0 and <= 5");
+    seg.anchorX = anchorX;
+    seg.anchorY = anchorY;
+    seg.headScale = headScale;
+  }
+  return seg;
+}
+
+/**
+ * Save a head-rig entry for a character.
+ *
+ * Legacy single-pair body: { key, anchorX, anchorY, headScale, keyframes? }
+ * New multi-segment body:  { key, bodySegments: [...], headSegments: [...] }
+ * Both shapes can be present at once -- bodySegments/headSegments are added
+ * alongside the legacy fields, never in place of them, so older saves (or
+ * anything still reading anchorX/anchorY/headScale directly) keep working.
+ * key = pose/angle identifier (e.g. "front", "left_34")
+ */
+function saveHeadRig(projectDir, globalAssetsDir, characterId, body) {
+  if (!isSafeFolderName(characterId)) throw localError("Invalid character id");
+  const patch = body && typeof body === "object" ? body : {};
+  const key = String(patch.key || "").trim();
+  if (!key) throw localError("key is required (e.g. 'front', 'left_34')");
+
+  const hasSegments = Array.isArray(patch.bodySegments) || Array.isArray(patch.headSegments);
+
+  const anchorXRaw = patch.anchorX;
+  const anchorYRaw = patch.anchorY;
+  const headScaleRaw = patch.headScale;
+  const anchorX = anchorXRaw == null ? (hasSegments ? 0.5 : NaN) : Number(anchorXRaw);
+  const anchorY = anchorYRaw == null ? (hasSegments ? 0.15 : NaN) : Number(anchorYRaw);
+  const headScale = headScaleRaw == null ? (hasSegments ? 1.0 : NaN) : Number(headScaleRaw);
+  if (!Number.isFinite(anchorX) || anchorX < 0 || anchorX > 1)
+    throw localError("anchorX must be 0-1");
+  if (!Number.isFinite(anchorY) || anchorY < -0.5 || anchorY > 1.5)
+    throw localError("anchorY must be -0.5 to 1.5");
+  if (!Number.isFinite(headScale) || headScale <= 0 || headScale > 5)
+    throw localError("headScale must be > 0 and <= 5");
+
+  // Validate keyframes if provided (legacy single-rig correction points)
+  let keyframes = undefined;
+  if (Array.isArray(patch.keyframes) && patch.keyframes.length > 0) {
+    keyframes = patch.keyframes.map((kf) => {
+      const frame = Number(kf.frame);
+      const kfAx = Number(kf.anchorX);
+      const kfAy = Number(kf.anchorY);
+      const kfScale = Number(kf.headScale);
+      if (!Number.isFinite(frame) || frame < 1) throw localError("keyframe.frame must be >= 1");
+      if (!Number.isFinite(kfAx)) throw localError("keyframe.anchorX must be a number");
+      if (!Number.isFinite(kfAy)) throw localError("keyframe.anchorY must be a number");
+      if (!Number.isFinite(kfScale) || kfScale <= 0) throw localError("keyframe.headScale must be > 0");
+      return { frame, anchorX: kfAx, anchorY: kfAy, headScale: kfScale };
+    });
+  }
+
+  // Validate the new multi-segment timeline, if provided
+  let bodySegments;
+  let headSegments;
+  if (Array.isArray(patch.bodySegments)) {
+    bodySegments = patch.bodySegments.map((s) => normalizeStoredSegment(s, false));
+  }
+  if (Array.isArray(patch.headSegments)) {
+    headSegments = patch.headSegments.map((s) => normalizeStoredSegment(s, true));
+  }
+
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  if (!character.headRig) character.headRig = {};
+  const entry = { anchorX, anchorY, headScale };
+  if (keyframes) entry.keyframes = keyframes;
+  if (bodySegments) entry.bodySegments = bodySegments;
+  if (headSegments) entry.headSegments = headSegments;
+  character.headRig[key] = entry;
+
+  writeCharacterJson(projectDir, characterId, character, null);
+  return { ok: true, key, anchorX, anchorY, headScale, keyframes, bodySegments, headSegments, rigs: character.headRig };
+}
+
+/**
+ * Delete a head-rig entry.
+ */
+function deleteHeadRig(projectDir, globalAssetsDir, characterId, key) {
+  if (!isSafeFolderName(characterId)) throw localError("Invalid character id");
+  if (!key) throw localError("key is required");
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  if (character.headRig) {
+    delete character.headRig[key];
+  }
+  writeCharacterJson(projectDir, characterId, character, null);
+  return { ok: true, rigs: character.headRig || {} };
+}
+
 module.exports = {
   REFERENCE_DIR,
   SLOT_NAME,
@@ -198,5 +327,8 @@ module.exports = {
   saveCharacterStyle,
   saveCharacterReference,
   saveSlotAlignment,
+  loadHeadRig,
+  saveHeadRig,
+  deleteHeadRig,
   decodeImageBuffer,
 };
