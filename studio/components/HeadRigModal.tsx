@@ -235,7 +235,6 @@ export default function HeadRigModal({
     if (!shotId || shotDims[shotId] || shotDimsLoadingRef.current.has(shotId)) return;
     shotDimsLoadingRef.current.add(shotId);
     const img = new Image();
-    img.crossOrigin = "anonymous";
     img.onload = () => {
       setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
     };
@@ -246,16 +245,18 @@ export default function HeadRigModal({
   // Per-frame image cache (shotId#frame -> Image), with a bump counter to
   // force a redraw once a requested frame finishes loading.
   const frameImgCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const frameImgLoadingRef = useRef<Set<string>>(new Set());
   const [redrawTick, setRedrawTick] = useState(0);
   function getFrameImage(shotId: string, frame: number): HTMLImageElement | null {
     const key = `${shotId}#${frame}`;
     const cached = frameImgCacheRef.current.get(key);
-    if (cached) return cached;
+    if (cached) return cached.complete && cached.naturalWidth > 0 ? cached : null;
+    if (frameImgLoadingRef.current.has(key)) return null;
+    frameImgLoadingRef.current.add(key);
     const pad = String(Math.max(1, frame)).padStart(4, "0");
     const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
-    img.onerror = () => { /* prevent infinite retry — frame image missing */ };
+    img.onload = () => { frameImgCacheRef.current.set(key, img); frameImgLoadingRef.current.delete(key); setRedrawTick((t) => t + 1); };
+    img.onerror = () => { frameImgLoadingRef.current.delete(key); };
     img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
     return null;
   }
@@ -269,7 +270,6 @@ export default function HeadRigModal({
         if (!frameImgCacheRef.current.has(key)) {
           const pad = String(Math.max(1, f)).padStart(4, "0");
           const img = new Image();
-          img.crossOrigin = "anonymous";
           img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
           img.src = shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`);
         }
@@ -640,7 +640,8 @@ export default function HeadRigModal({
     const cw = CANVAS_W;
     const ch = CANVAS_H;
     if (body) {
-      const dims = shotDims[body.shotId];
+      const img = frameImgCacheRef.current.get(`${body.shotId}#${sourceFrameOf(body, frame)}`);
+      const dims = shotDims[body.shotId] || (img && img.naturalWidth > 0 ? { w: img.naturalWidth, h: img.naturalHeight } : null);
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         const scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
@@ -657,34 +658,34 @@ export default function HeadRigModal({
   function onCanvasMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
     const head = editingHead;
     if (!head) return;
-    const dims = shotDims[head.shotId];
-    if (!dims || dims.w === 0) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const mx = (e.clientX - rect.left) * scaleX;
-    const my = (e.clientY - rect.top) * scaleY;
+
+    setSelectedSegment({ track: "head", id: head.id });
+
+    // Check if click is near a corner handle for scale drag
     const { scale, bw, bh, bx, by } = layoutBasis(scrubFrame);
-
-    const hw = dims.w * head.headScale * scale;
-    const hh = dims.h * head.headScale * scale;
-    const hx = bx + head.anchorX * bw - hw / 2;
-    const hy = by + head.anchorY * bh - hh / 2;
-
-    const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
-    for (const [cx, cy] of corners) {
-      if (Math.abs(mx - cx) < 14 && Math.abs(my - cy) < 14) {
-        setSelectedSegment({ track: "head", id: head.id });
-        canvasDragRef.current = { kind: "scale", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
-        e.preventDefault();
-        return;
+    const headDims = shotDims[head.shotId];
+    if (headDims && headDims.w > 0) {
+      const hw = headDims.w * head.headScale * scale;
+      const hh = headDims.h * head.headScale * scale;
+      const hx = bx + head.anchorX * bw - hw / 2;
+      const hy = by + head.anchorY * bh - hh / 2;
+      const cssScale = canvas.width / canvas.getBoundingClientRect().width;
+      const rect = canvas.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) * cssScale;
+      const my = (e.clientY - rect.top) * cssScale;
+      const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
+      for (const [cx, cy] of corners) {
+        if (Math.abs(mx - cx) < 14 && Math.abs(my - cy) < 14) {
+          canvasDragRef.current = { kind: "scale", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
+          e.preventDefault();
+          return;
+        }
       }
     }
-    // Any click on the canvas moves the head when editing — no need for
-    // precise hit-testing which can fail if CSS-to-canvas scaling is off.
-    setSelectedSegment({ track: "head", id: head.id });
+
+    // Default: move drag
     canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
     e.preventDefault();
   }
