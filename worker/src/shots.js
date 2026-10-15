@@ -174,7 +174,11 @@ async function startGrokVideo(prompt, imageBase64, duration, fetchFn) {
   return json.request_id || json.id;
 }
 
-async function pollGrokVideo(requestId, fetchFn, intervalMs) {
+function throwIfCancelled(isCancelled) {
+  if (typeof isCancelled === "function" && isCancelled()) throw shotError("Stopped", "ECANCEL");
+}
+
+async function pollGrokVideo(requestId, fetchFn, intervalMs, isCancelled) {
   const apiKey = resolveApiKey();
   const fetchImpl = fetchFn || globalThis.fetch;
   const url = `https://api.x.ai/v1/videos/${requestId}`;
@@ -183,6 +187,7 @@ async function pollGrokVideo(requestId, fetchFn, intervalMs) {
 
   while (Date.now() - start < POLL_TIMEOUT) {
     await new Promise((r) => setTimeout(r, interval));
+    throwIfCancelled(isCancelled);
     const response = await fetchImpl(url, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
@@ -281,14 +286,16 @@ async function runGrokShot(dir, info, job) {
   const { fullPrompt, imageBase64, dur, jobKey, options = {} } = job;
   activeJobs.set(jobKey, { status: "making", startedAt: Date.now() });
   try {
+    throwIfCancelled(options.isCancelled);
     const requestId = await startGrokVideo(fullPrompt, imageBase64, dur, options.fetchFn);
     activeJobs.set(jobKey, { status: "making", requestId, startedAt: Date.now() });
     info.requestId = requestId;
     writeShotJson(dir, info);
 
-    const videoUrl = await pollGrokVideo(requestId, options.fetchFn, options.pollIntervalMs);
+    const videoUrl = await pollGrokVideo(requestId, options.fetchFn, options.pollIntervalMs, options.isCancelled);
     const sourcePath = path.join(dir, "source.mp4");
     await downloadVideo(videoUrl, sourcePath, options.fetchFn);
+    throwIfCancelled(options.isCancelled);
     info.filename = "source.mp4";
     writeShotJson(dir, info);
 
@@ -313,7 +320,11 @@ async function runGrokShot(dir, info, job) {
   } catch (err) {
     info.status = "error";
     info.error = err.message;
-    writeShotJson(dir, info);
+    try {
+      writeShotJson(dir, info);
+    } catch {
+      /* the shot folder was removed while the job was running */
+    }
     activeJobs.set(jobKey, { status: "error", error: err.message });
   }
   return info;

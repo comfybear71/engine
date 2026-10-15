@@ -14,6 +14,9 @@ const {
   makeTalkingHead,
   resumeTalkingHead,
   markInterruptedTalkShots,
+  listTalkingHeadStarts,
+  saveTalkingHeadStart,
+  stopTalkingHead,
 } = require("../src/talkingHead");
 const { listShots } = require("../src/shots");
 
@@ -83,7 +86,9 @@ describe("buildWindowPrompt", () => {
   test("includes the words, the head-only framing and continuity for later windows", () => {
     const first = buildWindowPrompt({ basePrompt: "calm", text: "hello there", index: 0 });
     assert.match(first, /"hello there"/);
-    assert.match(first, /head only from jawline up/);
+    assert.match(first, /head only from the jawline up/);
+    assert.match(first, /no collar/);
+    assert.match(first, /no zoom/);
     assert.doesNotMatch(first, /continuing/);
     const later = buildWindowPrompt({ basePrompt: "calm", text: "more", index: 2 });
     assert.match(later, /continuing the same performance/);
@@ -279,6 +284,76 @@ describe("talking head chain", () => {
     assert.equal(reported[2].status, "queued");
   });
 
+  test("start images: uploads come first, the full-body reference is flagged and last", () => {
+    const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(200)]);
+    const saved = saveTalkingHeadStart(projectDir, "rodney", { name: "front_head_no_neck.png", data: png.toString("base64") });
+    assert.equal(saved.rel, "characters/rodney/shots/_starts/front_head_no_neck.png");
+    assert.ok(fs.existsSync(path.join(projectDir, saved.rel)));
+    const list = listTalkingHeadStarts(projectDir, "rodney", "characters/rodney/front_head.jpg");
+    assert.deepEqual(list.map((item) => item.kind), ["uploaded", "reference"]);
+    assert.equal(list[0].thumb, "_starts/front_head_no_neck.png");
+    assert.equal(list[1].fullBody, true);
+    assert.throws(() => saveTalkingHeadStart(projectDir, "rodney", { name: "x.txt", data: Buffer.from("not an image at all ".repeat(10)).toString("base64") }), /PNG, JPG or WebP/);
+  });
+
+  test("a start image outside the project is refused", async () => {
+    writeAudio(8);
+    await assert.rejects(
+      makeTalkingHead(projectDir, "rodney", { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 8, refRel: "../../etc/passwd.png" }, chainOptions()),
+      /Invalid start image/
+    );
+  });
+
+  test("no start image means nothing is generated", async () => {
+    writeAudio(8);
+    await assert.rejects(
+      makeTalkingHead(projectDir, "rodney", { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 8 }, chainOptions()),
+      /Choose a start image/
+    );
+    assert.equal(requests.length, 0);
+  });
+
+  test("stop cancels the chain after the clip in flight and removes the unfinished clips", async () => {
+    writeAudio(24);
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const options = chainOptions();
+    const baseFetch = options.fetchFn;
+    options.fetchFn = async (url, init) => {
+      if (/\/v1\/videos\/req1$/.test(String(url))) await gate;
+      return baseFetch(url, init);
+    };
+    const started = await makeTalkingHead(
+      projectDir,
+      "rodney",
+      { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 24, refRel: "characters/rodney/front_head.jpg" },
+      options
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const stopping = stopTalkingHead(projectDir, "rodney", started.group);
+    release();
+    const result = await stopping;
+    await started.completion;
+    assert.equal(result.removed, started.shotIds.length);
+    assert.equal(requests.length, 1, "no further clip is sent to Grok after stopping");
+    assert.equal(listShots(projectDir, "rodney").length, 0);
+  });
+
+  test("delete removes finished clips too", async () => {
+    writeAudio(7);
+    const started = await makeTalkingHead(
+      projectDir,
+      "rodney",
+      { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 7, refRel: "characters/rodney/front_head.jpg" },
+      chainOptions()
+    );
+    await started.completion;
+    assert.equal((await stopTalkingHead(projectDir, "rodney", started.group)).removed, 0);
+    assert.equal(listShots(projectDir, "rodney").length, 1);
+    assert.equal((await stopTalkingHead(projectDir, "rodney", started.group, { removeAll: true })).removed, 1);
+    assert.equal(listShots(projectDir, "rodney").length, 0);
+  });
+
   test("refuses audio with no transcript", async () => {
     const dir = path.join(projectDir, "audio", "take_one");
     fs.mkdirSync(dir, { recursive: true });
@@ -294,11 +369,11 @@ describe("talking head chain", () => {
     );
   });
 
-  test("refuses when the character has no reference head", async () => {
+  test("refuses when the chosen start image file is missing", async () => {
     writeAudio(8);
     await assert.rejects(
       makeTalkingHead(projectDir, "rodney", { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 8, refRel: "characters/rodney/missing.jpg" }, chainOptions()),
-      /reference/
+      /Choose a start image/
     );
   });
 });

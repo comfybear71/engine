@@ -21,7 +21,8 @@ const {
   sliceWords,
   extractWavSlice,
 } = require("./splitLongAudio");
-const { internals } = require("./shots");
+const shotsModule = require("./shots");
+const { internals } = shotsModule;
 
 const {
   runGrokShot,
@@ -41,9 +42,13 @@ const MIN_CUT_SEC = 3;
 const MIN_GAP_SEC = 0.12;
 const DEFAULT_TALK_PROMPT = "natural conversational delivery, subtle head movement, natural blinks";
 const HEAD_ONLY_SUFFIX =
-  "head only from jawline up, no neck, no shoulders, no body, close-up head and face only, cut off cleanly at the jaw";
+  "exactly the same character, art style, framing and crop as the starting image, head only from the jawline up, no neck, no collar, no clothing, no shoulders, no body, cut off cleanly at the jaw, static locked-off camera with no zoom, no push-in and no camera movement";
 
 const running = new Set();
+const chains = new Map();
+const cancelled = new Set();
+const START_DIR = "_starts";
+const START_EXT = /\.(png|jpe?g|webp)$/i;
 
 function round3(value) {
   return Math.round(Number(value) * 1000) / 1000;
@@ -233,10 +238,16 @@ async function runChain(projectDir, characterId, group, startIndex, options = {}
   const key = `${characterId}/${group}`;
   if (running.has(key)) return;
   running.add(key);
+  cancelled.delete(key);
+  let finish;
+  chains.set(key, new Promise((resolve) => { finish = resolve; }));
+  const stopped = () => cancelled.has(key);
+  options = { ...options, isCancelled: stopped };
   try {
     const shots = groupShots(projectDir, characterId, group);
     const extract = options.extractFrame || extractFrameAt;
     for (let i = startIndex; i < shots.length; i++) {
+      if (stopped()) return;
       const { dir, info } = shots[i];
       if (info.status === "ready") continue;
       info.status = "making";
@@ -292,6 +303,8 @@ async function runChain(projectDir, characterId, group, startIndex, options = {}
     }
   } finally {
     running.delete(key);
+    chains.delete(key);
+    finish();
   }
 }
 
@@ -319,6 +332,116 @@ function markInterruptedTalkShots(characterId, shots) {
   return shots;
 }
 
+
+function isInsideProject(projectDir, rel) {
+  if (!rel || rel.startsWith("/") || rel.split("/").includes("..")) return false;
+  const root = path.resolve(projectDir);
+  const abs = path.resolve(root, rel);
+  return abs.startsWith(root + path.sep) && START_EXT.test(abs);
+}
+
+function startsDir(projectDir, characterId) {
+  return path.join(shotsDir(projectDir, characterId), START_DIR);
+}
+
+/**
+ * Images a talking head can start from, newest first within each kind.
+ * Uploaded heads come first. The full-body character reference is listed
+ * last and flagged, because starting from it makes Grok draw the body.
+ */
+function listTalkingHeadStarts(projectDir, characterId, referenceRel = "") {
+  const out = [];
+  const dir = startsDir(projectDir, characterId);
+  if (fs.existsSync(dir)) {
+    const files = fs.readdirSync(dir).filter((name) => START_EXT.test(name));
+    files.sort((a, b) => fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs);
+    for (const name of files) {
+      out.push({
+        kind: "uploaded",
+        label: name,
+        rel: `characters/${characterId}/shots/${START_DIR}/${name}`,
+        thumb: `${START_DIR}/${name}`,
+      });
+    }
+  }
+  const root = shotsDir(projectDir, characterId);
+  if (fs.existsSync(root)) {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
+      let info = null;
+      try {
+        info = readShotJson(path.join(root, entry.name));
+      } catch {
+        info = null;
+      }
+      if (!info || info.status !== "ready" || info.talk || info.shotType !== "head") continue;
+      if (!fs.existsSync(path.join(root, entry.name, "poster.jpg"))) continue;
+      out.push({
+        kind: "head-shot",
+        label: info.name || info.id,
+        rel: `characters/${characterId}/shots/${entry.name}/poster.jpg`,
+        thumb: `${entry.name}/poster.jpg`,
+      });
+    }
+  }
+  if (referenceRel && fs.existsSync(path.join(projectDir, referenceRel))) {
+    out.push({ kind: "reference", label: "Character reference (usually full body)", rel: referenceRel, thumb: "", fullBody: true });
+  }
+  return out;
+}
+
+/** Keep an uploaded start image on the character so it is picked again next time. */
+function saveTalkingHeadStart(projectDir, characterId, body = {}) {
+  const data = String(body.data || "").replace(/^data:[^,]+,/, "");
+  if (!data) throw shotError("No image data");
+  const buffer = Buffer.from(data, "base64");
+  if (buffer.length < 100) throw shotError("That is not an image");
+  const isPng = buffer.subarray(0, 4).toString("hex") === "89504e47";
+  const isJpg = buffer.subarray(0, 2).toString("hex") === "ffd8";
+  const isWebp = buffer.subarray(0, 4).toString() === "RIFF" && buffer.subarray(8, 12).toString() === "WEBP";
+  if (!isPng && !isJpg && !isWebp) throw shotError("Use a PNG, JPG or WebP image");
+  const ext = isPng ? "png" : isWebp ? "webp" : "jpg";
+  const stem = slugName(path.basename(String(body.name || "head"), path.extname(String(body.name || ""))));
+  const dir = startsDir(projectDir, characterId);
+  fs.mkdirSync(dir, { recursive: true });
+  let name = `${stem}.${ext}`;
+  for (let i = 2; fs.existsSync(path.join(dir, name)) && i < 999; i++) name = `${stem}_${i}.${ext}`;
+  fs.writeFileSync(path.join(dir, name), buffer);
+  return { ok: true, rel: `characters/${characterId}/shots/${START_DIR}/${name}`, thumb: `${START_DIR}/${name}`, label: name };
+}
+
+/**
+ * Stop a running chain (no new clip is sent to Grok; a clip already sent
+ * is billed either way) and remove the clips that did not finish. With
+ * removeAll the finished clips go too.
+ */
+async function stopTalkingHead(projectDir, characterId, group, { removeAll = false } = {}) {
+  const key = `${characterId}/${group}`;
+  const members = groupShots(projectDir, characterId, group);
+  if (!members.length) throw shotError("Talking head not found", "ENOENT");
+  if (running.has(key)) {
+    cancelled.add(key);
+    const finished = chains.get(key);
+    if (finished) {
+      let timer;
+      await Promise.race([finished, new Promise((resolve) => { timer = setTimeout(resolve, 20000); })]);
+      clearTimeout(timer);
+    }
+  }
+  let removed = 0;
+  for (const { info } of groupShots(projectDir, characterId, group)) {
+    if (!removeAll && info.status === "ready") continue;
+    try {
+      shotsModule.deleteShot(projectDir, characterId, info.id);
+      removed += 1;
+    } catch {
+      /* already gone */
+    }
+  }
+  cancelled.delete(key);
+  return { ok: true, group, removed };
+}
+
 function uniqueGroupId(projectDir, characterId, base) {
   const root = shotsDir(projectDir, characterId);
   const taken = (id) => fs.existsSync(path.join(root, `${id}_01`));
@@ -338,10 +461,11 @@ async function makeTalkingHead(projectDir, characterId, body = {}, options = {})
   if (!plan.hasWords || !plan.windows.length) {
     throw shotError("No transcript found for this audio. Re-import it with transcription so the words are known.");
   }
-  const refRel = String(body.refRel || "").trim();
+  const refRel = String(body.refRel || "").trim().replace(/\\/g, "/");
   const refB64 = body.refBase64 ? String(body.refBase64) : "";
+  if (refRel && !isInsideProject(projectDir, refRel)) throw shotError("Invalid start image path");
   if (!refB64 && !(refRel && fs.existsSync(path.join(projectDir, refRel)))) {
-    throw shotError("This character has no reference head image to start from.");
+    throw shotError("Choose a start image: a head shot of the character with no neck or collar.");
   }
 
   const basePrompt = String(body.prompt || "").trim() || DEFAULT_TALK_PROMPT;
@@ -427,4 +551,7 @@ module.exports = {
   makeTalkingHead,
   resumeTalkingHead,
   markInterruptedTalkShots,
+  listTalkingHeadStarts,
+  saveTalkingHeadStart,
+  stopTalkingHead,
 };
