@@ -521,11 +521,8 @@ export default function HeadRigModal({
 
   function onCanvasMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
     const head = editingHead;
-    if (!head) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-
-    setSelectedSegment({ track: "head", id: head.id });
 
     const rect = canvas.getBoundingClientRect();
     const cssScale = canvas.width / rect.width;
@@ -533,24 +530,45 @@ export default function HeadRigModal({
     const my = (e.clientY - rect.top) * cssScale;
     const { scale, bw, bh, bx, by } = layoutBasis(scrubFrame);
 
-    // Check corner handles for scale drag (only if dims known)
+    if (!head) {
+      setSelectedSegment(null);
+      return;
+    }
+
+    // Check if click is on the head image
     const headDims = shotDims[head.shotId];
     if (headDims && headDims.w > 0) {
       const hw = headDims.w * head.headScale * scale;
       const hh = headDims.h * head.headScale * scale;
       const hx = bx + head.anchorX * bw - hw / 2;
       const hy = by + head.anchorY * bh - hh / 2;
+
+      // Corner handles for scale drag
       const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
       for (const [cx, cy] of corners) {
         if (Math.abs(mx - cx) < 14 && Math.abs(my - cy) < 14) {
+          setSelectedSegment({ track: "head", id: head.id });
           canvasDragRef.current = { kind: "scale", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
           e.preventDefault();
           return;
         }
       }
+
+      // Click inside head bounds = select + move drag
+      if (mx >= hx && mx <= hx + hw && my >= hy && my <= hy + hh) {
+        setSelectedSegment({ track: "head", id: head.id });
+        canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
+        e.preventDefault();
+        return;
+      }
+
+      // Click outside head = deselect
+      setSelectedSegment(null);
+      return;
     }
 
-    // Default: move drag (works even without dims loaded)
+    // No dims yet — select and allow move drag
+    setSelectedSegment({ track: "head", id: head.id });
     canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
     e.preventDefault();
   }
