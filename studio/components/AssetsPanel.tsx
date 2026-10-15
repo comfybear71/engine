@@ -1536,13 +1536,13 @@ export default function AssetsPanel({
             <AddTile testId="assets-new-sounds" onClick={() => onNew("sounds")} />
           </div>
         ) : nav.page === "character" ? (
-          <>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {!selected ? (
               <p className="p-4 text-[11px] text-studio-muted">No character in this project yet.</p>
             ) : (
               <HeadRigModal project={project} characterId={selected.id} inline />
             )}
-          </>
+          </div>
         ) : nav.page === "action" && selectedAction ? (
           <ActionShotDetail
             project={project}

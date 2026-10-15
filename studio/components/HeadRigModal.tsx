@@ -1066,7 +1066,7 @@ export default function HeadRigModal({
   }, []);
 
   const content = (
-    <div className={inline ? "flex flex-col p-2" : "flex min-h-0 flex-1 flex-col"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
+    <div className={inline ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col"}>
       <div className="flex min-h-0 flex-1">
         {/* ══════════ LEFT SIDEBAR — Media Bins + Grok ══════════ */}
         <div className={`shrink-0 bg-[#131313] transition-all ${mediaPanelOpen ? "" : "w-0 overflow-hidden"}`} style={mediaPanelOpen ? { width: sidebarWidth } : undefined}>
@@ -1343,6 +1343,11 @@ export default function HeadRigModal({
             <span className="text-neutral-400">Body <span className="text-blue-400">{bodySegments.length}</span> Head <span className="text-green-400">{headSegments.length}</span></span>
           </div>
         </div>
+      </div>
+
+      {/* ══════════ Bottom Navbar ══════════ */}
+      <div className="flex shrink-0 items-center justify-between border-t border-[#222] bg-[#111] px-3" style={{ height: 32 }}>
+        <span className="text-[11px] text-neutral-500">ENGINE</span>
       </div>
 
       {/* ── Right-click context menu ── */}
