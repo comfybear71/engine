@@ -21,6 +21,7 @@ from .interpolate import interpolate_scalar
 from .media_probe import probe_duration_seconds
 from .schema_validate import validate_timeline
 from .slots import DrawingAlign, Slot, SlotKeyframe
+from .sequence import FrameSequence
 
 DEFAULT_CANVAS_WIDTH = 1920
 DEFAULT_CANVAS_HEIGHT = 1080
@@ -154,6 +155,7 @@ class Layer:
     groups: dict[str, list[str]] = field(default_factory=dict)
     group_rotations: dict[str, float] = field(default_factory=dict)
     group_rotation_keyframes: dict[str, list[RotationKeyframe]] = field(default_factory=dict)
+    sequence: FrameSequence | None = None
 
     def is_visible_at(self, frame_idx: int, scene_total_frames: int) -> bool:
         end = self.end_frame if self.end_frame is not None else scene_total_frames
@@ -889,6 +891,19 @@ def apply_natural_lipsync(
     return replace(layer, dialogue=dialogue, slots=new_slots, children=new_children)
 
 
+def _build_sequence(raw: dict | None, project_dir: Path) -> FrameSequence | None:
+    if not isinstance(raw, dict):
+        return None
+    frames = tuple(_resolve(project_dir, rel) for rel in raw.get("frames", []) if rel)
+    if not frames:
+        return None
+    return FrameSequence(
+        frames=frames,
+        fps=float(raw.get("fps") or 24),
+        trim_in=float(raw.get("trim_in") or 0.0),
+    )
+
+
 def _build_layer(
     raw: dict,
     project_dir: Path,
@@ -975,6 +990,7 @@ def _build_layer(
         groups=groups,
         group_rotations=group_rotations,
         group_rotation_keyframes=group_rotation_keyframes,
+        sequence=_build_sequence(raw.get("sequence"), project_dir),
     )
     # Natural lipsync (blinks + bob on the whole head group) is opt-in via
     # groups.head so existing characters without the new field stay unchanged.

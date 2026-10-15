@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { backgroundDestRect, collectRels, evaluateBackgroundRect, evaluateFrame } from "../../shared/placement.js";
+import {
+  backgroundDestRect,
+  collectRels,
+  evaluateBackgroundRect,
+  evaluateFrame,
+  sequenceLookahead,
+} from "../../shared/placement.js";
 
 const graph = {
   fps: 24,
@@ -169,5 +175,46 @@ describe("shared placement lock", () => {
     assert.equal(squareSource.x, 0);
     assert.equal(squareSource.y, -420);
     assert.ok(squareSource.y + squareSource.h >= 1080);
+  });
+
+  test("flipbook layers draw one frame at a time and are not preloaded wholesale", () => {
+    const files = ["a_1.png", "a_2.png", "a_3.png", "a_4.png"];
+    const flip = {
+      fps: 24,
+      canvas: { width: 40, height: 40 },
+      totalFrames: 24,
+      scenes: [
+        {
+          id: "s1",
+          totalFrames: 24,
+          frameStep: 1,
+          camera: null,
+          background: { rel: "bg.png", width: 40, height: 40, fit: "cover" },
+          layers: [
+            {
+              id: "clip",
+              z: 0,
+              rel: files[0],
+              width: 8,
+              height: 8,
+              startFrame: 4,
+              endFrame: 16,
+              transform: { x: 20, y: 30, scale: 1, rotation: 0, flip_x: false, opacity: 1, anchor: "bottom-center" },
+              transformKeyframes: [],
+              slots: {},
+              children: [],
+              sequence: { fps: 12, trimIn: 0, files },
+            },
+          ],
+        },
+      ],
+    };
+    assert.deepEqual(collectRels(flip), ["a_1.png", "bg.png"]);
+    const relAt = (frame: number) => evaluateFrame(flip, frame).commands.filter((cmd) => cmd.kind === "sprite").map((cmd) => cmd.rel);
+    assert.deepEqual(relAt(3), []);
+    assert.deepEqual(relAt(4), ["a_1.png"]);
+    assert.deepEqual(relAt(6), ["a_2.png"]);
+    assert.deepEqual(relAt(15), ["a_4.png"]);
+    assert.deepEqual(sequenceLookahead(flip, 4, 4), ["a_1.png", "a_2.png", "a_3.png"]);
   });
 });

@@ -4,6 +4,7 @@ import {
   collectRels as collectRelsJs,
   evaluateBackgroundRect as evaluateBackgroundRectJs,
   evaluateFrame as evaluateFrameJs,
+  sequenceLookahead as sequenceLookaheadJs,
   rotateOffsetClockwise,
 } from "../../shared/placement.js";
 
@@ -39,6 +40,10 @@ export type EvaluatedFrame = {
 
 export function evaluateFrame(graph: unknown, frame: number): EvaluatedFrame {
   return evaluateFrameJs(graph, frame) as EvaluatedFrame;
+}
+
+export function sequenceLookahead(graph: unknown, frame: number, count?: number): string[] {
+  return sequenceLookaheadJs(graph, frame, count);
 }
 
 export function collectRels(graph: unknown): string[] {

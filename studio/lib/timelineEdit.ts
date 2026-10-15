@@ -706,7 +706,7 @@ export function trimKindForBlock(block: {
   lane?: string;
 }): TrimKind | null {
   const kind = block.timing?.kind;
-  if (kind === "audio" || kind === "dialogue" || block.lane === "audio" || block.lane === "dialogue") {
+  if (kind === "audio" || kind === "dialogue" || kind === "clip" || block.lane === "audio" || block.lane === "dialogue") {
     return "media";
   }
   if (kind === "over" || kind === "for") return "duration";

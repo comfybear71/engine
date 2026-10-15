@@ -9,6 +9,7 @@ declare module "../../shared/placement.js" {
     commands: Array<Record<string, unknown>>;
   };
   export function collectRels(graph: unknown): string[];
+  export function sequenceLookahead(graph: unknown, frame: number, count?: number): string[];
   export function backgroundDestRect(
     cmd: Record<string, unknown>,
     canvasW: number,

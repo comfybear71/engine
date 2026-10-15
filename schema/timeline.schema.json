@@ -541,6 +541,17 @@
         "character_id": { "type": "string", "description": "Optional logical character this layer belongs to, for continuity across scenes and tooling (e.g. the script.txt parser)." },
         "prop_id": { "type": "string", "description": "Optional logical location-prop identity (from backgrounds/<location>/staging.json `props`) when this layer is a still object rather than a character. Drawn in the same z-ordered list as character layers; the background stays behind every layer." },
         "insert_id": { "type": "string", "description": "Optional insert-still identity from [Insert: image=…] — a PNG held over timing.start_frame..end_frame as a cutaway. Drawn in z order with other layers." },
+        "sequence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["frames", "fps"],
+          "description": "Optional flipbook from [Clip: Name action] — a baked Action Shot. While the layer is visible, the image drawn is frames[floor((trim_in + local_frame / project_fps) * fps)] (clamped to the last frame) instead of `asset`; transform places it like any layer. `asset` is the first frame.",
+          "properties": {
+            "frames": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "description": "Project-relative PNG paths, in playback order." },
+            "fps": { "type": "number", "exclusiveMinimum": 0, "description": "Playback rate of `frames` in frames per second." },
+            "trim_in": { "type": "number", "minimum": 0, "default": 0, "description": "Seconds into the sequence at which the first visible frame plays." }
+          }
+        },
         "asset": { "type": "string", "description": "Path (relative to the project folder) to the layer's own (root/base) image (PNG with alpha recommended)." },
         "z": { "type": "integer", "description": "Explicit draw order within the scene. Layers are drawn back-to-front in ascending z order; the background is implicitly z = -infinity." },
         "transform": { "$ref": "#/definitions/transform" },

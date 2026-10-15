@@ -94,6 +94,7 @@ const HOLD_KEYS = new Set(["over", "hold"]);
 const TRIM_KEYS = new Set(["trim_in", "trim_out"]);
 const AUDIO_KEYS = new Set(["file", "lines", "view", "at_time", "start", "trim_in", "trim_out"]);
 const DO_KEYS = new Set(["action", "for", "wait", "at_time", "start", "prop"]);
+const CLIP_KEYS = new Set(["at_time", "start", "trim_in", "trim_out", "x", "y", "scale", "z", "flip", "mark"]);
 const INSERT_KEYS = new Set(["image", "file", "src", "at_time", "start", "for", "over", "to", "z", "x", "y", "scale", "anchor"]);
 const BUILTIN_REST_ACTION = "rest";
 const PROP_PLACEHOLDER = "{prop}";
@@ -227,6 +228,8 @@ class SceneContext {
     this.camera = { x: canvas.width / 2, y: canvas.height / 2, zoom: 1.0 };
     this.cameraKeyframes = [];
     this.inserts = [];
+    this.clips = [];
+    this.clipCharacters = new Set();
   }
 }
 
@@ -312,11 +315,13 @@ class ScriptParser {
         ? "dialogue"
         : token.kind === "audio"
           ? "audio"
-          : token.kind === "swing" || token.kind === "do"
-            ? "for"
-            : token.kind === "move" || token.kind === "pose" || token.kind === "camera"
-              ? "over"
-              : "pin";
+          : token.kind === "clip"
+            ? "clip"
+            : token.kind === "swing" || token.kind === "do"
+              ? "for"
+              : token.kind === "move" || token.kind === "pose" || token.kind === "camera"
+                ? "over"
+                : "pin";
     const explicit = kv && kv.at_time !== undefined ? "at_time" : kv && kv.start !== undefined ? "start" : null;
     const durationAttr =
       kind === "over"
@@ -628,6 +633,9 @@ class ScriptParser {
         return;
       case "insert":
         this._handleInsert(token);
+        return;
+      case "clip":
+        this._handleClip(token);
         return;
       case "dialogue":
         await this._handleDialogue(token);
@@ -2293,6 +2301,116 @@ class ScriptParser {
     });
   }
 
+  // ---- [Clip: Name <actionId> at_time= trim_in= trim_out=] ----------------
+
+  /**
+   * Plays a baked Action Shot (characters/<id>/actions/<action>/f_NNNN.png)
+   * as a flipbook layer. The clip is a self-contained picture of the
+   * character, so it is not tied to the rig: no rig layer is opened for it.
+   */
+  _handleClip(token) {
+    const scene = this._requireScene(token.lineNumber, "Clip");
+    const { character: scriptName, kv, note, positional } = parseActionTag(token.body, { allowPositional: true });
+    this._warnNoteLooksLikeAssignments(token.lineNumber, "Clip", note);
+    if (!scriptName) throw new ScriptError(token.lineNumber, "[Clip: ...] needs a character name.");
+    const extra = Object.keys(kv).filter((key) => !CLIP_KEYS.has(key));
+    if (extra.length > 0) {
+      throw new ScriptError(
+        token.lineNumber,
+        `[Clip: ...] unknown key "${extra[0]}". Allowed: at_time/start, trim_in, trim_out, x, y, scale, z, flip, mark.`
+      );
+    }
+    const actionId = (positional && positional[0]) || "";
+    if (!actionId) {
+      throw new ScriptError(token.lineNumber, `[Clip: ...] needs an Action Shot id, e.g. [Clip: Rodney grab_mic].`);
+    }
+    const characterId = this._resolveCharacterIdOrThrow(scriptName, token.lineNumber);
+    const action = assetLibrary.loadAction(this.projectDir, this.globalAssetsDir, characterId, actionId);
+    if (!action) {
+      const known = assetLibrary.listActionIds(this.projectDir, this.globalAssetsDir, characterId);
+      throw new ScriptError(
+        token.lineNumber,
+        `Unknown Action Shot "${actionId}" for ${scriptName}.${known.length ? ` Available: ${known.join(", ")}` : ""}`
+      );
+    }
+    const names = action.slot_frames && Array.isArray(action.slot_frames.body) ? action.slot_frames.body : [];
+    if (names.length === 0) {
+      throw new ScriptError(token.lineNumber, `Action Shot "${actionId}" has no baked frames.`);
+    }
+    const dirRel = String(action.drawingsDir || `characters/${characterId}/actions/${actionId}`).replace(/\/+$/, "");
+    const base = dirRel.startsWith("characters/") ? dirRel : `characters/${characterId}/${dirRel}`;
+    const frames = [];
+    for (const name of names) {
+      const resolved = assetLibrary.resolveAsset(this.projectDir, this.globalAssetsDir, `${base}/${name}`);
+      if (!resolved) {
+        throw new ScriptError(token.lineNumber, `Action Shot "${actionId}" is missing frame "${base}/${name}".`);
+      }
+      frames.push(resolved.timelinePath);
+    }
+    const clipFps = Number(action.fps) > 0 ? Number(action.fps) : this.fps;
+    const window = this._audioWindow(kv, frames.length / clipFps, this.fps, token.lineNumber);
+    const hasExplicitStart = kv.at_time !== undefined || kv.start !== undefined;
+    const startFrame = this._eventStartFrame(kv, scene, token.lineNumber);
+    const endFrame = startFrame + window.durationFrames;
+
+    const config = this.characterLibrary.get(characterId) || {};
+    let mark = null;
+    if (scene.staging) {
+      const markName = kv.mark || (scene.castOrder.includes(characterId)
+        ? this._autoAssignMark(scene, characterId)
+        : scene.staging.autoOrder[0]);
+      mark = this._resolveMark(scene, markName, token.lineNumber);
+    }
+    const x = kv.x !== undefined ? parseNumberValue(kv.x, token.lineNumber, "x") : mark ? mark.x : scene.canvas.width / 2;
+    const y = kv.y !== undefined ? parseNumberValue(kv.y, token.lineNumber, "y") : mark ? mark.y : scene.canvas.height;
+    const scale =
+      kv.scale !== undefined
+        ? parseNumberValue(kv.scale, token.lineNumber, "scale")
+        : mark && mark.scale !== undefined
+          ? mark.scale
+          : config.default_scale !== undefined
+            ? config.default_scale
+            : 1;
+    if (!(scale > 0)) throw new ScriptError(token.lineNumber, `Invalid scale "${kv.scale}" -- must be greater than 0.`);
+    const flipX = kv.flip !== undefined ? kv.flip === "true" || kv.flip === "1" : mark && mark.flip_x ? !!mark.flip_x : !!config.default_flip_x;
+    const z = kv.z !== undefined ? Math.round(parseNumberValue(kv.z, token.lineNumber, "z")) : config.z !== undefined ? config.z : 0;
+
+    const baseId = `clip_${characterId}_${slugInsertId(String(actionId))}`;
+    let id = baseId;
+    let n = 2;
+    while (scene.clips.some((item) => item.id === id)) id = `${baseId}_${n++}`;
+    scene.clips.push({
+      id,
+      characterId,
+      asset: frames[0],
+      frames,
+      fps: clipFps,
+      trimIn: Math.round(window.inSec * 1000) / 1000,
+      startFrame,
+      endFrame,
+      z,
+      transform: { x, y, scale, anchor: "bottom-center", flip_x: flipX },
+      lineNumber: token.lineNumber,
+    });
+    scene.clipCharacters.add(characterId);
+    this._noteHorizon(scene, endFrame);
+    this._emitLane({
+      lane: "action",
+      token,
+      startFrame,
+      endFrame,
+      label: `${scriptName}: ${actionId}`,
+      subject: characterId,
+      rel: frames[0],
+      keys: Object.keys(kv),
+      kv,
+      sourceStartFrame: startFrame,
+      trim: { inFrames: window.inFrames, outFrames: window.outFrames },
+      sourceDurationFrames: window.sourceFrames,
+    });
+    if (!hasExplicitStart) scene.cursorFrames = endFrame;
+  }
+
   _handleCamera(token) {
     const scene = this._requireScene(token.lineNumber, "Camera");
     const { kv, note } = parseKvTag(token.body, { bareFlags: ["reset"] });
@@ -3133,9 +3251,17 @@ class ScriptParser {
     const layers = [];
     let anyDialogue = false;
     for (const state of scene.characters.values()) {
+      const replacedByClip = scene.clipCharacters.has(state.characterId);
       for (const segment of state.segments) {
         anyDialogue = anyDialogue || segment.dialogue.length > 0;
-        layers.push(this._buildLayerJson(state, segment));
+        if (replacedByClip && segment.dialogue.length === 0) continue;
+        const layer = this._buildLayerJson(state, segment);
+        if (replacedByClip) {
+          // Keep the layer so its dialogue still mixes, but never draw the rig under the clip.
+          const at = (layer.timing && layer.timing.start_frame) || 0;
+          layer.timing = { start_frame: at, end_frame: at };
+        }
+        layers.push(layer);
       }
     }
     for (const state of scene.props.values()) {
@@ -3145,6 +3271,9 @@ class ScriptParser {
     }
     for (const insert of scene.inserts) {
       layers.push(this._buildInsertLayerJson(insert));
+    }
+    for (const clip of scene.clips) {
+      layers.push(this._buildClipLayerJson(clip));
     }
 
     const endFrames = Math.max(scene.cursorFrames, scene.horizonFrames);
@@ -3183,6 +3312,18 @@ class ScriptParser {
       z: insert.z,
       transform: insert.transform,
       timing: { start_frame: insert.startFrame, end_frame: insert.endFrame },
+    };
+  }
+
+  _buildClipLayerJson(clip) {
+    return {
+      id: clip.id,
+      character_id: clip.characterId,
+      asset: clip.asset,
+      z: clip.z,
+      transform: clip.transform,
+      timing: { start_frame: clip.startFrame, end_frame: clip.endFrame },
+      sequence: { frames: clip.frames, fps: clip.fps, trim_in: clip.trimIn },
     };
   }
 

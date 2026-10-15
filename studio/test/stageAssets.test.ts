@@ -14,6 +14,24 @@ const scenes = [{ id: "intro", startFrame: 0, endFrame: 96, frames: 96 }];
 const script = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Hi."].join("\n");
 
 describe("stage asset drops", () => {
+  test("Action Shots drop on the Action Shots lane as a [Clip:] line", () => {
+    const clip = { kind: "clip", characterId: "rodney", characterName: "Rodney", actionId: "grab_mic" } as const;
+    assert.equal(assetFitsLane(clip, "action"), true);
+    assert.equal(assetFitsLane(clip, "audio"), false);
+    assert.equal(assetFitsLane(clip, "props"), false);
+    assert.equal(scriptLineForAssetDrop(clip, 24, 48), "[Clip: Rodney grab_mic at_time=2s]");
+    const next = applyAssetDropToScript({
+      script,
+      asset: clip,
+      lane: "action",
+      frame: 24,
+      fps: 24,
+      scenes,
+      playheadLine: null,
+    });
+    assert.match(next, /\[Clip: Rodney grab_mic at_time=1s\]/);
+  });
+
   test("drawings and cycles become Action tags on the fitting lane", () => {
     assert.equal(slotLane("face"), "face");
     assert.equal(slotLane("eyes"), "face");

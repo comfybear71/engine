@@ -33,6 +33,7 @@ from .blend import draw_image
 from .camera import CameraView, camera_view, scale_camera
 from .ffmpeg_writer import write_frames
 from .lipsync_natural import slot_head_bob
+from .sequence import layer_at_sequence_frame
 from .slots import Slot, _find_active_clip, active_drawing, drawing_align, is_hide_drawing, slot_is_visible
 from .timeline_loader import (
     Child,
@@ -354,6 +355,9 @@ def _draw_layer(
     world_scale: float = 1.0,
     camera: CameraView | None = None,
 ) -> None:
+    if layer.sequence is not None:
+        layer = layer_at_sequence_frame(layer, layer_local_frame_idx, fps)
+        cache.note_sequence_frame(layer.id, layer.asset)
     drawings = _collect_slot_drawings(layer, layer_local_frame_idx, fps)
     hide_rig_base = is_walk_cycle_drawing(drawings)
     suppressed = _suppressed_head_slots(layer)

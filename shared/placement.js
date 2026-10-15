@@ -515,6 +515,14 @@ export function evaluateBackgroundRect(graph, frameIndex) {
   return backgroundDestRect(bg, evaluated.canvas.width, evaluated.canvas.height);
 }
 
+/** Mirrors sequence_frame_index in worker/python/compositor/sequence.py. */
+export function sequenceFrameIndex(sequence, localFrame, projectFps) {
+  const files = (sequence && sequence.files) || [];
+  const seconds = (Number(sequence.trimIn) || 0) + Math.max(0, localFrame) / Math.max(1, projectFps);
+  const index = Math.floor(seconds * (Number(sequence.fps) || 24) + 1e-6);
+  return Math.max(0, Math.min(index, files.length - 1));
+}
+
 export function evaluateFrame(graph, frameIndex) {
   const fps = graph.fps || 24;
   const canvasW = graph.canvas?.width || 1920;
@@ -549,9 +557,14 @@ export function evaluateFrame(graph, frameIndex) {
     const end = layer.endFrame == null ? scene.totalFrames : layer.endFrame;
     if (composed < (layer.startFrame || 0) || composed >= end) continue;
     const local = composed - (layer.startFrame || 0);
-    const drawings = collectDrawings(layer, local, fps);
-    const hidden = suppressed(layer);
-    const layerView = layerViewAt(layer, local);
+    let drawLayer = layer;
+    if (layer.sequence && layer.sequence.files && layer.sequence.files.length) {
+      const index = sequenceFrameIndex(layer.sequence, local, fps);
+      drawLayer = { ...layer, rel: layer.sequence.files[index] };
+    }
+    const drawings = collectDrawings(drawLayer, local, fps);
+    const hidden = suppressed(drawLayer);
+    const layerView = layerViewAt(drawLayer, local);
     const groupRotBySlot = {};
     const groupPivotBySlot = {};
     for (const [groupName, members] of Object.entries(layer.groups || {})) {
@@ -576,7 +589,7 @@ export function evaluateFrame(graph, frameIndex) {
         groupPivotBySlot[member] = pivotXy;
       }
     }
-    for (const placed of resolveLayerPlacements(layer, local, drawings)) {
+    for (const placed of resolveLayerPlacements(drawLayer, local, drawings)) {
       let x = placed.x;
       let y = placed.y;
       let scale = placed.scale;
@@ -613,6 +626,30 @@ export function evaluateFrame(graph, frameIndex) {
     }
   }
   return { frame, canvas: { width: canvasW, height: canvasH }, fps, commands };
+}
+
+/**
+ * Flipbook frames the next `count` project frames will need that are not the
+ * frame already shown at `frameIndex`, so the preview can load them ahead of
+ * playback instead of preloading whole sequences.
+ */
+export function sequenceLookahead(graph, frameIndex, count = 8) {
+  const fps = graph.fps || 24;
+  const total = graph.totalFrames || 1;
+  const wanted = new Set();
+  for (let step = 0; step <= count; step++) {
+    const frame = Math.max(0, Math.min(Math.floor(frameIndex) + step, total - 1));
+    const { scene, localFrame } = sceneAtFrame(graph, frame);
+    const composed = localFrame - (localFrame % Math.max(1, scene.frameStep || 1));
+    for (const layer of scene.layers || []) {
+      const files = layer.sequence && layer.sequence.files;
+      if (!files || !files.length) continue;
+      const end = layer.endFrame == null ? scene.totalFrames : layer.endFrame;
+      if (composed < (layer.startFrame || 0) || composed >= end) continue;
+      wanted.add(files[sequenceFrameIndex(layer.sequence, composed - (layer.startFrame || 0), fps)]);
+    }
+  }
+  return [...wanted];
 }
 
 export function collectRels(graph) {

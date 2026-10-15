@@ -5,6 +5,7 @@ import {
   backgroundDestRect,
   collectRels,
   evaluateFrame,
+  sequenceLookahead,
   type PreviewCommand,
 } from "@/lib/previewCompose";
 import { assetUrl } from "@/lib/worker";
@@ -13,6 +14,8 @@ const DISPLAY_WIDTH = 854;
 const DISPLAY_HEIGHT = 480;
 
 type TextureMap = Map<string, HTMLImageElement>;
+
+const LAZY_TEXTURE_LIMIT = 48;
 
 function loadTexture(project: string, rel: string): Promise<HTMLImageElement | null> {
   const src = assetUrl(project, rel, { preview: true });
@@ -92,6 +95,8 @@ export default function PreviewCanvas({
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const texturesRef = useRef<TextureMap>(new Map());
+  const lazyRef = useRef<TextureMap>(new Map());
+  const pendingRef = useRef<Set<string>>(new Set());
   const [readyTick, setReadyTick] = useState(0);
   const rels = useMemo(() => collectRels(graph), [graph]);
 
@@ -114,9 +119,36 @@ export default function PreviewCanvas({
   }, [project, rels]);
 
   useEffect(() => {
+    lazyRef.current = new Map();
+    pendingRef.current = new Set();
+  }, [project]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !graph) return;
     const evaluated = evaluateFrame(graph, frame);
+    const lookahead = sequenceLookahead(graph, frame);
+    const keep = new Set(lookahead);
+    const wanted = [
+      ...evaluated.commands.map((cmd) => cmd.rel),
+      ...lookahead,
+    ];
+    for (const rel of wanted) {
+      if (!rel) continue;
+      if (texturesRef.current.has(rel) || lazyRef.current.has(rel) || pendingRef.current.has(rel)) continue;
+      pendingRef.current.add(rel);
+      void loadTexture(project, rel).then((img) => {
+        pendingRef.current.delete(rel);
+        if (!img) return;
+        const lazy = lazyRef.current;
+        lazy.set(rel, img);
+        for (const key of lazy.keys()) {
+          if (lazy.size <= LAZY_TEXTURE_LIMIT) break;
+          if (!keep.has(key) && key !== rel) lazy.delete(key);
+        }
+        setReadyTick((n) => n + 1);
+      });
+    }
     const worldW = evaluated.canvas.width || 1920;
     const worldH = evaluated.canvas.height || 1080;
     const displayW = DISPLAY_WIDTH;
@@ -129,7 +161,7 @@ export default function PreviewCanvas({
     ctx.clearRect(0, 0, worldW, worldH);
     const textures = texturesRef.current;
     for (const cmd of evaluated.commands) {
-      const img = cmd.rel ? textures.get(cmd.rel) || null : null;
+      const img = cmd.rel ? textures.get(cmd.rel) || lazyRef.current.get(cmd.rel) || null : null;
       if (cmd.kind === "bg") {
         drawBackground(ctx, img, cmd, worldW, worldH);
         continue;
@@ -137,7 +169,7 @@ export default function PreviewCanvas({
       if (!img) continue;
       drawSprite(ctx, img, cmd);
     }
-  }, [graph, frame, readyTick]);
+  }, [graph, frame, readyTick, project]);
 
   return (
     <canvas
