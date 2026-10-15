@@ -112,7 +112,7 @@ describe("LTX prompt", () => {
       prompt,
       'Use the provided start image as the first frame. Rodney, a man with a red felt hat and dark beard is prominent, mouth and head move naturally while speaking, subtle gesture. Props and background stay exactly as the start image, nothing new enters frame. Rodney says: "' +
         words +
-        '". Camera stays completely still and holds the shot, locked off, no zoom, no movement. Same person and objects as the start image.'
+        '". Static medium close-up shot. Fixed camera frame, zero camera movement, stable background. Same person and objects as the start image.'
     );
   });
 

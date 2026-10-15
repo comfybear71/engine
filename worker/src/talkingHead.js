@@ -218,7 +218,7 @@ function buildLtxPrompt(talk) {
     "Use the provided start image as the first frame. " +
     `${subject} is prominent, mouth and head move naturally while speaking, subtle gesture. ` +
     "Props and background stay exactly as the start image, nothing new enters frame. " +
-    `${says} Camera stays completely still and holds the shot, locked off, no zoom, no movement. Same person and objects as the start image.`
+    `${says} Static medium close-up shot. Fixed camera frame, zero camera movement, stable background. Same person and objects as the start image.`
   );
 }
 
