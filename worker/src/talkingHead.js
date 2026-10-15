@@ -270,6 +270,42 @@ async function ensureChainHeadSize(shots, options = {}) {
   }
 }
 
+const STASH_DIR = "_previous";
+const STASH_ITEMS = ["source.mp4", "raw", "cut", "thumb", "poster.jpg", "preview.mp4"];
+
+/** Move a finished clip's media aside so a redo can be undone. One level only. */
+function stashClip(dir, info) {
+  const stash = path.join(dir, STASH_DIR);
+  fs.rmSync(stash, { recursive: true, force: true });
+  fs.mkdirSync(stash, { recursive: true });
+  const snapshot = { ...info };
+  delete snapshot.hasPrevious;
+  fs.writeFileSync(path.join(stash, "shot.json"), JSON.stringify(snapshot, null, 2));
+  for (const item of STASH_ITEMS) {
+    const from = path.join(dir, item);
+    if (fs.existsSync(from)) fs.renameSync(from, path.join(stash, item));
+  }
+  info.hasPrevious = true;
+}
+
+/** Put the stashed version back. Returns false when there is nothing to restore. */
+function restoreClip(dir) {
+  const stash = path.join(dir, STASH_DIR);
+  const metaPath = path.join(stash, "shot.json");
+  if (!fs.existsSync(metaPath)) return false;
+  const previous = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  for (const item of STASH_ITEMS) {
+    fs.rmSync(path.join(dir, item), { recursive: true, force: true });
+    const from = path.join(stash, item);
+    if (fs.existsSync(from)) fs.renameSync(from, path.join(dir, item));
+  }
+  fs.rmSync(stash, { recursive: true, force: true });
+  delete previous.hasPrevious;
+  delete previous.requestId;
+  writeShotJson(dir, previous);
+  return true;
+}
+
 function buildWindowPrompt(talk) {
   if (normalizeEngine(talk.engine) === "ltx") return buildLtxPrompt(talk);
   const base = String(talk.basePrompt || DEFAULT_TALK_PROMPT).trim();
@@ -524,8 +560,15 @@ async function stopTalkingHead(projectDir, characterId, group, { removeAll = fal
     }
   }
   let removed = 0;
-  for (const { info } of groupShots(projectDir, characterId, group)) {
+  for (const { dir, info } of groupShots(projectDir, characterId, group)) {
     if (!removeAll && info.status === "ready") continue;
+    if (!removeAll && info.hasPrevious) {
+      try {
+        if (restoreClip(dir)) continue;
+      } catch {
+        /* fall through and remove it */
+      }
+    }
     try {
       shotsModule.deleteShot(projectDir, characterId, info.id);
       removed += 1;
@@ -659,6 +702,7 @@ async function redoTalkingHeadClip(projectDir, characterId, group, index, option
   const last = options.cascade === true ? shots.length - 1 : target;
   for (let i = target; i <= last; i++) {
     const { dir, info } = shots[i];
+    if (info.status === "ready") stashClip(dir, info);
     info.status = "queued";
     delete info.error;
     delete info.requestId;
@@ -668,6 +712,17 @@ async function redoTalkingHeadClip(projectDir, characterId, group, index, option
   const result = { ok: true, group, redone: target + 1, cascade: options.cascade === true };
   Object.defineProperty(result, "completion", { value: completion, enumerable: false });
   return result;
+}
+
+/** Bring back the clip a redo replaced. */
+async function undoTalkingHeadRedo(projectDir, characterId, group, index) {
+  const shots = groupShots(projectDir, characterId, group);
+  if (!shots.length) throw shotError("Talking head not found", "ENOENT");
+  if (running.has(`${characterId}/${group}`)) throw shotError("Wait for this talking head to finish generating, or stop it first.");
+  const target = Number(index);
+  if (!Number.isInteger(target) || target < 0 || target >= shots.length) throw shotError("That clip does not exist");
+  if (!restoreClip(shots[target].dir)) throw shotError("There is no earlier version of that clip to restore");
+  return { ok: true, group, restored: target + 1 };
 }
 
 module.exports = {
@@ -681,6 +736,7 @@ module.exports = {
   makeTalkingHead,
   resumeTalkingHead,
   redoTalkingHeadClip,
+  undoTalkingHeadRedo,
   markInterruptedTalkShots,
   listTalkingHeadStarts,
   saveTalkingHeadStart,

@@ -1822,6 +1822,15 @@ export function redoTalkingHeadClip(
   return talkingHeadPost(`${talkingHeadBase(name, characterId)}/${encodeURIComponent(group)}/redo`, { index, cascade });
 }
 
+export function undoTalkingHeadRedo(
+  name: string,
+  characterId: string,
+  group: string,
+  index: number
+): Promise<{ ok: boolean; group: string; restored: number }> {
+  return talkingHeadPost(`${talkingHeadBase(name, characterId)}/${encodeURIComponent(group)}/undo-redo`, { index });
+}
+
 export async function importProjectAudio(
   name: string,
   file: File,

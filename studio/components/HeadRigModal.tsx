@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { WORKER_URL, deleteTalkingHead, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, workerFetch } from "@/lib/worker";
+import { WORKER_URL, deleteTalkingHead, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
 import { groupTalkShots, placeTalkWindows, type TalkGroup, type TalkMeta } from "@/lib/talkingHead";
 import {
   alphaBox,
@@ -1032,12 +1032,24 @@ export default function HeadRigModal({
   }
 
   async function handleRedoTalkClip(group: string, index: number) {
-    if (!confirm(`Regenerate clip ${index + 1} with a new seed?\n\nThis uses Comfy Cloud credits for one clip. The other clips are kept, and the old clip ${index + 1} is replaced.`)) return;
+    if (!confirm(`Regenerate clip ${index + 1} with a new seed?\n\nThis uses Comfy Cloud credits for one clip. The other clips are kept, and you can press Undo to get the old clip ${index + 1} back.`)) return;
     setTalkBusy(group);
     try {
       await redoTalkingHeadClip(project, characterId, group, index);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not redo the clip");
+    }
+    await reloadShots();
+    setTalkBusy(null);
+  }
+
+  async function handleUndoRedoClip(group: string, index: number) {
+    if (!confirm(`Go back to the previous version of clip ${index + 1}?\n\nThe current version of clip ${index + 1} is discarded.`)) return;
+    setTalkBusy(group);
+    try {
+      await undoTalkingHeadRedo(project, characterId, group, index);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not restore the previous clip");
     }
     await reloadShots();
     setTalkBusy(null);
@@ -1725,6 +1737,7 @@ export default function HeadRigModal({
                 onPlace={placeTalkGroup}
                 onResume={(g) => void handleResumeTalk(g)}
                 onRedoClip={(g, i) => void handleRedoTalkClip(g, i)}
+                onUndoRedoClip={(g, i) => void handleUndoRedoClip(g, i)}
                 onStop={(g) => void handleStopTalk(g)}
                 onDelete={(g) => void handleDeleteTalk(g)}
               />
@@ -2100,13 +2113,14 @@ export default function HeadRigModal({
 
 // ── Talking head sidebar section ─────────────────────────────────────
 
-function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onRedoClip, onStop, onDelete }: {
+function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onRedoClip, onUndoRedoClip, onStop, onDelete }: {
   groups: TalkGroup[];
   project: string; characterId: string;
   busyGroup: string | null;
   onPlace: (group: TalkGroup) => void;
   onResume: (group: string) => void;
   onRedoClip: (group: string, index: number) => void;
+  onUndoRedoClip: (group: string, index: number) => void;
   onStop: (group: string) => void;
   onDelete: (group: string) => void;
 }) {
@@ -2124,7 +2138,7 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
           {groups.map((group) => (
             <TalkGroupCard key={group.group} group={group} project={project} characterId={characterId}
               busy={busyGroup === group.group} onPlace={() => onPlace(group)} onResume={() => onResume(group.group)}
-              onRedoClip={(i) => onRedoClip(group.group, i)}
+              onRedoClip={(i) => onRedoClip(group.group, i)} onUndoRedoClip={(i) => onUndoRedoClip(group.group, i)}
               onStop={() => onStop(group.group)} onDelete={() => onDelete(group.group)} />
           ))}
         </div>
@@ -2135,9 +2149,9 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
 
 const TALK_STATE_LABEL: Record<string, string> = { queued: "Queued", making: "Generating", ready: "Ready", stopped: "Stopped", error: "Failed" };
 
-function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onRedoClip, onStop, onDelete }: {
+function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onRedoClip, onUndoRedoClip, onStop, onDelete }: {
   group: TalkGroup; project: string; characterId: string; busy: boolean;
-  onPlace: () => void; onResume: () => void; onRedoClip: (index: number) => void; onStop: () => void; onDelete: () => void;
+  onPlace: () => void; onResume: () => void; onRedoClip: (index: number) => void; onUndoRedoClip: (index: number) => void; onStop: () => void; onDelete: () => void;
 }) {
   const inProgress = group.state === "making" || group.state === "queued";
   const [playing, setPlaying] = useState<number | null>(null);
@@ -2174,6 +2188,15 @@ function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, o
                 title="Regenerate just this clip with a new seed (uses credits for one clip)"
                 onClick={() => onRedoClip(shot.talk?.index ?? 0)}>
                 Redo
+              </button>
+            )}
+            {shot.hasPrevious && !inProgress && (
+              <button type="button" disabled={busy}
+                className="shrink-0 rounded border border-amber-500/60 px-1.5 py-0.5 text-[10px] text-amber-300 hover:bg-[#333] disabled:opacity-40"
+                data-testid={`talk-undo-${(shot.talk?.index ?? 0) + 1}`}
+                title="Go back to the version of this clip from before the last redo"
+                onClick={() => onUndoRedoClip(shot.talk?.index ?? 0)}>
+                Undo
               </button>
             )}
           </li>
