@@ -196,17 +196,19 @@ def key_flat(bgr: np.ndarray, bg_color: tuple[float, float, float],
 HEAD_BLACK_KEY = "head-black"
 
 
-def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, close_frac: float = 0.09,
-                      feather_px: float = 1.2) -> np.ndarray:
+def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, open_frac: float = 0.14,
+                      close_frac: float = 0.03, feather_px: float = 1.2) -> np.ndarray:
     """Key a head shot filmed on pure black (an LTX talking head).
 
     A colour key cannot work here: black hair, the shadow under a hat brim
     and a dark beard are as black as the backdrop, and they touch it, so
     key_flat() eats them. Instead only near-pure black connected to the
-    frame border (including any letterbox bars) counts as backdrop, then
-    the head silhouette is closed and its outline filled so hair and the shadow
-    under a hat brim stay solid. A convex hull is deliberately not used: it
-    leaves straight-edged black corners around the head once it is composited.
+    frame border (including any letterbox bars) counts as backdrop. That
+    backdrop is then opened, which removes any pocket of hair or hat shadow
+    that only reaches the backdrop through a narrow gap, so those stay solid
+    while the open backdrop is still removed right up to the head outline.
+    A convex hull is deliberately not used: it leaves straight-edged black
+    corners around the head once it is composited.
     Pixel colours are never changed, only alpha.
     """
     h, w = bgr.shape[:2]
@@ -217,15 +219,19 @@ def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, close_frac: float =
     border |= set(labels[:, 0].tolist()) | set(labels[:, -1].tolist())
     border.discard(0)
     background = np.isin(labels, list(border)).astype(np.uint8)
-    foreground = (1 - background).astype(np.uint8)
 
-    k = max(3, int(round(h * close_frac)) | 1)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    closed = cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, kernel)
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    k_open = max(3, int(round(h * open_frac)) | 1)
+    pad = k_open
+    padded = cv2.copyMakeBorder(background, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
+    opened = cv2.morphologyEx(padded, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open)))
+    foreground = (1 - opened[pad:-pad, pad:-pad]).astype(np.uint8)
+
+    k_close = max(3, int(round(h * close_frac)) | 1)
+    foreground = cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_close, k_close)))
+    contours, _ = cv2.findContours(foreground, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     min_area = 0.002 * h * w
     keep = [c for c in contours if cv2.contourArea(c) >= min_area]
-    mask = np.zeros_like(closed)
+    mask = np.zeros_like(foreground)
     cv2.drawContours(mask, keep, -1, 1, cv2.FILLED)
 
     alpha = (mask * 255).astype(np.uint8)
