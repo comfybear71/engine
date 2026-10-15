@@ -976,24 +976,46 @@ export default function HeadRigModal({
   const rigKeys = Object.keys(rigs);
 
   const [mediaPanelOpen, setMediaPanelOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(300);
+  const [timelineHeight, setTimelineHeight] = useState(220);
+  const sidebarDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const timelineDragRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  // Sidebar resize handler
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (sidebarDragRef.current) {
+        const delta = e.clientX - sidebarDragRef.current.startX;
+        setSidebarWidth(clamp(sidebarDragRef.current.startW + delta, 200, 500));
+      }
+      if (timelineDragRef.current) {
+        const delta = timelineDragRef.current.startY - e.clientY;
+        setTimelineHeight(clamp(timelineDragRef.current.startH + delta, 120, 500));
+      }
+    }
+    function onUp() { sidebarDragRef.current = null; timelineDragRef.current = null; }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, []);
 
   const content = (
     <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
       <div className="flex h-full">
         {/* ══════════ LEFT SIDEBAR — Media Bins + Grok ══════════ */}
-        <div className={`shrink-0 border-r border-[#222] bg-[#131313] transition-all ${mediaPanelOpen ? "w-[260px]" : "w-0 overflow-hidden"}`}>
+        <div className={`shrink-0 bg-[#131313] transition-all ${mediaPanelOpen ? "" : "w-0 overflow-hidden"}`} style={mediaPanelOpen ? { width: sidebarWidth } : undefined}>
           <div className="flex h-full flex-col overflow-y-auto">
             {/* Import clip */}
             <div className="flex items-center gap-2 border-b border-[#222] px-3 py-2">
               <input ref={importRef} type="file" accept="video/*,.mp4,.mov,.webm" className="hidden"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFile(f, importType); }} />
-              <select className="rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+              <select className="rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
                 value={importType} onChange={(e) => setImportType(e.target.value as "body" | "head")}>
-                <option value="body">Body</option>
-                <option value="head">Head</option>
+                <option value="body">Body clip</option>
+                <option value="head">Head clip</option>
               </select>
               <button type="button"
-                className="rounded bg-blue-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
+                className="rounded bg-blue-600 px-3 py-1 text-[12px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
                 disabled={importBusy}
                 onClick={() => importRef.current?.click()}>
                 {importBusy ? "Importing…" : "📁 Import Clip"}
@@ -1041,6 +1063,15 @@ export default function HeadRigModal({
           </div>
         </div>
 
+        {/* Sidebar resize handle */}
+        {mediaPanelOpen && (
+          <div
+            className="shrink-0 cursor-col-resize bg-[#222] hover:bg-[#e0a040]/60 active:bg-[#e0a040]"
+            style={{ width: 4 }}
+            onMouseDown={(e) => { e.preventDefault(); sidebarDragRef.current = { startX: e.clientX, startW: sidebarWidth }; }}
+          />
+        )}
+
         {/* ══════════ MAIN AREA — Canvas + Timeline ══════════ */}
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Toggle sidebar + Rig controls */}
@@ -1049,10 +1080,10 @@ export default function HeadRigModal({
               onClick={() => setMediaPanelOpen(!mediaPanelOpen)} title={mediaPanelOpen ? "Hide media panel" : "Show media panel"}>
               {mediaPanelOpen ? "◀" : "▶"}
             </button>
-            <label className="text-[11px] text-studio-muted">
+            <label className="text-[13px] text-studio-muted">
               Rig
               <select
-                className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-0.5 text-[10px] text-neutral-200"
+                className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-[12px] text-neutral-200"
                 value={rigKey}
                 onChange={(e) => setRigKey(e.target.value)}
               >
@@ -1065,17 +1096,17 @@ export default function HeadRigModal({
               </select>
               <input
                 type="text"
-                className="ml-1 w-16 rounded-md border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+                className="ml-1 w-20 rounded-md border border-studio-border bg-studio-raised px-1 py-1 text-[12px] text-neutral-200"
                 placeholder="custom"
                 value={rigKey}
                 onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
               />
             </label>
-            <label className="text-[11px] text-studio-muted">
+            <label className="text-[13px] text-studio-muted">
               FPS
               <input
                 type="number" min={4} max={60}
-                className="ml-1 w-12 rounded-md border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+                className="ml-1 w-14 rounded-md border border-studio-border bg-studio-raised px-1 py-1 text-[12px] text-neutral-200"
                 value={fps}
                 onChange={(e) => setFps(clamp(Number(e.target.value) || 24, 4, 60))}
               />
@@ -1083,19 +1114,19 @@ export default function HeadRigModal({
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
-                className="rounded bg-studio-accent px-2 py-0.5 text-[10px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+                className="rounded bg-studio-accent px-3 py-1 text-[12px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
                 disabled={busy != null || (!bodySegments.length && !headSegments.length)}
                 onClick={() => void handleSave()}
               >
                 {busy || `Save "${rigKey}"`}
               </button>
-              {error ? <span className="text-[10px] text-red-400">{error}</span> : null}
-              {saved ? <span className="text-[10px] text-green-400">Saved!</span> : null}
+              {error ? <span className="text-[12px] text-red-400">{error}</span> : null}
+              {saved ? <span className="text-[12px] text-green-400">Saved!</span> : null}
               {rigKeys.length > 0 && rigKeys.map((key) => (
                 <button
                   key={key}
                   type="button"
-                  className={`rounded px-1.5 py-0.5 text-[9px] ${rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-400 hover:text-white"}`}
+                  className={`rounded px-2 py-1 text-[11px] ${rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-400 hover:text-white"}`}
                   onClick={() => setRigKey(key)}
                 >
                   {key}
@@ -1118,15 +1149,22 @@ export default function HeadRigModal({
               onMouseLeave={onCanvasMouseUp}
               onWheel={onCanvasWheel}
             />
-            <p className="mt-1 text-[10px] text-studio-muted">
+            <p className="mt-1 text-[12px] text-studio-muted">
               {editingHead
                 ? "Drag head = move · Corner handles = scale · Scroll = resize"
                 : "Select a head segment to reposition it"}
             </p>
           </div>
 
+      {/* Timeline resize handle */}
+      <div
+        className="shrink-0 cursor-row-resize bg-[#222] hover:bg-[#e0a040]/60 active:bg-[#e0a040]"
+        style={{ height: 4 }}
+        onMouseDown={(e) => { e.preventDefault(); timelineDragRef.current = { startY: e.clientY, startH: timelineHeight }; }}
+      />
+
       {/* ══════════ Multi-segment DaVinci-style Timeline ══════════ */}
-      <div className="select-none overflow-hidden border-t border-[#2a2a2a] bg-[#0d0d0d]">
+      <div className="select-none overflow-hidden bg-[#0d0d0d]" style={{ height: timelineHeight }}>
         <div className="flex items-center justify-between border-b border-[#222] bg-[#181818] px-4 py-2">
           <div className="font-mono text-xl font-bold tracking-wider text-neutral-100" style={{ minWidth: 120 }}>
             {String(Math.floor((scrubFrame - 1) / (fps * 60))).padStart(2, "0")}
@@ -1136,8 +1174,8 @@ export default function HeadRigModal({
             {String(Math.floor((scrubFrame - 1) % fps)).padStart(2, "0")}
           </div>
           <div className="flex items-center gap-1">
-            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(1)} title="Go to start">⏮</button>
-            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.max(1, f - 1))} title="Previous frame">◀</button>
+            <button type="button" className="rounded px-2.5 py-1.5 text-lg text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(1)} title="Go to start">⏮</button>
+            <button type="button" className="rounded px-2.5 py-1.5 text-lg text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.max(1, f - 1))} title="Previous frame">◀</button>
             <button
               type="button"
               className={`rounded-md px-4 py-1.5 text-sm font-semibold ${playing ? "bg-[#c83030] text-white hover:bg-[#a02828]" : "bg-[#2a2a2a] text-neutral-200 hover:bg-[#3a3a3a]"}`}
@@ -1146,13 +1184,13 @@ export default function HeadRigModal({
             >
               {playing ? "■" : "▶"}
             </button>
-            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.min(maxFrames, f + 1))} title="Next frame">▶</button>
-            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(maxFrames)} title="Go to end">⏭</button>
+            <button type="button" className="rounded px-2.5 py-1.5 text-lg text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.min(maxFrames, f + 1))} title="Next frame">▶</button>
+            <button type="button" className="rounded px-2.5 py-1.5 text-lg text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(maxFrames)} title="Go to end">⏭</button>
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))} title="Zoom out">−</button>
-            <span className="w-8 text-center font-mono text-[10px] text-neutral-500">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
-            <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))} title="Zoom in">+</button>
+            <button type="button" className="h-8 w-8 rounded text-base text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))} title="Zoom out">−</button>
+            <span className="w-10 text-center font-mono text-[12px] text-neutral-500">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
+            <button type="button" className="h-8 w-8 rounded text-base text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))} title="Zoom in">+</button>
           </div>
         </div>
 
@@ -1169,7 +1207,7 @@ export default function HeadRigModal({
                   return (
                     <Fragment key={f}>
                       <div className="absolute top-0 h-full w-px bg-[#2a2a2a]" style={{ left: pct }} />
-                      <span className="absolute bottom-1 text-[9px] text-neutral-600" style={{ left: pct, transform: "translateX(-50%)" }}>{f}</span>
+                      <span className="absolute bottom-0.5 text-[11px] font-medium text-neutral-500" style={{ left: pct, transform: "translateX(-50%)" }}>{f}</span>
                     </Fragment>
                   );
                 })}
@@ -1219,16 +1257,18 @@ export default function HeadRigModal({
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-t border-[#222] bg-[#161616] px-4 py-1">
-          <div className="flex gap-3 text-[10px] text-neutral-500">
-            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Click</kbd> select</span>
-            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Drag</kbd> move</span>
-            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">I/O</kbd> trim</span>
-            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Ctrl+B</kbd> split</span>
-            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Del</kbd> remove</span>
-            <span><kbd className="rounded bg-[#222] px-1 text-neutral-400">Ctrl+C/V</kbd> copy/paste</span>
+        <div className="flex items-center justify-between border-t border-[#222] bg-[#161616] px-4 py-1.5">
+          <div className="flex flex-wrap gap-3 text-[12px] text-neutral-500">
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Click</kbd> select</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Drag</kbd> move</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Drag edge</kbd> trim</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">I/O</kbd> trim at playhead</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Ctrl+B</kbd> split</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Del</kbd> remove</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Ctrl+C/V</kbd> copy/paste</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Right-click</kbd> menu</span>
           </div>
-          <div className="flex items-center gap-3 font-mono text-[10px]">
+          <div className="flex items-center gap-4 font-mono text-[12px]">
             <span className="text-neutral-400">Frame <span className="text-neutral-200">{scrubFrame}</span> / {maxFrames}</span>
             <span className="text-neutral-400">Body <span className="text-blue-400">{bodySegments.length}</span> Head <span className="text-green-400">{headSegments.length}</span></span>
           </div>
@@ -1242,19 +1282,19 @@ export default function HeadRigModal({
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-200 hover:bg-[#333]"
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
             onClick={ctxCopy}>
-            <span className="w-4 text-center">📋</span> Copy <span className="ml-auto text-[10px] text-neutral-500">Ctrl+C</span>
+            <span className="w-4 text-center">📋</span> Copy <span className="ml-auto text-[12px] text-neutral-500">Ctrl+C</span>
           </button>
-          <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-200 hover:bg-[#333] disabled:opacity-40"
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333] disabled:opacity-40"
             disabled={!clipboardRef.current}
             onClick={ctxPaste}>
-            <span className="w-4 text-center">📌</span> Paste <span className="ml-auto text-[10px] text-neutral-500">Ctrl+V</span>
+            <span className="w-4 text-center">📌</span> Paste <span className="ml-auto text-[12px] text-neutral-500">Ctrl+V</span>
           </button>
           <div className="my-1 h-px bg-[#333]" />
-          <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-400 hover:bg-[#333]"
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 hover:bg-[#333]"
             onClick={ctxDelete}>
-            <span className="w-4 text-center">🗑</span> Delete <span className="ml-auto text-[10px] text-neutral-500">Del</span>
+            <span className="w-4 text-center">🗑</span> Delete <span className="ml-auto text-[12px] text-neutral-500">Del</span>
           </button>
         </div>
       ) : null}
@@ -1301,20 +1341,20 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
   const [open, setOpen] = useState(true);
   return (
     <div className="border-b border-[#222]">
-      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] font-semibold text-[#e0a040] hover:bg-[#222]"
+      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-[#e0a040] hover:bg-[#222]"
         onClick={() => setOpen(!open)}>
-        <span className="text-[9px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        <span className="text-[11px] text-neutral-500">{open ? "▼" : "▶"}</span>
         Create with Grok
       </button>
       {open && (
         <div className="flex flex-col gap-2 px-3 pb-3">
           <div className="flex gap-2">
-            <select className="flex-1 rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+            <select className="flex-1 rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
               value={grokType} onChange={(e) => setGrokType(e.target.value as "body" | "head")}>
               <option value="body">Body</option>
               <option value="head">Head</option>
             </select>
-            <select className="rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+            <select className="rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
               value={grokDuration} onChange={(e) => setGrokDuration(Number(e.target.value))}>
               <option value={4}>4s</option>
               <option value={6}>6s</option>
@@ -1322,21 +1362,21 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
               <option value={10}>10s</option>
             </select>
           </div>
-          <select className="w-full rounded border border-studio-border bg-studio-raised px-1 py-0.5 text-[10px] text-neutral-200"
+          <select className="w-full rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
             value={grokRefShotId} onChange={(e) => setGrokRefShotId(e.target.value)}>
             <option value="">Character ref</option>
             {allShots.map((s) => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
           </select>
-          <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1 text-[10px] text-neutral-200"
+          <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-[12px] text-neutral-200"
             placeholder={grokType === "body" ? "body prompt…" : "head prompt…"}
             value={grokPrompt} onChange={(e) => setGrokPrompt(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") onCreate(); }} />
           <button type="button"
-            className="w-full rounded bg-studio-accent px-2 py-1 text-[10px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+            className="w-full rounded bg-studio-accent px-2 py-1.5 text-[12px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
             disabled={grokBusy || !grokPrompt.trim()} onClick={onCreate}>
             {grokBusy ? "Creating…" : `Create ${grokType} shot`}
           </button>
-          {grokMsg && <p className={`text-[10px] font-medium ${/error|fail/i.test(grokMsg) ? "text-red-400" : "text-emerald-300"}`}>{grokMsg}</p>}
+          {grokMsg && <p className={`text-[12px] font-medium ${/error|fail/i.test(grokMsg) ? "text-red-400" : "text-emerald-300"}`}>{grokMsg}</p>}
         </div>
       )}
     </div>
@@ -1358,37 +1398,37 @@ function BakeSection({ bakeName, setBakeName, bakeBusy, bakeMsg, bodySegments, h
   const [open, setOpen] = useState(true);
   return (
     <div className="border-b border-[#222]">
-      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] font-semibold text-emerald-400 hover:bg-[#222]"
+      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-emerald-400 hover:bg-[#222]"
         onClick={() => setOpen(!open)}>
-        <span className="text-[9px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        <span className="text-[11px] text-neutral-500">{open ? "▼" : "▶"}</span>
         Bake to Action Shot
-        {combinedShots.length > 0 && <span className="ml-auto text-[9px] font-normal text-neutral-600">{combinedShots.length}</span>}
+        {combinedShots.length > 0 && <span className="ml-auto text-[11px] font-normal text-neutral-600">{combinedShots.length}</span>}
       </button>
       {open && (
         <div className="flex flex-col gap-2 px-3 pb-3">
-          <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1 text-[10px] text-neutral-200"
+          <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-[12px] text-neutral-200"
             placeholder="Shot name (optional)" value={bakeName} onChange={(e) => setBakeName(e.target.value)} />
           <button type="button"
-            className="w-full rounded bg-emerald-600 px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+            className="w-full rounded bg-emerald-600 px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
             disabled={bakeBusy || (!bodySegments.length && !headSegments.length)} onClick={onBake}>
             {bakeBusy ? "Baking…" : "Bake Timeline"}
           </button>
-          {bakeMsg && <p className={`text-[10px] font-medium ${/fail/i.test(bakeMsg) ? "text-red-400" : "text-emerald-300"}`}>{bakeMsg}</p>}
+          {bakeMsg && <p className={`text-[12px] font-medium ${/fail/i.test(bakeMsg) ? "text-red-400" : "text-emerald-300"}`}>{bakeMsg}</p>}
           {combinedShots.map((s) => (
-            <div key={s.id} className="group relative flex items-center gap-2 rounded border border-studio-border bg-[#111] p-1.5">
+            <div key={s.id} className="group relative flex items-center gap-2 rounded border border-studio-border bg-[#111] p-2">
               <img src={shotMediaUrl(project, characterId, s.id, "poster.jpg")} alt={s.name || s.id}
-                className="h-10 w-10 shrink-0 rounded object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                className="h-12 w-12 shrink-0 rounded object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[10px] font-medium text-neutral-200">{s.name || s.id}</p>
-                <p className="text-[9px] text-neutral-500">{s.frameCount}f</p>
+                <p className="truncate text-[12px] font-medium text-neutral-200">{s.name || s.id}</p>
+                <p className="text-[11px] text-neutral-500">{s.frameCount}f</p>
                 {s.actionId ? (
-                  <span className="text-[9px] font-semibold text-emerald-400">✓ Action Shots</span>
+                  <span className="text-[11px] font-semibold text-emerald-400">✓ Action Shots</span>
                 ) : (
-                  <button type="button" className="rounded bg-blue-700 px-1.5 py-0.5 text-[8px] font-semibold text-white hover:bg-blue-600"
+                  <button type="button" className="rounded bg-blue-700 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-blue-600"
                     onClick={() => onSendToAction(s.id)}>Send to Action Shots</button>
                 )}
               </div>
-              <button type="button" className="hidden h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-600 text-[8px] font-bold text-white group-hover:flex"
+              <button type="button" className="hidden h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white group-hover:flex"
                 onClick={() => onDeleteShot(s.id)}>✕</button>
             </div>
           ))}
@@ -1423,13 +1463,13 @@ function TrackRow({
   return (
     <div className="flex">
       <div className="flex w-[120px] shrink-0 items-center gap-2 border-b border-r border-[#222] bg-[#161616] px-3 py-2">
-        <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold text-white ${codeClass}`}>{code}</span>
+        <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold text-white ${codeClass}`}>{code}</span>
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium text-neutral-300">{label}</div>
-          <div className="text-[9px] text-neutral-500">{segments.length} clip{segments.length === 1 ? "" : "s"}</div>
+          <div className="text-[13px] font-medium text-neutral-300">{label}</div>
+          <div className="text-[11px] text-neutral-500">{segments.length} clip{segments.length === 1 ? "" : "s"}</div>
         </div>
       </div>
-      <div className="relative flex-1 overflow-hidden border-b border-[#222]" style={{ height: 80, background: bg }}>
+      <div className="relative flex-1 overflow-hidden border-b border-[#222]" style={{ height: 90, background: bg }}>
         {segments.map((seg) => {
           const shot = shotsById.get(seg.shotId);
           const left = `${((seg.start - 1) / Math.max(maxFrames, 1)) * 100}%`;
@@ -1465,7 +1505,7 @@ function TrackRow({
                 })()}
               </div>
               <div className="pointer-events-none absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-1 py-0.5">
-                <span className="text-[9px] font-medium text-neutral-200">{shot?.name || seg.shotId}</span>
+                <span className="text-[11px] font-medium text-neutral-200">{shot?.name || seg.shotId}</span>
               </div>
               {/* Trim handles */}
               <div className="absolute inset-y-0 left-0 flex w-2 cursor-ew-resize items-center justify-center bg-[#e0a040]/60 hover:bg-[#e0a040]"
@@ -1518,17 +1558,17 @@ function MediaBin({
     <div className="border-b border-[#222]">
       <button
         type="button"
-        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] font-semibold text-neutral-300 hover:bg-[#222]"
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-neutral-300 hover:bg-[#222]"
         onClick={() => setOpen(!open)}
       >
-        <span className="text-[9px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        <span className="text-[11px] text-neutral-500">{open ? "▼" : "▶"}</span>
         {title}
-        <span className="ml-auto text-[9px] font-normal text-neutral-600">{shots.length}</span>
+        <span className="ml-auto text-[11px] font-normal text-neutral-600">{shots.length}</span>
       </button>
       {open && (
         <div className="flex flex-col gap-1 px-2 pb-2">
           {shots.length === 0 ? (
-            <p className="px-1 text-[10px] text-neutral-600">No shots yet</p>
+            <p className="px-1 text-[12px] text-neutral-600">No shots yet</p>
           ) : shots.map((s) => (
             <div key={s.id} className="group relative">
               <button
@@ -1539,7 +1579,7 @@ function MediaBin({
                 onMouseLeave={stopHover}
                 title={`Add "${s.name || s.id}" to track`}
               >
-                <div className="relative h-[42px] w-[72px] shrink-0 overflow-hidden rounded bg-[#0a0a0a]">
+                <div className="relative h-[56px] w-[96px] shrink-0 overflow-hidden rounded bg-[#0a0a0a]">
                   <img
                     src={hoverShot === s.id
                       ? shotMediaUrl(project, characterId, s.id, `cut/f_${String(hoverFrame).padStart(4, "0")}.png`)
@@ -1549,17 +1589,17 @@ function MediaBin({
                     onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                   />
                   {hoverShot === s.id && (
-                    <span className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1 text-[8px] text-neutral-300">f{hoverFrame}</span>
+                    <span className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1 text-[10px] text-neutral-300">f{hoverFrame}</span>
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[10px] font-medium text-neutral-200">{s.name || s.id}</p>
-                  <p className="text-[9px] text-neutral-500">{s.frameCount || "?"}f</p>
+                  <p className="truncate text-[12px] font-medium text-neutral-200">{s.name || s.id}</p>
+                  <p className="text-[11px] text-neutral-500">{s.frameCount || "?"}f</p>
                 </div>
               </button>
               <button
                 type="button"
-                className="absolute -right-0.5 -top-0.5 z-10 hidden h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[8px] font-bold text-white shadow hover:bg-red-500 group-hover:flex"
+                className="absolute -right-0.5 -top-0.5 z-10 hidden h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500 group-hover:flex"
                 onClick={(e) => { e.stopPropagation(); onDelete(s.id); }}
                 title="Delete shot"
               >✕</button>
