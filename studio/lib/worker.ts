@@ -1731,6 +1731,60 @@ export async function saveAudioSlice(
   return { ok: true, label: payload.label || "", rel: payload.rel || "" };
 }
 
+export type TalkWindow = {
+  index: number;
+  start: number;
+  end: number;
+  duration: number;
+  clipSec: number;
+  text: string;
+};
+export type TalkingHeadRange = { audioRel: string; inSec: number; durationSec: number };
+export type TalkingHeadPlan = TalkingHeadRange & {
+  characterId: string;
+  hasWords: boolean;
+  transcript: string;
+  windows: TalkWindow[];
+  refRel: string;
+  hasReference: boolean;
+  defaultPrompt: string;
+};
+
+async function talkingHeadPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await workerFetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const payload = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) throw new Error(payload.error || `Request failed (${res.status})`);
+  return payload;
+}
+
+function talkingHeadBase(name: string, characterId: string): string {
+  return `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/talking-head`;
+}
+
+export function planTalkingHead(name: string, characterId: string, range: TalkingHeadRange): Promise<TalkingHeadPlan> {
+  return talkingHeadPost<TalkingHeadPlan>(`${talkingHeadBase(name, characterId)}/plan`, range);
+}
+
+export function startTalkingHead(
+  name: string,
+  characterId: string,
+  body: TalkingHeadRange & { prompt?: string }
+): Promise<{ ok: boolean; group: string; shotIds: string[]; windows: TalkWindow[] }> {
+  return talkingHeadPost(`${talkingHeadBase(name, characterId)}/start`, body);
+}
+
+export function resumeTalkingHead(
+  name: string,
+  characterId: string,
+  group: string
+): Promise<{ ok: boolean; group: string; resumed: boolean; fromWindow?: number }> {
+  return talkingHeadPost(`${talkingHeadBase(name, characterId)}/${encodeURIComponent(group)}/resume`, {});
+}
+
 export async function importProjectAudio(
   name: string,
   file: File,

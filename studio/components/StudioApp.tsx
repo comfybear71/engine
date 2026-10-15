@@ -67,6 +67,7 @@ export default function StudioApp({
   const [imagineContext, setImagineContext] = useState<FactoryContext | null>(null);
   const [assetCharacterId, setAssetCharacterId] = useState<string | null>(null);
   const [assetEpoch, setAssetEpoch] = useState(0);
+  const [openCharacter, setOpenCharacter] = useState<{ id: string; nonce: number } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
@@ -263,6 +264,7 @@ export default function StudioApp({
               setImagineOpen(true);
             }}
             refreshToken={assetEpoch}
+            openCharacter={openCharacter}
           />
         ) : null}
         {tab === "stage" && script ? (
@@ -278,6 +280,11 @@ export default function StudioApp({
             onSelectLine={setSelectedScriptLine}
             onSaved={() => setScriptEpoch((n) => n + 1)}
             renderNonce={videoBust}
+            onOpenCharacter={(characterId) => {
+              setAssetCharacterId(characterId);
+              setOpenCharacter({ id: characterId, nonce: Date.now() });
+              setTab("assets");
+            }}
             onOpenImagine={(opts) => {
               setAssetCharacterId(opts.characterId);
               setImagineNeedId(opts.needId);

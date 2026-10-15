@@ -606,6 +606,7 @@ export default function AssetsPanel({
   onSelectId,
   onOpenImagine,
   refreshToken = 0,
+  openCharacter = null,
 }: {
   project: string | null;
   workerUp: boolean;
@@ -624,6 +625,7 @@ export default function AssetsPanel({
     label?: string;
   }) => void;
   refreshToken?: number;
+  openCharacter?: { id: string; nonce: number } | null;
 }) {
   const pool = variant === "pool";
   const [characters, setCharacters] = useState<Character[]>([]);
@@ -832,6 +834,11 @@ export default function AssetsPanel({
     setLibrarySel({ kind: "characters", id });
     setNav({ page: "character", id });
   }
+
+  useEffect(() => {
+    if (openCharacter && !pool) selectCharacter(openCharacter.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCharacter?.nonce]);
 
   function goHome() {
     setNav({ page: "home" });

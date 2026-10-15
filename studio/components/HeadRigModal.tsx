@@ -1,7 +1,8 @@
 "use client";
 
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { WORKER_URL, workerFetch } from "@/lib/worker";
+import { WORKER_URL, resumeTalkingHead, workerFetch } from "@/lib/worker";
+import { groupTalkShots, placeTalkWindows, type TalkGroup, type TalkMeta } from "@/lib/talkingHead";
 import {
   alphaBox,
   fitToStandard,
@@ -36,6 +37,10 @@ interface ShotInfo {
   actionId?: string; // set when sent to Action Shots
   sourceBody?: string;
   sourceHead?: string;
+  in?: number;
+  out?: number;
+  error?: string;
+  talk?: TalkMeta;
 }
 
 /** One clip reference placed on a track. Many segments can reference the
@@ -192,6 +197,8 @@ export default function HeadRigModal({
   inline?: boolean;
 }) {
   const [shots, setShots] = useState<ShotInfo[]>([]);
+  const [talkShots, setTalkShots] = useState<ShotInfo[]>([]);
+  const [talkBusy, setTalkBusy] = useState<string | null>(null);
   const [rigs, setRigs] = useState<Record<string, RigEntry>>({});
   const [rigKey, setRigKey] = useState("front");
   const [charRefRel, setCharRefRel] = useState("");
@@ -328,6 +335,7 @@ export default function HeadRigModal({
         if (shotsRes.ok) {
           const data: ShotInfo[] = await shotsRes.json();
           setShots(data.filter((s) => s.status === "ready"));
+          setTalkShots(data.filter((s) => s.talk));
         }
         if (rigRes.ok) {
           const data = await rigRes.json();
@@ -997,8 +1005,50 @@ export default function HeadRigModal({
       if (res.ok) {
         const data: ShotInfo[] = await res.json();
         setShots(data.filter((s) => s.status === "ready"));
+        setTalkShots(data.filter((s) => s.talk));
       }
     } catch { /* best effort */ }
+  }
+
+  // ── Talking heads (chained Grok clips made from Stage audio) ──
+  const talkGroups = useMemo(() => groupTalkShots(talkShots), [talkShots]);
+  const talkActive = talkShots.some((s) => s.status === "queued" || s.status === "making");
+  useEffect(() => {
+    if (!talkActive) return;
+    const id = window.setInterval(() => { void reloadShots(); }, 4000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [talkActive, project, characterId]);
+
+  async function handleResumeTalk(group: string) {
+    setTalkBusy(group);
+    try {
+      await resumeTalkingHead(project, characterId, group);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not resume the talking head");
+    }
+    await reloadShots();
+    setTalkBusy(null);
+  }
+
+  function placeTalkGroup(group: TalkGroup) {
+    const ready = group.shots.filter((s) => s.status === "ready");
+    if (!ready.length) return;
+    const ids = ready.map(() => genSegId());
+    const base = (list: HeadSegment[]) => (list.length ? Math.max(...list.map(segEnd)) + 1 : 1);
+    setHeadSegments((prev) => [
+      ...prev,
+      ...placeTalkWindows(group.shots, base(prev)).map((p, i) => ({
+        id: ids[i], ...p, anchorX: 0.5, anchorY: 0.15, headScale: 1.0,
+      })),
+    ]);
+    if (standardRef.current) {
+      placeTalkWindows(group.shots, 1).forEach((p, i) => {
+        void fitPatchFor({ id: ids[i], ...p, anchorX: 0.5, anchorY: 0.15, headScale: 1 }, standardRef.current).then((patch) => {
+          if (patch) setHeadSegments((prev) => prev.map((seg) => (seg.id === ids[i] ? { ...seg, ...patch } : seg)));
+        });
+      });
+    }
   }
 
   // ── Add a shot (full frame range) to the end of a track ──
@@ -1627,6 +1677,16 @@ export default function HeadRigModal({
               onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot}
             />
 
+            {talkGroups.length > 0 && (
+              <TalkingHeadSection
+                groups={talkGroups}
+                project={project} characterId={characterId}
+                busyGroup={talkBusy}
+                onPlace={placeTalkGroup}
+                onResume={(g) => void handleResumeTalk(g)}
+              />
+            )}
+
             {/* Grok Creator — collapsible */}
             <GrokSection
               grokType={grokType} setGrokType={setGrokType}
@@ -1989,6 +2049,105 @@ export default function HeadRigModal({
         <div className="flex justify-end gap-2 border-t border-studio-border px-4 py-3">
           <button type="button" className="rounded-md border border-studio-border px-3 py-1.5 text-xs text-neutral-200" onClick={onClose}>Done</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Talking head sidebar section ─────────────────────────────────────
+
+function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume }: {
+  groups: TalkGroup[];
+  project: string; characterId: string;
+  busyGroup: string | null;
+  onPlace: (group: TalkGroup) => void;
+  onResume: (group: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="border-b border-[#222]" data-testid="talking-head-section">
+      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-[#e0a040] hover:bg-[#222]"
+        onClick={() => setOpen(!open)}>
+        <span className="text-[11px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        Talking heads
+        <span className="ml-auto text-[11px] font-normal text-neutral-500">{groups.length}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 px-3 pb-3">
+          {groups.map((group) => (
+            <TalkGroupCard key={group.group} group={group} project={project} characterId={characterId}
+              busy={busyGroup === group.group} onPlace={() => onPlace(group)} onResume={() => onResume(group.group)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const TALK_STATE_LABEL: Record<string, string> = { queued: "Queued", making: "Generating", ready: "Ready", stopped: "Stopped", error: "Failed" };
+
+function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume }: {
+  group: TalkGroup; project: string; characterId: string; busy: boolean;
+  onPlace: () => void; onResume: () => void;
+}) {
+  const [playing, setPlaying] = useState<number | null>(null);
+  const ready = group.shots.filter((s) => s.status === "ready");
+  const current = playing !== null ? ready[playing] : null;
+  const stateColor = group.state === "ready" ? "text-emerald-300" : group.state === "stopped" ? "text-red-400" : "text-amber-300";
+  return (
+    <div className="rounded border border-[#333] bg-[#1a1a1a] p-2" data-testid={`talk-group-${group.group}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-[12px] font-semibold text-neutral-200" title={group.group}>{group.group}</span>
+        <span className={`shrink-0 text-[11px] font-medium ${stateColor}`} data-testid="talk-group-state">
+          {TALK_STATE_LABEL[group.state]} {group.readyCount}/{group.shots.length}
+        </span>
+      </div>
+      <ol className="mt-1.5 flex flex-col gap-1">
+        {group.shots.map((shot) => (
+          <li key={shot.id} className="flex items-start gap-1.5 text-[11px] leading-snug">
+            <span className={`mt-px w-4 shrink-0 text-right ${shot.status === "ready" ? "text-emerald-300" : shot.status === "error" ? "text-red-400" : "text-neutral-500"}`}>
+              {(shot.talk?.index ?? 0) + 1}
+            </span>
+            <span className="min-w-0 flex-1 text-neutral-300">
+              <span className="line-clamp-2" title={shot.talk?.text}>{shot.talk?.text || "…"}</span>
+              <span className="text-neutral-500">
+                {shot.status === "ready" ? `${(shot.talk?.windowSec ?? 0).toFixed(1)}s` : TALK_STATE_LABEL[shot.status] || shot.status}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      {group.error && <p className="mt-1 text-[11px] text-red-400">{group.error}</p>}
+      {current && (
+        <div className="mt-2 overflow-hidden rounded border border-[#333] bg-[#00b140]">
+          <video key={current.id} src={shotMediaUrl(project, characterId, current.id, "source.mp4")}
+            className="aspect-video w-full object-contain" autoPlay muted playsInline />
+          <audio key={`a-${current.id}`} src={shotMediaUrl(project, characterId, current.id, "audio.wav")} autoPlay
+            onEnded={() => setPlaying(playing !== null && playing + 1 < ready.length ? playing + 1 : null)} />
+        </div>
+      )}
+      <div className="mt-2 flex gap-1.5">
+        <button type="button" disabled={!ready.length}
+          className="flex-1 rounded border border-studio-border bg-studio-raised px-2 py-1 text-[11px] text-neutral-200 hover:bg-[#333] disabled:opacity-40"
+          title="Play each clip with its slice of the audio, to check the lip sync"
+          onClick={() => setPlaying(playing === null ? 0 : null)}>
+          {playing === null ? "▶ Play with audio" : "■ Stop"}
+        </button>
+        {group.state === "stopped" ? (
+          <button type="button" disabled={busy}
+            className="flex-1 rounded bg-red-500/80 px-2 py-1 text-[11px] font-semibold text-white hover:bg-red-500 disabled:opacity-40"
+            title="Continue the chain from the clip that failed"
+            onClick={onResume}>
+            {busy ? "Resuming…" : "Retry from failed clip"}
+          </button>
+        ) : (
+          <button type="button" disabled={group.state !== "ready"}
+            className="flex-1 rounded bg-studio-accent px-2 py-1 text-[11px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+            title="Add every clip to the head track, back to back, trimmed to its audio"
+            onClick={onPlace}>
+            Place on head track
+          </button>
+        )}
       </div>
     </div>
   );
