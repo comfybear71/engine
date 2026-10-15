@@ -2,6 +2,19 @@
 
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WORKER_URL, workerFetch } from "@/lib/worker";
+import {
+  alphaBox,
+  fitToStandard,
+  matchStandard,
+  medianBox,
+  standardFromHead,
+  targetHeightFraction,
+  visibleHeadRect,
+  BASE_RIG_KEY,
+  type Box,
+  type FrameSize,
+  type HeadStandard,
+} from "@/lib/headStandard";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -174,6 +187,9 @@ export default function HeadRigModal({
   const [rigs, setRigs] = useState<Record<string, RigEntry>>({});
   const [rigKey, setRigKey] = useState("front");
   const [charRefRel, setCharRefRel] = useState("");
+  const [standard, setStandard] = useState<HeadStandard | null>(null);
+  const standardRef = useRef<HeadStandard | null>(null);
+  useEffect(() => { standardRef.current = standard; }, [standard]);
 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -297,6 +313,7 @@ export default function HeadRigModal({
           const data = await rigRes.json();
           setRigs(data.rigs || {});
           if (data.reference) setCharRefRel(data.reference);
+          setStandard(data.standard || null);
         }
       } catch { /* worker may not be reachable yet */ }
     })();
@@ -355,6 +372,110 @@ export default function HeadRigModal({
     }
     return activeHead;
   }, [selectedSegment, headSegments, activeHead]);
+
+  // ── Visible head size (alpha box per shot) for the head standard ──
+  type HeadMetrics = { box: Box; frame: FrameSize };
+  const headMetricsRef = useRef<Map<string, HeadMetrics | null>>(new Map());
+  const headMetricsLoadingRef = useRef<Map<string, Promise<HeadMetrics | null>>>(new Map());
+  const [metricsTick, setMetricsTick] = useState(0);
+  const rigKeyRef = useRef(rigKey);
+  useEffect(() => { rigKeyRef.current = rigKey; }, [rigKey]);
+  const shotsByIdRef = useRef(new Map<string, ShotInfo>());
+  useEffect(() => { shotsByIdRef.current = new Map(shots.map((s) => [s.id, s])); }, [shots]);
+
+  const mediaVersionRef = useRef(mediaVersion);
+  useEffect(() => { mediaVersionRef.current = mediaVersion; }, [mediaVersion]);
+  function metricsKey(shotId: string): string {
+    return `${shotId}#${mediaVersionRef.current[shotId] || 0}`;
+  }
+
+  /** Median visible-head box over up to 9 frames of the whole shot, in source pixels. */
+  function measureShotHead(shotId: string): Promise<HeadMetrics | null> {
+    const key = metricsKey(shotId);
+    const cached = headMetricsRef.current.get(key);
+    if (cached !== undefined) return Promise.resolve(cached);
+    const inflight = headMetricsLoadingRef.current.get(key);
+    if (inflight) return inflight;
+    const version = mediaVersionRef.current[shotId] || 0;
+    const count = Math.max(1, shotsByIdRef.current.get(shotId)?.frameCount || 1);
+    const picks = Array.from(new Set(
+      Array.from({ length: Math.min(9, count) }, (_, i) => (count === 1 ? 1 : 1 + Math.round((i * (count - 1)) / (Math.min(9, count) - 1))))
+    ));
+    const promise = (async (): Promise<HeadMetrics | null> => {
+      const boxes: Box[] = [];
+      let frame: FrameSize | null = null;
+      for (const f of picks) {
+        try {
+          const pad = String(f).padStart(4, "0");
+          const res = await fetch(shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`, version));
+          if (!res.ok) continue;
+          const bitmap = await createImageBitmap(await res.blob());
+          const k = Math.min(1, 256 / Math.max(bitmap.width, bitmap.height));
+          const w = Math.max(1, Math.round(bitmap.width * k));
+          const h = Math.max(1, Math.round(bitmap.height * k));
+          const off = document.createElement("canvas");
+          off.width = w;
+          off.height = h;
+          const octx = off.getContext("2d");
+          if (!octx) continue;
+          octx.drawImage(bitmap, 0, 0, w, h);
+          const box = alphaBox(octx.getImageData(0, 0, w, h).data, w, h);
+          frame = { w: bitmap.width, h: bitmap.height };
+          if (box) boxes.push({ x: box.x / k, y: box.y / k, w: box.w / k, h: box.h / k });
+        } catch { /* skip an unreadable frame */ }
+      }
+      const median = medianBox(boxes);
+      const result = median && frame ? { box: median, frame } : null;
+      headMetricsRef.current.set(key, result);
+      headMetricsLoadingRef.current.delete(key);
+      setMetricsTick((t) => t + 1);
+      return result;
+    })();
+    headMetricsLoadingRef.current.set(key, promise);
+    return promise;
+  }
+
+  useEffect(() => {
+    for (const seg of headSegments) void measureShotHead(seg.shotId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headSegments.map((s) => s.shotId).join("|"), mediaVersion, shots]);
+
+  /** Body frame the head fractions refer to: the active body at `frame` (or the first body clip when `fallbackToFirst`). */
+  function bodyDimsFor(frame: number, fallbackToFirst = false): FrameSize | null {
+    const active = activeSegmentAt(segmentsRef.current.body, frame) || (fallbackToFirst ? segmentsRef.current.body[0] : undefined);
+    const dims = active ? shotDims[active.shotId] : null;
+    return dims && dims.w > 0 ? { w: dims.w, h: dims.h } : null;
+  }
+
+  type HeadGeometry = {
+    box: Box;
+    frame: FrameSize;
+    body: FrameSize;
+    rect: Box;
+  };
+
+  function headGeometry(head: HeadSegment, frame: number): HeadGeometry | null {
+    const metrics = headMetricsRef.current.get(metricsKey(head.shotId));
+    const body = bodyDimsFor(frame);
+    if (!metrics || !body) return null;
+    const rect = visibleHeadRect(metrics.box, metrics.frame, head, body);
+    return { box: metrics.box, frame: metrics.frame, body, rect };
+  }
+
+  const headMatchInfo = (() => {
+    if (!editingHead || !standard) return null;
+    const metrics = headMetricsRef.current.get(metricsKey(editingHead.shotId));
+    const body = bodyDimsFor(scrubFrame, true);
+    if (!metrics || !body) return null;
+    return matchStandard({ box: metrics.box, placement: editingHead, body, standard, rigKey });
+  })();
+  const headStatusText = !editingHead
+    ? standard ? "Standard head size is set." : "No standard head size yet."
+    : !standard
+      ? "No standard yet: size the front head how you want it, then Set as standard."
+      : headMatchInfo
+        ? `Head ${Math.round(headMatchInfo.ratio * 100)}% of standard${headMatchInfo.state === "match" ? " ✓" : ""}`
+        : "Measuring head…";
 
   // ── Canvas drawing ──
   const CANVAS_W = 600;
@@ -418,16 +539,46 @@ export default function HeadRigModal({
           ctx.drawImage(img, hx, hy, hw, hh);
 
           const isEditing = selectedRef.current?.track === "head" && selectedRef.current.id === head.id;
+          const geo = headGeometry(head, frame);
+          const std = standardRef.current;
+          const rigNow = rigKeyRef.current;
+          // Visible-head box (what is compared with the standard); the whole
+          // source frame is only the fallback until it has been measured.
+          const box = geo
+            ? { x: bx + geo.rect.x * scale, y: by + geo.rect.y * scale, w: geo.rect.w * scale, h: geo.rect.h * scale }
+            : { x: hx, y: hy, w: hw, h: hh };
+
+          let matched = false;
+          if (geo && std) {
+            const tgtH = targetHeightFraction(std, rigNow) * geo.body.h * scale;
+            const tgtCy = by + std.centerY * geo.body.h * scale;
+            const guideHalfW = Math.max(box.w / 2, 40) + 24;
+            const gx = bx + std.centerX * geo.body.w * scale;
+            ctx.save();
+            ctx.strokeStyle = "rgba(80, 220, 120, 0.55)";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 5]);
+            for (const gy of [tgtCy - tgtH / 2, tgtCy + tgtH / 2]) {
+              ctx.beginPath();
+              ctx.moveTo(gx - guideHalfW, gy);
+              ctx.lineTo(gx + guideHalfW, gy);
+              ctx.stroke();
+            }
+            ctx.restore();
+            matched = matchStandard({ box: geo.box, placement: head, body: geo.body, standard: std, rigKey: rigNow }).state === "match";
+          }
+
           if (isEditing) {
-            ctx.strokeStyle = "#e0a040";
+            const color = matched ? "#3ecf6a" : "#e0a040";
+            ctx.strokeStyle = color;
             ctx.lineWidth = 2;
             ctx.setLineDash([6, 4]);
-            ctx.strokeRect(hx, hy, hw, hh);
+            ctx.strokeRect(box.x, box.y, box.w, box.h);
             ctx.setLineDash([]);
 
-            const handles = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
+            const handles = [[box.x, box.y], [box.x + box.w, box.y], [box.x, box.y + box.h], [box.x + box.w, box.y + box.h]];
             for (const [cx, cy] of handles) {
-              ctx.fillStyle = "#e0a040";
+              ctx.fillStyle = color;
               ctx.fillRect(cx - 4, cy - 4, 8, 8);
               ctx.strokeStyle = "#fff";
               ctx.lineWidth = 1;
@@ -436,7 +587,7 @@ export default function HeadRigModal({
 
             const ax = bx + head.anchorX * bw;
             const ay = by + head.anchorY * bh;
-            ctx.strokeStyle = "#e0a040";
+            ctx.strokeStyle = color;
             ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(ax - 10, ay); ctx.lineTo(ax + 10, ay);
@@ -460,7 +611,7 @@ export default function HeadRigModal({
   useEffect(() => {
     if (playing) return;
     drawFrame(scrubFrame);
-  }, [playing, scrubFrame, bodySegments, headSegments, selectedSegment, shotDims, redrawTick, drawFrame]);
+  }, [playing, scrubFrame, bodySegments, headSegments, selectedSegment, shotDims, redrawTick, metricsTick, standard, rigKey, drawFrame]);
 
   // ── Playback loop ──
   function handlePlay() {
@@ -531,14 +682,27 @@ export default function HeadRigModal({
     const my = (e.clientY - rect.top) * cssScale;
     const { scale, bw, bh, bx, by } = layoutBasis(scrubFrame);
 
-    // Check corner handles for scale drag (only if dims known)
+    // Check corner handles for scale drag (only if dims known). The box is the
+    // visible head once measured, otherwise the whole source frame.
     const headDims = shotDims[head.shotId];
     const hitMargin = 16;
     if (headDims && headDims.w > 0) {
-      const hw = headDims.w * head.headScale * scale;
-      const hh = headDims.h * head.headScale * scale;
-      const hx = bx + head.anchorX * bw - hw / 2;
-      const hy = by + head.anchorY * bh - hh / 2;
+      const geo = headGeometry(head, scrubFrame);
+      let hx: number;
+      let hy: number;
+      let hw: number;
+      let hh: number;
+      if (geo) {
+        hx = bx + geo.rect.x * scale;
+        hy = by + geo.rect.y * scale;
+        hw = geo.rect.w * scale;
+        hh = geo.rect.h * scale;
+      } else {
+        hw = headDims.w * head.headScale * scale;
+        hh = headDims.h * head.headScale * scale;
+        hx = bx + head.anchorX * bw - hw / 2;
+        hy = by + head.anchorY * bh - hh / 2;
+      }
       const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
       for (const [cx, cy] of corners) {
         if (Math.abs(mx - cx) < 14 && Math.abs(my - cy) < 14) {
@@ -565,8 +729,101 @@ export default function HeadRigModal({
     e.preventDefault();
   }
 
+  /** New scale for a head that grows/shrinks about the middle of its visible box, not the frame centre. */
+  function rescaleKeepingHeadCentre(
+    head: HeadSegment,
+    nextScale: number,
+    from?: { origAnchorX: number; origAnchorY: number; origScale: number }
+  ): Partial<HeadSegment> {
+    const base: HeadSegment = from ? { ...head, anchorX: from.origAnchorX, anchorY: from.origAnchorY, headScale: from.origScale } : head;
+    const metrics = headMetricsRef.current.get(metricsKey(head.shotId));
+    const body = bodyDimsFor(scrubFrame);
+    if (!metrics || !body) return { headScale: nextScale };
+    const { box, frame } = metrics;
+    const boxCx = box.x + box.w / 2 - frame.w / 2;
+    const boxCy = box.y + box.h / 2 - frame.h / 2;
+    const centreX = base.anchorX * body.w + boxCx * base.headScale;
+    const centreY = base.anchorY * body.h + boxCy * base.headScale;
+    return {
+      headScale: nextScale,
+      anchorX: clamp((centreX - boxCx * nextScale) / body.w, 0, 1),
+      anchorY: clamp((centreY - boxCy * nextScale) / body.h, -0.5, 1.5),
+    };
+  }
+
   function updateHeadSegment(id: string, patch: Partial<HeadSegment>) {
     setHeadSegments((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }
+
+  // ── Head standard actions ──
+  const [headNote, setHeadNote] = useState<string | null>(null);
+
+  async function putStandard(next: HeadStandard | null): Promise<boolean> {
+    const base = `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/head-standard`;
+    const res = next
+      ? await workerFetch(base, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) })
+      : await workerFetch(base, { method: "DELETE" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: "Could not save the head standard" }));
+      throw new Error(data.error || "Could not save the head standard");
+    }
+    const data = await res.json();
+    setStandard(data.standard || null);
+    return true;
+  }
+
+  async function handleSetStandard() {
+    const head = editingHead;
+    if (!head) return;
+    setError(null);
+    const metrics = await measureShotHead(head.shotId);
+    const body = bodyDimsFor(scrubFrame, true);
+    if (!metrics || !body) {
+      setError("Needs a body clip and a readable head clip to measure the head.");
+      return;
+    }
+    try {
+      const next = standardFromHead({ box: metrics.box, frame: metrics.frame, placement: head, body, rigKey, current: standard });
+      await putStandard(next);
+      const isBase = rigKey === BASE_RIG_KEY || !standard;
+      setHeadNote(isBase ? "Standard head set from this clip." : `Size for "${rigKey}" saved (${Math.round((next.views?.[rigKey] ?? 1) * 100)}% of standard).`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the head standard");
+    }
+  }
+
+  async function handleClearStandard() {
+    try {
+      await putStandard(null);
+      setHeadNote("Standard cleared.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not clear the head standard");
+    }
+  }
+
+  async function fitPatchFor(seg: HeadSegment, std: HeadStandard | null): Promise<Partial<HeadSegment> | null> {
+    if (!std) return null;
+    const metrics = await measureShotHead(seg.shotId);
+    const body = bodyDimsFor(scrubFrame, true);
+    if (!metrics || !body) return null;
+    return fitToStandard({ box: metrics.box, frame: metrics.frame, body, standard: std, rigKey: rigKeyRef.current });
+  }
+
+  async function handleFitHeads(onlyId?: string) {
+    const targets = onlyId ? headSegments.filter((s) => s.id === onlyId) : headSegments;
+    const patches = new Map<string, Partial<HeadSegment>>();
+    for (const seg of targets) {
+      const patch = await fitPatchFor(seg, standard);
+      if (patch) patches.set(seg.id, patch);
+    }
+    if (patches.size === 0) {
+      setError("Could not measure the heads yet -- add a body clip first.");
+      return;
+    }
+    setError(null);
+    setHeadSegments((prev) => prev.map((s) => (patches.has(s.id) ? { ...s, ...patches.get(s.id)! } : s)));
+    setHeadNote(`Fitted ${patches.size} head${patches.size === 1 ? "" : "s"} to the standard. Save to keep.`);
+    setSaved(false);
   }
 
   function onCanvasMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
@@ -583,7 +840,7 @@ export default function HeadRigModal({
     } else if (drag.kind === "scale") {
       const dy = drag.startY - e.clientY;
       const factor = 1 + dy / 200;
-      updateHeadSegment(editingHead.id, { headScale: clamp(drag.origScale * factor, 0.1, 3) });
+      updateHeadSegment(editingHead.id, rescaleKeepingHeadCentre(editingHead, clamp(drag.origScale * factor, 0.1, 3), drag));
     }
   }
 
@@ -595,7 +852,7 @@ export default function HeadRigModal({
     if (!editingHead) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.03 : 0.03;
-    updateHeadSegment(editingHead.id, { headScale: clamp(editingHead.headScale + delta, 0.1, 3) });
+    updateHeadSegment(editingHead.id, rescaleKeepingHeadCentre(editingHead, clamp(editingHead.headScale + delta, 0.1, 3)));
   }
 
   // ── Save / load rig ──
@@ -662,10 +919,16 @@ export default function HeadRigModal({
         return [...prev, { id: genSegId(), shotId: shot.id, inFrame: 1, outFrame: shot.frameCount || 1, start }];
       });
     } else {
+      const id = genSegId();
       setHeadSegments((prev) => {
         const start = prev.length ? Math.max(...prev.map(segEnd)) + 1 : 1;
-        return [...prev, { id: genSegId(), shotId: shot.id, inFrame: 1, outFrame: shot.frameCount || 1, start, anchorX: 0.5, anchorY: 0.15, headScale: 1.0 }];
+        return [...prev, { id, shotId: shot.id, inFrame: 1, outFrame: shot.frameCount || 1, start, anchorX: 0.5, anchorY: 0.15, headScale: 1.0 }];
       });
+      if (standardRef.current) {
+        void fitPatchFor({ id, shotId: shot.id, inFrame: 1, outFrame: shot.frameCount || 1, start: 1, anchorX: 0.5, anchorY: 0.15, headScale: 1 }, standardRef.current).then((patch) => {
+          if (patch) setHeadSegments((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+        });
+      }
     }
   }
 
@@ -1335,6 +1598,52 @@ export default function HeadRigModal({
                 ? "Drag head = move · Corner handles = scale · Scroll = resize"
                 : "Select a head segment to reposition it"}
             </p>
+            <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-standard-bar">
+              <span
+                data-testid="head-standard-status"
+                className={headMatchInfo?.state === "match" ? "text-green-400" : "text-studio-muted"}
+              >
+                {headStatusText}
+              </span>
+              <button
+                type="button"
+                data-testid="head-standard-set"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingHead}
+                onClick={() => void handleSetStandard()}
+                title="Use this head's visible size as the character's standard"
+              >
+                {!standard || rigKey === BASE_RIG_KEY ? "Set as standard" : `Set size for ${rigKey}`}
+              </button>
+              <button
+                type="button"
+                data-testid="head-standard-fit"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!standard || !editingHead}
+                onClick={() => editingHead && void handleFitHeads(editingHead.id)}
+              >
+                Fit to standard
+              </button>
+              <button
+                type="button"
+                data-testid="head-standard-fit-all"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!standard || headSegments.length === 0}
+                onClick={() => void handleFitHeads()}
+              >
+                Fit all heads
+              </button>
+              {standard ? (
+                <button
+                  type="button"
+                  className="text-neutral-500 underline hover:text-neutral-300"
+                  onClick={() => void handleClearStandard()}
+                >
+                  Clear standard
+                </button>
+              ) : null}
+              {headNote ? <span className="text-studio-muted">{headNote}</span> : null}
+            </div>
           </div>
 
         </div>{/* end main area flex-col */}
