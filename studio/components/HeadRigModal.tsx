@@ -407,7 +407,9 @@ export default function HeadRigModal({
       for (const f of picks) {
         try {
           const pad = String(f).padStart(4, "0");
-          const res = await fetch(shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`, version));
+          // The `m=pixels` suffix keeps this CORS request off the cache entry of the plain <img>
+          // loads, which carry no Access-Control-Allow-Origin header and would make fetch() fail.
+          const res = await fetch(`${shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`, version)}&m=pixels`);
           if (!res.ok) continue;
           const bitmap = await createImageBitmap(await res.blob());
           const k = Math.min(1, 256 / Math.max(bitmap.width, bitmap.height));
@@ -555,9 +557,9 @@ export default function HeadRigModal({
             const guideHalfW = Math.max(box.w / 2, 40) + 24;
             const gx = bx + std.centerX * geo.body.w * scale;
             ctx.save();
-            ctx.strokeStyle = "rgba(80, 220, 120, 0.55)";
-            ctx.lineWidth = 1;
-            ctx.setLineDash([3, 5]);
+            ctx.strokeStyle = "rgba(80, 220, 120, 0.9)";
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([8, 4]);
             for (const gy of [tgtCy - tgtH / 2, tgtCy + tgtH / 2]) {
               ctx.beginPath();
               ctx.moveTo(gx - guideHalfW, gy);
@@ -1581,24 +1583,26 @@ export default function HeadRigModal({
 
           {/* Canvas preview */}
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden bg-[#0a0a0a] p-3">
-            <canvas
-              ref={canvasRef}
-              width={CANVAS_W}
-              height={CANVAS_H}
-              className="rounded-md border border-studio-border"
-              style={{ cursor: editingHead ? "crosshair" : "default", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-              onMouseDown={onCanvasMouseDown}
-              onMouseMove={onCanvasMouseMove}
-              onMouseUp={onCanvasMouseUp}
-              onMouseLeave={onCanvasMouseUp}
-              onWheel={onCanvasWheel}
-            />
-            <p className="mt-1 text-[12px] text-studio-muted">
+            <div className="flex min-h-0 w-full flex-1 items-center justify-center">
+              <canvas
+                ref={canvasRef}
+                width={CANVAS_W}
+                height={CANVAS_H}
+                className="rounded-md border border-studio-border"
+                style={{ cursor: editingHead ? "crosshair" : "default", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+                onMouseDown={onCanvasMouseDown}
+                onMouseMove={onCanvasMouseMove}
+                onMouseUp={onCanvasMouseUp}
+                onMouseLeave={onCanvasMouseUp}
+                onWheel={onCanvasWheel}
+              />
+            </div>
+            <p className="mt-1 shrink-0 text-[12px] text-studio-muted">
               {editingHead
                 ? "Drag head = move · Corner handles = scale · Scroll = resize"
                 : "Select a head segment to reposition it"}
             </p>
-            <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-standard-bar">
+            <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-standard-bar">
               <span
                 data-testid="head-standard-status"
                 className={headMatchInfo?.state === "match" ? "text-green-400" : "text-studio-muted"}

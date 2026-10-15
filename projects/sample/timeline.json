@@ -59,6 +59,19 @@
                 "H": "../_global_assets/characters/hicks/mouth/H.png",
                 "X": "../_global_assets/characters/hicks/mouth/X.png"
               },
+              "images_by_view": {
+                "front": {
+                  "A": "../_global_assets/characters/hicks/mouth/A.png",
+                  "B": "../_global_assets/characters/hicks/mouth/B.png",
+                  "C": "../_global_assets/characters/hicks/mouth/C.png",
+                  "D": "../_global_assets/characters/hicks/mouth/D.png",
+                  "E": "../_global_assets/characters/hicks/mouth/E.png",
+                  "F": "../_global_assets/characters/hicks/mouth/F.png",
+                  "G": "../_global_assets/characters/hicks/mouth/G.png",
+                  "H": "../_global_assets/characters/hicks/mouth/H.png",
+                  "X": "../_global_assets/characters/hicks/mouth/X.png"
+                }
+              },
               "lipsync": {
                 "source": "dialogue"
               }
@@ -167,6 +180,19 @@
                 "H": "../_global_assets/characters/dana/mouth/H.png",
                 "X": "../_global_assets/characters/dana/mouth/X.png"
               },
+              "images_by_view": {
+                "front": {
+                  "A": "../_global_assets/characters/dana/mouth/A.png",
+                  "B": "../_global_assets/characters/dana/mouth/B.png",
+                  "C": "../_global_assets/characters/dana/mouth/C.png",
+                  "D": "../_global_assets/characters/dana/mouth/D.png",
+                  "E": "../_global_assets/characters/dana/mouth/E.png",
+                  "F": "../_global_assets/characters/dana/mouth/F.png",
+                  "G": "../_global_assets/characters/dana/mouth/G.png",
+                  "H": "../_global_assets/characters/dana/mouth/H.png",
+                  "X": "../_global_assets/characters/dana/mouth/X.png"
+                }
+              },
               "lipsync": {
                 "source": "dialogue"
               }
@@ -241,6 +267,19 @@
                 "G": "../_global_assets/characters/hicks/mouth/G.png",
                 "H": "../_global_assets/characters/hicks/mouth/H.png",
                 "X": "../_global_assets/characters/hicks/mouth/X.png"
+              },
+              "images_by_view": {
+                "front": {
+                  "A": "../_global_assets/characters/hicks/mouth/A.png",
+                  "B": "../_global_assets/characters/hicks/mouth/B.png",
+                  "C": "../_global_assets/characters/hicks/mouth/C.png",
+                  "D": "../_global_assets/characters/hicks/mouth/D.png",
+                  "E": "../_global_assets/characters/hicks/mouth/E.png",
+                  "F": "../_global_assets/characters/hicks/mouth/F.png",
+                  "G": "../_global_assets/characters/hicks/mouth/G.png",
+                  "H": "../_global_assets/characters/hicks/mouth/H.png",
+                  "X": "../_global_assets/characters/hicks/mouth/X.png"
+                }
               },
               "lipsync": {
                 "source": "dialogue"
@@ -373,6 +412,19 @@
                 "G": "../_global_assets/characters/dana/mouth/G.png",
                 "H": "../_global_assets/characters/dana/mouth/H.png",
                 "X": "../_global_assets/characters/dana/mouth/X.png"
+              },
+              "images_by_view": {
+                "front": {
+                  "A": "../_global_assets/characters/dana/mouth/A.png",
+                  "B": "../_global_assets/characters/dana/mouth/B.png",
+                  "C": "../_global_assets/characters/dana/mouth/C.png",
+                  "D": "../_global_assets/characters/dana/mouth/D.png",
+                  "E": "../_global_assets/characters/dana/mouth/E.png",
+                  "F": "../_global_assets/characters/dana/mouth/F.png",
+                  "G": "../_global_assets/characters/dana/mouth/G.png",
+                  "H": "../_global_assets/characters/dana/mouth/H.png",
+                  "X": "../_global_assets/characters/dana/mouth/X.png"
+                }
               },
               "lipsync": {
                 "source": "dialogue"
