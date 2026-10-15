@@ -142,6 +142,7 @@ const {
   resizeHead,
   bakeTimeline,
 } = require("./shots");
+const { planTalkingHead, makeTalkingHead, resumeTalkingHead, markInterruptedTalkShots, DEFAULT_TALK_PROMPT } = require("./talkingHead");
 const {
   isSafeShowId,
   resolveEpisodeDir,
@@ -1231,7 +1232,7 @@ function createApp(options = {}) {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
     try {
-      res.json(listShots(projectDir, req.params.characterId));
+      res.json(markInterruptedTalkShots(req.params.characterId, listShots(projectDir, req.params.characterId)));
     } catch (err) {
       sendFactoryError(res, err);
     }
@@ -1348,6 +1349,63 @@ function createApp(options = {}) {
     if (!projectDir) return;
     try {
       const result = await bakeTimeline(projectDir, req.params.characterId, req.body || {});
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // ── Talking head: dialogue audio -> chained Grok head shots ────────
+  function talkingHeadReference(projectDir, characterId) {
+    try {
+      return loadHeadRig(projectDir, resolveGlobalAssetsDir(projectDir), characterId).reference || "";
+    } catch {
+      return "";
+    }
+  }
+
+  app.post("/api/projects/:name/characters/:characterId/talking-head/plan", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const body = req.body || {};
+      const plan = planTalkingHead(projectDir, body);
+      const refRel = talkingHeadReference(projectDir, req.params.characterId);
+      res.json({
+        ...plan,
+        refRel,
+        hasReference: Boolean(refRel && fs.existsSync(path.join(projectDir, refRel))),
+        defaultPrompt: DEFAULT_TALK_PROMPT,
+      });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/talking-head/start", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const body = { ...(req.body || {}) };
+      if (!body.refRel) body.refRel = talkingHeadReference(projectDir, req.params.characterId);
+      const result = await makeTalkingHead(projectDir, req.params.characterId, body, {
+        fetchFn,
+        pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/talking-head/:group/resume", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const result = await resumeTalkingHead(projectDir, req.params.characterId, req.params.group, {
+        fetchFn,
+        pythonBin: options.pythonBin,
+      });
       res.json(result);
     } catch (err) {
       sendFactoryError(res, err);

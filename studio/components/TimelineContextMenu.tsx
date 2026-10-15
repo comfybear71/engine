@@ -13,7 +13,8 @@ export type TimelineContextAction =
   | "redo-sync"
   | "clear-lipsync"
   | "split-long-audio"
-  | "save-slice";
+  | "save-slice"
+  | "talking-head";
 
 export default function TimelineContextMenu({
   x,
@@ -26,6 +27,7 @@ export default function TimelineContextMenu({
   mouthOnly = false,
   showSplitLong = false,
   showSaveSlice = false,
+  showTalkingHead = false,
   onAction,
   onClose,
 }: {
@@ -39,6 +41,7 @@ export default function TimelineContextMenu({
   mouthOnly?: boolean;
   showSplitLong?: boolean;
   showSaveSlice?: boolean;
+  showTalkingHead?: boolean;
   onAction: (action: TimelineContextAction) => void;
   onClose: () => void;
 }) {
@@ -99,6 +102,13 @@ export default function TimelineContextMenu({
               label="Split long audio"
               disabled={!canEdit}
               onClick={() => run("split-long-audio")}
+            />
+          ) : null}
+          {showTalkingHead ? (
+            <MenuItem
+              label="Make talking head"
+              disabled={!canEdit}
+              onClick={() => run("talking-head")}
             />
           ) : null}
           {showSaveSlice ? (

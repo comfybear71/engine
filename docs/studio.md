@@ -43,6 +43,21 @@ The Head Rig timeline has the same keys, snaps clip edges to the playhead and
 neighbouring cuts (hold Alt to turn snapping off), never lets clips overlap on
 a track, and supports undo / redo.
 
+**Talking head from audio.** Right-click an audio block on the Stage and
+choose **Make talking head**. The block's trimmed slice of
+`audio/<label>/001_<character>.wav` is read through its `words.json`, split on
+pauses into windows of 10 s or less (Grok clips are 4/6/8/10 s), and one head
+shot is generated per window with Grok. Window 1 starts from the character's
+reference head; every later window starts from the frame of the previous clip
+where that window ends (last frame to first frame). Grok never hears the audio:
+each window's words go into its prompt, and the clip is trimmed to the
+window's audio, so lip timing is approximate. The clips arrive in that
+character's Head Rig (Assets, Characters) under **Talking heads**, where
+**Play with audio** checks each clip against its audio slice and **Place on
+head track** lays them back to back, trimmed to their audio. The chain is
+sequential; if a clip fails, **Retry from failed clip** continues from it.
+The audio needs a transcript (`words.json`), so import it with transcription on.
+
 ## Starting Engine Studio
 
 You do not need a terminal. After the computer has been set up once
@@ -603,6 +618,9 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/projects/:name/render?script=` | Parse the selected script to a temp timeline (never `timeline.json`), run the compositor with `--output renders/<script-stem>.mp4`. Same `--script` choice as the CLI. One render at a time. |
 | `POST` | `/api/projects/:name/preview-render?script=` | Same temp parse as Render, but writes a 960×540 H.264 proxy to `renders/<script-stem>_preview.mp4` for Stage playback. Shares the one-at-a-time render lock. |
 | `POST` | `/api/projects/:name/import-audio` | Import a pre-recorded mp3/wav for lip-sync (same as `node src/cli.js import-audio`). Studio **Import audio** sends multipart (`file` + `character` + optional `name` / `dryRun` / `noTranscribe` / `splitLong`); JSON `{ "path", "character", "name?", "dryRun?", "noTranscribe?", "splitLong?" }` still works. Copies into `audio/<label>/`, converts to the engine WAV, runs Rhubarb, and transcribes with ElevenLabs STT unless `noTranscribe`. Takes longer than 60 s are split into 30–60 s clips at silences (default; `splitLong=false` keeps one file). Dry-run returns length + the STT credit note and writes nothing. |
+| `POST` | `/api/projects/:name/characters/:characterId/talking-head/plan` | Body `{ audioRel, inSec, durationSec }`. Reads the slice's `words.json` and returns `{ transcript, windows[{ index, start, end, duration, clipSec, text }], refRel, hasReference, hasWords, defaultPrompt }`. No Grok call. |
+| `POST` | `/api/projects/:name/characters/:characterId/talking-head/start` | Body `{ audioRel, inSec, durationSec, prompt? }`. Creates one queued head shot per window (each with its `audio.wav` slice and `talk` metadata) and runs the Grok chain in the background. Returns `{ group, shotIds, windows }`. |
+| `POST` | `/api/projects/:name/characters/:characterId/talking-head/:group/resume` | Continue a stopped chain from its first window that is not ready. |
 | `POST` | `/api/projects/:name/split-audio` | Split an existing `audio/<label>/<file>.wav` over 60 s into 30–60 s chunks at word/Rhubarb silences. Reuses `.words.json` / `.rhubarb.json` (no ElevenLabs). Returns `{ chunks, tags }`. Studio rewrites the script line(s). |
 | `GET` | `/api/projects/:name/renders/:file` | Stream a render (`script.mp4`, `script_mcd.mp4`, `script_preview.mp4`, or a leftover `output.mp4`). |
 | `POST` | `/render` | Original CLI-oriented contract: `{ "projectDir": "..." }`. |

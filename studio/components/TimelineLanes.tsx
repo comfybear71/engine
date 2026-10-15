@@ -79,6 +79,7 @@ import {
   zoomAroundCursor,
   zoomToSlider,
 } from "@/lib/timelineZoom";
+import { talkingHeadRangeForBlock } from "@/lib/talkingHead";
 import { saveAudioSlice, type LaneBlock, type LaneId, type LanesResponse } from "@/lib/worker";
 
 const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
@@ -162,6 +163,7 @@ export default function TimelineLanes({
   onPatchCue,
   onClearLipSync,
   onSplitLongAudio,
+  onMakeTalkingHead,
 }: {
   project: string | null;
   lanes: LanesResponse | null;
@@ -206,6 +208,7 @@ export default function TimelineLanes({
   }) => void;
   onClearLipSync?: (opts: { scriptLine: number }) => void;
   onSplitLongAudio?: (block: LaneBlock) => void;
+  onMakeTalkingHead?: (block: LaneBlock) => void;
 }) {
   const total = Math.max(totalFrames || lanes?.totalFrames || 1, 1);
   const fps = Math.max(lanes?.fps || 24, 1);
@@ -715,6 +718,12 @@ export default function TimelineLanes({
     }
   }
 
+  function talkingHeadBlock() {
+    const audio = allBlocks.filter((block) => selectedIds.has(block.id) && block.lane === "audio" && block.rel);
+    if (audio.length !== 1) return null;
+    return talkingHeadRangeForBlock(audio[0], fps) ? audio[0] : null;
+  }
+
   function longSelectedAudio() {
     return allBlocks.find((block) => {
       if (!selectedIds.has(block.id) || block.lane !== "audio" || !block.rel) return false;
@@ -743,6 +752,9 @@ export default function TimelineLanes({
       if (block) onSplitLongAudio?.(block);
     } else if (action === "save-slice") {
       void applySaveSlice();
+    } else if (action === "talking-head") {
+      const block = talkingHeadBlock();
+      if (block) onMakeTalkingHead?.(block);
     }
   }
 
@@ -1573,6 +1585,7 @@ export default function TimelineLanes({
           hasSelection={selectedIds.size > 0}
           mouthOnly={selectionIsMouthOnly(allBlocks, selectedIds)}
           showSplitLong={Boolean(onSplitLongAudio && longSelectedAudio())}
+          showTalkingHead={Boolean(onMakeTalkingHead && talkingHeadBlock())}
           showSaveSlice={allBlocks.some((block) => block.lane === "audio" && selectedIds.has(block.id) && Boolean(block.rel))}
           showSync={allBlocks.some((block) => block.lane === "dialogue" && selectedIds.has(block.id))}
           syncLabel={

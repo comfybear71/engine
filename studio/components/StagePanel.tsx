@@ -5,6 +5,7 @@ import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import CameraDrawer from "@/components/CameraDrawer";
 import StageAssetsPanel from "@/components/StageAssetsPanel";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
+import TalkingHeadDialog from "@/components/TalkingHeadDialog";
 import PreviewCanvas from "@/components/PreviewCanvas";
 import PanelSplitter from "@/components/PanelSplitter";
 import { LayersInspector, MarksInspector, ScriptInspector } from "@/components/StageInspectors";
@@ -55,6 +56,7 @@ import {
   type ScriptEditMeta,
 } from "@/lib/timelineEdit";
 import { replaceLineWithAudioChunks } from "@/lib/importAudio";
+import { talkingHeadRangeForBlock } from "@/lib/talkingHead";
 import {
   DEFAULT_STAGE_LAYOUT,
   clampStageLayout,
@@ -114,6 +116,7 @@ export default function StagePanel({
   onSaved,
   renderNonce,
   onOpenImagine,
+  onOpenCharacter,
 }: {
   project: string | null;
   script: string;
@@ -127,7 +130,9 @@ export default function StagePanel({
   onSaved: () => void;
   renderNonce: number | null;
   onOpenImagine?: (opts: { characterId: string; needId: string }) => void;
+  onOpenCharacter?: (characterId: string) => void;
 }) {
+  const [talkBlock, setTalkBlock] = useState<LaneBlock | null>(null);
   const [stage, setStage] = useState<StageInfo | null>(null);
   const [lanes, setLanes] = useState<LanesResponse | null>(null);
   const [scriptText, setScriptText] = useState("");
@@ -1233,6 +1238,8 @@ export default function StagePanel({
     onEditScript(next);
   }
 
+  const talkRange = talkBlock ? talkingHeadRangeForBlock(talkBlock, fps) : null;
+
   async function splitLongAudio(block: LaneBlock) {
     if (!project || !block.rel || block.scriptLine == null) return;
     try {
@@ -1563,6 +1570,7 @@ export default function StagePanel({
             onPatchCue={(patch) => void patchMouthCue(patch)}
             onClearLipSync={(opts) => void runLipSync({ ...opts, clear: true })}
             onSplitLongAudio={(block) => void splitLongAudio(block)}
+            onMakeTalkingHead={onOpenCharacter ? setTalkBlock : undefined}
           />
         </div>
       </div>
@@ -1570,6 +1578,18 @@ export default function StagePanel({
         active={rightDrawer}
         onToggle={(id) => setRightDrawer((current) => (current === id ? null : id))}
       />
+      {talkBlock && talkRange && project ? (
+        <TalkingHeadDialog
+          project={project}
+          characterId={talkRange.characterId}
+          range={{ audioRel: talkRange.audioRel, inSec: talkRange.inSec, durationSec: talkRange.durationSec }}
+          onClose={() => setTalkBlock(null)}
+          onStarted={(characterId) => {
+            setTalkBlock(null);
+            onOpenCharacter?.(characterId);
+          }}
+        />
+      ) : null}
       {importOpen && project ? (
         <ImportAudioDialog
           project={project}

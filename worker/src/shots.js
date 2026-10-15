@@ -174,14 +174,15 @@ async function startGrokVideo(prompt, imageBase64, duration, fetchFn) {
   return json.request_id || json.id;
 }
 
-async function pollGrokVideo(requestId, fetchFn) {
+async function pollGrokVideo(requestId, fetchFn, intervalMs) {
   const apiKey = resolveApiKey();
   const fetchImpl = fetchFn || globalThis.fetch;
   const url = `https://api.x.ai/v1/videos/${requestId}`;
   const start = Date.now();
+  const interval = Number.isFinite(intervalMs) ? intervalMs : POLL_INTERVAL;
 
   while (Date.now() - start < POLL_TIMEOUT) {
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+    await new Promise((r) => setTimeout(r, interval));
     const response = await fetchImpl(url, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
@@ -271,6 +272,54 @@ function getShot(projectDir, characterId, shotId) {
 }
 
 /**
+ * Run one Grok generation for an already-created shot folder: start the job,
+ * poll, download source.mp4, capture frames and write the final shot.json.
+ * Never throws -- failures are recorded on the shot (status "error").
+ * Resolves with the (mutated) info once the shot is ready or failed.
+ */
+async function runGrokShot(dir, info, job) {
+  const { fullPrompt, imageBase64, dur, jobKey, options = {} } = job;
+  activeJobs.set(jobKey, { status: "making", startedAt: Date.now() });
+  try {
+    const requestId = await startGrokVideo(fullPrompt, imageBase64, dur, options.fetchFn);
+    activeJobs.set(jobKey, { status: "making", requestId, startedAt: Date.now() });
+    info.requestId = requestId;
+    writeShotJson(dir, info);
+
+    const videoUrl = await pollGrokVideo(requestId, options.fetchFn, options.pollIntervalMs);
+    const sourcePath = path.join(dir, "source.mp4");
+    await downloadVideo(videoUrl, sourcePath, options.fetchFn);
+    info.filename = "source.mp4";
+    writeShotJson(dir, info);
+
+    const capture = options.captureFn || runShotCapture;
+    const result = await capture(sourcePath, dir, {
+      name: info.name,
+      prompt: info.prompt,
+      refImage: info.refImage || "",
+      background: info.background,
+      category: info.category,
+    }, options);
+
+    info.fps = result.fps;
+    info.frameCount = result.frameCount;
+    info.out = result.frameCount;
+    if (typeof job.finalize === "function") job.finalize(info);
+    info.status = "ready";
+    delete info.requestId;
+    delete info.error;
+    writeShotJson(dir, info);
+    activeJobs.delete(jobKey);
+  } catch (err) {
+    info.status = "error";
+    info.error = err.message;
+    writeShotJson(dir, info);
+    activeJobs.set(jobKey, { status: "error", error: err.message });
+  }
+  return info;
+}
+
+/**
  * Start making a shot with Grok – returns immediately, processes in background.
  */
 async function makeShot(projectDir, characterId, body, options = {}) {
@@ -315,47 +364,8 @@ async function makeShot(projectDir, characterId, body, options = {}) {
   };
   writeShotJson(dir, info);
 
-  // Start the Grok job in the background
   const jobKey = `${characterId}/${shotId}`;
-  activeJobs.set(jobKey, { status: "making", startedAt: Date.now() });
-
-  (async () => {
-    try {
-      const requestId = await startGrokVideo(fullPrompt, imageBase64, dur, options.fetchFn);
-      activeJobs.set(jobKey, { status: "making", requestId, startedAt: Date.now() });
-      info.requestId = requestId;
-      writeShotJson(dir, info);
-
-      const videoUrl = await pollGrokVideo(requestId, options.fetchFn);
-      const sourcePath = path.join(dir, "source.mp4");
-      await downloadVideo(videoUrl, sourcePath, options.fetchFn);
-      info.filename = "source.mp4";
-      writeShotJson(dir, info);
-
-      // Run shot capture
-      const result = await runShotCapture(sourcePath, dir, {
-        name: shotName,
-        prompt,
-        refImage: refRel || "",
-        background: bg,
-        category: inferCategory(prompt),
-      }, options);
-
-      // Update shot.json with results
-      info.fps = result.fps;
-      info.frameCount = result.frameCount;
-      info.out = result.frameCount;
-      info.status = "ready";
-      delete info.requestId;
-      writeShotJson(dir, info);
-      activeJobs.delete(jobKey);
-    } catch (err) {
-      info.status = "error";
-      info.error = err.message;
-      writeShotJson(dir, info);
-      activeJobs.set(jobKey, { status: "error", error: err.message });
-    }
-  })();
+  void runGrokShot(dir, info, { fullPrompt, imageBase64, dur, jobKey, options });
 
   return { shotId, status: "making" };
 }
@@ -657,7 +667,7 @@ function serveMedia(projectDir, characterId, req, res) {
 
   // Determine content type
   const ext = path.extname(filePath).toLowerCase();
-  const types = { ".mp4": "video/mp4", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png" };
+  const types = { ".mp4": "video/mp4", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".wav": "audio/wav" };
   if (types[ext]) res.setHeader("Content-Type", types[ext]);
 
   res.sendFile(filePath);
@@ -946,4 +956,16 @@ module.exports = {
   combineShots,
   resizeHead,
   bakeTimeline,
+  internals: {
+    runGrokShot,
+    shotsDir,
+    shotDir,
+    readShotJson,
+    writeShotJson,
+    uniqueShotId,
+    slugName,
+    shotError,
+    spawnCmd,
+    BG_PROMPT_SUFFIX,
+  },
 };
