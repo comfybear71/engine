@@ -13,6 +13,7 @@ export type TalkShot = {
   status: string;
   error?: string;
   frameCount: number;
+  hasPrevious?: boolean;
   in?: number;
   out?: number;
   talk?: TalkMeta;

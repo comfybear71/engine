@@ -147,6 +147,7 @@ const {
   makeTalkingHead,
   resumeTalkingHead,
   redoTalkingHeadClip,
+  undoTalkingHeadRedo,
   stopTalkingHead,
   markInterruptedTalkShots,
   listTalkingHeadStarts,
@@ -1466,6 +1467,16 @@ function createApp(options = {}) {
         cascade: body.cascade === true,
       });
       res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/talking-head/:group/undo-redo", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(await undoTalkingHeadRedo(projectDir, req.params.characterId, req.params.group, (req.body || {}).index));
     } catch (err) {
       sendFactoryError(res, err);
     }

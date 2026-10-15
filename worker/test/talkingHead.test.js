@@ -14,6 +14,7 @@ const {
   makeTalkingHead,
   resumeTalkingHead,
   redoTalkingHeadClip,
+  undoTalkingHeadRedo,
   markInterruptedTalkShots,
   listTalkingHeadStarts,
   saveTalkingHeadStart,
@@ -554,6 +555,58 @@ describe("talking head chain", () => {
     const cascade = await redoTalkingHeadClip(projectDir, "rodney", started.group, 1, { ...chainOptions(), cascade: true });
     await cascade.completion;
     assert.equal(requests.length, before + 1 + (shots.length - 1), "cascade redoes the following clips too");
+  });
+
+  describe("undoing a redo", () => {
+    async function madeChain() {
+      writeAudio(24);
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 24, refRel: "characters/rodney/front_head.jpg" },
+        chainOptions()
+      );
+      await started.completion;
+      const shots = () => listShots(projectDir, "rodney").sort((a, b) => a.talk.index - b.talk.index);
+      const dir = path.join(shotsDirOf(), shots()[1].id);
+      fs.mkdirSync(path.join(dir, "cut"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "cut", "f_0001.png"), "OLD-CUT");
+      fs.writeFileSync(path.join(dir, "source.mp4"), "OLD-SOURCE");
+      return { started, shots, dir };
+    }
+    const shotsDirOf = () => path.join(projectDir, "characters", "rodney", "shots");
+
+    test("keeps the replaced clip and brings it back", async () => {
+      const { started, shots, dir } = await madeChain();
+      const redo = await redoTalkingHeadClip(projectDir, "rodney", started.group, 1, chainOptions());
+      await redo.completion;
+      assert.equal(shots()[1].hasPrevious, true);
+      assert.equal(fs.existsSync(path.join(dir, "cut", "f_0001.png")), false, "old frames are moved aside, not overwritten");
+      assert.equal(shots()[0].hasPrevious, undefined, "other clips are untouched");
+
+      const undone = await undoTalkingHeadRedo(projectDir, "rodney", started.group, 1);
+      assert.equal(undone.restored, 2);
+      assert.equal(fs.readFileSync(path.join(dir, "cut", "f_0001.png"), "utf8"), "OLD-CUT");
+      assert.equal(fs.readFileSync(path.join(dir, "source.mp4"), "utf8"), "OLD-SOURCE");
+      assert.equal(shots()[1].status, "ready");
+      assert.equal(shots()[1].hasPrevious, undefined);
+      assert.equal(fs.existsSync(path.join(dir, "_previous")), false);
+      await assert.rejects(undoTalkingHeadRedo(projectDir, "rodney", started.group, 1), /no earlier version/);
+    });
+
+    test("a redo that fails or is stopped restores the old clip instead of deleting it", async () => {
+      const { started, shots, dir } = await madeChain();
+      const redo = await redoTalkingHeadClip(projectDir, "rodney", started.group, 1, chainOptions({ failOn: 1 }));
+      await redo.completion;
+      assert.equal(shots()[1].status, "error");
+      assert.equal(shots()[1].hasPrevious, true);
+
+      const stopped = await stopTalkingHead(projectDir, "rodney", started.group);
+      assert.equal(stopped.removed, 0);
+      assert.equal(shots().length, started.windows.length, "no clip was deleted");
+      assert.equal(shots()[1].status, "ready");
+      assert.equal(fs.readFileSync(path.join(dir, "cut", "f_0001.png"), "utf8"), "OLD-CUT");
+    });
   });
 
   test("a failed window stops the chain and resume continues from it", async () => {
