@@ -213,7 +213,10 @@ function allowedOrigins() {
 
 function applyCors(req, res) {
   const origin = req.headers.origin;
-  if (origin && allowedOrigins().has(origin)) {
+  // Allow any localhost / 127.0.0.1 origin (any port) for local dev,
+  // plus any explicitly configured origins.
+  const isLocal = origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  if (origin && (isLocal || allowedOrigins().has(origin))) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, DELETE, PATCH, OPTIONS");

@@ -194,9 +194,16 @@ def remove_watermark(bgra: np.ndarray) -> np.ndarray:
 
 # ── Frame processing ─────────────────────────────────────────────────
 
-def process_frame(bgr: np.ndarray) -> np.ndarray:
-    """Key the background and remove watermark from a single frame."""
-    kind, bg_color = detect_bg_from_border(bgr)
+def process_frame(bgr: np.ndarray, bg_hint: str = "") -> np.ndarray:
+    """Key the background and remove watermark from a single frame.
+
+    bg_hint: if "green", always use green keying (we told Grok to use
+    a green screen, so trust that over border-pixel auto-detection).
+    """
+    if bg_hint == "green":
+        kind, bg_color = "green", None
+    else:
+        kind, bg_color = detect_bg_from_border(bgr)
     if kind == "green":
         keyed = despill_green(key_green(bgr))
     else:
@@ -213,9 +220,9 @@ def rgba_on_black(bgra: np.ndarray) -> np.ndarray:
 
 
 def _process_and_write_frame(bgr: np.ndarray, idx: int, cut_dir: Path, thumb_dir: Path,
-                              thumb_h: int = 160) -> None:
+                              thumb_h: int = 160, bg_hint: str = "") -> None:
     """Key one raw frame and write its cut/ PNG + thumb/ JPG."""
-    keyed = process_frame(bgr)
+    keyed = process_frame(bgr, bg_hint=bg_hint)
 
     cut_path = cut_dir / f"f_{idx:04d}.png"
     cv2.imwrite(str(cut_path), keyed)
@@ -320,7 +327,7 @@ def run(video_path: str, out_dir: str, name: str = "", prompt: str = "",
         bgr = cv2.imread(str(raw_path), cv2.IMREAD_COLOR)
         if bgr is None:
             continue
-        _process_and_write_frame(bgr, idx, cut_dir, thumb_dir)
+        _process_and_write_frame(bgr, idx, cut_dir, thumb_dir, bg_hint=background)
 
     # 3 + 4. poster.jpg and preview.mp4
     _write_poster_and_preview(out, cut_dir, frame_count, fps)
@@ -374,6 +381,18 @@ def reprocess(out_dir: str) -> dict:
     if not raw_frames:
         raise RuntimeError("No raw frames found to reprocess")
 
+    # Pull fps and the saved background hint (e.g. "green") from shot.json
+    shot_json_path = out / "shot.json"
+    fps = 24.0
+    bg_hint = ""
+    if shot_json_path.exists():
+        try:
+            shot_info = json.loads(shot_json_path.read_text())
+            fps = float(shot_info.get("fps") or 24.0)
+            bg_hint = str(shot_info.get("background") or "")
+        except Exception:
+            pass
+
     frame_count = 0
     for raw_path in raw_frames:
         try:
@@ -384,16 +403,7 @@ def reprocess(out_dir: str) -> dict:
         bgr = cv2.imread(str(raw_path), cv2.IMREAD_COLOR)
         if bgr is None:
             continue
-        _process_and_write_frame(bgr, idx, cut_dir, thumb_dir)
-
-    shot_json_path = out / "shot.json"
-    fps = 24.0
-    if shot_json_path.exists():
-        try:
-            shot_info = json.loads(shot_json_path.read_text())
-            fps = float(shot_info.get("fps") or 24.0)
-        except Exception:
-            pass
+        _process_and_write_frame(bgr, idx, cut_dir, thumb_dir, bg_hint=bg_hint)
 
     _write_poster_and_preview(out, cut_dir, frame_count, fps)
 

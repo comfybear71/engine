@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WORKER_URL, workerFetch } from "@/lib/worker";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -107,6 +107,56 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+// ── Thumbnail ref picker ─────────────────────────────────────────────
+
+function RefShotPicker({ allShots, value, onChange, project, characterId }: {
+  allShots: ShotInfo[]; value: string; onChange: (id: string) => void; project: string; characterId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    function h(e: MouseEvent) { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); }
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+  const sel = allShots.find((s) => s.id === value);
+  return (
+    <div ref={wrapRef} className="relative w-full">
+      <button type="button"
+        className="flex w-full items-center gap-2 rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-left text-[12px] text-neutral-200"
+        onClick={() => setOpen(!open)}>
+        {sel ? (
+          <>
+            <img src={shotMediaUrl(project, characterId, sel.id, "poster.jpg")}
+              className="h-7 w-10 rounded object-cover" alt="" />
+            <span className="truncate">{sel.name || sel.id}</span>
+          </>
+        ) : <span className="text-neutral-400">Character ref</span>}
+        <span className="ml-auto text-neutral-500">▾</span>
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded border border-studio-border bg-[#1a1a1a] shadow-lg">
+          <button type="button"
+            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px] text-neutral-400 hover:bg-[#333]"
+            onClick={() => { onChange(""); setOpen(false); }}>
+            None
+          </button>
+          {allShots.map((s) => (
+            <button key={s.id} type="button"
+              className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px] hover:bg-[#333] ${s.id === value ? "bg-[#2a2a2a] text-studio-accent" : "text-neutral-200"}`}
+              onClick={() => { onChange(s.id); setOpen(false); }}>
+              <img src={shotMediaUrl(project, characterId, s.id, "poster.jpg")}
+                className="h-8 w-12 rounded object-cover" alt=""
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+              <span className="truncate">{s.name || s.id}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Component ───────────────────────────────────────────────────────
 
 export default function HeadRigModal({
@@ -155,6 +205,9 @@ export default function HeadRigModal({
   } | null>(null);
   const [, forceDragTick] = useState(0); // re-render while dragging segment blocks
 
+  // Right-click context menu
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; track: TrackName; id: string } | null>(null);
+
   // Canvas drag state (move/scale a head segment's anchor)
   const canvasDragRef = useRef<{
     kind: "move" | "scale";
@@ -183,7 +236,6 @@ export default function HeadRigModal({
     if (!shotId || shotDims[shotId] || shotDimsLoadingRef.current.has(shotId)) return;
     shotDimsLoadingRef.current.add(shotId);
     const img = new Image();
-    img.crossOrigin = "anonymous";
     img.onload = () => {
       setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
     };
@@ -207,11 +259,27 @@ export default function HeadRigModal({
     if (cached) return cached;
     const pad = String(Math.max(1, frame)).padStart(4, "0");
     const img = new Image();
-    img.crossOrigin = "anonymous";
     img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
+    img.onerror = () => { /* prevent infinite retry — frame image missing */ };
     img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`, v);
     return null;
   }
+
+  // Preload frame images for all segments so playback doesn't blink
+  useEffect(() => {
+    const segs = [...bodySegments, ...headSegments];
+    for (const seg of segs) {
+      for (let f = seg.inFrame; f <= seg.outFrame; f++) {
+        const key = `${seg.shotId}#${f}`;
+        if (!frameImgCacheRef.current.has(key)) {
+          const pad = String(Math.max(1, f)).padStart(4, "0");
+          const img = new Image();
+          img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
+          img.src = shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`);
+        }
+      }
+    }
+  }, [bodySegments, headSegments, project, characterId]);
 
   // ── Load shots + rigs ──
   useEffect(() => {
@@ -244,6 +312,19 @@ export default function HeadRigModal({
     setScrubFrame(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rigKey, rigs]);
+
+  // Remove segments whose shot was deleted
+  const shotIdsSet = useMemo(() => new Set(shots.map((s) => s.id)), [shots]);
+  useEffect(() => {
+    setBodySegments((prev) => {
+      const filtered = prev.filter((s) => shotIdsSet.has(s.shotId));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+    setHeadSegments((prev) => {
+      const filtered = prev.filter((s) => shotIdsSet.has(s.shotId));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [shotIdsSet]);
 
   const shotsById = useMemo(() => {
     const map = new Map<string, ShotInfo>();
@@ -309,7 +390,8 @@ export default function HeadRigModal({
     let by = ch - bh - ch * 0.03;
 
     if (body) {
-      const dims = shotDims[body.shotId];
+      const img = getFrameImage(body.shotId, sourceFrameOf(body, frame));
+      const dims = shotDims[body.shotId] || (img ? { w: img.naturalWidth, h: img.naturalHeight } : null);
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
@@ -317,15 +399,14 @@ export default function HeadRigModal({
         bh = dims.h * scale;
         bx = (cw - bw) / 2;
         by = ch - bh - ch * 0.03;
-        const img = getFrameImage(body.shotId, sourceFrameOf(body, frame));
         if (img) ctx.drawImage(img, bx, by, bw, bh);
       }
     }
 
     if (head) {
-      const dims = shotDims[head.shotId];
+      const img = getFrameImage(head.shotId, sourceFrameOf(head, frame));
+      const dims = shotDims[head.shotId] || (img ? { w: img.naturalWidth, h: img.naturalHeight } : null);
       if (dims && dims.w > 0) {
-        const img = getFrameImage(head.shotId, sourceFrameOf(head, frame));
         if (img) {
           const hw = dims.w * head.headScale * scale;
           const hh = dims.h * head.headScale * scale;
@@ -423,7 +504,8 @@ export default function HeadRigModal({
     const cw = CANVAS_W;
     const ch = CANVAS_H;
     if (body) {
-      const dims = shotDims[body.shotId];
+      const img = frameImgCacheRef.current.get(`${body.shotId}#${sourceFrameOf(body, frame)}`);
+      const dims = shotDims[body.shotId] || (img && img.naturalWidth > 0 ? { w: img.naturalWidth, h: img.naturalHeight } : null);
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         const scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
@@ -440,34 +522,37 @@ export default function HeadRigModal({
   function onCanvasMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
     const head = editingHead;
     if (!head) return;
-    const dims = shotDims[head.shotId];
-    if (!dims || dims.w === 0) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    setSelectedSegment({ track: "head", id: head.id });
+
     const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    const cssScale = canvas.width / rect.width;
+    const mx = (e.clientX - rect.left) * cssScale;
+    const my = (e.clientY - rect.top) * cssScale;
     const { scale, bw, bh, bx, by } = layoutBasis(scrubFrame);
 
-    const hw = dims.w * head.headScale * scale;
-    const hh = dims.h * head.headScale * scale;
-    const hx = bx + head.anchorX * bw - hw / 2;
-    const hy = by + head.anchorY * bh - hh / 2;
-
-    const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
-    for (const [cx, cy] of corners) {
-      if (Math.abs(mx - cx) < 10 && Math.abs(my - cy) < 10) {
-        setSelectedSegment({ track: "head", id: head.id });
-        canvasDragRef.current = { kind: "scale", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
-        e.preventDefault();
-        return;
+    // Check corner handles for scale drag (only if dims known)
+    const headDims = shotDims[head.shotId];
+    if (headDims && headDims.w > 0) {
+      const hw = headDims.w * head.headScale * scale;
+      const hh = headDims.h * head.headScale * scale;
+      const hx = bx + head.anchorX * bw - hw / 2;
+      const hy = by + head.anchorY * bh - hh / 2;
+      const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
+      for (const [cx, cy] of corners) {
+        if (Math.abs(mx - cx) < 14 && Math.abs(my - cy) < 14) {
+          canvasDragRef.current = { kind: "scale", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
+          e.preventDefault();
+          return;
+        }
       }
     }
-    if (mx >= hx && mx <= hx + hw && my >= hy && my <= hy + hh) {
-      setSelectedSegment({ track: "head", id: head.id });
-      canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
-      e.preventDefault();
-    }
+
+    // Default: move drag (works even without dims loaded)
+    canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
+    e.preventDefault();
   }
 
   function updateHeadSegment(id: string, patch: Partial<HeadSegment>) {
@@ -689,25 +774,52 @@ export default function HeadRigModal({
     }
   }
 
-  function bladeSelected() {
-    const sel = selectedSeg();
-    if (!sel) return;
-    const seg = sel.seg;
-    const end = segEnd(seg);
-    if (scrubFrame <= seg.start || scrubFrame > end) return; // playhead must be strictly inside
-    const splitSourceFrame = sourceFrameOf(seg, scrubFrame);
-    if (sel.track === "body") {
-      const first: Segment = { ...seg, outFrame: splitSourceFrame - 1 };
-      const second: Segment = { ...seg, id: genSegId(), start: scrubFrame, inFrame: splitSourceFrame };
-      setBodySegments((prev) => prev.flatMap((s) => (s.id === seg.id ? [first, second] : [s])));
-      setSelectedSegment({ track: "body", id: second.id });
-    } else {
-      const h = seg as HeadSegment;
-      const first: HeadSegment = { ...h, outFrame: splitSourceFrame - 1 };
-      const second: HeadSegment = { ...h, id: genSegId(), start: scrubFrame, inFrame: splitSourceFrame };
-      setHeadSegments((prev) => prev.flatMap((s) => (s.id === h.id ? [first, second] : [s])));
-      setSelectedSegment({ track: "head", id: second.id });
+  function bladeAtPlayhead() {
+    // Use refs to avoid stale closures — the keyboard handler may hold old state
+    const curBody = segmentsRef.current.body;
+    const curHead = segmentsRef.current.head;
+    const frame = scrubFrame;
+
+    // Find segment under playhead — selected first, then auto-detect
+    let track: TrackName | null = null;
+    let segId: string | null = null;
+
+    if (selectedSegment) {
+      const list = selectedSegment.track === "body" ? curBody : curHead;
+      const seg = list.find((s) => s.id === selectedSegment.id);
+      if (seg && frame > seg.start && frame <= segEnd(seg)) {
+        track = selectedSegment.track;
+        segId = seg.id;
+      }
     }
+
+    if (!segId) {
+      for (const s of curBody) {
+        if (frame > s.start && frame <= segEnd(s)) { track = "body"; segId = s.id; break; }
+      }
+    }
+    if (!segId) {
+      for (const s of curHead) {
+        if (frame > s.start && frame <= segEnd(s)) { track = "head"; segId = s.id; break; }
+      }
+    }
+    if (!track || !segId) return;
+
+    const secondId = genSegId();
+    const splitter = (prev: any[]) => prev.flatMap((s: any) => {
+      if (s.id !== segId) return [s];
+      const splitSrc = sourceFrameOf(s, frame);
+      const first = { ...s, outFrame: splitSrc - 1 };
+      const second = { ...s, id: secondId, start: frame, inFrame: splitSrc };
+      return [first, second];
+    });
+
+    if (track === "body") {
+      setBodySegments(splitter as any);
+    } else {
+      setHeadSegments(splitter as any);
+    }
+    setSelectedSegment({ track, id: secondId });
   }
 
   function trimSelectedEdge(edge: "in" | "out") {
@@ -730,6 +842,34 @@ export default function HeadRigModal({
     }
   }
 
+  // ── Context menu handlers ──
+  function handleCtxMenu(e: React.MouseEvent, track: TrackName, id: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedSegment({ track, id });
+    setCtxMenu({ x: e.clientX, y: e.clientY, track, id });
+  }
+  function ctxDelete() {
+    if (!ctxMenu) return;
+    const { track, id } = ctxMenu;
+    if (track === "body") setBodySegments((prev) => prev.filter((s) => s.id !== id));
+    else setHeadSegments((prev) => prev.filter((s) => s.id !== id));
+    setSelectedSegment(null);
+    setCtxMenu(null);
+  }
+  function ctxCopy() {
+    if (!ctxMenu) return;
+    const { track, id } = ctxMenu;
+    const list = track === "body" ? bodySegments : headSegments;
+    const seg = list.find((s) => s.id === id);
+    if (seg) clipboardRef.current = { track, seg };
+    setCtxMenu(null);
+  }
+  function ctxPaste() {
+    pasteClipboard();
+    setCtxMenu(null);
+  }
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement).tagName;
@@ -737,15 +877,18 @@ export default function HeadRigModal({
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
 
-      if (ctrl && key === "b") { e.preventDefault(); bladeSelected(); return; }
+      if (ctrl && key === "b") { e.preventDefault(); bladeAtPlayhead(); return; }
       if (key === "delete" || key === "backspace") { deleteSelected(); return; }
       if (key === "i" && !ctrl) { e.preventDefault(); trimSelectedEdge("in"); return; }
       if (key === "o" && !ctrl) { e.preventDefault(); trimSelectedEdge("out"); return; }
       if (ctrl && key === "c") { copySelected(); return; }
       if (ctrl && key === "v") { pasteClipboard(); return; }
     }
+    // Close context menu on click outside
+    function onClickAnywhere() { setCtxMenu(null); }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("mousedown", onClickAnywhere);
+    return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("mousedown", onClickAnywhere); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSegment, bodySegments, headSegments, scrubFrame]);
 
@@ -758,6 +901,7 @@ export default function HeadRigModal({
   const [grokBusy, setGrokBusy] = useState(false);
   const [grokMsg, setGrokMsg] = useState("");
   const [grokRefShotId, setGrokRefShotId] = useState(""); // "" = character reference
+  const [grokRefFile, setGrokRefFile] = useState<File | null>(null); // custom uploaded ref image
 
   async function handleGrokCreate() {
     if (!grokPrompt.trim()) return;
@@ -765,7 +909,9 @@ export default function HeadRigModal({
     setGrokMsg("");
     try {
       let refBase64: string | undefined;
-      if (grokRefShotId) {
+      if (grokRefFile) {
+        refBase64 = await blobToBase64(grokRefFile);
+      } else if (grokRefShotId) {
         const refRes = await workerFetch(
           `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/media?rel=${encodeURIComponent(`${grokRefShotId}/poster.jpg`)}`
         );
@@ -779,7 +925,7 @@ export default function HeadRigModal({
           body: JSON.stringify({
             prompt: grokType === "body"
               ? `${grokPrompt.trim()}, body only from neck down, show full neck and shoulders, no head, no face, cut off at the neck, the head is a separate layer`
-              : grokPrompt.trim(),
+              : `${grokPrompt.trim()}, head only from jawline up, no neck, no shoulders, no body, close-up head and face only, cut off cleanly at the jaw`,
             shotType: grokType,
             background: "green",
             duration: grokDuration,
@@ -981,97 +1127,213 @@ export default function HeadRigModal({
   const allShots = shots;
   const rigKeys = Object.keys(rigs);
 
+  const [mediaPanelOpen, setMediaPanelOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(300);
+  const [timelineHeight, setTimelineHeight] = useState(220);
+  const sidebarDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const timelineDragRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  // Sidebar resize handler
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (sidebarDragRef.current) {
+        const delta = e.clientX - sidebarDragRef.current.startX;
+        setSidebarWidth(clamp(sidebarDragRef.current.startW + delta, 200, 500));
+      }
+      if (timelineDragRef.current) {
+        const delta = timelineDragRef.current.startY - e.clientY;
+        setTimelineHeight(clamp(timelineDragRef.current.startH + delta, 120, 500));
+      }
+    }
+    function onUp() { sidebarDragRef.current = null; timelineDragRef.current = null; }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, []);
+
   const content = (
-    <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto p-4"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
-      {/* ── Centered Viewer ── */}
-      <div className="flex flex-col items-center">
-        <div className="mb-2 flex flex-wrap items-end justify-center gap-3">
-          <label className="text-[11px] text-studio-muted">
-            Rig
-            <select
-              className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={rigKey}
-              onChange={(e) => setRigKey(e.target.value)}
-            >
-              <option value="front">front</option>
-              <option value="left_34">left 3/4</option>
-              <option value="right_34">right 3/4</option>
-              <option value="left_side">left side</option>
-              <option value="right_side">right side</option>
-              <option value="back">back</option>
-            </select>
-            <input
-              type="text"
-              className="ml-1 w-16 rounded-md border border-studio-border bg-studio-raised px-1 py-1 text-xs text-neutral-200"
-              placeholder="custom"
-              value={rigKey}
-              onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
-            />
-          </label>
-          <label className="text-[11px] text-studio-muted">
-            FPS
-            <input
-              type="number" min={4} max={60}
-              className="ml-1 w-14 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={fps}
-              onChange={(e) => setFps(clamp(Number(e.target.value) || 24, 4, 60))}
-            />
-          </label>
-        </div>
-
-        <canvas
-          ref={canvasRef}
-          width={CANVAS_W}
-          height={CANVAS_H}
-          className="rounded-md border border-studio-border"
-          style={{ cursor: editingHead ? "crosshair" : "default", width: CANVAS_W, height: CANVAS_H, maxHeight: "60vh", objectFit: "contain" }}
-          onMouseDown={onCanvasMouseDown}
-          onMouseMove={onCanvasMouseMove}
-          onMouseUp={onCanvasMouseUp}
-          onMouseLeave={onCanvasMouseUp}
-          onWheel={onCanvasWheel}
-        />
-        <p className="mt-1 text-[10px] text-studio-muted">
-          {editingHead
-            ? "Drag head = move · Corner handles = scale · Scroll = resize"
-            : "Select or add a head segment on the timeline below to reposition it"}
-        </p>
-
-        <div className="mt-2 flex flex-wrap items-center justify-center gap-4 rounded-md border border-studio-border bg-[#1a1a1a] px-4 py-2">
-          <button
-            type="button"
-            className="rounded-md bg-studio-accent px-3 py-1 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
-            disabled={busy != null || (!bodySegments.length && !headSegments.length)}
-            onClick={() => void handleSave()}
-          >
-            {busy || `Save "${rigKey}"`}
-          </button>
-          {error ? <span className="text-xs text-red-400">{error}</span> : null}
-          {saved ? <span className="text-xs text-green-400">Saved!</span> : null}
-        </div>
-
-        {rigKeys.length > 0 ? (
-          <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
-            <span className="text-[10px] text-studio-muted">Rigs:</span>
-            {rigKeys.map((key) => (
-              <button
-                key={key}
-                type="button"
-                className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] ${
-                  rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-300 hover:text-white"
-                }`}
-                onClick={() => setRigKey(key)}
-              >
-                {key}
-                <span className="ml-1 text-red-400 hover:text-red-300" onClick={(e) => { e.stopPropagation(); void handleDeleteRig(key); }}>×</span>
+    <div className={inline ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col"}>
+      <div className="flex min-h-0 flex-1">
+        {/* ══════════ LEFT SIDEBAR — Media Bins + Grok ══════════ */}
+        <div className={`shrink-0 bg-[#131313] transition-all ${mediaPanelOpen ? "" : "w-0 overflow-hidden"}`} style={mediaPanelOpen ? { width: sidebarWidth } : undefined}>
+          <div className="flex h-full flex-col overflow-y-auto">
+            {/* Import clip */}
+            <div className="flex items-center gap-2 border-b border-[#222] px-3 py-2">
+              <input ref={importRef} type="file" accept="video/*,.mp4,.mov,.webm" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFile(f, importType); }} />
+              <select className="rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
+                value={importType} onChange={(e) => setImportType(e.target.value as "body" | "head")}>
+                <option value="body">Body clip</option>
+                <option value="head">Head clip</option>
+              </select>
+              <button type="button"
+                className="rounded bg-blue-600 px-3 py-1 text-[12px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
+                disabled={importBusy}
+                onClick={() => importRef.current?.click()}>
+                {importBusy ? "Importing…" : "📁 Import Clip"}
               </button>
-            ))}
+              <button type="button"
+                className="rounded bg-neutral-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-neutral-600 disabled:opacity-40"
+                disabled={reprocessAllBusy}
+                title="Re-key every shot's background from its already-captured frames — no new Grok generations"
+                onClick={() => void handleReprocessAll()}>
+                {reprocessAllBusy ? "Fixing…" : "🩹 Fix All Backgrounds"}
+              </button>
+            </div>
+            {reprocessMsg ? (
+              <p className={`border-b border-[#222] px-3 py-1 text-[11px] font-medium ${/fail/i.test(reprocessMsg) ? "text-red-400" : "text-emerald-300"}`}>{reprocessMsg}</p>
+            ) : null}
+
+            {/* Body Shots bin */}
+            <MediaBin
+              title="Body Shots"
+              shots={bodyShots.length > 0 ? bodyShots : allShots}
+              project={project} characterId={characterId} mediaVersion={mediaVersion}
+              reprocessingShotId={reprocessingShotId}
+              onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot}
+            />
+
+            {/* Head Shots bin */}
+            <MediaBin
+              title="Head Shots"
+              shots={headShots.length > 0 ? headShots : allShots}
+              project={project} characterId={characterId} mediaVersion={mediaVersion}
+              reprocessingShotId={reprocessingShotId}
+              onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot}
+            />
+
+            {/* Grok Creator — collapsible */}
+            <GrokSection
+              grokType={grokType} setGrokType={setGrokType}
+              grokDuration={grokDuration} setGrokDuration={setGrokDuration}
+              grokRefShotId={grokRefShotId} setGrokRefShotId={setGrokRefShotId}
+              grokRefFile={grokRefFile} setGrokRefFile={setGrokRefFile}
+              grokPrompt={grokPrompt} setGrokPrompt={setGrokPrompt}
+              grokBusy={grokBusy} grokMsg={grokMsg}
+              allShots={allShots}
+              onCreate={() => void handleGrokCreate()}
+              project={project} characterId={characterId}
+            />
+
+            {/* Bake output — collapsible */}
+            <BakeSection
+              bakeName={bakeName} setBakeName={setBakeName}
+              bakeBusy={bakeBusy} bakeMsg={bakeMsg}
+              bodySegments={bodySegments} headSegments={headSegments}
+              combinedShots={combinedShots}
+              project={project} characterId={characterId}
+              onBake={() => void handleBake()}
+              onSendToAction={(id) => void handleSendToAction(id)}
+              onDeleteShot={handleDeleteShot}
+            />
           </div>
-        ) : null}
-      </div>
+        </div>
+
+        {/* Sidebar resize handle */}
+        {mediaPanelOpen && (
+          <div
+            className="shrink-0 cursor-col-resize bg-[#222] hover:bg-[#e0a040]/60 active:bg-[#e0a040]"
+            style={{ width: 4 }}
+            onMouseDown={(e) => { e.preventDefault(); sidebarDragRef.current = { startX: e.clientX, startW: sidebarWidth }; }}
+          />
+        )}
+
+        {/* ══════════ MAIN AREA — Canvas + Timeline ══════════ */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* Toggle sidebar + Rig controls */}
+          <div className="flex items-center gap-3 border-b border-[#222] bg-[#161616] px-3 py-1.5">
+            <button type="button" className="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-[#333] hover:text-white"
+              onClick={() => setMediaPanelOpen(!mediaPanelOpen)} title={mediaPanelOpen ? "Hide media panel" : "Show media panel"}>
+              {mediaPanelOpen ? "◀" : "▶"}
+            </button>
+            <label className="text-[13px] text-studio-muted">
+              Rig
+              <select
+                className="ml-1 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-[12px] text-neutral-200"
+                value={rigKey}
+                onChange={(e) => setRigKey(e.target.value)}
+              >
+                <option value="front">front</option>
+                <option value="left_34">left 3/4</option>
+                <option value="right_34">right 3/4</option>
+                <option value="left_side">left side</option>
+                <option value="right_side">right side</option>
+                <option value="back">back</option>
+              </select>
+              <input
+                type="text"
+                className="ml-1 w-20 rounded-md border border-studio-border bg-studio-raised px-1 py-1 text-[12px] text-neutral-200"
+                placeholder="custom"
+                value={rigKey}
+                onChange={(e) => setRigKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, "_"))}
+              />
+            </label>
+            <label className="text-[13px] text-studio-muted">
+              FPS
+              <input
+                type="number" min={4} max={60}
+                className="ml-1 w-14 rounded-md border border-studio-border bg-studio-raised px-1 py-1 text-[12px] text-neutral-200"
+                value={fps}
+                onChange={(e) => setFps(clamp(Number(e.target.value) || 24, 4, 60))}
+              />
+            </label>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded bg-studio-accent px-3 py-1 text-[12px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+                disabled={busy != null || (!bodySegments.length && !headSegments.length)}
+                onClick={() => void handleSave()}
+              >
+                {busy || `Save "${rigKey}"`}
+              </button>
+              {error ? <span className="text-[12px] text-red-400">{error}</span> : null}
+              {saved ? <span className="text-[12px] text-green-400">Saved!</span> : null}
+              {rigKeys.length > 0 && rigKeys.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`rounded px-2 py-1 text-[11px] ${rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-400 hover:text-white"}`}
+                  onClick={() => setRigKey(key)}
+                >
+                  {key}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Canvas preview */}
+          <div className="flex flex-1 flex-col items-center justify-center overflow-hidden bg-[#0a0a0a] p-3">
+            <canvas
+              ref={canvasRef}
+              width={CANVAS_W}
+              height={CANVAS_H}
+              className="rounded-md border border-studio-border"
+              style={{ cursor: editingHead ? "crosshair" : "default", width: CANVAS_W, height: CANVAS_H, maxHeight: "55vh", objectFit: "contain" }}
+              onMouseDown={onCanvasMouseDown}
+              onMouseMove={onCanvasMouseMove}
+              onMouseUp={onCanvasMouseUp}
+              onMouseLeave={onCanvasMouseUp}
+              onWheel={onCanvasWheel}
+            />
+            <p className="mt-1 text-[12px] text-studio-muted">
+              {editingHead
+                ? "Drag head = move · Corner handles = scale · Scroll = resize"
+                : "Select a head segment to reposition it"}
+            </p>
+          </div>
+
+        </div>{/* end main area flex-col */}
+      </div>{/* end sidebar+main flex row */}
+
+      {/* Timeline resize handle */}
+      <div
+        className="shrink-0 cursor-row-resize bg-[#222] hover:bg-[#e0a040]/60 active:bg-[#e0a040]"
+        style={{ height: 5 }}
+        onMouseDown={(e) => { e.preventDefault(); timelineDragRef.current = { startY: e.clientY, startH: timelineHeight }; }}
+      />
 
       {/* ══════════ Multi-segment DaVinci-style Timeline ══════════ */}
-      <div className="mt-4 overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#0d0d0d]">
+      <div className="shrink-0 select-none overflow-hidden bg-[#0d0d0d]" style={{ height: timelineHeight }}>
         <div className="flex items-center justify-between border-b border-[#222] bg-[#181818] px-4 py-2">
           <div className="font-mono text-xl font-bold tracking-wider text-neutral-100" style={{ minWidth: 120 }}>
             {String(Math.floor((scrubFrame - 1) / (fps * 60))).padStart(2, "0")}
@@ -1081,8 +1343,8 @@ export default function HeadRigModal({
             {String(Math.floor((scrubFrame - 1) % fps)).padStart(2, "0")}
           </div>
           <div className="flex items-center gap-1">
-            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(1)} title="Go to start">⏮</button>
-            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.max(1, f - 1))} title="Previous frame">◀</button>
+            <button type="button" className="rounded px-2.5 py-1.5 text-lg text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(1)} title="Go to start">⏮</button>
+            <button type="button" className="rounded px-2.5 py-1.5 text-lg text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.max(1, f - 1))} title="Previous frame">◀</button>
             <button
               type="button"
               className={`rounded-md px-4 py-1.5 text-sm font-semibold ${playing ? "bg-[#c83030] text-white hover:bg-[#a02828]" : "bg-[#2a2a2a] text-neutral-200 hover:bg-[#3a3a3a]"}`}
@@ -1091,13 +1353,13 @@ export default function HeadRigModal({
             >
               {playing ? "■" : "▶"}
             </button>
-            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.min(maxFrames, f + 1))} title="Next frame">▶</button>
-            <button type="button" className="rounded px-2 py-1.5 text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(maxFrames)} title="Go to end">⏭</button>
+            <button type="button" className="rounded px-2.5 py-1.5 text-lg text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame((f) => Math.min(maxFrames, f + 1))} title="Next frame">▶</button>
+            <button type="button" className="rounded px-2.5 py-1.5 text-lg text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(maxFrames)} title="Go to end">⏭</button>
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))} title="Zoom out">−</button>
-            <span className="w-8 text-center font-mono text-[10px] text-neutral-500">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
-            <button type="button" className="h-7 w-7 rounded text-sm text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))} title="Zoom in">+</button>
+            <button type="button" className="h-8 w-8 rounded text-base text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))} title="Zoom out">−</button>
+            <span className="w-10 text-center font-mono text-[12px] text-neutral-500">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
+            <button type="button" className="h-8 w-8 rounded text-base text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))} title="Zoom in">+</button>
           </div>
         </div>
 
@@ -1114,7 +1376,7 @@ export default function HeadRigModal({
                   return (
                     <Fragment key={f}>
                       <div className="absolute top-0 h-full w-px bg-[#2a2a2a]" style={{ left: pct }} />
-                      <span className="absolute bottom-1 text-[9px] text-neutral-600" style={{ left: pct, transform: "translateX(-50%)" }}>{f}</span>
+                      <span className="absolute bottom-0.5 text-[11px] font-medium text-neutral-500" style={{ left: pct, transform: "translateX(-50%)" }}>{f}</span>
                     </Fragment>
                   );
                 })}
@@ -1141,6 +1403,7 @@ export default function HeadRigModal({
                     project={project} characterId={characterId} mediaVersion={mediaVersion}
                     onSelect={(id) => setSelectedSegment({ track: "body", id })}
                     onSegMouseDown={(e, seg, edge) => onSegmentMouseDown(e, "body", seg, edge)}
+                    onContextMenu={(e, id) => handleCtxMenu(e, "body", id)}
                     playheadPct={playheadPct}
                   />
                   {/* ── HEAD TRACK (V2) ── */}
@@ -1154,6 +1417,7 @@ export default function HeadRigModal({
                     project={project} characterId={characterId} mediaVersion={mediaVersion}
                     onSelect={(id) => setSelectedSegment({ track: "head", id })}
                     onSegMouseDown={(e, seg, edge) => onSegmentMouseDown(e, "head", seg, edge)}
+                    onContextMenu={(e, id) => handleCtxMenu(e, "head", id)}
                     playheadPct={playheadPct}
                   />
                 </div>
@@ -1162,185 +1426,53 @@ export default function HeadRigModal({
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-t border-[#222] bg-[#141414] px-4 py-1.5">
-          <span className="text-[9px] text-neutral-600">
-            <b className="text-neutral-500">Click</b> select · <b className="text-neutral-500">Drag</b> move · <b className="text-neutral-500">Drag edge</b> trim · <b className="text-neutral-500">I/O</b> trim at playhead · <b className="text-neutral-500">Ctrl+B</b> split · <b className="text-neutral-500">Del</b> remove · <b className="text-neutral-500">Ctrl+C/V</b> copy/paste
-          </span>
-          <span className="font-mono text-[9px] text-neutral-600">F{scrubFrame} / {maxFrames}</span>
-        </div>
-      </div>
-
-      {/* ── Shot Browser + Bake Outputs ──────────────────────────── */}
-      <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
-        <div className="flex gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="mb-3 flex items-center gap-2">
-              <input ref={importRef} type="file" accept="video/*,.mp4,.mov,.webm" className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFile(f, importType); }} />
-              <select className="rounded border border-studio-border bg-studio-raised px-2 py-1 text-[11px] text-neutral-200"
-                value={importType} onChange={(e) => setImportType(e.target.value as "body" | "head")}>
-                <option value="body">Body clip</option>
-                <option value="head">Head clip</option>
-              </select>
-              <button type="button"
-                className="rounded bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
-                disabled={importBusy}
-                onClick={() => importRef.current?.click()}>
-                {importBusy ? "Importing…" : "📁 Import Clip"}
-              </button>
-              <button type="button"
-                className="rounded bg-neutral-700 px-3 py-1 text-[11px] font-semibold text-white hover:bg-neutral-600 disabled:opacity-40"
-                disabled={reprocessAllBusy}
-                title="Re-key every shot's background from its already-captured frames — no new Grok generations"
-                onClick={() => void handleReprocessAll()}>
-                {reprocessAllBusy ? "Fixing…" : "🩹 Fix All Backgrounds"}
-              </button>
-              {reprocessMsg ? (
-                <span className={`text-[10px] font-medium ${/fail/i.test(reprocessMsg) ? "text-red-400" : "text-emerald-300"}`}>{reprocessMsg}</span>
-              ) : null}
-            </div>
-
-            <h3 className="mb-2 text-xs font-semibold text-neutral-300">Body Shots <span className="text-neutral-500">— click to add to Body track</span></h3>
-            {bodyShots.length === 0 && allShots.length === 0 ? (
-              <p className="text-[10px] text-studio-muted">No body shots yet — create one with Grok below</p>
-            ) : (
-              <ShotGrid shots={bodyShots.length > 0 ? bodyShots : allShots} project={project} characterId={characterId}
-                mediaVersion={mediaVersion} reprocessingShotId={reprocessingShotId}
-                onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot} />
-            )}
-
-            <h3 className="mb-2 mt-3 text-xs font-semibold text-neutral-300">Head Shots <span className="text-neutral-500">— click to add to Head track</span></h3>
-            {headShots.length === 0 && allShots.length === 0 ? (
-              <p className="text-[10px] text-studio-muted">No head shots yet — create one with Grok below</p>
-            ) : (
-              <ShotGrid shots={headShots.length > 0 ? headShots : allShots} project={project} characterId={characterId}
-                mediaVersion={mediaVersion} reprocessingShotId={reprocessingShotId}
-                onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot} />
-            )}
+        <div className="flex items-center justify-between border-t border-[#222] bg-[#161616] px-4 py-1.5">
+          <div className="flex flex-wrap gap-3 text-[12px] text-neutral-500">
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Click</kbd> select</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Drag</kbd> move</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Drag edge</kbd> trim</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">I/O</kbd> trim at playhead</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Ctrl+B</kbd> split</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Del</kbd> remove</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Ctrl+C/V</kbd> copy/paste</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Right-click</kbd> menu</span>
           </div>
-
-          <div className="w-64 shrink-0 border-l border-studio-border pl-4">
-            <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Bake to Action Shot</h3>
-            <input
-              type="text"
-              className="mb-2 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              placeholder="Shot name (optional)"
-              value={bakeName}
-              onChange={(e) => setBakeName(e.target.value)}
-            />
-            <button
-              type="button"
-              className="mb-3 w-full rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
-              disabled={bakeBusy || (!bodySegments.length && !headSegments.length)}
-              onClick={() => void handleBake()}
-            >
-              {bakeBusy ? "Baking…" : "Bake Timeline"}
-            </button>
-            {bakeMsg ? (
-              <p className={`mb-2 text-[10px] font-medium ${/fail/i.test(bakeMsg) ? "text-red-400" : "text-emerald-300"}`}>{bakeMsg}</p>
-            ) : null}
-            <p className="mb-3 text-[9px] text-studio-muted">
-              Stitches every segment on both tracks into one new shot. The source clips stay untouched, and the segment recipe is saved under this rig key so you can keep editing later.
-            </p>
-
-            {combinedShots.length === 0 ? (
-              <p className="text-[10px] text-studio-muted">No baked shots yet.</p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {combinedShots.map((s) => (
-                  <div key={s.id} className="group relative rounded-md border border-studio-border bg-[#111] p-2">
-                    <div className="flex items-start gap-2">
-                      <img
-                        src={shotMediaUrl(project, characterId, s.id, "poster.jpg", mediaVersion[s.id])}
-                        alt={s.name || s.id}
-                        className="h-12 w-12 shrink-0 rounded object-cover"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-[10px] font-medium text-neutral-200" title={s.id}>{s.name || s.id}</p>
-                        <p className="text-[9px] text-studio-muted">{s.frameCount}f</p>
-                        {s.actionId ? (
-                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-400"><span>✓</span> In Action Shots</span>
-                        ) : (
-                          <button type="button" className="mt-1 rounded bg-blue-700 px-2 py-0.5 text-[9px] font-semibold text-white hover:bg-blue-600"
-                            onClick={() => void handleSendToAction(s.id)}>
-                            Send to Action Shots
-                          </button>
-                        )}
-                      </div>
-                      <button type="button" className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
-                        onClick={() => void handleDeleteShot(s.id)} title="Delete baked shot">✕</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+          <div className="flex items-center gap-4 font-mono text-[12px]">
+            <span className="text-neutral-400">Frame <span className="text-neutral-200">{scrubFrame}</span> / {maxFrames}</span>
+            <span className="text-neutral-400">Body <span className="text-blue-400">{bodySegments.length}</span> Head <span className="text-green-400">{headSegments.length}</span></span>
           </div>
         </div>
       </div>
 
-      {/* ── Grok Shot Creator ─────────────────────────── */}
-      <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
-        <h3 className="mb-2 text-xs font-semibold text-[#e0a040]">Create Shot with Grok</h3>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="text-[11px] text-studio-muted">
-            Shot type
-            <select className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={grokType} onChange={(e) => setGrokType(e.target.value as "body" | "head")}>
-              <option value="body">Body / Torso</option>
-              <option value="head">Head shot</option>
-            </select>
-          </label>
-          <label className="text-[11px] text-studio-muted">
-            Duration
-            <select className="ml-2 rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={grokDuration} onChange={(e) => setGrokDuration(Number(e.target.value))}>
-              <option value={4}>4 sec</option>
-              <option value={6}>6 sec</option>
-              <option value={8}>8 sec</option>
-              <option value={10}>10 sec</option>
-            </select>
-          </label>
-          <label className="text-[11px] text-studio-muted">
-            Reference
-            <select className="ml-2 max-w-[160px] rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              value={grokRefShotId} onChange={(e) => setGrokRefShotId(e.target.value)}>
-              <option value="">Character reference</option>
-              {allShots.map((s) => (
-                <option key={s.id} value={s.id}>{s.name || s.id}</option>
-              ))}
-            </select>
-          </label>
-          <label className="flex-1 text-[11px] text-studio-muted">
-            Prompt
-            <input
-              type="text"
-              className="mt-1 w-full rounded-md border border-studio-border bg-studio-raised px-2 py-1 text-xs text-neutral-200"
-              placeholder={grokType === "body" ? "cowboy standing with arms out (neck added automatically)" : "cowboy head talking, green screen"}
-              value={grokPrompt}
-              onChange={(e) => setGrokPrompt(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") void handleGrokCreate(); }}
-            />
-          </label>
-          <button
-            type="button"
-            className="rounded-md bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
-            disabled={grokBusy || !grokPrompt.trim()}
-            onClick={() => void handleGrokCreate()}
-          >
-            {grokBusy ? "Creating…" : `Create ${grokType} shot`}
+      {/* ══════════ Bottom Navbar ══════════ */}
+      <div className="flex shrink-0 items-center justify-between border-t border-[#222] bg-[#111] px-3" style={{ height: 32 }}>
+        <span className="text-[11px] text-neutral-500">ENGINE</span>
+      </div>
+
+      {/* ── Right-click context menu ── */}
+      {ctxMenu ? (
+        <div
+          className="fixed z-50 min-w-[160px] rounded border border-[#333] bg-[#1a1a1a] py-1 shadow-xl"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
+            onClick={ctxCopy}>
+            <span className="w-4 text-center">📋</span> Copy <span className="ml-auto text-[12px] text-neutral-500">Ctrl+C</span>
+          </button>
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333] disabled:opacity-40"
+            disabled={!clipboardRef.current}
+            onClick={ctxPaste}>
+            <span className="w-4 text-center">📌</span> Paste <span className="ml-auto text-[12px] text-neutral-500">Ctrl+V</span>
+          </button>
+          <div className="my-1 h-px bg-[#333]" />
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 hover:bg-[#333]"
+            onClick={ctxDelete}>
+            <span className="w-4 text-center">🗑</span> Delete <span className="ml-auto text-[12px] text-neutral-500">Del</span>
           </button>
         </div>
-        {grokMsg ? (
-          <p className={`mt-2 text-sm font-medium ${/error|fail/i.test(grokMsg) ? "text-red-400" : "text-emerald-300"}`}>{grokMsg}</p>
-        ) : null}
-        <p className="mt-1 text-[10px] text-studio-muted">
-          {grokType === "body"
-            ? "Creates a torso/body shot with neck included. Head will be overlaid separately."
-            : "Creates a head shot (mouth moving, expressions). Will be overlaid onto body."}
-          {" "}Pick a specific prior shot as the reference for consistency across takes, just like reusing a take on grok.com.
-        </p>
-      </div>
+      ) : null}
+
     </div>
   );
 
@@ -1367,11 +1499,146 @@ export default function HeadRigModal({
   );
 }
 
+// ── Grok sidebar section ─────────────────────────────────────────────
+
+function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, grokRefShotId, setGrokRefShotId, grokRefFile, setGrokRefFile, grokPrompt, setGrokPrompt, grokBusy, grokMsg, allShots, onCreate, project, characterId }: {
+  grokType: "body" | "head"; setGrokType: (v: "body" | "head") => void;
+  grokDuration: number; setGrokDuration: (v: number) => void;
+  grokRefShotId: string; setGrokRefShotId: (v: string) => void;
+  grokRefFile: File | null; setGrokRefFile: (v: File | null) => void;
+  grokPrompt: string; setGrokPrompt: (v: string) => void;
+  grokBusy: boolean; grokMsg: string;
+  allShots: ShotInfo[];
+  onCreate: () => void;
+  project: string; characterId: string;
+}) {
+  const [open, setOpen] = useState(true);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const refThumb = useMemo(() => grokRefFile ? URL.createObjectURL(grokRefFile) : null, [grokRefFile]);
+  // clean up object URL on unmount or change
+  useEffect(() => { return () => { if (refThumb) URL.revokeObjectURL(refThumb); }; }, [refThumb]);
+  return (
+    <div className="border-b border-[#222]">
+      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-[#e0a040] hover:bg-[#222]"
+        onClick={() => setOpen(!open)}>
+        <span className="text-[11px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        Create with Grok
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 px-3 pb-3">
+          <div className="flex gap-2">
+            <select className="flex-1 rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
+              value={grokType} onChange={(e) => setGrokType(e.target.value as "body" | "head")}>
+              <option value="body">Body</option>
+              <option value="head">Head</option>
+            </select>
+            <select className="rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
+              value={grokDuration} onChange={(e) => setGrokDuration(Number(e.target.value))}>
+              <option value={4}>4s</option>
+              <option value={6}>6s</option>
+              <option value={8}>8s</option>
+              <option value={10}>10s</option>
+            </select>
+          </div>
+          {/* Ref: pick from existing shots OR upload an image */}
+          <div className="flex items-center gap-1.5">
+            <div className="flex-1">
+              <RefShotPicker allShots={allShots} value={grokRefFile ? "" : grokRefShotId}
+                onChange={(id) => { setGrokRefShotId(id); setGrokRefFile(null); }} project={project} characterId={characterId} />
+            </div>
+            <input ref={fileRef} type="file" accept="image/*" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) { setGrokRefFile(f); setGrokRefShotId(""); } }} />
+            <button type="button" title="Upload ref image"
+              className="shrink-0 rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-300 hover:bg-[#333]"
+              onClick={() => fileRef.current?.click()}>
+              📷
+            </button>
+          </div>
+          {/* Show uploaded ref preview */}
+          {grokRefFile && refThumb && (
+            <div className="flex items-center gap-2 rounded border border-[#333] bg-[#1a1a1a] px-2 py-1">
+              <img src={refThumb} className="h-10 w-14 rounded object-cover" alt="" />
+              <span className="flex-1 truncate text-[11px] text-neutral-300">{grokRefFile.name}</span>
+              <button type="button" className="text-[11px] text-red-400 hover:text-red-300"
+                onClick={() => setGrokRefFile(null)}>✕</button>
+            </div>
+          )}
+          <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-[12px] text-neutral-200"
+            placeholder={grokType === "body" ? "body prompt…" : "head prompt…"}
+            value={grokPrompt} onChange={(e) => setGrokPrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onCreate(); }} />
+          <button type="button"
+            className="w-full rounded bg-studio-accent px-2 py-1.5 text-[12px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
+            disabled={grokBusy || !grokPrompt.trim()} onClick={onCreate}>
+            {grokBusy ? "Creating…" : `Create ${grokType} shot`}
+          </button>
+          {grokMsg && <p className={`text-[12px] font-medium ${/error|fail/i.test(grokMsg) ? "text-red-400" : "text-emerald-300"}`}>{grokMsg}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Bake sidebar section ─────────────────────────────────────────────
+
+function BakeSection({ bakeName, setBakeName, bakeBusy, bakeMsg, bodySegments, headSegments, combinedShots, project, characterId, onBake, onSendToAction, onDeleteShot }: {
+  bakeName: string; setBakeName: (v: string) => void;
+  bakeBusy: boolean; bakeMsg: string;
+  bodySegments: Segment[]; headSegments: HeadSegment[];
+  combinedShots: ShotInfo[];
+  project: string; characterId: string;
+  onBake: () => void;
+  onSendToAction: (id: string) => void;
+  onDeleteShot: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="border-b border-[#222]">
+      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-emerald-400 hover:bg-[#222]"
+        onClick={() => setOpen(!open)}>
+        <span className="text-[11px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        Bake to Action Shot
+        {combinedShots.length > 0 && <span className="ml-auto text-[11px] font-normal text-neutral-600">{combinedShots.length}</span>}
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 px-3 pb-3">
+          <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-[12px] text-neutral-200"
+            placeholder="Shot name (optional)" value={bakeName} onChange={(e) => setBakeName(e.target.value)} />
+          <button type="button"
+            className="w-full rounded bg-emerald-600 px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+            disabled={bakeBusy || (!bodySegments.length && !headSegments.length)} onClick={onBake}>
+            {bakeBusy ? "Baking…" : "Bake Timeline"}
+          </button>
+          {bakeMsg && <p className={`text-[12px] font-medium ${/fail/i.test(bakeMsg) ? "text-red-400" : "text-emerald-300"}`}>{bakeMsg}</p>}
+          {combinedShots.map((s) => (
+            <div key={s.id} className="group relative flex items-center gap-2 rounded border border-studio-border bg-[#111] p-2">
+              <img src={shotMediaUrl(project, characterId, s.id, "poster.jpg")} alt={s.name || s.id}
+                className="h-12 w-12 shrink-0 rounded object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[12px] font-medium text-neutral-200">{s.name || s.id}</p>
+                <p className="text-[11px] text-neutral-500">{s.frameCount}f</p>
+                {s.actionId ? (
+                  <span className="text-[11px] font-semibold text-emerald-400">✓ Action Shots</span>
+                ) : (
+                  <button type="button" className="rounded bg-blue-700 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-blue-600"
+                    onClick={() => onSendToAction(s.id)}>Send to Action Shots</button>
+                )}
+              </div>
+              <button type="button" className="hidden h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white group-hover:flex"
+                onClick={() => onDeleteShot(s.id)}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Track row sub-component ─────────────────────────────────────────
 
 function TrackRow({
   label, code, codeClass, bg, ringClass, segments, maxFrames, shotsById, project, characterId, mediaVersion,
-  isSelected, onSelect, onSegMouseDown, playheadPct,
+  isSelected, onSelect, onSegMouseDown, onContextMenu, playheadPct,
 }: {
   label: string;
   code: string;
@@ -1387,18 +1654,19 @@ function TrackRow({
   isSelected: (id: string) => boolean;
   onSelect: (id: string) => void;
   onSegMouseDown: (e: React.MouseEvent, seg: Segment, edge?: "in" | "out") => void;
+  onContextMenu?: (e: React.MouseEvent, id: string) => void;
   playheadPct: string;
 }) {
   return (
     <div className="flex">
       <div className="flex w-[120px] shrink-0 items-center gap-2 border-b border-r border-[#222] bg-[#161616] px-3 py-2">
-        <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold text-white ${codeClass}`}>{code}</span>
+        <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold text-white ${codeClass}`}>{code}</span>
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium text-neutral-300">{label}</div>
-          <div className="text-[9px] text-neutral-500">{segments.length} clip{segments.length === 1 ? "" : "s"}</div>
+          <div className="text-[13px] font-medium text-neutral-300">{label}</div>
+          <div className="text-[11px] text-neutral-500">{segments.length} clip{segments.length === 1 ? "" : "s"}</div>
         </div>
       </div>
-      <div className="relative flex-1 overflow-hidden border-b border-[#222]" style={{ height: 80, background: bg }}>
+      <div className="relative flex-1 overflow-hidden border-b border-[#222]" style={{ height: 90, background: bg }}>
         {segments.map((seg) => {
           const shot = shotsById.get(seg.shotId);
           const left = `${((seg.start - 1) / Math.max(maxFrames, 1)) * 100}%`;
@@ -1411,22 +1679,30 @@ function TrackRow({
               style={{ left, width, zIndex: selected ? 6 : 2 }}
               onMouseDown={(e) => onSegMouseDown(e, seg)}
               onClick={(e) => { e.stopPropagation(); onSelect(seg.id); }}
+              onContextMenu={(e) => { if (onContextMenu) onContextMenu(e, seg.id); }}
               title={`${shot?.name || seg.shotId} · frames ${seg.inFrame}-${seg.outFrame}`}
             >
               <div className="flex h-full">
-                {Array.from({ length: Math.min(segLength(seg), 24) }, (_, i) => {
-                  const frac = Math.min(segLength(seg), 24) <= 1 ? 0 : i / (Math.min(segLength(seg), 24) - 1);
-                  const frame = Math.round(seg.inFrame + frac * (segLength(seg) - 1));
-                  const pad = String(frame).padStart(4, "0");
-                  return (
-                    <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`, mediaVersion[seg.shotId])} alt=""
-                      className="h-full shrink-0 object-contain" style={{ width: `${100 / Math.min(segLength(seg), 24)}%`, background: "#0a0a0a" }}
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                  );
-                })}
+                {(() => {
+                  // Fixed thumbnail count across the whole timeline so body & head
+                  // thumbnails are the same size and frame-aligned.
+                  const THUMBS_ACROSS_TIMELINE = 48;
+                  const step = Math.max(1, Math.round(maxFrames / THUMBS_ACROSS_TIMELINE));
+                  const len = segLength(seg);
+                  const count = Math.max(1, Math.ceil(len / step));
+                  return Array.from({ length: count }, (_, i) => {
+                    const srcFrame = seg.inFrame + Math.min(i * step, len - 1);
+                    const pad = String(srcFrame).padStart(4, "0");
+                    return (
+                      <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`, mediaVersion[seg.shotId])} alt=""
+                        className="h-full shrink-0 object-cover" style={{ width: `${100 / count}%`, background: "#0a0a0a" }}
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                    );
+                  });
+                })()}
               </div>
               <div className="pointer-events-none absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-1 py-0.5">
-                <span className="text-[9px] font-medium text-neutral-200">{shot?.name || seg.shotId}</span>
+                <span className="text-[11px] font-medium text-neutral-200">{shot?.name || seg.shotId}</span>
               </div>
               {/* Trim handles */}
               <div className="absolute inset-y-0 left-0 flex w-2 cursor-ew-resize items-center justify-center bg-[#e0a040]/60 hover:bg-[#e0a040]"
@@ -1442,7 +1718,107 @@ function TrackRow({
   );
 }
 
-// ── Shot grid sub-component ───────────────────────────────────────────
+// ── Collapsible media bin with rectangular hover-preview thumbnails ──
+
+function MediaBin({
+  title, shots, project, characterId, mediaVersion, reprocessingShotId, onAdd, onDelete, onReprocess, defaultOpen = true,
+}: {
+  title: string;
+  shots: ShotInfo[];
+  project: string;
+  characterId: string;
+  mediaVersion: Record<string, number>;
+  reprocessingShotId: string | null;
+  onAdd: (s: ShotInfo) => void;
+  onDelete: (id: string) => void;
+  onReprocess: (id: string) => void;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [hoverShot, setHoverShot] = useState<string | null>(null);
+  const [hoverFrame, setHoverFrame] = useState(1);
+  const hoverInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function startHover(shotId: string, frameCount: number) {
+    setHoverShot(shotId);
+    setHoverFrame(1);
+    if (hoverInterval.current) clearInterval(hoverInterval.current);
+    let f = 1;
+    hoverInterval.current = setInterval(() => {
+      f = f >= frameCount ? 1 : f + 1;
+      setHoverFrame(f);
+    }, 120);
+  }
+  function stopHover() {
+    setHoverShot(null);
+    if (hoverInterval.current) { clearInterval(hoverInterval.current); hoverInterval.current = null; }
+  }
+
+  return (
+    <div className="border-b border-[#222]">
+      <button
+        type="button"
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-neutral-300 hover:bg-[#222]"
+        onClick={() => setOpen(!open)}
+      >
+        <span className="text-[11px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        {title}
+        <span className="ml-auto text-[11px] font-normal text-neutral-600">{shots.length}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-1 px-2 pb-2">
+          {shots.length === 0 ? (
+            <p className="px-1 text-[12px] text-neutral-600">No shots yet</p>
+          ) : shots.map((s) => (
+            <div key={s.id} className="group relative">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded border border-transparent px-1 py-1 text-left hover:border-[#e0a040] hover:bg-[#1e1e1e]"
+                onClick={() => onAdd(s)}
+                onMouseEnter={() => startHover(s.id, s.frameCount || 1)}
+                onMouseLeave={stopHover}
+                title={`Add "${s.name || s.id}" to track`}
+              >
+                <div className="relative h-[56px] w-[96px] shrink-0 overflow-hidden rounded bg-[#0a0a0a]">
+                  <img
+                    src={hoverShot === s.id
+                      ? shotMediaUrl(project, characterId, s.id, `cut/f_${String(hoverFrame).padStart(4, "0")}.png`, mediaVersion[s.id])
+                      : shotMediaUrl(project, characterId, s.id, "poster.jpg", mediaVersion[s.id])}
+                    alt={s.name || s.id}
+                    className="h-full w-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                  {hoverShot === s.id && (
+                    <span className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1 text-[10px] text-neutral-300">f{hoverFrame}</span>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[12px] font-medium text-neutral-200">{s.name || s.id}</p>
+                  <p className="text-[11px] text-neutral-500">{s.frameCount || "?"}f</p>
+                </div>
+              </button>
+              <button
+                type="button"
+                className="absolute -left-0.5 -top-0.5 z-10 hidden h-5 w-5 items-center justify-center rounded-full bg-neutral-700 text-[10px] shadow hover:bg-neutral-500 disabled:opacity-40 group-hover:flex"
+                disabled={reprocessingShotId === s.id}
+                onClick={(e) => { e.stopPropagation(); onReprocess(s.id); }}
+                title="Fix background (re-key this shot's frames, no new Grok generation)"
+              >{reprocessingShotId === s.id ? "…" : "🩹"}</button>
+              <button
+                type="button"
+                className="absolute -right-0.5 -top-0.5 z-10 hidden h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500 group-hover:flex"
+                onClick={(e) => { e.stopPropagation(); onDelete(s.id); }}
+                title="Delete shot"
+              >✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Shot grid sub-component (legacy, kept for compatibility) ─────────
 
 function ShotGrid({
   shots, project, characterId, mediaVersion, reprocessingShotId, onAdd, onDelete, onReprocess,
