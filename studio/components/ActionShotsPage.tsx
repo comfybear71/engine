@@ -143,6 +143,7 @@ function ShotCard({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [hovering, setHovering] = useState(false);
+  const [playing, setPlaying] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(shot.name || shot.id);
 
@@ -163,16 +164,17 @@ function ShotCard({
 
   const handleMouseLeave = () => {
     setHovering(false);
+    setPlaying(false);
     if (videoRef.current) {
       videoRef.current.pause();
     }
   };
 
-  // Play video once it mounts and loads
+  // Play video once it has loaded — only then hide poster
   const handleVideoReady = () => {
     if (videoRef.current) {
       videoRef.current.currentTime = 0;
-      videoRef.current.play().catch(() => {});
+      videoRef.current.play().then(() => setPlaying(true)).catch(() => {});
     }
   };
 
@@ -196,7 +198,7 @@ function ShotCard({
           src={posterUrl}
           alt={shot.name}
           loading="lazy"
-          style={{ objectFit: "contain", width: "100%", height: "100%", display: hovering ? "none" : "block" }}
+          style={{ objectFit: "cover", objectPosition: "top center", width: "100%", height: "100%", display: playing ? "none" : "block" }}
         />
         {hovering && (
           <video
