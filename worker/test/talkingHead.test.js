@@ -13,6 +13,7 @@ const {
   extractFrameAt,
   makeTalkingHead,
   resumeTalkingHead,
+  redoTalkingHeadClip,
   markInterruptedTalkShots,
   listTalkingHeadStarts,
   saveTalkingHeadStart,
@@ -110,7 +111,7 @@ describe("LTX prompt", () => {
       prompt,
       'Use the provided start image as the first frame. Rodney, a man with a red felt hat and dark beard is prominent, mouth and head move naturally while speaking, subtle gesture. Props and background stay exactly as the start image, nothing new enters frame. Rodney says: "' +
         words +
-        '". Camera holds. Same person and objects as the start image.'
+        '". Camera stays completely still and holds the shot, locked off, no zoom, no movement. Same person and objects as the start image.'
     );
   });
 
@@ -453,6 +454,34 @@ describe("talking head chain", () => {
       assert.equal(shot.status, "error");
       assert.match(shot.error, /out of credits/);
     });
+  });
+
+  test("redo regenerates one clip from the previous clip's last frame and keeps the others", async () => {
+    writeAudio(24);
+    const started = await makeTalkingHead(
+      projectDir,
+      "rodney",
+      { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 24, refRel: "characters/rodney/front_head.jpg" },
+      chainOptions()
+    );
+    await started.completion;
+    const before = requests.length;
+    const frames = frameCalls.length;
+    assert.ok(before >= 3);
+
+    await assert.rejects(redoTalkingHeadClip(projectDir, "rodney", started.group, 99, chainOptions()), /does not exist/);
+
+    const redo = await redoTalkingHeadClip(projectDir, "rodney", started.group, 1, chainOptions());
+    assert.equal(redo.redone, 2);
+    await redo.completion;
+    const shots = listShots(projectDir, "rodney").sort((a, b) => a.talk.index - b.talk.index);
+    assert.ok(shots.every((s) => s.status === "ready"));
+    assert.equal(requests.length, before + 1, "only the redone clip is sent");
+    assert.equal(frameCalls.length, frames + 1, "it starts from the previous clip's last frame");
+
+    const cascade = await redoTalkingHeadClip(projectDir, "rodney", started.group, 1, { ...chainOptions(), cascade: true });
+    await cascade.completion;
+    assert.equal(requests.length, before + 1 + (shots.length - 1), "cascade redoes the following clips too");
   });
 
   test("a failed window stops the chain and resume continues from it", async () => {

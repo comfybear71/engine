@@ -217,7 +217,7 @@ function buildLtxPrompt(talk) {
     "Use the provided start image as the first frame. " +
     `${subject} is prominent, mouth and head move naturally while speaking, subtle gesture. ` +
     "Props and background stay exactly as the start image, nothing new enters frame. " +
-    `${says} Camera holds. Same person and objects as the start image.`
+    `${says} Camera stays completely still and holds the shot, locked off, no zoom, no movement. Same person and objects as the start image.`
   );
 }
 
@@ -588,6 +588,31 @@ async function resumeTalkingHead(projectDir, characterId, group, options = {}) {
   return result;
 }
 
+/**
+ * Regenerate one clip with a new seed. By default only that clip is redone and
+ * the later clips are kept; with cascade the later clips are redone too so
+ * each still starts from the previous clip's last frame.
+ */
+async function redoTalkingHeadClip(projectDir, characterId, group, index, options = {}) {
+  const shots = groupShots(projectDir, characterId, group);
+  if (!shots.length) throw shotError("Talking head not found", "ENOENT");
+  if (running.has(`${characterId}/${group}`)) throw shotError("This talking head is already generating.");
+  const target = Number(index);
+  if (!Number.isInteger(target) || target < 0 || target >= shots.length) throw shotError("That clip does not exist");
+  const last = options.cascade === true ? shots.length - 1 : target;
+  for (let i = target; i <= last; i++) {
+    const { dir, info } = shots[i];
+    info.status = "queued";
+    delete info.error;
+    delete info.requestId;
+    writeShotJson(dir, info);
+  }
+  const completion = runChain(projectDir, characterId, group, target, options);
+  const result = { ok: true, group, redone: target + 1, cascade: options.cascade === true };
+  Object.defineProperty(result, "completion", { value: completion, enumerable: false });
+  return result;
+}
+
 module.exports = {
   CLIP_LENGTHS,
   MAX_WINDOW_SEC,
@@ -598,6 +623,7 @@ module.exports = {
   extractFrameAt,
   makeTalkingHead,
   resumeTalkingHead,
+  redoTalkingHeadClip,
   markInterruptedTalkShots,
   listTalkingHeadStarts,
   saveTalkingHeadStart,
