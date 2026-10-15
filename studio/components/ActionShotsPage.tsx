@@ -198,7 +198,7 @@ function ShotCard({
           src={posterUrl}
           alt={shot.name}
           loading="lazy"
-          style={{ objectFit: "cover", objectPosition: "top center", width: "100%", height: "100%", display: playing ? "none" : "block" }}
+          style={{ display: playing ? "none" : "block" }}
         />
         {hovering && (
           <video
@@ -209,7 +209,6 @@ function ShotCard({
             playsInline
             preload="none"
             className="shots-card-video"
-            style={{ objectFit: "contain" }}
             onLoadedData={handleVideoReady}
           />
         )}
