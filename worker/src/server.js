@@ -58,7 +58,7 @@ const {
 const { cachedBackgroundThumb, cachedPreviewTexture, isBackgroundAssetPath } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
 const { previewIngest, confirmIngest, cancelIngest, DRAWING_NAME } = require("./assetIngest");
-const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, loadHeadRig, saveHeadRig, deleteHeadRig, SLOT_NAME } = require("./characterLocal");
+const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, loadHeadRig, saveHeadRig, deleteHeadRig, saveHeadStandard, clearHeadStandard, SLOT_NAME } = require("./characterLocal");
 const {
   describeSlot,
   describeDrawing,
@@ -1730,6 +1730,32 @@ function createApp(options = {}) {
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
       res.json(saveHeadRig(projectDir, globalAssetsDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.put("/api/projects/:name/characters/:characterId/head-standard", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(saveHeadStandard(projectDir, globalAssetsDir, characterId, req.body || {}));
+    } catch (err) {
+      sendIngestError(res, err);
+    }
+  });
+
+  app.delete("/api/projects/:name/characters/:characterId/head-standard", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const characterId = characterIdFromRequest(req, res);
+    if (!characterId) return;
+    const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
+    try {
+      res.json(clearHeadStandard(projectDir, globalAssetsDir, characterId));
     } catch (err) {
       sendIngestError(res, err);
     }
