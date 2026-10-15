@@ -241,6 +241,35 @@ async function normalizeHeadFrame(png, target, options = {}) {
   }
 }
 
+/** Head size (px) of a frame, or 0 when it cannot be measured. */
+async function measureHeadSize(png, options = {}) {
+  try {
+    if (!fs.existsSync(png)) return 0;
+    const pythonBin = options.pythonBin || resolvePythonBin();
+    const { code, stdout } = await spawnCmd(pythonBin, ["-m", "compositor.head_size", "measure", "--in", png], { cwd: PYTHON_DIR });
+    if (code !== 0) return 0;
+    const parsed = JSON.parse(String(stdout).trim().split("\n").pop());
+    return Number(parsed.size) > 0 ? Number(parsed.size) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Chains made before the size lock have no saved head size. Take it from the
+ * first clip's opening frame so a redone or resumed later clip is held to the
+ * chain's size instead of to whatever (possibly shrunk) frame it starts from.
+ */
+async function ensureChainHeadSize(shots, options = {}) {
+  const first = shots[0];
+  if (!first || Number(first.info.headSizeTarget) > 0 || first.info.status !== "ready") return;
+  const size = await (options.measureHead || measureHeadSize)(path.join(first.dir, "raw", "f_0001.png"), options);
+  if (size > 0) {
+    first.info.headSizeTarget = Math.round(size * 100) / 100;
+    writeShotJson(first.dir, first.info);
+  }
+}
+
 function buildWindowPrompt(talk) {
   if (normalizeEngine(talk.engine) === "ltx") return buildLtxPrompt(talk);
   const base = String(talk.basePrompt || DEFAULT_TALK_PROMPT).trim();
@@ -324,6 +353,7 @@ async function runChain(projectDir, characterId, group, startIndex, options = {}
         const startPng = path.join(dir, "start_frame.png");
         try {
           await extract(prevSource, startPng, prev.info.talk.windowSec);
+          if (normalizeEngine(info.engine) === "ltx") await ensureChainHeadSize(shots, options);
           const chainTarget = Number(shots[0].info.headSizeTarget) || 0;
           if (normalizeEngine(info.engine) === "ltx" && chainTarget > 0) {
             await (options.normalizeStart || normalizeHeadFrame)(startPng, chainTarget, options);
@@ -355,7 +385,7 @@ async function runChain(projectDir, characterId, group, startIndex, options = {}
         fullPrompt,
         imageBase64,
         headSizeTarget,
-        lockHeadSize: ltx && headSizeTarget === 0,
+        lockHeadSize: ltx && i === 0 && headSizeTarget === 0,
         dur: info.talk.clipSec,
         jobKey: `${characterId}/${info.id}`,
         options,
