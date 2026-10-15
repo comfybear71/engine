@@ -234,65 +234,33 @@ export default function HeadRigModal({
   function ensureShotDims(shotId: string) {
     if (!shotId || shotDims[shotId] || shotDimsLoadingRef.current.has(shotId)) return;
     shotDimsLoadingRef.current.add(shotId);
-    // Fetch as blob → object URL so it's same-origin (no CORS issues)
-    const url = shotMediaUrl(project, characterId, shotId, "cut/f_0001.png");
-    fetch(url).then((r) => r.blob()).then((blob) => {
-      const objUrl = URL.createObjectURL(blob);
-      const img = new Image();
-      img.onload = () => {
-        setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
-        URL.revokeObjectURL(objUrl);
-      };
-      img.onerror = () => { shotDimsLoadingRef.current.delete(shotId); URL.revokeObjectURL(objUrl); };
-      img.src = objUrl;
-    }).catch(() => { shotDimsLoadingRef.current.delete(shotId); });
+    const img = new Image();
+    img.onload = () => {
+      setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
+    };
+    img.onerror = () => { shotDimsLoadingRef.current.delete(shotId); };
+    img.src = shotMediaUrl(project, characterId, shotId, "cut/f_0001.png");
   }
 
   // Per-frame image cache (shotId#frame -> Image), with a bump counter to
   // force a redraw once a requested frame finishes loading.
-  // Images are fetched as blobs and loaded via object URLs so they're
-  // always same-origin — no crossOrigin needed, getImageData works for
-  // stripBg, and no CORS caching issues.
   const frameImgCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const frameImgLoadingRef = useRef<Set<string>>(new Set());
   const [redrawTick, setRedrawTick] = useState(0);
 
-  function loadFrameImage(shotId: string, frame: number): void {
-    const key = `${shotId}#${frame}`;
-    if (frameImgCacheRef.current.has(key) || frameImgLoadingRef.current.has(key)) return;
-    frameImgLoadingRef.current.add(key);
-    const pad = String(Math.max(1, frame)).padStart(4, "0");
-    const url = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
-    fetch(url).then((r) => r.blob()).then((blob) => {
-      const objUrl = URL.createObjectURL(blob);
-      const img = new Image();
-      img.onload = () => { frameImgCacheRef.current.set(key, img); frameImgLoadingRef.current.delete(key); setRedrawTick((t) => t + 1); };
-      img.onerror = () => { frameImgLoadingRef.current.delete(key); URL.revokeObjectURL(objUrl); };
-      img.src = objUrl;
-    }).catch(() => { frameImgLoadingRef.current.delete(key); });
-  }
-
   function getFrameImage(shotId: string, frame: number): HTMLImageElement | null {
     const key = `${shotId}#${frame}`;
     const cached = frameImgCacheRef.current.get(key);
-    if (cached) return cached;
-    loadFrameImage(shotId, frame);
+    if (cached) return cached.complete && cached.naturalWidth > 0 ? cached : null;
+    if (frameImgLoadingRef.current.has(key)) return null;
+    frameImgLoadingRef.current.add(key);
+    const pad = String(Math.max(1, frame)).padStart(4, "0");
+    const img = new Image();
+    img.onload = () => { frameImgCacheRef.current.set(key, img); frameImgLoadingRef.current.delete(key); setRedrawTick((t) => t + 1); };
+    img.onerror = () => { frameImgLoadingRef.current.delete(key); };
+    img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
     return null;
   }
-
-  // Preload a window of frames around the current scrub position so
-  // nearby frames are ready when you step/play. Only loads ~10 ahead
-  // instead of ALL frames at once (which overwhelms the browser).
-  useEffect(() => {
-    const segs = [...bodySegments, ...headSegments];
-    for (const seg of segs) {
-      const lo = Math.max(seg.inFrame, scrubFrame - 2);
-      const hi = Math.min(seg.outFrame, scrubFrame + 10);
-      for (let f = lo; f <= hi; f++) {
-        loadFrameImage(seg.shotId, f);
-      }
-    }
-  }, [bodySegments, headSegments, scrubFrame, project, characterId]);
 
   // ── Load shots + rigs ──
   useEffect(() => {
