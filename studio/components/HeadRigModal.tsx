@@ -429,7 +429,7 @@ export default function HeadRigModal({
           offCtx.putImageData(idata, 0, 0);
           ctx.drawImage(offC, hx, hy, hw, hh);
 
-          const isEditing = selectedRef.current?.track === "head" ? selectedRef.current.id === head.id : true;
+          const isEditing = selectedRef.current?.track === "head" && selectedRef.current.id === head.id;
           if (isEditing) {
             ctx.strokeStyle = "#e0a040";
             ctx.lineWidth = 2;
