@@ -142,6 +142,35 @@ def first_available_frame(segments: list[dict]) -> np.ndarray | None:
     return None
 
 
+def head_overshoot_padding(
+    head_segments: list[dict], canvas_w: int, canvas_h: int, samples_per_segment: int = 12, margin: int = 12
+) -> tuple[int, int, int, int]:
+    """Transparent padding (left, top, right, bottom) needed so the head is
+    never clipped by the body frame's edges. A head dragged up near the top
+    of the body (hat brim, tall hair) can extend past the body image, and
+    without padding that part would be cut off in every baked frame."""
+    pad_l = pad_t = pad_r = pad_b = 0
+    for seg in head_segments:
+        length = segment_length(seg)
+        scale = float(seg.get("headScale", 1.0))
+        cx = float(seg.get("anchorX", 0.5)) * canvas_w
+        cy = float(seg.get("anchorY", 0.15)) * canvas_h
+        n = min(samples_per_segment, length)
+        for k in range(n):
+            frame = int(seg["start"]) + (0 if n == 1 else round(k * (length - 1) / (n - 1)))
+            head_img = load_bgra(source_frame_path(seg, frame))
+            if head_img is None:
+                continue
+            _, _, bw, bh = find_content_bbox(head_img)
+            bw *= scale
+            bh *= scale
+            pad_l = max(pad_l, bw / 2 - cx)
+            pad_r = max(pad_r, cx + bw / 2 - canvas_w)
+            pad_t = max(pad_t, bh / 2 - cy)
+            pad_b = max(pad_b, cy + bh / 2 - canvas_h)
+    return tuple(int(np.ceil(v + margin)) if v > 0 else 0 for v in (pad_l, pad_t, pad_r, pad_b))  # type: ignore[return-value]
+
+
 def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
     spec = json.loads(Path(spec_path).read_text())
     body_segments = spec.get("bodySegments") or []
@@ -170,11 +199,15 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
         raise RuntimeError("Could not read any source frame for this timeline")
     canvas_h, canvas_w = reference.shape[:2]
 
+    pad_l, pad_t, pad_r, pad_b = head_overshoot_padding(head_segments, canvas_w, canvas_h)
+    out_w = canvas_w + pad_l + pad_r
+    out_h = canvas_h + pad_t + pad_b
+
     THUMB_H = 160
     written = 0
 
     for frame in range(1, total_frames + 1):
-        canvas = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+        canvas = np.zeros((out_h, out_w, 4), dtype=np.uint8)
 
         body_seg = active_segment(body_segments, frame)
         if body_seg is not None:
@@ -182,7 +215,7 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
             if body_img is not None:
                 if body_img.shape[:2] != (canvas_h, canvas_w):
                     body_img = cv2.resize(body_img, (canvas_w, canvas_h), interpolation=cv2.INTER_AREA)
-                canvas = body_img
+                canvas[pad_t:pad_t + canvas_h, pad_l:pad_l + canvas_w] = body_img
 
         head_seg = active_segment(head_segments, frame)
         if head_seg is not None:
@@ -197,8 +230,8 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
                     head_img = cv2.resize(head_img, (new_hw, new_hh), interpolation=interp)
                 hx, hy, hw, hh = find_content_bbox(head_img)
                 head_cropped = head_img[hy:hy + hh, hx:hx + hw]
-                cx = int(float(head_seg.get("anchorX", 0.5)) * canvas_w)
-                cy = int(float(head_seg.get("anchorY", 0.15)) * canvas_h)
+                cx = pad_l + int(float(head_seg.get("anchorX", 0.5)) * canvas_w)
+                cy = pad_t + int(float(head_seg.get("anchorY", 0.15)) * canvas_h)
                 canvas = composite_over(canvas, head_cropped, cx, cy)
 
         cut_path = cut_dir / f"f_{frame:04d}.png"
