@@ -1,10 +1,33 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatSeconds } from "@/lib/talkingHead";
-import { planTalkingHead, startTalkingHead, type TalkingHeadPlan, type TalkingHeadRange } from "@/lib/worker";
+import {
+  WORKER_URL,
+  planTalkingHead,
+  startTalkingHead,
+  uploadTalkingHeadStart,
+  type TalkStart,
+  type TalkingHeadPlan,
+  type TalkingHeadRange,
+} from "@/lib/worker";
 
 const promptKey = (project: string, characterId: string) => `studio.talkingHeadPrompt.${project}.${characterId}`;
+const startKey = (project: string, characterId: string) => `studio.talkingHeadStart.${project}.${characterId}`;
+
+function thumbUrl(project: string, characterId: string, start: TalkStart): string | null {
+  if (!start.thumb) return null;
+  return `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/media?rel=${encodeURIComponent(start.thumb)}`;
+}
+
+function readFileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read that file"));
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function TalkingHeadDialog({
   project,
@@ -23,6 +46,10 @@ export default function TalkingHeadDialog({
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [starts, setStarts] = useState<TalkStart[]>([]);
+  const [startRel, setStartRel] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +66,15 @@ export default function TalkingHeadDialog({
           saved = "";
         }
         setPrompt((current) => current || saved || next.defaultPrompt);
+        setStarts(next.starts);
+        let remembered = "";
+        try {
+          remembered = window.localStorage.getItem(startKey(project, characterId)) || "";
+        } catch {
+          remembered = "";
+        }
+        const keep = next.starts.some((item) => item.rel === remembered) ? remembered : next.defaultStart;
+        setStartRel((current) => (next.starts.some((item) => item.rel === current) ? current : keep));
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -50,13 +86,33 @@ export default function TalkingHeadDialog({
 
   const windows = plan?.windows ?? [];
   const clipSeconds = windows.reduce((sum, w) => sum + w.clipSec, 0);
+  const chosen = starts.find((item) => item.rel === startRel) || null;
   const blocker = !plan
     ? null
     : !plan.hasWords
       ? "No transcript for this audio. Re-import it with transcription on so the words are known."
-      : !plan.hasReference
-        ? "This character has no reference head image to start from."
-        : null;
+      : !chosen
+        ? "Choose the head image to start from, or upload one. It should be a head with no neck or collar."
+        : chosen.fullBody
+          ? "The full-body reference would make Grok draw a body. Pick or upload a head image."
+          : null;
+
+  async function onUpload(file: File | undefined) {
+    if (!file || uploading) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const saved = await uploadTalkingHeadStart(project, characterId, { name: file.name, data: await readFileBase64(file) });
+      const item: TalkStart = { kind: "uploaded", label: saved.label, rel: saved.rel, thumb: saved.thumb };
+      setStarts((current) => [item, ...current.filter((existing) => existing.rel !== item.rel)]);
+      setStartRel(saved.rel);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not upload that image");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
 
   async function onGenerate() {
     if (!plan || blocker || busy) return;
@@ -65,10 +121,11 @@ export default function TalkingHeadDialog({
     try {
       try {
         window.localStorage.setItem(promptKey(project, characterId), prompt.trim());
+        window.localStorage.setItem(startKey(project, characterId), startRel);
       } catch {
         /* optional */
       }
-      await startTalkingHead(project, characterId, { ...range, prompt: prompt.trim() });
+      await startTalkingHead(project, characterId, { ...range, prompt: prompt.trim(), refRel: startRel });
       onStarted(characterId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start the talking head");
@@ -116,6 +173,64 @@ export default function TalkingHeadDialog({
                 </span>
               </div>
 
+              <div>
+                <div className="mb-1 flex items-center justify-between text-[11px] text-studio-muted">
+                  <span>Start image (clip 1 starts from this head)</span>
+                  <button
+                    type="button"
+                    className="rounded border border-studio-border px-2 py-0.5 text-[11px] text-neutral-200 hover:bg-studio-raised disabled:opacity-40"
+                    disabled={uploading}
+                    data-testid="talking-head-upload"
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    {uploading ? "Uploading…" : "Upload image"}
+                  </button>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    data-testid="talking-head-file"
+                    onChange={(event) => void onUpload(event.target.files?.[0])}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2" data-testid="talking-head-starts">
+                  {starts.map((item) => {
+                    const src = thumbUrl(project, characterId, item);
+                    const selected = item.rel === startRel;
+                    return (
+                      <button
+                        key={item.rel}
+                        type="button"
+                        title={item.label}
+                        data-testid="talking-head-start"
+                        onClick={() => setStartRel(item.rel)}
+                        className={`flex w-20 flex-col items-center gap-1 rounded border p-1 text-[10px] ${
+                          selected ? "border-studio-accent bg-studio-accent/10 text-white" : "border-studio-border text-studio-muted hover:bg-studio-raised"
+                        }`}
+                      >
+                        {src ? (
+                          <img src={src} alt="" className="h-16 w-full rounded bg-black object-contain" />
+                        ) : (
+                          <span className="flex h-16 w-full items-center justify-center rounded bg-black text-[10px]">full body</span>
+                        )}
+                        <span className="w-full truncate text-center">
+                          {item.kind === "reference" ? "Reference" : item.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {starts.length === 0 ? (
+                    <p className="text-[11px] text-amber-300">No head images yet. Upload the head image you want Grok to start from.</p>
+                  ) : null}
+                </div>
+                {chosen?.fullBody ? (
+                  <p className="mt-1 text-[11px] text-amber-300" data-testid="talking-head-body-warning">
+                    This is the full-body reference. Grok will start from a body, not a head. Pick or upload a head image instead.
+                  </p>
+                ) : null}
+              </div>
+
               <ol className="space-y-1.5" data-testid="talking-head-windows">
                 {windows.map((win) => (
                   <li key={win.index} className="rounded border border-studio-border bg-studio-raised px-2.5 py-1.5">
@@ -124,7 +239,7 @@ export default function TalkingHeadDialog({
                         Clip {win.index + 1} · {formatSeconds(win.start)}–{formatSeconds(win.end)}
                       </span>
                       <span>
-                        {win.index === 0 ? "from the reference head" : "from clip " + win.index + "'s last frame"} · {win.clipSec}s
+                        {win.index === 0 ? "from the start image" : "from clip " + win.index + "'s last frame"} · {win.clipSec}s
                       </span>
                     </div>
                     <p className="leading-snug text-neutral-200">{win.text || <em className="text-studio-muted">(no words)</em>}</p>

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { WORKER_URL, resumeTalkingHead, workerFetch } from "@/lib/worker";
+import { WORKER_URL, deleteTalkingHead, resumeTalkingHead, stopTalkingHead, workerFetch } from "@/lib/worker";
 import { groupTalkShots, placeTalkWindows, type TalkGroup, type TalkMeta } from "@/lib/talkingHead";
 import {
   alphaBox,
@@ -1031,6 +1031,30 @@ export default function HeadRigModal({
     setTalkBusy(null);
   }
 
+  async function handleStopTalk(group: string) {
+    if (!confirm("Stop this talking head and remove the clips that are not finished?\n\nA clip already sent to Grok is still billed. Finished clips are kept.")) return;
+    setTalkBusy(group);
+    try {
+      await stopTalkingHead(project, characterId, group);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not stop the talking head");
+    }
+    await reloadShots();
+    setTalkBusy(null);
+  }
+
+  async function handleDeleteTalk(group: string) {
+    if (!confirm("Delete this talking head and all of its clips?")) return;
+    setTalkBusy(group);
+    try {
+      await deleteTalkingHead(project, characterId, group);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete the talking head");
+    }
+    await reloadShots();
+    setTalkBusy(null);
+  }
+
   function placeTalkGroup(group: TalkGroup) {
     const ready = group.shots.filter((s) => s.status === "ready");
     if (!ready.length) return;
@@ -1684,6 +1708,8 @@ export default function HeadRigModal({
                 busyGroup={talkBusy}
                 onPlace={placeTalkGroup}
                 onResume={(g) => void handleResumeTalk(g)}
+                onStop={(g) => void handleStopTalk(g)}
+                onDelete={(g) => void handleDeleteTalk(g)}
               />
             )}
 
@@ -2056,12 +2082,14 @@ export default function HeadRigModal({
 
 // ── Talking head sidebar section ─────────────────────────────────────
 
-function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume }: {
+function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onStop, onDelete }: {
   groups: TalkGroup[];
   project: string; characterId: string;
   busyGroup: string | null;
   onPlace: (group: TalkGroup) => void;
   onResume: (group: string) => void;
+  onStop: (group: string) => void;
+  onDelete: (group: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -2076,7 +2104,8 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
         <div className="flex flex-col gap-2 px-3 pb-3">
           {groups.map((group) => (
             <TalkGroupCard key={group.group} group={group} project={project} characterId={characterId}
-              busy={busyGroup === group.group} onPlace={() => onPlace(group)} onResume={() => onResume(group.group)} />
+              busy={busyGroup === group.group} onPlace={() => onPlace(group)} onResume={() => onResume(group.group)}
+              onStop={() => onStop(group.group)} onDelete={() => onDelete(group.group)} />
           ))}
         </div>
       )}
@@ -2086,10 +2115,11 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
 
 const TALK_STATE_LABEL: Record<string, string> = { queued: "Queued", making: "Generating", ready: "Ready", stopped: "Stopped", error: "Failed" };
 
-function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume }: {
+function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onStop, onDelete }: {
   group: TalkGroup; project: string; characterId: string; busy: boolean;
-  onPlace: () => void; onResume: () => void;
+  onPlace: () => void; onResume: () => void; onStop: () => void; onDelete: () => void;
 }) {
+  const inProgress = group.state === "making" || group.state === "queued";
   const [playing, setPlaying] = useState<number | null>(null);
   const ready = group.shots.filter((s) => s.status === "ready");
   const current = playing !== null ? ready[playing] : null;
@@ -2101,6 +2131,9 @@ function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume }:
         <span className={`shrink-0 text-[11px] font-medium ${stateColor}`} data-testid="talk-group-state">
           {TALK_STATE_LABEL[group.state]} {group.readyCount}/{group.shots.length}
         </span>
+        <button type="button" disabled={busy} title="Delete this talking head and its clips"
+          className="shrink-0 text-[12px] text-neutral-500 hover:text-red-400 disabled:opacity-40"
+          data-testid="talk-group-delete" onClick={onDelete}>✕</button>
       </div>
       <ol className="mt-1.5 flex flex-col gap-1">
         {group.shots.map((shot) => (
@@ -2125,6 +2158,15 @@ function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume }:
           <audio key={`a-${current.id}`} src={shotMediaUrl(project, characterId, current.id, "audio.wav")} autoPlay
             onEnded={() => setPlaying(playing !== null && playing + 1 < ready.length ? playing + 1 : null)} />
         </div>
+      )}
+      {inProgress && (
+        <button type="button" disabled={busy}
+          className="mt-2 w-full rounded bg-red-500/80 px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-red-500 disabled:opacity-40"
+          data-testid="talk-group-stop"
+          title="Stop sending clips to Grok and remove the unfinished ones"
+          onClick={onStop}>
+          {busy ? "Stopping…" : "■ Stop generating"}
+        </button>
       )}
       <div className="mt-2 flex gap-1.5">
         <button type="button" disabled={!ready.length}

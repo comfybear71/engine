@@ -1740,13 +1740,20 @@ export type TalkWindow = {
   text: string;
 };
 export type TalkingHeadRange = { audioRel: string; inSec: number; durationSec: number };
+export type TalkStart = {
+  kind: "uploaded" | "head-shot" | "reference";
+  label: string;
+  rel: string;
+  thumb: string;
+  fullBody?: boolean;
+};
 export type TalkingHeadPlan = TalkingHeadRange & {
   characterId: string;
   hasWords: boolean;
   transcript: string;
   windows: TalkWindow[];
-  refRel: string;
-  hasReference: boolean;
+  starts: TalkStart[];
+  defaultStart: string;
   defaultPrompt: string;
 };
 
@@ -1772,9 +1779,28 @@ export function planTalkingHead(name: string, characterId: string, range: Talkin
 export function startTalkingHead(
   name: string,
   characterId: string,
-  body: TalkingHeadRange & { prompt?: string }
+  body: TalkingHeadRange & { prompt?: string; refRel: string }
 ): Promise<{ ok: boolean; group: string; shotIds: string[]; windows: TalkWindow[] }> {
   return talkingHeadPost(`${talkingHeadBase(name, characterId)}/start`, body);
+}
+
+export function uploadTalkingHeadStart(
+  name: string,
+  characterId: string,
+  body: { name: string; data: string }
+): Promise<TalkStart & { ok: boolean }> {
+  return talkingHeadPost(`${talkingHeadBase(name, characterId)}/start-image`, body);
+}
+
+export function stopTalkingHead(name: string, characterId: string, group: string): Promise<{ ok: boolean; removed: number }> {
+  return talkingHeadPost(`${talkingHeadBase(name, characterId)}/${encodeURIComponent(group)}/stop`, {});
+}
+
+export async function deleteTalkingHead(name: string, characterId: string, group: string): Promise<{ ok: boolean; removed: number }> {
+  const res = await workerFetch(`${talkingHeadBase(name, characterId)}/${encodeURIComponent(group)}`, { method: "DELETE" });
+  const payload = (await res.json().catch(() => ({}))) as { ok?: boolean; removed?: number; error?: string };
+  if (!res.ok) throw new Error(payload.error || `Delete failed (${res.status})`);
+  return { ok: true, removed: payload.removed || 0 };
 }
 
 export function resumeTalkingHead(
