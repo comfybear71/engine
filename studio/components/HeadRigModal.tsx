@@ -1113,6 +1113,7 @@ export default function HeadRigModal({
               grokBusy={grokBusy} grokMsg={grokMsg}
               allShots={allShots}
               onCreate={() => void handleGrokCreate()}
+              project={project} characterId={characterId}
             />
 
             {/* Bake output — collapsible */}
@@ -1396,7 +1397,7 @@ export default function HeadRigModal({
 
 // ── Grok sidebar section ─────────────────────────────────────────────
 
-function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, grokRefShotId, setGrokRefShotId, grokPrompt, setGrokPrompt, grokBusy, grokMsg, allShots, onCreate }: {
+function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, grokRefShotId, setGrokRefShotId, grokPrompt, setGrokPrompt, grokBusy, grokMsg, allShots, onCreate, project, characterId }: {
   grokType: "body" | "head"; setGrokType: (v: "body" | "head") => void;
   grokDuration: number; setGrokDuration: (v: number) => void;
   grokRefShotId: string; setGrokRefShotId: (v: string) => void;
@@ -1404,6 +1405,7 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
   grokBusy: boolean; grokMsg: string;
   allShots: ShotInfo[];
   onCreate: () => void;
+  project: string; characterId: string;
 }) {
   const [open, setOpen] = useState(true);
   return (
