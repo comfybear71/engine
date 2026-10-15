@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { WORKER_URL, deleteTalkingHead, resumeTalkingHead, stopTalkingHead, workerFetch } from "@/lib/worker";
+import { WORKER_URL, deleteTalkingHead, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, workerFetch } from "@/lib/worker";
 import { groupTalkShots, placeTalkWindows, type TalkGroup, type TalkMeta } from "@/lib/talkingHead";
 import {
   alphaBox,
@@ -1031,8 +1031,20 @@ export default function HeadRigModal({
     setTalkBusy(null);
   }
 
+  async function handleRedoTalkClip(group: string, index: number) {
+    if (!confirm(`Regenerate clip ${index + 1} with a new seed?\n\nThis uses Comfy Cloud credits for one clip. The other clips are kept, and the old clip ${index + 1} is replaced.`)) return;
+    setTalkBusy(group);
+    try {
+      await redoTalkingHeadClip(project, characterId, group, index);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not redo the clip");
+    }
+    await reloadShots();
+    setTalkBusy(null);
+  }
+
   async function handleStopTalk(group: string) {
-    if (!confirm("Stop this talking head and remove the clips that are not finished?\n\nA clip already sent to Grok is still billed. Finished clips are kept.")) return;
+    if (!confirm("Stop this talking head and remove the clips that are not finished?\n\nA Comfy Cloud clip is cancelled right away; a Grok clip already sent is still billed. Finished clips are kept.")) return;
     setTalkBusy(group);
     try {
       await stopTalkingHead(project, characterId, group);
@@ -1712,6 +1724,7 @@ export default function HeadRigModal({
                 busyGroup={talkBusy}
                 onPlace={placeTalkGroup}
                 onResume={(g) => void handleResumeTalk(g)}
+                onRedoClip={(g, i) => void handleRedoTalkClip(g, i)}
                 onStop={(g) => void handleStopTalk(g)}
                 onDelete={(g) => void handleDeleteTalk(g)}
               />
@@ -2087,12 +2100,13 @@ export default function HeadRigModal({
 
 // ── Talking head sidebar section ─────────────────────────────────────
 
-function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onStop, onDelete }: {
+function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onRedoClip, onStop, onDelete }: {
   groups: TalkGroup[];
   project: string; characterId: string;
   busyGroup: string | null;
   onPlace: (group: TalkGroup) => void;
   onResume: (group: string) => void;
+  onRedoClip: (group: string, index: number) => void;
   onStop: (group: string) => void;
   onDelete: (group: string) => void;
 }) {
@@ -2110,6 +2124,7 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
           {groups.map((group) => (
             <TalkGroupCard key={group.group} group={group} project={project} characterId={characterId}
               busy={busyGroup === group.group} onPlace={() => onPlace(group)} onResume={() => onResume(group.group)}
+              onRedoClip={(i) => onRedoClip(group.group, i)}
               onStop={() => onStop(group.group)} onDelete={() => onDelete(group.group)} />
           ))}
         </div>
@@ -2120,9 +2135,9 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
 
 const TALK_STATE_LABEL: Record<string, string> = { queued: "Queued", making: "Generating", ready: "Ready", stopped: "Stopped", error: "Failed" };
 
-function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onStop, onDelete }: {
+function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onRedoClip, onStop, onDelete }: {
   group: TalkGroup; project: string; characterId: string; busy: boolean;
-  onPlace: () => void; onResume: () => void; onStop: () => void; onDelete: () => void;
+  onPlace: () => void; onResume: () => void; onRedoClip: (index: number) => void; onStop: () => void; onDelete: () => void;
 }) {
   const inProgress = group.state === "making" || group.state === "queued";
   const [playing, setPlaying] = useState<number | null>(null);
@@ -2152,6 +2167,15 @@ function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, o
                 {shot.status === "ready" ? `${(shot.talk?.windowSec ?? 0).toFixed(1)}s` : TALK_STATE_LABEL[shot.status] || shot.status}
               </span>
             </span>
+            {shot.status === "ready" && !inProgress && (
+              <button type="button" disabled={busy}
+                className="shrink-0 rounded border border-studio-border px-1.5 py-0.5 text-[10px] text-neutral-300 hover:bg-[#333] disabled:opacity-40"
+                data-testid={`talk-redo-${(shot.talk?.index ?? 0) + 1}`}
+                title="Regenerate just this clip with a new seed (uses credits for one clip)"
+                onClick={() => onRedoClip(shot.talk?.index ?? 0)}>
+                Redo
+              </button>
+            )}
           </li>
         ))}
       </ol>

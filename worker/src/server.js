@@ -146,6 +146,7 @@ const {
   planTalkingHead,
   makeTalkingHead,
   resumeTalkingHead,
+  redoTalkingHeadClip,
   stopTalkingHead,
   markInterruptedTalkShots,
   listTalkingHeadStarts,
@@ -1447,6 +1448,22 @@ function createApp(options = {}) {
       const result = await resumeTalkingHead(projectDir, req.params.characterId, req.params.group, {
         fetchFn,
         pythonBin: options.pythonBin,
+      });
+      res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/talking-head/:group/redo", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const body = req.body || {};
+      const result = await redoTalkingHeadClip(projectDir, req.params.characterId, req.params.group, body.index, {
+        fetchFn,
+        pythonBin: options.pythonBin,
+        cascade: body.cascade === true,
       });
       res.json(result);
     } catch (err) {

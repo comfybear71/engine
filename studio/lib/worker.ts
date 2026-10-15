@@ -1812,6 +1812,16 @@ export function resumeTalkingHead(
   return talkingHeadPost(`${talkingHeadBase(name, characterId)}/${encodeURIComponent(group)}/resume`, {});
 }
 
+export function redoTalkingHeadClip(
+  name: string,
+  characterId: string,
+  group: string,
+  index: number,
+  cascade = false
+): Promise<{ ok: boolean; group: string; redone: number; cascade: boolean }> {
+  return talkingHeadPost(`${talkingHeadBase(name, characterId)}/${encodeURIComponent(group)}/redo`, { index, cascade });
+}
+
 export async function importProjectAudio(
   name: string,
   file: File,
