@@ -23,6 +23,7 @@ const {
 } = require("./splitLongAudio");
 const shotsModule = require("./shots");
 const comfyCloud = require("./comfyCloud");
+const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 const { internals } = shotsModule;
 
 const {
@@ -221,6 +222,25 @@ function buildLtxPrompt(talk) {
   );
 }
 
+/**
+ * Scale a start frame so the head matches the chain's head size, so a head that
+ * shrank at the end of one clip does not start the next clip smaller. Best
+ * effort: on any failure the frame is used unchanged.
+ */
+async function normalizeHeadFrame(png, target, options = {}) {
+  try {
+    const pythonBin = options.pythonBin || resolvePythonBin();
+    const { code } = await spawnCmd(
+      pythonBin,
+      ["-m", "compositor.head_size", "normalize", "--in", png, "--out", png, "--target", String(target)],
+      { cwd: PYTHON_DIR }
+    );
+    return code === 0;
+  } catch {
+    return false;
+  }
+}
+
 function buildWindowPrompt(talk) {
   if (normalizeEngine(talk.engine) === "ltx") return buildLtxPrompt(talk);
   const base = String(talk.basePrompt || DEFAULT_TALK_PROMPT).trim();
@@ -304,6 +324,10 @@ async function runChain(projectDir, characterId, group, startIndex, options = {}
         const startPng = path.join(dir, "start_frame.png");
         try {
           await extract(prevSource, startPng, prev.info.talk.windowSec);
+          const chainTarget = Number(shots[0].info.headSizeTarget) || 0;
+          if (normalizeEngine(info.engine) === "ltx" && chainTarget > 0) {
+            await (options.normalizeStart || normalizeHeadFrame)(startPng, chainTarget, options);
+          }
           imageBase64 = fs.readFileSync(startPng).toString("base64");
         } catch (err) {
           info.status = "error";
@@ -320,6 +344,7 @@ async function runChain(projectDir, characterId, group, startIndex, options = {}
       }
 
       const ltx = normalizeEngine(info.engine) === "ltx";
+      const headSizeTarget = ltx ? Number(shots[0].info.headSizeTarget) || 0 : 0;
       const fullPrompt = ltx
         ? buildWindowPrompt(info.talk)
         : `${buildWindowPrompt(info.talk)}, ${BG_PROMPT_SUFFIX[info.background] || BG_PROMPT_SUFFIX.green}`;
@@ -329,6 +354,8 @@ async function runChain(projectDir, characterId, group, startIndex, options = {}
         durationSec: Math.max(1, Math.round(info.talk.windowSec * 100) / 100),
         fullPrompt,
         imageBase64,
+        headSizeTarget,
+        lockHeadSize: ltx && headSizeTarget === 0,
         dur: info.talk.clipSec,
         jobKey: `${characterId}/${info.id}`,
         options,

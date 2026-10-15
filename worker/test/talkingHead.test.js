@@ -359,6 +359,42 @@ describe("talking head chain", () => {
       assert.deepEqual(frameCalls, started.windows.slice(0, -1).map((w) => w.duration));
     });
 
+    test("clip 1 sets the head size and every later clip is held to it, including its start frame", async () => {
+      writeAudio(24);
+      const captures = [];
+      const normalized = [];
+      const options = {
+        ...chainOptions(),
+        fetchFn: makeComfyFetch(),
+        padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out),
+        normalizeStart: async (png, target) => normalized.push({ png: path.basename(png), target }),
+        captureFn: async (_v, _d, meta) => {
+          captures.push(meta);
+          return { fps: 24, frameCount: 240, headSize: 312.5 };
+        },
+      };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 24, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+      assert.ok(captures.length >= 3);
+      assert.equal(captures[0].keyMode, "head-black");
+      assert.equal(captures[0].lockHeadSize, true, "the first clip measures its own opening size");
+      assert.equal(captures[0].headSizeTarget, 0);
+      for (const meta of captures.slice(1)) {
+        assert.equal(meta.headSizeTarget, 312.5);
+        assert.equal(meta.lockHeadSize, false);
+      }
+      assert.equal(normalized.length, captures.length - 1, "each chained start frame is rescaled before it is sent");
+      assert.ok(normalized.every((n) => n.target === 312.5 && n.png === "start_frame.png"));
+      const shots = listShots(projectDir, "rodney").sort((a, b) => a.talk.index - b.talk.index);
+      assert.equal(shots[0].headSizeTarget, 312.5);
+    });
+
     test("retrying a window whose network dropped resumes the same Comfy job instead of paying again", async () => {
       writeAudio(7);
       let pollsFail = true;
