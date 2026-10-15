@@ -1,0 +1,105 @@
+"""Head placement in the baked shot matches the Head Rig preview (frame centred on the anchor)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from compositor import shot_timeline_bake as bake
+
+
+def _write_shot(root: Path, name: str, frames: list[np.ndarray]) -> Path:
+    cut = root / name / "cut"
+    cut.mkdir(parents=True)
+    for i, img in enumerate(frames, start=1):
+        cv2.imwrite(str(cut / f"f_{i:04d}.png"), img)
+    return cut
+
+
+def _body(w=100, h=200) -> np.ndarray:
+    img = np.zeros((h, w, 4), dtype=np.uint8)
+    img[:, :, 0] = 200
+    img[:, :, 3] = 255
+    return img
+
+
+def _head(content_x: int, content_w: int, w=60, h=60, content_y=10, content_h=30) -> np.ndarray:
+    """Frame with an off-centre opaque block, like a head that is not centred in its clip."""
+    img = np.zeros((h, w, 4), dtype=np.uint8)
+    img[content_y:content_y + content_h, content_x:content_x + content_w] = (0, 0, 255, 255)
+    return img
+
+
+def _spec(tmp_path: Path, body_cut: Path, head_cut: Path, frames: int, anchor, scale=1.0) -> Path:
+    spec = {
+        "fps": 24,
+        "bodySegments": [{"cutDir": str(body_cut), "inFrame": 1, "outFrame": frames, "start": 1}],
+        "headSegments": [
+            {
+                "cutDir": str(head_cut),
+                "inFrame": 1,
+                "outFrame": frames,
+                "start": 1,
+                "anchorX": anchor[0],
+                "anchorY": anchor[1],
+                "headScale": scale,
+            }
+        ],
+    }
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(spec))
+    return path
+
+
+def _red_box(path: Path) -> tuple[int, int, int, int]:
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    mask = (img[:, :, 2] > 200) & (img[:, :, 0] < 50) & (img[:, :, 3] > 200)
+    ys, xs = np.where(mask)
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+
+def test_head_frame_is_centred_on_anchor_not_its_visible_box(tmp_path):
+    body_cut = _write_shot(tmp_path, "body", [_body()] * 2)
+    # Visible block hugs the right of the frame: x 40..58 of a 60 wide frame.
+    head_cut = _write_shot(tmp_path, "head", [_head(40, 18)] * 2)
+    out = tmp_path / "out"
+    bake.run(str(_spec(tmp_path, body_cut, head_cut, 2, (0.5, 0.5))), str(out))
+
+    x0, y0, x1, y1 = _red_box(out / "cut" / "f_0001.png")
+    canvas = cv2.imread(str(out / "cut" / "f_0001.png"), cv2.IMREAD_UNCHANGED)
+    assert canvas.shape[:2] == (200, 100)
+    # Frame centre (30, 30) sits on (50, 100): the block's left edge is 10px right of centre.
+    assert (x0, x1) == (50 + (40 - 30), 50 + (58 - 30))
+    assert (y0, y1) == (100 + (10 - 30), 100 + (40 - 30))
+
+
+def test_visible_pixels_never_clipped_when_head_overshoots_the_body(tmp_path):
+    body_cut = _write_shot(tmp_path, "body", [_body()])
+    head_cut = _write_shot(tmp_path, "head", [_head(0, 60, content_y=0, content_h=60)])
+    out = tmp_path / "out"
+    bake.run(str(_spec(tmp_path, body_cut, head_cut, 1, (0.1, 0.05), scale=1.0)), str(out))
+    canvas = cv2.imread(str(out / "cut" / "f_0001.png"), cv2.IMREAD_UNCHANGED)
+    pad_l, pad_t, pad_r, pad_b = bake.head_overshoot_padding(
+        json.loads((tmp_path / "spec.json").read_text())["headSegments"], 100, 200
+    )
+    assert canvas.shape[1] == 100 + pad_l + pad_r
+    assert canvas.shape[0] == 200 + pad_t + pad_b
+    # 60x60 head centred on (10, 10): extends 20px past the left/top edges.
+    assert pad_l >= 20 and pad_t >= 20
+    x0, y0, x1, y1 = _red_box(out / "cut" / "f_0001.png")
+    assert (x1 - x0, y1 - y0) == (60, 60)
+
+
+def test_head_does_not_move_while_its_visible_box_changes(tmp_path):
+    body_cut = _write_shot(tmp_path, "body", [_body()] * 2)
+    narrow = _head(10, 10)
+    wide = _head(10, 40)
+    head_cut = _write_shot(tmp_path, "head", [narrow, wide])
+    out = tmp_path / "out"
+    bake.run(str(_spec(tmp_path, body_cut, head_cut, 2, (0.5, 0.5))), str(out))
+    a = _red_box(out / "cut" / "f_0001.png")
+    b = _red_box(out / "cut" / "f_0002.png")
+    assert a[0] == b[0]

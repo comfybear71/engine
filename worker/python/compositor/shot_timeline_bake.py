@@ -161,13 +161,18 @@ def head_overshoot_padding(
             head_img = load_bgra(source_frame_path(seg, frame))
             if head_img is None:
                 continue
-            _, _, bw, bh = find_content_bbox(head_img)
-            bw *= scale
-            bh *= scale
-            pad_l = max(pad_l, bw / 2 - cx)
-            pad_r = max(pad_r, cx + bw / 2 - canvas_w)
-            pad_t = max(pad_t, bh / 2 - cy)
-            pad_b = max(pad_b, cy + bh / 2 - canvas_h)
+            frame_h, frame_w = head_img.shape[:2]
+            bx, by, bw, bh = find_content_bbox(head_img)
+            # The whole frame is centred on the anchor, so the visible pixels
+            # sit at their source offset from the frame centre, scaled.
+            left = cx + (bx - frame_w / 2) * scale
+            right = cx + (bx + bw - frame_w / 2) * scale
+            top = cy + (by - frame_h / 2) * scale
+            bottom = cy + (by + bh - frame_h / 2) * scale
+            pad_l = max(pad_l, -left)
+            pad_r = max(pad_r, right - canvas_w)
+            pad_t = max(pad_t, -top)
+            pad_b = max(pad_b, bottom - canvas_h)
     return tuple(int(np.ceil(v + margin)) if v > 0 else 0 for v in (pad_l, pad_t, pad_r, pad_b))  # type: ignore[return-value]
 
 
@@ -228,11 +233,12 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
                     new_hh = max(1, int(hh * head_scale))
                     interp = cv2.INTER_AREA if head_scale < 1.0 else cv2.INTER_LANCZOS4
                     head_img = cv2.resize(head_img, (new_hw, new_hh), interpolation=interp)
-                hx, hy, hw, hh = find_content_bbox(head_img)
-                head_cropped = head_img[hy:hy + hh, hx:hx + hw]
+                # Whole frame, centred on the anchor -- the same placement the
+                # Head Rig preview draws, and stable while the head turns or
+                # the mouth opens (the visible-pixel box changes every frame).
                 cx = pad_l + int(float(head_seg.get("anchorX", 0.5)) * canvas_w)
                 cy = pad_t + int(float(head_seg.get("anchorY", 0.15)) * canvas_h)
-                canvas = composite_over(canvas, head_cropped, cx, cy)
+                canvas = composite_over(canvas, head_img, cx, cy)
 
         cut_path = cut_dir / f"f_{frame:04d}.png"
         cv2.imwrite(str(cut_path), canvas)
