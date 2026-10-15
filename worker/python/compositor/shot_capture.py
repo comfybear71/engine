@@ -174,9 +174,16 @@ def remove_watermark(bgra: np.ndarray) -> np.ndarray:
 
 # ── Frame processing ─────────────────────────────────────────────────
 
-def process_frame(bgr: np.ndarray) -> np.ndarray:
-    """Key the background and remove watermark from a single frame."""
-    bg_type = detect_bg_from_border(bgr)
+def process_frame(bgr: np.ndarray, bg_hint: str = "") -> np.ndarray:
+    """Key the background and remove watermark from a single frame.
+
+    bg_hint: if "green", always use green keying (we told Grok to use
+    a green screen, so trust that over border-pixel auto-detection).
+    """
+    if bg_hint == "green":
+        bg_type = "green"
+    else:
+        bg_type = detect_bg_from_border(bgr)
     if bg_type == "green":
         keyed = despill_green(key_green(bgr))
     else:
@@ -245,8 +252,9 @@ def run(video_path: str, out_dir: str, name: str = "", prompt: str = "",
         if bgr is None:
             continue
 
-        # Key the frame
-        keyed = process_frame(bgr)
+        # Key the frame — pass the background hint so we always green-key
+        # when we told Grok to use a green screen
+        keyed = process_frame(bgr, bg_hint=background)
 
         # Write cut (RGBA png)
         cut_path = cut_dir / f"f_{idx:04d}.png"

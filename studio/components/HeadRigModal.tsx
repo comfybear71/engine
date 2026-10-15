@@ -1038,8 +1038,15 @@ export default function HeadRigModal({
   }
 
   // ── Shot categorization ──
-  const bodyShots = shots.filter((s) => s.shotType === "body" || s.category === "idle_stand" || s.category === "walks" || s.category === "mic");
-  const headShots = shots.filter((s) => s.shotType === "head" || s.category === "expressions" || s.category === "head_moves" || s.category === "mouth_tongue");
+  // shotType wins — if set, only that bin gets the shot; category is a fallback for untyped shots
+  const bodyShots = shots.filter((s) => {
+    if (s.shotType) return s.shotType === "body";
+    return s.category === "idle_stand" || s.category === "walks" || s.category === "mic";
+  });
+  const headShots = shots.filter((s) => {
+    if (s.shotType) return s.shotType === "head";
+    return s.category === "expressions" || s.category === "head_moves" || s.category === "mouth_tongue";
+  });
   const combinedShots = shots.filter((s) => s.shotType === "combined");
   const allShots = shots;
   const rigKeys = Object.keys(rigs);
@@ -1069,8 +1076,8 @@ export default function HeadRigModal({
   }, []);
 
   const content = (
-    <div className={inline ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col"}>
-      <div className="flex min-h-0 flex-1">
+    <div className={inline ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "flex min-h-0 flex-1 flex-col"}>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* ══════════ LEFT SIDEBAR — Media Bins + Grok ══════════ */}
         <div className={`shrink-0 bg-[#131313] transition-all ${mediaPanelOpen ? "" : "w-0 overflow-hidden"}`} style={mediaPanelOpen ? { width: sidebarWidth } : undefined}>
           <div className="flex h-full flex-col overflow-y-auto">
@@ -1144,7 +1151,7 @@ export default function HeadRigModal({
         )}
 
         {/* ══════════ MAIN AREA — Canvas + Timeline ══════════ */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           {/* Toggle sidebar + Rig controls */}
           <div className="flex items-center gap-3 border-b border-[#222] bg-[#161616] px-3 py-1.5">
             <button type="button" className="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-[#333] hover:text-white"
