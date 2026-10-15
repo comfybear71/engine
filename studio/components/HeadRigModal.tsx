@@ -413,21 +413,25 @@ export default function HeadRigModal({
           const hx = bx + head.anchorX * bw - hw / 2;
           const hy = by + head.anchorY * bh - hh / 2;
           // Keyed PNGs can have semi-transparent pixels from background
-          // removal.  Draw to an offscreen canvas, stamp its alpha to fully
-          // opaque, then composite the result so the head is never see-through.
+          // removal.  Stamp alpha to fully opaque so head isn't see-through.
+          const ow = Math.ceil(hw) || 1;
+          const oh = Math.ceil(hh) || 1;
           const offC = document.createElement("canvas");
-          offC.width = Math.ceil(hw);
-          offC.height = Math.ceil(hh);
-          const offCtx = offC.getContext("2d")!;
-          offCtx.drawImage(img, 0, 0, hw, hh);
-          // Make every non-zero-alpha pixel fully opaque
-          const idata = offCtx.getImageData(0, 0, offC.width, offC.height);
-          const d = idata.data;
-          for (let i = 3; i < d.length; i += 4) {
-            if (d[i] > 0) d[i] = 255;
+          offC.width = ow;
+          offC.height = oh;
+          const offCtx = offC.getContext("2d");
+          if (offCtx) {
+            offCtx.drawImage(img, 0, 0, ow, oh);
+            const idata = offCtx.getImageData(0, 0, ow, oh);
+            const d = idata.data;
+            for (let i = 3; i < d.length; i += 4) {
+              if (d[i] > 0) d[i] = 255;
+            }
+            offCtx.putImageData(idata, 0, 0);
+            ctx.drawImage(offC, hx, hy, hw, hh);
+          } else {
+            ctx.drawImage(img, hx, hy, hw, hh);
           }
-          offCtx.putImageData(idata, 0, 0);
-          ctx.drawImage(offC, hx, hy, hw, hh);
 
           const isEditing = selectedRef.current?.track === "head" && selectedRef.current.id === head.id;
           if (isEditing) {
