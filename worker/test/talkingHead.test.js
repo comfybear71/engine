@@ -330,6 +330,37 @@ describe("talking head chain", () => {
       assert.deepEqual(frameCalls, started.windows.slice(0, -1).map((w) => w.duration));
     });
 
+    test("retrying a window whose network dropped resumes the same Comfy job instead of paying again", async () => {
+      writeAudio(7);
+      let pollsFail = true;
+      const base = makeComfyFetch();
+      const fetchFn = async (url, init) => {
+        if (String(url).includes("/api/jobs/") && pollsFail) throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }) });
+        return base(url, init);
+      };
+      const options = { ...chainOptions(), fetchFn, padImage: async (input, out) => fs.copyFileSync(input, out) };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 7, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+      let [shot] = listShots(projectDir, "rodney");
+      assert.equal(shot.status, "error");
+      assert.match(shot.error, /ECONNRESET/);
+      assert.equal(shot.requestId, "p1");
+      assert.equal(submitted.length, 1);
+
+      pollsFail = false;
+      const resumed = await resumeTalkingHead(projectDir, "rodney", started.group, options);
+      await resumed.completion;
+      [shot] = listShots(projectDir, "rodney");
+      assert.equal(shot.status, "ready");
+      assert.equal(submitted.length, 1, "no second paid job");
+      assert.equal(uploads.length, 2, "no second upload");
+    });
+
     test("refuses LTX up front when no Comfy Cloud key is configured", async () => {
       delete process.env.COMFY_CLOUD_API_KEY;
       writeAudio(7);
