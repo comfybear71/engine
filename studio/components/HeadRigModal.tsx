@@ -1066,8 +1066,8 @@ export default function HeadRigModal({
   }, []);
 
   const content = (
-    <div className={inline ? "overflow-y-auto p-2" : "min-h-0 flex-1 overflow-y-auto"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
-      <div className="flex h-full">
+    <div className={inline ? "flex flex-col p-2" : "flex min-h-0 flex-1 flex-col"} style={inline ? { maxHeight: "calc(100vh - 120px)" } : undefined}>
+      <div className="flex min-h-0 flex-1">
         {/* ══════════ LEFT SIDEBAR — Media Bins + Grok ══════════ */}
         <div className={`shrink-0 bg-[#131313] transition-all ${mediaPanelOpen ? "" : "w-0 overflow-hidden"}`} style={mediaPanelOpen ? { width: sidebarWidth } : undefined}>
           <div className="flex h-full flex-col overflow-y-auto">
@@ -1202,7 +1202,7 @@ export default function HeadRigModal({
           </div>
 
           {/* Canvas preview */}
-          <div className="flex flex-col items-center bg-[#0a0a0a] p-3">
+          <div className="flex flex-1 flex-col items-center justify-center overflow-hidden bg-[#0a0a0a] p-3">
             <canvas
               ref={canvasRef}
               width={CANVAS_W}
@@ -1222,15 +1222,18 @@ export default function HeadRigModal({
             </p>
           </div>
 
+        </div>{/* end main area flex-col */}
+      </div>{/* end sidebar+main flex row */}
+
       {/* Timeline resize handle */}
       <div
         className="shrink-0 cursor-row-resize bg-[#222] hover:bg-[#e0a040]/60 active:bg-[#e0a040]"
-        style={{ height: 4 }}
+        style={{ height: 5 }}
         onMouseDown={(e) => { e.preventDefault(); timelineDragRef.current = { startY: e.clientY, startH: timelineHeight }; }}
       />
 
       {/* ══════════ Multi-segment DaVinci-style Timeline ══════════ */}
-      <div className="select-none overflow-hidden bg-[#0d0d0d]" style={{ height: timelineHeight }}>
+      <div className="shrink-0 select-none overflow-hidden bg-[#0d0d0d]" style={{ height: timelineHeight }}>
         <div className="flex items-center justify-between border-b border-[#222] bg-[#181818] px-4 py-2">
           <div className="font-mono text-xl font-bold tracking-wider text-neutral-100" style={{ minWidth: 120 }}>
             {String(Math.floor((scrubFrame - 1) / (fps * 60))).padStart(2, "0")}
@@ -1365,8 +1368,6 @@ export default function HeadRigModal({
         </div>
       ) : null}
 
-        </div>{/* end main area flex-col */}
-      </div>{/* end sidebar+main flex row */}
     </div>
   );
 
