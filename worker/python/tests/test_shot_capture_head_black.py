@@ -54,3 +54,15 @@ def test_process_frame_uses_the_head_black_mode() -> None:
     forced = process_frame(img, bg_hint="black", key_mode=HEAD_BLACK_KEY)
     assert forced[150, 640, 3] == 255
     assert default.shape == forced.shape
+
+
+def test_dark_pocket_reached_only_through_a_narrow_gap_stays_solid() -> None:
+    img = np.zeros((704, 1280, 3), dtype=np.uint8)
+    cv2.ellipse(img, (640, 360), (230, 280), 0, 0, 360, (60, 110, 190), -1)
+    cv2.rectangle(img, (540, 300), (740, 400), (0, 0, 0), -1)
+    cv2.rectangle(img, (400, 340), (540, 356), (0, 0, 0), -1)
+    alpha = key_head_on_black(img)[:, :, 3]
+    assert alpha[350, 640] == 255
+    assert alpha[348, 470] == 255
+    assert alpha[20, 20] == 0
+    assert alpha[360, 200] == 0
