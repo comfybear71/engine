@@ -683,10 +683,12 @@ export default function StagePanel({
         totalNow
       );
       if (!schedule || schedule.delaySec > 0.05) {
-        try {
-          el.pause();
-        } catch {
-          /* ignore */
+        if (!el.paused) {
+          try {
+            el.pause();
+          } catch {
+            /* ignore */
+          }
         }
         continue;
       }
@@ -745,10 +747,12 @@ export default function StagePanel({
         totalNow
       );
       if (!schedule || schedule.delaySec > 0.05) {
-        try {
-          el.pause();
-        } catch {
-          /* ignore */
+        if (!el.paused) {
+          try {
+            el.pause();
+          } catch {
+            /* ignore */
+          }
         }
         continue;
       }
@@ -838,7 +842,8 @@ export default function StagePanel({
   }
 
   function prefetchFromPlayhead(fromFrame: number) {
-    if (!project) return;
+    // The canvas preview draws from the graph; server-rendered frames are only the fallback.
+    if (!project || previewGraphRef.current) return;
     const gen = (prefetchGenRef.current += 1);
     const frames = previewPrefetchWindow(fromFrame, fpsRef.current, totalFramesRef.current);
     void (async () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TimelineContextMenu, { type TimelineContextAction } from "@/components/TimelineContextMenu";
 import { formatTimecode } from "@/lib/playhead";
 import {
@@ -112,6 +112,8 @@ const CUE_COLORS: Record<string, string> = {
   H: "#c084fc",
 };
 
+const EMPTY_BLOCKS: LaneBlock[] = [];
+
 function relatedMoveIds(blocks: LaneBlock[], seed: Set<string>): Set<string> {
   const ids = idsForMarriedGroup(blocks, seed);
   const seedBlocks = blocks.filter((block) => seed.has(block.id));
@@ -213,7 +215,7 @@ export default function TimelineLanes({
   const total = Math.max(totalFrames || lanes?.totalFrames || 1, 1);
   const fps = Math.max(lanes?.fps || 24, 1);
   const maxFrame = Math.max(total - 1, 0);
-  const allBlocks = lanes?.blocks || [];
+  const allBlocks = useMemo(() => lanes?.blocks || EMPTY_BLOCKS, [lanes]);
   const scenes = lanes?.scenes || [];
   const [zoom, setZoom] = useState(MIN_ZOOM);
   const [laneScale, setLaneScale] = useState(DEFAULT_LANE_SCALE);
@@ -383,6 +385,33 @@ export default function TimelineLanes({
     if (laneHRef.current) laneHRef.current.scrollLeft = left;
     setScrollLeft(left);
   }, []);
+
+  const groupBoundsFor = useMemo(() => {
+    const cache = new Map<string, { start: number; end: number }>();
+    return (block: LaneBlock) => {
+      const hit = cache.get(block.id);
+      if (hit) return hit;
+      const group = relatedMoveIds(allBlocks, new Set([block.id]));
+      let start = block.startFrame;
+      let end = block.endFrame;
+      if (group.size > 0) {
+        start = Infinity;
+        end = -Infinity;
+        for (const item of allBlocks) {
+          if (!group.has(item.id)) continue;
+          if (item.startFrame < start) start = item.startFrame;
+          if (item.endFrame > end) end = item.endFrame;
+        }
+        if (start === Infinity) {
+          start = block.startFrame;
+          end = block.endFrame;
+        }
+      }
+      const bounds = { start, end };
+      cache.set(block.id, bounds);
+      return bounds;
+    };
+  }, [allBlocks]);
 
   useEffect(() => {
     if (!playing) return;
@@ -1142,6 +1171,36 @@ export default function TimelineLanes({
   const headerBtn =
     "flex h-6 w-6 items-center justify-center rounded border border-neutral-600 bg-black/40 text-white hover:bg-neutral-700 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-studio-accent";
 
+  const chipApi = useRef<ChipApi | null>(null);
+  chipApi.current = {
+    pointerDown: onChipPointerDown,
+    trimPointerDown: onTrimPointerDown,
+    contextMenu: openContextMenu,
+    toggleMouth: (event, block) => {
+      event.stopPropagation();
+      setExpandedMouthIds((current) => {
+        if (current.has(block.id)) return new Set();
+        return new Set([block.id]);
+      });
+      setCueEditor(null);
+    },
+    cueClick: (block, index, x, y) => setCueEditor({ blockId: block.id, index, x, y }),
+    syncLine: (block) => onSyncLines?.(lipSyncOpts(block, block.sync === "synced")),
+  };
+  const chipHandlers = useMemo<ChipHandlers>(
+    () => ({
+      onPointerDown: (event, block) => chipApi.current?.pointerDown(event, block),
+      onTrimPointerDown: (event, block, edge) => chipApi.current?.trimPointerDown(event, block, edge),
+      onContextMenu: (event, block, lane) => chipApi.current?.contextMenu(event, block, lane),
+      onToggleMouth: (event, block) => chipApi.current?.toggleMouth(event, block),
+      onCueClick: (block, index, x, y) => chipApi.current?.cueClick(block, index, x, y),
+      onSyncLine: (block) => chipApi.current?.syncLine(block),
+    }),
+    []
+  );
+  const canEditCues = Boolean(onPatchCue);
+  const canSyncLine = Boolean(onSyncLines);
+
   return (
     <div
       className="relative flex h-full min-h-0 select-none flex-col bg-studio-panel"
@@ -1458,10 +1517,8 @@ export default function TimelineLanes({
                                 )) ||
                               (block.scriptLine != null && selectedLinesRef.current.has(block.scriptLine)));
                           const take = draftTrim && draftTrim.ids.has(block.id) ? draftTrim : null;
-                          const group = relatedMoveIds(allBlocks, new Set([block.id]));
-                          const members = allBlocks.filter((item) => group.has(item.id));
-                          const groupStart = members.length ? Math.min(...members.map((item) => item.startFrame)) : block.startFrame;
-                          const groupEnd = members.length ? Math.max(...members.map((item) => item.endFrame)) : block.endFrame;
+                          const { start: groupStart, end: groupEnd } = groupBoundsFor(block);
+                          const mouthOpen = isMouthBlock(block) && expandedMouthIds.has(block.id);
                           return (
                             <LaneChip
                               key={block.id}
@@ -1480,32 +1537,13 @@ export default function TimelineLanes({
                               showInHandle={blockIsTrimmable(block) && block.startFrame === groupStart}
                               showOutHandle={blockIsTrimmable(block) && block.endFrame === groupEnd}
                               syncing={syncing}
-                              onPointerDown={onChipPointerDown}
-                              onContextMenu={(event) => openContextMenu(event, block, lane.id)}
-                              onTrimPointerDown={onTrimPointerDown}
-                              mouthExpanded={isMouthBlock(block) && expandedMouthIds.has(block.id)}
-                              viewStartFrame={scrollLeft / Math.max(ppf, 1e-6) - fps}
-                              viewEndFrame={(scrollLeft + (viewWidth || 1)) / Math.max(ppf, 1e-6) + fps}
-                              onToggleMouth={(event) => {
-                                event.stopPropagation();
-                                setExpandedMouthIds((current) => {
-                                  if (current.has(block.id)) return new Set();
-                                  return new Set([block.id]);
-                                });
-                                setCueEditor(null);
-                              }}
-                              onCueClick={
-                                onPatchCue && block.cuesRel
-                                  ? (cue, index, clientX, clientY) => {
-                                      setCueEditor({ blockId: block.id, index, x: clientX, y: clientY });
-                                    }
-                                  : undefined
-                              }
-                              onSyncLine={
-                                onSyncLines
-                                  ? () => onSyncLines(lipSyncOpts(block, block.sync === "synced"))
-                                  : undefined
-                              }
+                              laneId={lane.id}
+                              handlers={chipHandlers}
+                              mouthExpanded={mouthOpen}
+                              viewStartFrame={mouthOpen ? scrollLeft / Math.max(ppf, 1e-6) - fps : 0}
+                              viewEndFrame={mouthOpen ? (scrollLeft + (viewWidth || 1)) / Math.max(ppf, 1e-6) + fps : 0}
+                              canEditCues={canEditCues && Boolean(block.cuesRel)}
+                              canSyncLine={canSyncLine}
                             />
                           );
                         })}
@@ -1631,7 +1669,25 @@ export default function TimelineLanes({
   );
 }
 
-function LaneChip({
+type ChipHandlers = {
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock) => void;
+  onTrimPointerDown: (event: React.PointerEvent<HTMLElement>, block: LaneBlock, edge: "in" | "out") => void;
+  onContextMenu: (event: React.MouseEvent<HTMLDivElement>, block: LaneBlock, lane: LaneId) => void;
+  onToggleMouth: (event: React.MouseEvent<HTMLButtonElement>, block: LaneBlock) => void;
+  onCueClick: (block: LaneBlock, index: number, x: number, y: number) => void;
+  onSyncLine: (block: LaneBlock) => void;
+};
+
+type ChipApi = {
+  pointerDown: ChipHandlers["onPointerDown"];
+  trimPointerDown: ChipHandlers["onTrimPointerDown"];
+  contextMenu: (event: React.MouseEvent, block: LaneBlock | null, lane: LaneId | null) => void;
+  toggleMouth: ChipHandlers["onToggleMouth"];
+  cueClick: ChipHandlers["onCueClick"];
+  syncLine: ChipHandlers["onSyncLine"];
+};
+
+const LaneChip = memo(function LaneChip({
   block,
   ppf,
   fps,
@@ -1650,12 +1706,10 @@ function LaneChip({
   mouthExpanded = false,
   viewStartFrame = 0,
   viewEndFrame = 0,
-  onPointerDown,
-  onContextMenu,
-  onTrimPointerDown,
-  onToggleMouth,
-  onCueClick,
-  onSyncLine,
+  laneId,
+  handlers,
+  canEditCues,
+  canSyncLine,
 }: {
   block: LaneBlock;
   ppf: number;
@@ -1675,12 +1729,10 @@ function LaneChip({
   mouthExpanded?: boolean;
   viewStartFrame?: number;
   viewEndFrame?: number;
-  onPointerDown: (event: React.PointerEvent<HTMLDivElement>, block: LaneBlock) => void;
-  onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
-  onTrimPointerDown: (event: React.PointerEvent<HTMLElement>, block: LaneBlock, edge: "in" | "out") => void;
-  onToggleMouth?: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  onCueClick?: (cue: { shape: string; start: number; end: number; pinned?: boolean }, index: number, x: number, y: number) => void;
-  onSyncLine?: () => void;
+  laneId: LaneId;
+  handlers: ChipHandlers;
+  canEditCues: boolean;
+  canSyncLine: boolean;
 }) {
   const mouth = isMouthBlock(block);
   const movable = blockIsMovable(block) && !mouth;
@@ -1716,8 +1768,8 @@ function LaneChip({
       }${block.view ? ` · view=${block.view}` : ""}${block.sync ? ` · ${block.sync}` : ""}${
         block.timing?.attr ? ` · ${block.timing.attr}=` : ""
       }`}
-      onPointerDown={(event) => onPointerDown(event, block)}
-      onContextMenu={onContextMenu}
+      onPointerDown={(event) => handlers.onPointerDown(event, block)}
+      onContextMenu={(event) => handlers.onContextMenu(event, block, laneId)}
       data-hold={block.implicitHold ? "default" : block.timing?.attr || ""}
       data-face-override={block.faceOverridesMouth ? "true" : "false"}
       className={`absolute z-[1] overflow-hidden select-none rounded-sm px-1 text-left text-[10px] ${bar} ${text} ${
@@ -1741,7 +1793,7 @@ function LaneChip({
           data-testid="timeline-trim-in"
           data-allowed={trimAllowed ? "true" : "false"}
           title="Trim in"
-          onPointerDown={(event) => onTrimPointerDown(event, block, "in")}
+          onPointerDown={(event) => handlers.onTrimPointerDown(event, block, "in")}
         />
       ) : null}
       {showOutHandle ? (
@@ -1751,7 +1803,7 @@ function LaneChip({
           data-testid="timeline-trim-out"
           data-allowed={trimAllowed ? "true" : "false"}
           title="Trim out"
-          onPointerDown={(event) => onTrimPointerDown(event, block, "out")}
+          onPointerDown={(event) => handlers.onTrimPointerDown(event, block, "out")}
         />
       ) : null}
       <span className="relative flex items-start gap-1" style={{ height: chipPx }}>
@@ -1767,7 +1819,7 @@ function LaneChip({
             title={mouthExpanded ? "Collapse mouth cues" : "Expand mouth cues"}
             aria-label={mouthExpanded ? "Collapse mouth cues" : "Expand mouth cues"}
             onPointerDown={(event) => event.stopPropagation()}
-            onClick={onToggleMouth}
+            onClick={(event) => handlers.onToggleMouth(event, block)}
           >
             {mouthExpanded ? "▾" : "▸"}
           </button>
@@ -1783,7 +1835,7 @@ function LaneChip({
             !
           </span>
         ) : null}
-        {block.lane === "dialogue" && onSyncLine ? (
+        {block.lane === "dialogue" && canSyncLine ? (
           <button
             type="button"
             className="studio-chip-sync"
@@ -1796,7 +1848,7 @@ function LaneChip({
             }}
             onClick={(event) => {
               event.stopPropagation();
-              onSyncLine();
+              handlers.onSyncLine(block);
             }}
           >
             <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
@@ -1827,7 +1879,7 @@ function LaneChip({
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  onCueClick?.(cue, index, event.clientX, event.clientY);
+                  if (canEditCues) handlers.onCueClick(block, index, event.clientX, event.clientY);
                 }}
               >
                 {cue.pinned ? `${cue.shape}·` : cue.shape}
@@ -1838,7 +1890,7 @@ function LaneChip({
       ) : null}
     </div>
   );
-}
+});
 
 function CueStrip({
   cues,
