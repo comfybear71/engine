@@ -773,7 +773,7 @@ export default function ActionShotsPage({
     );
   }
 
-  const readyShots = shots.filter((s) => s.status === "ready");
+  const readyShots = shots.filter((s) => s.shotType === "combined" && s.status === "ready");
 
   return (
     <div className="shots-page" data-testid="shots-page">
