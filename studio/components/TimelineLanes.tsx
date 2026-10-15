@@ -85,7 +85,7 @@ const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
   { id: "body", label: "Body/Move", bar: "bg-orange-500/80", text: "text-orange-50" },
   { id: "face", label: "Face", bar: "bg-rose-500/80", text: "text-rose-50" },
   { id: "props", label: "Props", bar: "bg-teal-500/80", text: "text-teal-50" },
-  { id: "action", label: "Action", bar: "bg-orange-500/80", text: "text-orange-50" },
+  { id: "action", label: "Action Shots", bar: "bg-orange-500/80", text: "text-orange-50" },
   { id: "dialogue", label: "Dialogue", bar: "bg-sky-500/80", text: "text-sky-50" },
   { id: "mouth", label: "Mouth", bar: "bg-red-600/80", text: "text-red-50" },
   { id: "audio", label: "Audio", bar: "bg-emerald-600/80", text: "text-emerald-50" },
@@ -95,7 +95,7 @@ const LANE_META: { id: LaneId; label: string; bar: string; text: string }[] = [
 ];
 
 /** Lanes the Stage no longer shows; their script lines are untouched. */
-const HIDDEN_LANES: ReadonlySet<LaneId> = new Set<LaneId>(["body", "face", "mouth", "inserts"]);
+const HIDDEN_LANES: ReadonlySet<LaneId> = new Set<LaneId>(["body", "face", "mouth", "inserts", "dialogue"]);
 
 const DRAG_THRESHOLD_PX = 3;
 const SNAP_PX = 8;
