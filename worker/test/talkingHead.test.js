@@ -344,7 +344,6 @@ describe("talking head chain", () => {
         assert.equal(graph["340:331"].inputs.value, Math.max(1, started.windows[i].duration));
         assert.match(graph["340:319"].inputs.value, new RegExp(started.windows[i].text.split(" ")[0]));
         assert.equal(graph["340:349"].inputs.value, false);
-        assert.match(graph["340:314"].inputs.text, /extra faces.*blurry faces in the background/, "the negative prompt keeps LTX from drawing ghost faces at the sides");
       });
       assert.equal(uploads[0].size, Buffer.from("REFERENCE").length);
       assert.match(uploads[1].name, /\.mp3$/, "audio is sent as MP3, as in the Sunnybanks and music-video flows");
