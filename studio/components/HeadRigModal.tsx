@@ -877,6 +877,7 @@ export default function HeadRigModal({
   const [grokBusy, setGrokBusy] = useState(false);
   const [grokMsg, setGrokMsg] = useState("");
   const [grokRefShotId, setGrokRefShotId] = useState(""); // "" = character reference
+  const [grokRefFile, setGrokRefFile] = useState<File | null>(null); // custom uploaded ref image
 
   async function handleGrokCreate() {
     if (!grokPrompt.trim()) return;
@@ -884,7 +885,9 @@ export default function HeadRigModal({
     setGrokMsg("");
     try {
       let refBase64: string | undefined;
-      if (grokRefShotId) {
+      if (grokRefFile) {
+        refBase64 = await blobToBase64(grokRefFile);
+      } else if (grokRefShotId) {
         const refRes = await workerFetch(
           `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/media?rel=${encodeURIComponent(`${grokRefShotId}/poster.jpg`)}`
         );
@@ -1109,6 +1112,7 @@ export default function HeadRigModal({
               grokType={grokType} setGrokType={setGrokType}
               grokDuration={grokDuration} setGrokDuration={setGrokDuration}
               grokRefShotId={grokRefShotId} setGrokRefShotId={setGrokRefShotId}
+              grokRefFile={grokRefFile} setGrokRefFile={setGrokRefFile}
               grokPrompt={grokPrompt} setGrokPrompt={setGrokPrompt}
               grokBusy={grokBusy} grokMsg={grokMsg}
               allShots={allShots}
@@ -1402,10 +1406,11 @@ export default function HeadRigModal({
 
 // ── Grok sidebar section ─────────────────────────────────────────────
 
-function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, grokRefShotId, setGrokRefShotId, grokPrompt, setGrokPrompt, grokBusy, grokMsg, allShots, onCreate, project, characterId }: {
+function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, grokRefShotId, setGrokRefShotId, grokRefFile, setGrokRefFile, grokPrompt, setGrokPrompt, grokBusy, grokMsg, allShots, onCreate, project, characterId }: {
   grokType: "body" | "head"; setGrokType: (v: "body" | "head") => void;
   grokDuration: number; setGrokDuration: (v: number) => void;
   grokRefShotId: string; setGrokRefShotId: (v: string) => void;
+  grokRefFile: File | null; setGrokRefFile: (v: File | null) => void;
   grokPrompt: string; setGrokPrompt: (v: string) => void;
   grokBusy: boolean; grokMsg: string;
   allShots: ShotInfo[];
@@ -1413,6 +1418,10 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
   project: string; characterId: string;
 }) {
   const [open, setOpen] = useState(true);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const refThumb = useMemo(() => grokRefFile ? URL.createObjectURL(grokRefFile) : null, [grokRefFile]);
+  // clean up object URL on unmount or change
+  useEffect(() => { return () => { if (refThumb) URL.revokeObjectURL(refThumb); }; }, [refThumb]);
   return (
     <div className="border-b border-[#222]">
       <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-[#e0a040] hover:bg-[#222]"
@@ -1436,8 +1445,29 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
               <option value={10}>10s</option>
             </select>
           </div>
-          <RefShotPicker allShots={allShots} value={grokRefShotId}
-            onChange={setGrokRefShotId} project={project} characterId={characterId} />
+          {/* Ref: pick from existing shots OR upload an image */}
+          <div className="flex items-center gap-1.5">
+            <div className="flex-1">
+              <RefShotPicker allShots={allShots} value={grokRefFile ? "" : grokRefShotId}
+                onChange={(id) => { setGrokRefShotId(id); setGrokRefFile(null); }} project={project} characterId={characterId} />
+            </div>
+            <input ref={fileRef} type="file" accept="image/*" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) { setGrokRefFile(f); setGrokRefShotId(""); } }} />
+            <button type="button" title="Upload ref image"
+              className="shrink-0 rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-300 hover:bg-[#333]"
+              onClick={() => fileRef.current?.click()}>
+              📷
+            </button>
+          </div>
+          {/* Show uploaded ref preview */}
+          {grokRefFile && refThumb && (
+            <div className="flex items-center gap-2 rounded border border-[#333] bg-[#1a1a1a] px-2 py-1">
+              <img src={refThumb} className="h-10 w-14 rounded object-cover" alt="" />
+              <span className="flex-1 truncate text-[11px] text-neutral-300">{grokRefFile.name}</span>
+              <button type="button" className="text-[11px] text-red-400 hover:text-red-300"
+                onClick={() => setGrokRefFile(null)}>✕</button>
+            </div>
+          )}
           <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-[12px] text-neutral-200"
             placeholder={grokType === "body" ? "body prompt…" : "head prompt…"}
             value={grokPrompt} onChange={(e) => setGrokPrompt(e.target.value)}
