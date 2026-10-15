@@ -15,6 +15,14 @@ import {
   type FrameSize,
   type HeadStandard,
 } from "@/lib/headStandard";
+import {
+  clampTrim,
+  collectSnapTargets,
+  placeInFreeSlot,
+  rippleDelete,
+  snapClipStart,
+  snapEdgeFrame,
+} from "@/lib/headTimeline";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -220,6 +228,18 @@ export default function HeadRigModal({
     origOutFrame: number;
   } | null>(null);
   const [, forceDragTick] = useState(0); // re-render while dragging segment blocks
+  const [snapGuide, setSnapGuide] = useState<number | null>(null);
+
+  // Undo / redo of the whole recipe (body + head tracks). A drag or a burst
+  // of wheel/handle edits counts as one step.
+  type Snapshot = { body: Segment[]; head: HeadSegment[] };
+  const undoRef = useRef<Snapshot[]>([]);
+  const redoRef = useRef<Snapshot[]>([]);
+  const prevSnapRef = useRef<Snapshot>({ body: [], head: [] });
+  const skipHistoryRef = useRef(true);
+  const gestureBaseRef = useRef<Snapshot | null>(null);
+  const lastPushAtRef = useRef(0);
+  const [, historyTick] = useState(0);
 
   // Right-click context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; track: TrackName; id: string } | null>(null);
@@ -323,12 +343,77 @@ export default function HeadRigModal({
   useEffect(() => {
     const entry = rigs[rigKey];
     legacyKeyframesRef.current = entry?.keyframes;
+    skipHistoryRef.current = true;
+    undoRef.current = [];
+    redoRef.current = [];
+    gestureBaseRef.current = null;
     setBodySegments((entry?.bodySegments || []).map((s) => ({ ...s, id: genSegId() })));
     setHeadSegments((entry?.headSegments || []).map((s) => ({ ...s, id: genSegId() })));
     setSelectedSegment(null);
     setScrubFrame(1);
+    historyTick((n) => n + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rigKey, rigs]);
+
+  useEffect(() => {
+    const current: Snapshot = { body: bodySegments, head: headSegments };
+    const previous = prevSnapRef.current;
+    prevSnapRef.current = current;
+    if (skipHistoryRef.current) {
+      skipHistoryRef.current = false;
+      return;
+    }
+    if (previous.body === current.body && previous.head === current.head) return;
+    const now = Date.now();
+    if (dragSegRef.current || canvasDragRef.current) {
+      if (!gestureBaseRef.current) gestureBaseRef.current = previous;
+      return;
+    }
+    redoRef.current = [];
+    if (now - lastPushAtRef.current < 350) {
+      lastPushAtRef.current = now;
+      return;
+    }
+    lastPushAtRef.current = now;
+    undoRef.current = [...undoRef.current.slice(-79), previous];
+    historyTick((n) => n + 1);
+  }, [bodySegments, headSegments]);
+
+  function commitGesture() {
+    const base = gestureBaseRef.current;
+    gestureBaseRef.current = null;
+    if (!base) return;
+    redoRef.current = [];
+    undoRef.current = [...undoRef.current.slice(-79), base];
+    lastPushAtRef.current = Date.now();
+    historyTick((n) => n + 1);
+  }
+
+  function applySnapshot(snap: Snapshot) {
+    skipHistoryRef.current = true;
+    prevSnapRef.current = snap;
+    setBodySegments(snap.body);
+    setHeadSegments(snap.head);
+    setSelectedSegment(null);
+  }
+
+  function undo() {
+    const snap = undoRef.current[undoRef.current.length - 1];
+    if (!snap) return;
+    undoRef.current = undoRef.current.slice(0, -1);
+    redoRef.current = [...redoRef.current, { body: segmentsRef.current.body, head: segmentsRef.current.head }];
+    applySnapshot(snap);
+    historyTick((n) => n + 1);
+  }
+
+  function redo() {
+    const snap = redoRef.current[redoRef.current.length - 1];
+    if (!snap) return;
+    redoRef.current = redoRef.current.slice(0, -1);
+    undoRef.current = [...undoRef.current, { body: segmentsRef.current.body, head: segmentsRef.current.head }];
+    applySnapshot(snap);
+    historyTick((n) => n + 1);
+  }
 
   // Remove segments whose shot was deleted
   const shotIdsSet = useMemo(() => new Set(shots.map((s) => s.id)), [shots]);
@@ -847,7 +932,10 @@ export default function HeadRigModal({
   }
 
   function onCanvasMouseUp() {
-    canvasDragRef.current = null;
+    if (canvasDragRef.current) {
+      canvasDragRef.current = null;
+      commitGesture();
+    }
   }
 
   function onCanvasWheel(e: React.WheelEvent<HTMLCanvasElement>) {
@@ -936,6 +1024,8 @@ export default function HeadRigModal({
 
   // ── Segment block drag (move / trim) on the timeline ──
   function onSegmentMouseDown(e: React.MouseEvent, track: TrackName, seg: Segment, edge?: "in" | "out") {
+    if (e.button !== 0) return;
+    e.preventDefault();
     e.stopPropagation();
     setSelectedSegment({ track, id: seg.id });
     dragSegRef.current = {
@@ -952,41 +1042,69 @@ export default function HeadRigModal({
       const drag = dragSegRef.current;
       const el = timelineRef.current;
       if (!drag || !el) return;
+      e.preventDefault();
       const rect = el.getBoundingClientRect();
       const pxPerFrame = rect.width / Math.max(maxFrames, 1);
       const deltaFrames = Math.round((e.clientX - drag.startClientX) / Math.max(pxPerFrame, 0.01));
       const setter = drag.track === "body" ? setBodySegments : setHeadSegments;
-      const shot = shotsById.get(
-        (drag.track === "body" ? bodySegments : headSegments).find((s) => s.id === drag.id)?.shotId || ""
-      );
+      const list = drag.track === "body" ? segmentsRef.current.body : segmentsRef.current.head;
+      const current = list.find((s) => s.id === drag.id);
+      if (!current) return;
+      const others = list.filter((s) => s.id !== drag.id);
+      const shot = shotsById.get(current.shotId);
       const srcFrameCount = shot?.frameCount || drag.origOutFrame;
+      const orig = { ...current, start: drag.origStart, inFrame: drag.origInFrame, outFrame: drag.origOutFrame };
+      const thresholdFrames = e.altKey ? 0 : Math.max(1, Math.round(8 / Math.max(pxPerFrame, 0.01)));
+      const targets = collectSnapTargets({
+        playhead: scrubFrame,
+        tracks: [segmentsRef.current.body, segmentsRef.current.head],
+        ignoreId: drag.id,
+      });
 
+      let patch: Partial<Segment>;
+      let snappedTo: number | null = null;
+      if (drag.mode === "move") {
+        const length = orig.outFrame - orig.inFrame + 1;
+        const snapped = snapClipStart(drag.origStart + deltaFrames, length, targets, thresholdFrames);
+        snappedTo = snapped.snappedTo;
+        patch = { start: placeInFreeSlot(others, snapped.start, length) };
+      } else if (drag.edge === "in") {
+        let shift = deltaFrames;
+        const snapped = snapEdgeFrame(drag.origStart + shift, targets, thresholdFrames);
+        if (snapped.snappedTo != null) {
+          shift = snapped.frame - drag.origStart;
+          snappedTo = snapped.snappedTo;
+        }
+        shift = clampTrim({ edge: "in", seg: orig, others, shift, sourceFrameCount: srcFrameCount });
+        patch = { start: drag.origStart + shift, inFrame: drag.origInFrame + shift };
+      } else {
+        let shift = deltaFrames;
+        const origEnd = drag.origStart + (drag.origOutFrame - drag.origInFrame);
+        const snapped = snapEdgeFrame(origEnd + 1 + shift, targets, thresholdFrames);
+        if (snapped.snappedTo != null) {
+          shift = snapped.frame - 1 - origEnd;
+          snappedTo = snapped.snappedTo;
+        }
+        shift = clampTrim({ edge: "out", seg: orig, others, shift, sourceFrameCount: srcFrameCount });
+        patch = { outFrame: drag.origOutFrame + shift };
+      }
+      setSnapGuide(snappedTo);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (setter as any)((prev: Segment[]) => prev.map((s) => {
-        if (s.id !== drag.id) return s;
-        if (drag.mode === "move") {
-          return { ...s, start: Math.max(1, drag.origStart + deltaFrames) };
-        }
-        if (drag.edge === "in") {
-          const maxShift = drag.origOutFrame - drag.origInFrame; // can't trim past 1 frame left
-          const shift = clamp(deltaFrames, Math.max(-(drag.origStart - 1), -(drag.origInFrame - 1)), maxShift);
-          return { ...s, start: drag.origStart + shift, inFrame: drag.origInFrame + shift };
-        }
-        // out edge
-        const minShift = -(drag.origOutFrame - drag.origInFrame); // keep length >= 1
-        const maxShift = srcFrameCount - drag.origOutFrame;
-        const shift = clamp(deltaFrames, minShift, maxShift);
-        return { ...s, outFrame: drag.origOutFrame + shift };
-      }));
+      (setter as any)((prev: Segment[]) => prev.map((s) => (s.id === drag.id ? { ...s, ...patch } : s)));
     }
     function onUp() {
-      if (dragSegRef.current) { dragSegRef.current = null; forceDragTick((t) => t + 1); }
+      if (dragSegRef.current) {
+        dragSegRef.current = null;
+        setSnapGuide(null);
+        commitGesture();
+        forceDragTick((t) => t + 1);
+      }
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maxFrames, bodySegments, headSegments, shotsById]);
+  }, [maxFrames, shotsById, scrubFrame]);
 
   // ── Playhead ruler scrubbing ──
   function scrubFromMouse(clientX: number) {
@@ -1018,11 +1136,11 @@ export default function HeadRigModal({
     return seg ? { track: selectedSegment.track, seg } : null;
   }
 
-  function deleteSelected() {
+  function deleteSelected(ripple = false) {
     const sel = selectedSeg();
     if (!sel) return;
-    if (sel.track === "body") setBodySegments((prev) => prev.filter((s) => s.id !== sel.seg.id));
-    else setHeadSegments((prev) => prev.filter((s) => s.id !== sel.seg.id));
+    if (sel.track === "body") setBodySegments((prev) => (ripple ? rippleDelete(prev, sel.seg.id) : prev.filter((s) => s.id !== sel.seg.id)));
+    else setHeadSegments((prev) => (ripple ? rippleDelete(prev, sel.seg.id) : prev.filter((s) => s.id !== sel.seg.id)));
     setSelectedSegment(null);
   }
 
@@ -1031,70 +1149,73 @@ export default function HeadRigModal({
     if (sel) clipboardRef.current = { track: sel.track, seg: sel.seg };
   }
 
-  function pasteClipboard() {
+  function cutSelected() {
+    copySelected();
+    deleteSelected(false);
+  }
+
+  /** Paste (or duplicate) the clipboard clip on its own track at `at`, in the nearest free slot. */
+  function pasteClipboard(at?: number) {
     const clip = clipboardRef.current;
     if (!clip) return;
+    const length = segLength(clip.seg);
+    const where = at ?? scrubFrame;
+    const newId = genSegId();
     if (clip.track === "body") {
       setBodySegments((prev) => {
-        const start = prev.length ? Math.max(...prev.map(segEnd)) + 1 : 1;
-        const copy: Segment = { ...(clip.seg as Segment), id: genSegId(), start };
-        return [...prev, copy];
+        const start = placeInFreeSlot(prev, where, length);
+        return [...prev, { ...(clip.seg as Segment), id: newId, start }];
       });
     } else {
       setHeadSegments((prev) => {
-        const start = prev.length ? Math.max(...prev.map(segEnd)) + 1 : 1;
-        const copy: HeadSegment = { ...(clip.seg as HeadSegment), id: genSegId(), start };
-        return [...prev, copy];
+        const start = placeInFreeSlot(prev, where, length);
+        return [...prev, { ...(clip.seg as HeadSegment), id: newId, start }];
       });
     }
+    setSelectedSegment({ track: clip.track, id: newId });
+  }
+
+  function duplicateSelected() {
+    const sel = selectedSeg();
+    if (!sel) return;
+    clipboardRef.current = { track: sel.track, seg: sel.seg };
+    pasteClipboard(segEnd(sel.seg) + 1);
   }
 
   function bladeAtPlayhead() {
-    // Use refs to avoid stale closures — the keyboard handler may hold old state
     const curBody = segmentsRef.current.body;
     const curHead = segmentsRef.current.head;
     const frame = scrubFrame;
+    const straddles = (seg: Segment) => frame > seg.start && frame <= segEnd(seg);
 
-    // Find segment under playhead — selected first, then auto-detect
-    let track: TrackName | null = null;
-    let segId: string | null = null;
-
-    if (selectedSegment) {
-      const list = selectedSegment.track === "body" ? curBody : curHead;
-      const seg = list.find((s) => s.id === selectedSegment.id);
-      if (seg && frame > seg.start && frame <= segEnd(seg)) {
-        track = selectedSegment.track;
-        segId = seg.id;
-      }
+    const targets = new Set<string>();
+    const sel = selectedRef.current;
+    if (sel) {
+      const picked = (sel.track === "body" ? curBody : curHead).find((seg) => seg.id === sel.id);
+      if (picked && straddles(picked)) targets.add(picked.id);
     }
-
-    if (!segId) {
-      for (const s of curBody) {
-        if (frame > s.start && frame <= segEnd(s)) { track = "body"; segId = s.id; break; }
-      }
+    if (targets.size === 0) {
+      for (const seg of curBody) if (straddles(seg)) targets.add(seg.id);
+      for (const seg of curHead) if (straddles(seg)) targets.add(seg.id);
     }
-    if (!segId) {
-      for (const s of curHead) {
-        if (frame > s.start && frame <= segEnd(s)) { track = "head"; segId = s.id; break; }
-      }
-    }
-    if (!track || !segId) return;
+    if (targets.size === 0) return;
 
-    const secondId = genSegId();
-    const splitter = (prev: any[]) => prev.flatMap((s: any) => {
-      if (s.id !== segId) return [s];
-      const splitSrc = sourceFrameOf(s, frame);
-      const first = { ...s, outFrame: splitSrc - 1 };
-      const second = { ...s, id: secondId, start: frame, inFrame: splitSrc };
+    const newIds = new Map<string, string>();
+    for (const id of targets) newIds.set(id, genSegId());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const splitter = (prev: any[]) => prev.flatMap((seg: any) => {
+      if (!targets.has(seg.id)) return [seg];
+      const splitSrc = sourceFrameOf(seg, frame);
+      const first = { ...seg, outFrame: splitSrc - 1 };
+      const second = { ...seg, id: newIds.get(seg.id) as string, start: frame, inFrame: splitSrc };
       return [first, second];
     });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setBodySegments(splitter as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setHeadSegments(splitter as any);
 
-    if (track === "body") {
-      setBodySegments(splitter as any);
-    } else {
-      setHeadSegments(splitter as any);
-    }
-    setSelectedSegment({ track, id: secondId });
+    if (sel && targets.has(sel.id)) setSelectedSegment({ track: sel.track, id: newIds.get(sel.id) as string });
   }
 
   function trimSelectedEdge(edge: "in" | "out") {
@@ -1140,6 +1261,18 @@ export default function HeadRigModal({
     if (seg) clipboardRef.current = { track, seg };
     setCtxMenu(null);
   }
+  function ctxSplit() {
+    bladeAtPlayhead();
+    setCtxMenu(null);
+  }
+  function ctxDuplicate() {
+    duplicateSelected();
+    setCtxMenu(null);
+  }
+  function ctxRipple() {
+    deleteSelected(true);
+    setCtxMenu(null);
+  }
   function ctxPaste() {
     pasteClipboard();
     setCtxMenu(null);
@@ -1147,17 +1280,29 @@ export default function HeadRigModal({
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      const target = e.target as HTMLElement;
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return;
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
 
       if (ctrl && key === "b") { e.preventDefault(); bladeAtPlayhead(); return; }
-      if (key === "delete" || key === "backspace") { deleteSelected(); return; }
-      if (key === "i" && !ctrl) { e.preventDefault(); trimSelectedEdge("in"); return; }
-      if (key === "o" && !ctrl) { e.preventDefault(); trimSelectedEdge("out"); return; }
-      if (ctrl && key === "c") { copySelected(); return; }
-      if (ctrl && key === "v") { pasteClipboard(); return; }
+      if (ctrl && key === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+      if (ctrl && key === "y") { e.preventDefault(); redo(); return; }
+      if (ctrl && key === "c") { e.preventDefault(); copySelected(); return; }
+      if (ctrl && key === "x") { e.preventDefault(); cutSelected(); return; }
+      if (ctrl && key === "v") { e.preventDefault(); pasteClipboard(); return; }
+      if (ctrl && key === "d") { e.preventDefault(); duplicateSelected(); return; }
+      if (key === "delete" || key === "backspace") { e.preventDefault(); deleteSelected(e.shiftKey); return; }
+      if (ctrl || e.altKey) return;
+      if (key === "i") { e.preventDefault(); trimSelectedEdge("in"); return; }
+      if (key === "o") { e.preventDefault(); trimSelectedEdge("out"); return; }
+      if (key === " ") { e.preventDefault(); handlePlay(); return; }
+      if (key === "arrowleft") { e.preventDefault(); if (!playing) setScrubFrame((f) => Math.max(1, f - (e.shiftKey ? 10 : 1))); return; }
+      if (key === "arrowright") { e.preventDefault(); if (!playing) setScrubFrame((f) => Math.min(maxFrames, f + (e.shiftKey ? 10 : 1))); return; }
+      if (key === "home") { e.preventDefault(); if (!playing) setScrubFrame(1); return; }
+      if (key === "end") { e.preventDefault(); if (!playing) setScrubFrame(maxFrames); return; }
+      if (key === "escape") { setSelectedSegment(null); setCtxMenu(null); }
     }
     // Close context menu on click outside
     function onClickAnywhere() { setCtxMenu(null); }
@@ -1165,7 +1310,7 @@ export default function HeadRigModal({
     window.addEventListener("mousedown", onClickAnywhere);
     return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("mousedown", onClickAnywhere); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSegment, bodySegments, headSegments, scrubFrame]);
+  }, [selectedSegment, bodySegments, headSegments, scrubFrame, playing, maxFrames]);
 
   const playheadPct = `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
 
@@ -1432,7 +1577,7 @@ export default function HeadRigModal({
   }, []);
 
   const content = (
-    <div className={inline ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col"}>
+    <div className="flex min-h-0 flex-1 select-none flex-col [&_input]:select-text [&_textarea]:select-text" onDragStart={(e) => { if ((e.target as HTMLElement).tagName === "IMG") e.preventDefault(); }}>
       <div className="flex min-h-0 flex-1">
         {/* ══════════ LEFT SIDEBAR — Media Bins + Grok ══════════ */}
         <div className={`shrink-0 bg-[#131313] transition-all ${mediaPanelOpen ? "" : "w-0 overflow-hidden"}`} style={mediaPanelOpen ? { width: sidebarWidth } : undefined}>
@@ -1696,7 +1841,7 @@ export default function HeadRigModal({
             {/* Ruler */}
             <div className="flex">
               <div className="w-[120px] shrink-0 border-r border-[#222] bg-[#141414]" />
-              <div className="relative h-6 flex-1 cursor-pointer border-b border-[#222] bg-[#141414]" onMouseDown={(e) => { setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}>
+              <div className="relative h-6 flex-1 cursor-pointer select-none border-b border-[#222] bg-[#141414]" onMouseDown={(e) => { if (e.button !== 0) return; e.preventDefault(); setDraggingPlayhead(true); scrubFromMouse(e.clientX); }}>
                 {Array.from({ length: Math.min(Math.ceil(maxFrames / 10), 60) }, (_, i) => {
                   const f = (i + 1) * 10;
                   if (f > maxFrames) return null;
@@ -1708,7 +1853,7 @@ export default function HeadRigModal({
                     </Fragment>
                   );
                 })}
-                <div className="absolute top-0" style={{ left: playheadPct, zIndex: 20, transform: "translateX(-50%)", cursor: "ew-resize" }} onMouseDown={(e) => { e.stopPropagation(); setDraggingPlayhead(true); }}>
+                <div className="absolute top-0" style={{ left: playheadPct, zIndex: 20, transform: "translateX(-50%)", cursor: "ew-resize" }} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDraggingPlayhead(true); }}>
                   <svg width="16" height="20" viewBox="0 0 16 20" style={{ display: "block" }}>
                     <polygon points="0,0 16,0 16,10 8,20 0,10" fill="#e03030" />
                   </svg>
@@ -1719,6 +1864,13 @@ export default function HeadRigModal({
             <div className="flex">
               <div className="w-[120px] shrink-0" />
               <div ref={timelineRef} className="relative flex-1">
+                {snapGuide != null ? (
+                  <div
+                    className="pointer-events-none absolute inset-y-0 z-30 w-px bg-yellow-300"
+                    style={{ left: `${((snapGuide - 1) / Math.max(maxFrames, 1)) * 100}%` }}
+                    data-testid="head-rig-snap-guide"
+                  />
+                ) : null}
                 <div style={{ marginLeft: -120 }}>
                   {/* ── BODY TRACK (V1) ── */}
                   <TrackRow
@@ -1762,7 +1914,10 @@ export default function HeadRigModal({
             <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">I/O</kbd> trim at playhead</span>
             <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Ctrl+B</kbd> split</span>
             <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Del</kbd> remove</span>
-            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Ctrl+C/V</kbd> copy/paste</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Shift+Del</kbd> ripple delete</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Ctrl+C/X/V/D</kbd> copy/cut/paste at playhead/duplicate</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Ctrl+Z</kbd> undo</span>
+            <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Alt</kbd> no snap</span>
             <span><kbd className="rounded bg-[#222] px-1.5 py-0.5 text-neutral-400">Right-click</kbd> menu</span>
           </div>
           <div className="flex items-center gap-4 font-mono text-[12px]">
@@ -1793,7 +1948,19 @@ export default function HeadRigModal({
             onClick={ctxPaste}>
             <span className="w-4 text-center">📌</span> Paste <span className="ml-auto text-[12px] text-neutral-500">Ctrl+V</span>
           </button>
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
+            onClick={ctxDuplicate}>
+            <span className="w-4 text-center">⧉</span> Duplicate <span className="ml-auto text-[12px] text-neutral-500">Ctrl+D</span>
+          </button>
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
+            onClick={ctxSplit}>
+            <span className="w-4 text-center">✂</span> Split at playhead <span className="ml-auto text-[12px] text-neutral-500">Ctrl+B</span>
+          </button>
           <div className="my-1 h-px bg-[#333]" />
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 hover:bg-[#333]"
+            onClick={ctxRipple}>
+            <span className="w-4 text-center">⇤</span> Ripple delete <span className="ml-auto text-[12px] text-neutral-500">Shift+Del</span>
+          </button>
           <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 hover:bg-[#333]"
             onClick={ctxDelete}>
             <span className="w-4 text-center">🗑</span> Delete <span className="ml-auto text-[12px] text-neutral-500">Del</span>
@@ -2003,9 +2170,10 @@ function TrackRow({
           return (
             <div
               key={seg.id}
-              className={`absolute inset-y-0 cursor-move overflow-hidden rounded-sm border ${selected ? `border-[#e0a040] ring-1 ring-inset ${ringClass}` : "border-black/40"}`}
+              className={`absolute inset-y-0 cursor-move select-none overflow-hidden rounded-sm border ${selected ? `border-[#e0a040] ring-1 ring-inset ${ringClass}` : "border-black/40"}`}
               style={{ left, width, zIndex: selected ? 6 : 2 }}
               onMouseDown={(e) => onSegMouseDown(e, seg)}
+              onDragStart={(e) => e.preventDefault()}
               onClick={(e) => { e.stopPropagation(); onSelect(seg.id); }}
               onContextMenu={(e) => { if (onContextMenu) onContextMenu(e, seg.id); }}
               title={`${shot?.name || seg.shotId} · frames ${seg.inFrame}-${seg.outFrame}`}
@@ -2023,7 +2191,8 @@ function TrackRow({
                     const pad = String(srcFrame).padStart(4, "0");
                     return (
                       <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`, mediaVersion[seg.shotId])} alt=""
-                        className="h-full shrink-0 object-cover" style={{ width: `${100 / count}%`, background: "#0a0a0a" }}
+                        draggable={false}
+                        className="pointer-events-none h-full shrink-0 select-none object-cover" style={{ width: `${100 / count}%`, background: "#0a0a0a" }}
                         onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                     );
                   });

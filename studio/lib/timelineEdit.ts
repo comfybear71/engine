@@ -5,7 +5,7 @@
  */
 
 const TIMED_TAG_RE =
-  /^(\s*\[(?:Action|Prop|Layer|Move|Pose|Swing|Camera|Audio|Insert)\s*:\s*)(.*?)(\]\s*)(.*)$/i;
+  /^(\s*\[(?:Action|Do|Clip|Prop|Layer|Move|Pose|Swing|Camera|Audio|Insert)\s*:\s*)(.*?)(\]\s*)(.*)$/i;
 const DIALOGUE_RE = /^(\s*)(.+?)(\s*:\s*)(.*)$/;
 const EXISTING_START_RE = /\s*\b(?:at_time|start)=\S+/gi;
 const EXISTING_VIEW_RE = /\s*\bview=\S+/gi;

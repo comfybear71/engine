@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { DrawerHeader } from "@/components/StageRails";
+import { formatAtTime } from "@/lib/timelineEdit";
 import {
   DEFAULT_CAMERA_FORM,
   buildCameraTag,
@@ -17,6 +18,9 @@ export default function CameraDrawer({
   scriptText,
   sceneId,
   playheadLine,
+  playheadFrame,
+  sceneStartFrame,
+  fps,
   cameraBlocks,
   selectedLine,
   onSeek,
@@ -28,6 +32,9 @@ export default function CameraDrawer({
   scriptText: string;
   sceneId: string | null;
   playheadLine: number | null;
+  playheadFrame: number;
+  sceneStartFrame: number;
+  fps: number;
   cameraBlocks: LaneBlock[];
   selectedLine: number | null;
   onSeek: (frame: number, scriptLine: number | null) => void;
@@ -48,7 +55,8 @@ export default function CameraDrawer({
   }
 
   async function onAdd() {
-    const built = buildCameraTag(form);
+    const local = Math.max(0, Math.round(playheadFrame - sceneStartFrame));
+    const built = buildCameraTag(form, { atTime: formatAtTime(local, fps) });
     if (!built.ok) {
       setStatus(built.error);
       return;
@@ -56,7 +64,10 @@ export default function CameraDrawer({
     setSaving(true);
     setStatus("Saving…");
     try {
-      const after = findInsertAfterLine(scriptText, playheadLine, sceneId);
+      const earlier = shotMoves
+        .filter((block) => block.scriptLine != null && block.startFrame <= playheadFrame)
+        .sort((a, b) => b.startFrame - a.startFrame || (b.scriptLine || 0) - (a.scriptLine || 0))[0];
+      const after = earlier?.scriptLine ?? findInsertAfterLine(scriptText, playheadLine, sceneId);
       const next = insertLineAfter(scriptText, after, built.tag);
       const result = await saveScript(project, next, scriptName);
       setStatus(result.ok ? "Inserted and saved." : "Saved, with lint issues.");
@@ -104,6 +115,9 @@ export default function CameraDrawer({
         <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-studio-muted">
           Add camera move
         </h4>
+        <p className="mb-2 text-[11px] text-studio-muted" data-testid="camera-at-playhead">
+          Starts at the playhead ({(Math.max(0, playheadFrame - sceneStartFrame) / Math.max(1, fps)).toFixed(1)}s). Drag or trim it on the Camera lane afterwards.
+        </p>
         <div className="space-y-2">
           <Field label="zoom">
             <input
@@ -181,7 +195,7 @@ export default function CameraDrawer({
             onClick={() => void onAdd()}
             className="w-full rounded-md bg-studio-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
           >
-            {saving ? "Saving…" : "Add camera move"}
+            {saving ? "Saving…" : "Add camera move at playhead"}
           </button>
           {status ? <p className="text-[11px] text-studio-muted">{status}</p> : null}
         </div>

@@ -270,6 +270,8 @@ export default function StudioApp({
             project={project}
             script={script}
             scriptIsOld={isOldScript(script, newestScript)}
+            scripts={scripts}
+            onOpenScript={openScript}
             workerUp={workerUp === true}
             scriptEpoch={scriptEpoch}
             selectedLine={selectedScriptLine}

@@ -22,6 +22,12 @@ function form(partial: Partial<CameraMoveForm>): CameraMoveForm {
 }
 
 describe("buildCameraTag", () => {
+  test("pins the move to the playhead without moving later lines", () => {
+    const result = buildCameraTag(form({ zoom: "1.3" }), { atTime: "3s" });
+    assert.equal(result.ok, true);
+    if (result.ok) assert.equal(result.tag, "[Camera: zoom=1.3 over=2s at_time=3s wait=false]");
+  });
+
   test("builds a zoom move and normalizes over", () => {
     const result = buildCameraTag(form({ zoom: "1.3", over: "8" }));
     assert.equal(result.ok, true);
