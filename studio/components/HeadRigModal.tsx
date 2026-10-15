@@ -336,6 +336,43 @@ export default function HeadRigModal({
     return activeHead;
   }, [selectedSegment, headSegments, activeHead]);
 
+  // ── Client-side green removal (fallback when Python keying misses) ──
+  const chromaCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stripGreen = useCallback((img: HTMLImageElement): HTMLCanvasElement => {
+    let off = chromaCanvasRef.current;
+    if (!off) {
+      off = document.createElement("canvas");
+      chromaCanvasRef.current = off;
+    }
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    if (off.width !== w || off.height !== h) {
+      off.width = w;
+      off.height = h;
+    }
+    const c = off.getContext("2d", { willReadFrequently: true })!;
+    c.clearRect(0, 0, w, h);
+    c.drawImage(img, 0, 0);
+    const id = c.getImageData(0, 0, w, h);
+    const d = id.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      // Hard green: hue in green range, saturation decent, green dominant
+      if (g > 80 && g > r + 25 && g > b + 25) {
+        d[i + 3] = 0; // fully transparent
+      } else if (g > 60 && g > r && g > b) {
+        // Soft green fringe: reduce alpha proportionally
+        const excess = g - Math.max(r, b);
+        const fade = Math.min(excess / 60, 1);
+        d[i + 3] = Math.round(d[i + 3] * (1 - fade));
+        // Despill: cap green to max(r,b) on partially transparent pixels
+        if (fade > 0) d[i + 1] = Math.min(g, Math.max(r, b));
+      }
+    }
+    c.putImageData(id, 0, 0);
+    return off;
+  }, []);
+
   // ── Canvas drawing ──
   const CANVAS_W = 600;
   const CANVAS_H = 800;
@@ -379,7 +416,10 @@ export default function HeadRigModal({
         bh = dims.h * scale;
         bx = (cw - bw) / 2;
         by = ch - bh - ch * 0.03;
-        if (img) ctx.drawImage(img, bx, by, bw, bh);
+        if (img) {
+          const clean = stripGreen(img);
+          ctx.drawImage(clean, bx, by, bw, bh);
+        }
       }
     }
 
@@ -392,10 +432,11 @@ export default function HeadRigModal({
           const hh = dims.h * head.headScale * scale;
           const hx = bx + head.anchorX * bw - hw / 2;
           const hy = by + head.anchorY * bh - hh / 2;
-          // Draw twice -- keyed PNGs can have semi-transparent pixels from
-          // green-screen removal; a second pass makes them fully opaque.
-          ctx.drawImage(img, hx, hy, hw, hh);
-          ctx.drawImage(img, hx, hy, hw, hh);
+          // Strip any residual green, then draw twice so semi-transparent
+          // edge pixels become fully opaque.
+          const cleanHead = stripGreen(img);
+          ctx.drawImage(cleanHead, hx, hy, hw, hh);
+          ctx.drawImage(cleanHead, hx, hy, hw, hh);
 
           const isEditing = selectedRef.current?.track === "head" ? selectedRef.current.id === head.id : true;
           if (isEditing) {
@@ -433,7 +474,7 @@ export default function HeadRigModal({
     const headLabel = head ? `${shotsById.get(head.shotId)?.name || head.shotId} f${sourceFrameOf(head, frame)}` : "— head gap —";
     ctx.fillText(`F${frame}/${maxFrames}  Body: ${bodyLabel}  Head: ${headLabel}`, 8, ch - 8);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shotDims, maxFrames, shotsById]);
+  }, [shotDims, maxFrames, shotsById, stripGreen]);
 
   // Redraw whenever the scrub position, segments, selection, or a newly
   // loaded image/dim becomes available (while paused).
