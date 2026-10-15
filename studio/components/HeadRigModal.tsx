@@ -901,7 +901,7 @@ export default function HeadRigModal({
           body: JSON.stringify({
             prompt: grokType === "body"
               ? `${grokPrompt.trim()}, body only from neck down, show full neck and shoulders, no head, no face, cut off at the neck, the head is a separate layer`
-              : grokPrompt.trim(),
+              : `${grokPrompt.trim()}, head only from jawline up, no neck, no shoulders, no body, close-up head and face only, cut off cleanly at the jaw`,
             shotType: grokType,
             background: "green",
             duration: grokDuration,
