@@ -1043,6 +1043,18 @@ export default function HeadRigModal({
     setTalkBusy(null);
   }
 
+  async function handleRedoAllTalkClips(group: string, count: number) {
+    if (!confirm(`Regenerate all ${count} clips with new seeds?\n\nThis uses Comfy Cloud credits for ${count} clips. Clip 1 sets the head size and the other clips are held to it. Each clip keeps an Undo to get its old version back.`)) return;
+    setTalkBusy(group);
+    try {
+      await redoTalkingHeadClip(project, characterId, group, 0, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not redo the clips");
+    }
+    await reloadShots();
+    setTalkBusy(null);
+  }
+
   async function handleUndoRedoClip(group: string, index: number) {
     if (!confirm(`Go back to the previous version of clip ${index + 1}?\n\nThe current version of clip ${index + 1} is discarded.`)) return;
     setTalkBusy(group);
@@ -1738,6 +1750,7 @@ export default function HeadRigModal({
                 onResume={(g) => void handleResumeTalk(g)}
                 onRedoClip={(g, i) => void handleRedoTalkClip(g, i)}
                 onUndoRedoClip={(g, i) => void handleUndoRedoClip(g, i)}
+                onRedoAll={(g, n) => void handleRedoAllTalkClips(g, n)}
                 onStop={(g) => void handleStopTalk(g)}
                 onDelete={(g) => void handleDeleteTalk(g)}
               />
@@ -2113,7 +2126,7 @@ export default function HeadRigModal({
 
 // ── Talking head sidebar section ─────────────────────────────────────
 
-function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onRedoClip, onUndoRedoClip, onStop, onDelete }: {
+function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onRedoClip, onUndoRedoClip, onRedoAll, onStop, onDelete }: {
   groups: TalkGroup[];
   project: string; characterId: string;
   busyGroup: string | null;
@@ -2121,6 +2134,7 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
   onResume: (group: string) => void;
   onRedoClip: (group: string, index: number) => void;
   onUndoRedoClip: (group: string, index: number) => void;
+  onRedoAll: (group: string, count: number) => void;
   onStop: (group: string) => void;
   onDelete: (group: string) => void;
 }) {
@@ -2139,6 +2153,7 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
             <TalkGroupCard key={group.group} group={group} project={project} characterId={characterId}
               busy={busyGroup === group.group} onPlace={() => onPlace(group)} onResume={() => onResume(group.group)}
               onRedoClip={(i) => onRedoClip(group.group, i)} onUndoRedoClip={(i) => onUndoRedoClip(group.group, i)}
+              onRedoAll={() => onRedoAll(group.group, group.shots.length)}
               onStop={() => onStop(group.group)} onDelete={() => onDelete(group.group)} />
           ))}
         </div>
@@ -2149,9 +2164,9 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
 
 const TALK_STATE_LABEL: Record<string, string> = { queued: "Queued", making: "Generating", ready: "Ready", stopped: "Stopped", error: "Failed" };
 
-function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onRedoClip, onUndoRedoClip, onStop, onDelete }: {
+function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onRedoClip, onUndoRedoClip, onRedoAll, onStop, onDelete }: {
   group: TalkGroup; project: string; characterId: string; busy: boolean;
-  onPlace: () => void; onResume: () => void; onRedoClip: (index: number) => void; onUndoRedoClip: (index: number) => void; onStop: () => void; onDelete: () => void;
+  onPlace: () => void; onResume: () => void; onRedoClip: (index: number) => void; onUndoRedoClip: (index: number) => void; onRedoAll: () => void; onStop: () => void; onDelete: () => void;
 }) {
   const inProgress = group.state === "making" || group.state === "queued";
   const [playing, setPlaying] = useState<number | null>(null);
@@ -2203,6 +2218,15 @@ function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, o
         ))}
       </ol>
       {group.error && <p className="mt-1 text-[11px] text-red-400">{group.error}</p>}
+      {group.state === "ready" && group.shots.length > 1 && (
+        <button type="button" disabled={busy}
+          className="mt-2 w-full rounded border border-studio-border bg-studio-raised px-2 py-1 text-[11px] text-neutral-200 hover:bg-[#333] disabled:opacity-40"
+          data-testid="talk-group-redo-all"
+          title="Regenerate every clip so they share one head size (uses credits for all clips)"
+          onClick={onRedoAll}>
+          Redo all clips
+        </button>
+      )}
       {current && (
         <div className="mt-2 overflow-hidden rounded border border-[#333] bg-[#00b140]">
           <video key={current.id} src={shotMediaUrl(project, characterId, current.id, "source.mp4")}
