@@ -1121,9 +1121,14 @@ export default function HeadRigModal({
   }
 
   // ── Shot categorization ──
-  const bodyShots = shots.filter((s) => s.shotType === "body" || s.category === "idle_stand" || s.category === "walks" || s.category === "mic");
-  const headShots = shots.filter((s) => s.shotType === "head" || s.category === "expressions" || s.category === "head_moves" || s.category === "mouth_tongue");
+  const bodyCats = new Set(["idle_stand", "walks", "mic"]);
+  const headCats = new Set(["expressions", "head_moves", "mouth_tongue"]);
+  const bodyShots = shots.filter((s) => s.shotType === "body" || (!s.shotType && bodyCats.has(s.category || "")));
+  const headShots = shots.filter((s) => s.shotType === "head" || (!s.shotType && headCats.has(s.category || "")));
   const combinedShots = shots.filter((s) => s.shotType === "combined");
+  // Shots that don't match any category go into body by default
+  const uncategorized = shots.filter((s) => !s.shotType && !bodyCats.has(s.category || "") && !headCats.has(s.category || "") && s.shotType !== "combined");
+  const bodyWithUncategorized = [...bodyShots, ...uncategorized];
   const allShots = shots;
   const rigKeys = Object.keys(rigs);
 
@@ -1187,7 +1192,7 @@ export default function HeadRigModal({
             {/* Body Shots bin */}
             <MediaBin
               title="Body Shots"
-              shots={bodyShots.length > 0 ? bodyShots : allShots}
+              shots={bodyWithUncategorized}
               project={project} characterId={characterId} mediaVersion={mediaVersion}
               reprocessingShotId={reprocessingShotId}
               onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot}
@@ -1196,7 +1201,7 @@ export default function HeadRigModal({
             {/* Head Shots bin */}
             <MediaBin
               title="Head Shots"
-              shots={headShots.length > 0 ? headShots : allShots}
+              shots={headShots}
               project={project} characterId={characterId} mediaVersion={mediaVersion}
               reprocessingShotId={reprocessingShotId}
               onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot}
