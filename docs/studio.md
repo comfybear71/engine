@@ -278,8 +278,10 @@ clobber the project's `timeline.json`.
   the viewer (centred rewind / play / stop as small flat monochrome icon
   buttons, ~24px; play uses a small accent on the icon only; timecode on
   the left; **Import audio** then `frame N · fps · script` on the right),
-  and **editable timeline lanes** at the bottom (Body/Move, Face, Props,
-  Dialogue, Mouth, Audio, SFX, Camera, Inserts).
+  and **editable timeline lanes** at the bottom. The shot-driven workflow
+  shows **Props, Action Shots, Audio, SFX, Camera** (Body/Move, Face, Dialogue,
+  Mouth and Inserts are hidden; their script lines still run). Action Shots are
+  baked clips placed with `[Clip:]`. The older lane set is described below.
   The old single Action lane is split so overlapping motion is visible:
   `[Move:]` / `[Swing:]` / `[Pose:]` / `[Do:]` / `body=` cycles on Body/Move,
   `face=` / `eyes=` expression pins on Face, synced mouth cues on Mouth

@@ -63,6 +63,26 @@ describe("timeline clipboard and delete", () => {
     assert.equal(lines.some((line) => /Hello there/.test(line)), false);
   });
 
+  test("Do / Insert / Clip lines delete like any other block", () => {
+    const stageScript = [
+      "[Scene: Intro]",
+      "[Location: room_a]",
+      "[Do: Alice grab_mic]",
+      "[Clip: Alice wave at_time=1s]",
+      "[Insert: image=inserts/x.png at_time=2s for=1s]",
+    ].join("\n");
+    const stageBlocks = [
+      { id: "do", scriptLine: 3, sceneId: "intro", startFrame: 0, endFrame: 24, lane: "action", tag: "do" },
+      { id: "clip", scriptLine: 4, sceneId: "intro", startFrame: 24, endFrame: 48, lane: "action", tag: "clip" },
+      { id: "ins", scriptLine: 5, sceneId: "intro", startFrame: 48, endFrame: 72, lane: "inserts", tag: "insert" },
+    ];
+    for (const id of ["do", "clip", "ins"]) {
+      const next = deleteBlocksInScript({ script: stageScript, blocks: stageBlocks, ids: [id], scenes, fps: 24, ripple: false });
+      assert.notEqual(next, stageScript, `${id} should be removed`);
+      assert.equal(next.split("\n").length, stageScript.split("\n").length - 1);
+    }
+  });
+
   test("mouth-only selection is not a script-line delete", () => {
     assert.equal(selectionIsMouthOnly(blocks, ["m1"]), true);
     assert.equal(selectionIsMouthOnly(blocks, ["d1"]), false);

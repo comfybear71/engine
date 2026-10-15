@@ -41,6 +41,12 @@ export type AssetDrag =
       locationId: string;
     }
   | {
+      kind: "clip";
+      characterId: string;
+      characterName: string;
+      actionId: string;
+    }
+  | {
       kind: "audio";
       audioKind: "imported" | "generated";
       label: string;
@@ -67,6 +73,7 @@ export function assetFitsLane(asset: AssetDrag, lane: LaneId | null | undefined)
   }
   if (asset.kind === "background") return true;
   if (asset.kind === "prop") return lane === "props";
+  if (asset.kind === "clip") return lane === "action";
   if (asset.kind === "audio") return asset.audioKind === "imported" && (lane === "audio" || lane === "dialogue");
   if (asset.kind === "character") return false;
   if (asset.kind === "drawing" || asset.kind === "cycle") {
@@ -129,6 +136,9 @@ export function scriptLineForAssetDrop(
   }
   if (asset.kind === "prop") {
     return `[Prop: ${asset.propId} show at_time=${at}]`;
+  }
+  if (asset.kind === "clip") {
+    return `[Clip: ${asset.characterName} ${asset.actionId} at_time=${at}]`;
   }
   if (asset.kind === "audio") {
     if (asset.audioKind !== "imported") return null;

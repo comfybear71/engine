@@ -7,21 +7,23 @@ import { loadAssetsTreeOpen, saveAssetsTreeOpen } from "@/lib/stageLayout";
 import {
   assetUrl,
   loadCharacters,
+  loadProjectActions,
   loadProjectAudio,
   loadStaging,
   type Character,
   type CharacterSlot,
+  type ProjectAction,
   type ProjectAudioFile,
   type Staging,
 } from "@/lib/worker";
 import type { LeftPoolId } from "@/components/StageRails";
 
-type TreeKind = "characters" | "props" | "backgrounds" | "audio" | "sfx";
+type TreeKind = "actions" | "characters" | "props" | "backgrounds" | "audio" | "sfx";
 
 function groupsForPool(pool: LeftPoolId): TreeKind[] {
-  if (pool === "media") return ["backgrounds", "audio"];
+  if (pool === "media") return ["actions", "backgrounds", "audio"];
   if (pool === "effects") return ["sfx"];
-  return ["characters", "props", "backgrounds", "audio", "sfx"];
+  return ["actions", "characters", "props", "backgrounds", "audio", "sfx"];
 }
 
 function slotGroup(name: string): "mouths" | "faces" | "eyes" | "arms" | "bodies" | "other" {
@@ -164,8 +166,10 @@ export default function StageAssetsPanel({
   const [characters, setCharacters] = useState<Character[]>([]);
   const [staging, setStaging] = useState<Staging | null>(null);
   const [audio, setAudio] = useState<ProjectAudioFile[]>([]);
+  const [actions, setActions] = useState<ProjectAction[]>([]);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({
+    actions: true,
     characters: true,
     audio: true,
   });
@@ -182,10 +186,16 @@ export default function StageAssetsPanel({
   useEffect(() => {
     if (!project || !workerUp) return;
     let cancelled = false;
-    Promise.all([loadCharacters(project), loadStaging(project), loadProjectAudio(project)])
-      .then(([nextChars, nextStaging, nextAudio]) => {
+    Promise.all([
+      loadCharacters(project),
+      loadStaging(project),
+      loadProjectAudio(project),
+      loadProjectActions(project).catch(() => [] as ProjectAction[]),
+    ])
+      .then(([nextChars, nextStaging, nextAudio, nextActions]) => {
         if (cancelled) return;
         setCharacters(nextChars);
+        setActions(nextActions);
         setStaging(nextStaging);
         setAudio(nextAudio);
         setError(null);
@@ -228,6 +238,17 @@ export default function StageAssetsPanel({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
         {error ? <p className="px-1 text-[11px] text-red-400">{error}</p> : null}
+
+        {visible.includes("actions") ? (
+          <ActionShotsBranch
+            project={project}
+            actions={actions}
+            characters={characters}
+            query={q}
+            isOpen={isOpen}
+            onToggle={toggle}
+          />
+        ) : null}
 
         {visible.includes("characters") ? (
           <section>
@@ -510,6 +531,60 @@ function slotLeaves(
     }
   }
   return out;
+}
+
+function ActionShotsBranch({
+  project,
+  actions,
+  characters,
+  query,
+  isOpen,
+  onToggle,
+}: {
+  project: string;
+  actions: ProjectAction[];
+  characters: Character[];
+  query: string;
+  isOpen: (id: string, fallback?: boolean) => boolean;
+  onToggle: (id: string, fallback?: boolean) => void;
+}) {
+  const names = new Map(characters.map((character) => [character.id, character.display_name]));
+  const shots = actions.filter(
+    (action) =>
+      action.baked &&
+      action.characterId &&
+      matchesQuery(`${action.label} ${action.category || ""}`, query)
+  );
+  return (
+    <section>
+      <TreeToggle id="actions" label="Action Shots" open={isOpen("actions")} onToggle={onToggle} count={shots.length} />
+      {isOpen("actions")
+        ? shots.length === 0
+          ? (
+              <p className="px-2 py-1 text-[10px] text-neutral-600" data-testid="stage-assets-actions-empty">
+                Bake a shot, then Use as Action Shot.
+              </p>
+            )
+          : shots.map((action) => {
+              const characterId = action.characterId as string;
+              return (
+                <Leaf
+                  key={action.label}
+                  testId={`stage-asset-clip-${action.label}`}
+                  label={`${action.id} · ${names.get(characterId) || characterId}`}
+                  src={assetUrl(project, action.thumbRel || null, { thumb: true })}
+                  asset={{
+                    kind: "clip",
+                    characterId,
+                    characterName: names.get(characterId) || characterId,
+                    actionId: action.id,
+                  }}
+                />
+              );
+            })
+        : null}
+    </section>
+  );
 }
 
 function AudioBranch({

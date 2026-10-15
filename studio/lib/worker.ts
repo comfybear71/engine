@@ -568,6 +568,7 @@ export type ProjectAction = {
   view?: string | null;
   warnings?: string[];
   flagged?: boolean;
+  baked?: boolean;
 };
 
 export type LibraryFrame = {

@@ -241,6 +241,31 @@ the Insert Action **Insert still** button.
 [Insert: image=inserts/tongue_closeup.png at_time=942 to=952]
 ```
 
+### `[Clip: <Name> <action_id> at_time=<t> trim_in=<t> trim_out=<t>]`
+
+Plays a **baked Action Shot** (made in Action Shots → *Use as Action Shot*,
+stored as `characters/<id>/actions/<action_id>/f_NNNN.png`) as a flipbook.
+The clip is already a finished picture of the character, so it is **not**
+tied to the rig: a scene that has a `[Clip:]` for a character never draws that
+character's rig layer (a `[Cast:]` line or `[Audio:]` for them stays harmless —
+`[Audio:]` still mixes its sound). Lip-sync lives inside the Action Shot.
+
+* `at_time=` / `start=` places it (scene-local frames or seconds). Without it
+  the clip starts at the shared cursor and advances the cursor by its length.
+* `trim_in=` / `trim_out=` pick a window of the baked frames, same grammar as
+  `[Audio:]`. Playback rate is the Action Shot's own `fps`.
+* Position comes from the scene's mark (`mark=` to choose one, or `x=`, `y=`,
+  `scale=`, `flip`, `z=`); the frame's bottom-centre sits on the mark.
+
+```text
+[Clip: Rodney grab_mic at_time=1s]
+[Clip: Rodney grab_mic at_time=4s trim_in=0.5s trim_out=2s]
+```
+
+In Studio, drag an Action Shot from the **Action Shots** group in the assets
+panel onto the **Action Shots** lane; the block trims, splits, copies, moves
+and deletes like an audio block.
+
 ### `[Camera: zoom=<n> | pan=x,y | tilt=<dy> | to=x,y zoom=<n> | reset over=<secs>s ease=linear|inout wait=true|false]`
 
 Tweens the scene's **virtual camera** (pan/zoom folded into layer
