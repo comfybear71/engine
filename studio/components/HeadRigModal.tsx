@@ -235,6 +235,7 @@ export default function HeadRigModal({
     if (!shotId || shotDims[shotId] || shotDimsLoadingRef.current.has(shotId)) return;
     shotDimsLoadingRef.current.add(shotId);
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = () => {
       setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
     };
@@ -252,6 +253,7 @@ export default function HeadRigModal({
     if (cached) return cached;
     const pad = String(Math.max(1, frame)).padStart(4, "0");
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
     img.onerror = () => { /* prevent infinite retry — frame image missing */ };
     img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
@@ -267,6 +269,7 @@ export default function HeadRigModal({
         if (!frameImgCacheRef.current.has(key)) {
           const pad = String(Math.max(1, f)).padStart(4, "0");
           const img = new Image();
+          img.crossOrigin = "anonymous";
           img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
           img.src = shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`);
         }
@@ -296,15 +299,18 @@ export default function HeadRigModal({
   }, [project, characterId]);
 
   // ── When rig key changes, load its saved timeline (fresh client ids) ──
+  // Also filter out segments that reference shots no longer in the library.
   useEffect(() => {
     const entry = rigs[rigKey];
     legacyKeyframesRef.current = entry?.keyframes;
-    setBodySegments((entry?.bodySegments || []).map((s) => ({ ...s, id: genSegId() })));
-    setHeadSegments((entry?.headSegments || []).map((s) => ({ ...s, id: genSegId() })));
+    const shotIds = new Set(shots.map((s) => s.id));
+    const validSeg = (s: any) => shotIds.has(s.shotId);
+    setBodySegments((entry?.bodySegments || []).filter(validSeg).map((s) => ({ ...s, id: genSegId() })));
+    setHeadSegments((entry?.headSegments || []).filter(validSeg).map((s) => ({ ...s, id: genSegId() })));
     setSelectedSegment(null);
     setScrubFrame(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rigKey, rigs]);
+  }, [rigKey, rigs, shots]);
 
   const shotsById = useMemo(() => {
     const map = new Map<string, ShotInfo>();
@@ -338,39 +344,44 @@ export default function HeadRigModal({
 
   // ── Client-side green removal (fallback when Python keying misses) ──
   const chromaCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const stripGreen = useCallback((img: HTMLImageElement): HTMLCanvasElement => {
-    let off = chromaCanvasRef.current;
-    if (!off) {
-      off = document.createElement("canvas");
-      chromaCanvasRef.current = off;
-    }
-    const w = img.naturalWidth;
-    const h = img.naturalHeight;
-    if (off.width !== w || off.height !== h) {
-      off.width = w;
-      off.height = h;
-    }
-    const c = off.getContext("2d", { willReadFrequently: true })!;
-    c.clearRect(0, 0, w, h);
-    c.drawImage(img, 0, 0);
-    const id = c.getImageData(0, 0, w, h);
-    const d = id.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i], g = d[i + 1], b = d[i + 2];
-      // Hard green: hue in green range, saturation decent, green dominant
-      if (g > 80 && g > r + 25 && g > b + 25) {
-        d[i + 3] = 0; // fully transparent
-      } else if (g > 60 && g > r && g > b) {
-        // Soft green fringe: reduce alpha proportionally
-        const excess = g - Math.max(r, b);
-        const fade = Math.min(excess / 60, 1);
-        d[i + 3] = Math.round(d[i + 3] * (1 - fade));
-        // Despill: cap green to max(r,b) on partially transparent pixels
-        if (fade > 0) d[i + 1] = Math.min(g, Math.max(r, b));
+  const stripGreen = useCallback((img: HTMLImageElement): HTMLCanvasElement | HTMLImageElement => {
+    try {
+      let off = chromaCanvasRef.current;
+      if (!off) {
+        off = document.createElement("canvas");
+        chromaCanvasRef.current = off;
       }
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      if (off.width !== w || off.height !== h) {
+        off.width = w;
+        off.height = h;
+      }
+      const c = off.getContext("2d", { willReadFrequently: true })!;
+      c.clearRect(0, 0, w, h);
+      c.drawImage(img, 0, 0);
+      const id = c.getImageData(0, 0, w, h);
+      const d = id.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        // Hard green: hue in green range, saturation decent, green dominant
+        if (g > 80 && g > r + 25 && g > b + 25) {
+          d[i + 3] = 0; // fully transparent
+        } else if (g > 60 && g > r && g > b) {
+          // Soft green fringe: reduce alpha proportionally
+          const excess = g - Math.max(r, b);
+          const fade = Math.min(excess / 60, 1);
+          d[i + 3] = Math.round(d[i + 3] * (1 - fade));
+          // Despill: cap green to max(r,b) on partially transparent pixels
+          if (fade > 0) d[i + 1] = Math.min(g, Math.max(r, b));
+        }
+      }
+      c.putImageData(id, 0, 0);
+      return off;
+    } catch {
+      // Cross-origin or other error — fall back to raw image
+      return img;
     }
-    c.putImageData(id, 0, 0);
-    return off;
   }, []);
 
   // ── Canvas drawing ──
