@@ -98,7 +98,7 @@ describe("buildWindowPrompt", () => {
 describe("LTX prompt", () => {
   const words = "And I found out at the end of 2005 that I got a new s- this is true, got a new son I didn't know I had.";
 
-  test("matches, word for word, the prompt that lip-synced in hand-run Comfy Cloud tests", () => {
+  test("matches, word for word, the prompt that lip-synced in Comfy Cloud tests", () => {
     const prompt = buildWindowPrompt({
       engine: "ltx",
       index: 0,
@@ -108,15 +108,15 @@ describe("LTX prompt", () => {
     });
     assert.equal(
       prompt,
-      'Use the provided start image as the first frame. Rodney, a man with a red felt hat and dark beard, is prominent, mouth and head move naturally while speaking, subtle expression. Head only, same framing as the start image, plain black background, no neck, no collar, no clothing, no shoulders, nothing new enters frame. Rodney says: "' +
+      'Use the provided start image as the first frame. Rodney, a man with a red felt hat and dark beard is prominent, mouth and head move naturally while speaking, subtle gesture. Props and background stay exactly as the start image, nothing new enters frame. Rodney says: "' +
         words +
-        '". Camera holds, locked off, no zoom. Same person as the start image.'
+        '". Camera holds. Same person and objects as the start image.'
     );
   });
 
   test("falls back to the capitalised character id when no description is given", () => {
     const prompt = buildWindowPrompt({ engine: "ltx", index: 2, text: "Hello.", characterId: "rodney" });
-    assert.match(prompt, /^Use the provided start image as the first frame\. Rodney, is prominent/);
+    assert.match(prompt, /^Use the provided start image as the first frame\. Rodney is prominent/);
     assert.match(prompt, /Rodney says: "Hello\."/);
   });
 });
@@ -319,6 +319,7 @@ describe("talking head chain", () => {
         ...chainOptions(),
         fetchFn: makeComfyFetch(),
         padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out),
         captureFn: async (_v, _d, meta) => {
           capturedMeta = meta;
           return { fps: 24, frameCount: 240 };
@@ -343,6 +344,7 @@ describe("talking head chain", () => {
         assert.equal(graph["340:349"].inputs.value, false);
       });
       assert.equal(uploads[0].size, Buffer.from("REFERENCE").length);
+      assert.match(uploads[1].name, /\.mp3$/, "audio is sent as MP3, as in the Sunnybanks and music-video flows");
 
       assert.equal(capturedMeta.keyMode, "head-black");
       const shots = listShots(projectDir, "rodney");
@@ -364,7 +366,8 @@ describe("talking head chain", () => {
         if (String(url).includes("/api/jobs/") && pollsFail) throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }) });
         return base(url, init);
       };
-      const options = { ...chainOptions(), fetchFn, padImage: async (input, out) => fs.copyFileSync(input, out) };
+      const options = { ...chainOptions(), fetchFn, padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out) };
       const started = await makeTalkingHead(
         projectDir,
         "rodney",
@@ -396,7 +399,8 @@ describe("talking head chain", () => {
         if (String(url).includes("/api/jobs/p1")) throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }) });
         return base(url, init);
       };
-      const options = { ...chainOptions(), fetchFn, padImage: async (input, out) => fs.copyFileSync(input, out) };
+      const options = { ...chainOptions(), fetchFn, padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out) };
       const started = await makeTalkingHead(
         projectDir,
         "rodney",
@@ -435,6 +439,7 @@ describe("talking head chain", () => {
       const options = {
         ...chainOptions(),
         padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out),
         fetchFn: async (url) => (String(url).endsWith("/api/upload/image") ? { ok: false, status: 402 } : { ok: true, json: async () => ({}) }),
       };
       const started = await makeTalkingHead(

@@ -242,14 +242,15 @@ async function downloadOutput(creds, file, destPath, fetchFn) {
  * Run one LTX 2.3 IA2V render and write the mp4 to destPath.
  * imageBytes must already be 1280x720 (see padImageTo16x9 in shots.js).
  */
-async function generateLtxVideo({ imageBytes, audioBytes, prompt, durationSec, destPath, onSubmitted, resumePromptId, options = {} }) {
+async function generateLtxVideo({ imageBytes, audioBytes, audioMime = "audio/mpeg", prompt, durationSec, destPath, onSubmitted, resumePromptId, options = {} }) {
   const fetchFn = options.fetchFn || globalThis.fetch;
   const creds = requireCredentials(options.env || process.env);
   let promptId = resumePromptId || "";
   if (!promptId) {
     const stamp = `${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
     const imageName = await uploadInput(creds, imageBytes, `engine_${stamp}.png`, "image/png", fetchFn);
-    const audioName = await uploadInput(creds, audioBytes, `engine_${stamp}.wav`, "audio/wav", fetchFn);
+    const audioExt = audioMime === "audio/wav" ? "wav" : "mp3";
+    const audioName = await uploadInput(creds, audioBytes, `engine_${stamp}.${audioExt}`, audioMime, fetchFn);
     const workflow = buildWorkflow({ imageName, audioName, prompt, durationSec, negativePrompt: options.negativePrompt });
     if (typeof options.isCancelled === "function" && options.isCancelled()) throw comfyError("Stopped", "ECANCEL");
     promptId = await submitWorkflow(creds, workflow, fetchFn);

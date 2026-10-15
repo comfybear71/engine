@@ -297,6 +297,12 @@ function getShot(projectDir, characterId, shotId) {
  * Never throws -- failures are recorded on the shot (status "error").
  * Resolves with the (mutated) info once the shot is ready or failed.
  */
+async function encodeAudioMp3(inputPath, outMp3) {
+  const { code, stderr } = await spawnCmd("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-i", inputPath, "-vn", "-c:a", "libmp3lame", "-b:a", "192k", outMp3]);
+  if (code !== 0 || !fs.existsSync(outMp3)) throw shotError(`Could not encode audio for LTX: ${String(stderr || "").trim().slice(-300)}`);
+  return outMp3;
+}
+
 async function runGrokShot(dir, info, job) {
   const { fullPrompt, imageBase64, dur, jobKey, options = {} } = job;
   activeJobs.set(jobKey, { status: "making", startedAt: Date.now() });
@@ -314,7 +320,10 @@ async function runGrokShot(dir, info, job) {
           await (options.padImage || padImageTo16x9)(padInput, startPng);
           fs.rmSync(padInput, { force: true });
           imageBytes = fs.readFileSync(startPng);
-          audioBytes = fs.readFileSync(path.join(dir, job.audioFile || "audio.wav"));
+          const wavPath = path.join(dir, job.audioFile || "audio.wav");
+          const mp3Path = path.join(dir, "ltx_audio.mp3");
+          await (options.encodeAudio || encodeAudioMp3)(wavPath, mp3Path);
+          audioBytes = fs.readFileSync(mp3Path);
         }
         return comfyCloud.generateLtxVideo({
           resumePromptId,
@@ -1082,6 +1091,7 @@ module.exports = {
     lastFrameBase64,
     runGrokShot,
     padImageTo16x9,
+    encodeAudioMp3,
     shotsDir,
     shotDir,
     readShotJson,
