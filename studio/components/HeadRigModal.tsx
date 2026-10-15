@@ -651,8 +651,11 @@ export default function HeadRigModal({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    // Convert CSS pixels to canvas pixels (canvas may be CSS-scaled)
+    const cssToCanvasX = canvas.width / rect.width;
+    const cssToCanvasY = canvas.height / rect.height;
+    const mx = (e.clientX - rect.left) * cssToCanvasX;
+    const my = (e.clientY - rect.top) * cssToCanvasY;
     const { scale, bw, bh, bx, by } = layoutBasis(scrubFrame);
 
     const hw = dims.w * head.headScale * scale;
@@ -683,16 +686,19 @@ export default function HeadRigModal({
   function onCanvasMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
     const drag = canvasDragRef.current;
     if (!drag || !editingHead) return;
+    const canvas = canvasRef.current;
     const { bw, bh } = layoutBasis(scrubFrame);
+    // Scale CSS pixel deltas to canvas pixel space
+    const cssScale = canvas ? canvas.width / canvas.getBoundingClientRect().width : 1;
     if (drag.kind === "move") {
-      const dx = (e.clientX - drag.startX) / bw;
-      const dy = (e.clientY - drag.startY) / bh;
+      const dx = (e.clientX - drag.startX) * cssScale / bw;
+      const dy = (e.clientY - drag.startY) * cssScale / bh;
       updateHeadSegment(editingHead.id, {
         anchorX: clamp(drag.origAnchorX + dx, 0, 1),
         anchorY: clamp(drag.origAnchorY + dy, -0.5, 1),
       });
     } else if (drag.kind === "scale") {
-      const dy = drag.startY - e.clientY;
+      const dy = (drag.startY - e.clientY) * cssScale;
       const factor = 1 + dy / 200;
       updateHeadSegment(editingHead.id, { headScale: clamp(drag.origScale * factor, 0.1, 3) });
     }
