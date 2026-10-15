@@ -27,7 +27,21 @@ option as the CLI). Render writes `renders/<script-stem>.mp4`. The last
 selected script is remembered per project in `localStorage`
 (`engine.studio.activeScript.v1`) and in `studio.json` (`activeScript`),
 so a browser refresh restores that file instead of falling back to
-`script.txt`.
+`script.txt`. Every script file has its own timeline: switching scripts
+(the Script tab list, or the picker in the Stage header) shows that file's
+stage and never deletes the one you left.
+
+Stage timeline keys: **Ctrl+B** (or S) split at the playhead (the selection,
+or everything under the playhead when nothing is selected), **Ctrl+C / X /
+V / D** copy, cut, paste at the playhead, duplicate, **Delete** remove
+(**Shift+Delete** ripple), **Ctrl+Z / Shift+Z** undo / redo, drag the edge
+handles to trim. A trimmed audio part or Action Shot part is just a script
+line with `trim_in=` / `trim_out=`, so copy/paste reuses it anywhere. The
+Camera drawer's **Add camera move at playhead** writes
+`[Camera: ... at_time= wait=false]` so the move starts where the playhead is.
+The Head Rig timeline has the same keys, snaps clip edges to the playhead and
+neighbouring cuts (hold Alt to turn snapping off), never lets clips overlap on
+a track, and supports undo / redo.
 
 ## Starting Engine Studio
 

@@ -92,10 +92,21 @@ import {
 } from "@/lib/worker";
 import { explainTimelineError } from "@/lib/timelineError";
 
+type CachedGraph = { graph: PreviewGraph; fps: number; totalFrames: number; canvas: { width: number; height: number } };
+
+/** Last preview graph per project+script, so reopening a script shows it at once while a fresh one loads. */
+const graphCache = new Map<string, CachedGraph>();
+
+function graphCacheKey(project: string, script: string): string {
+  return `${project}|${script}`;
+}
+
 export default function StagePanel({
   project,
   script,
   scriptIsOld = false,
+  scripts = [],
+  onOpenScript,
   workerUp,
   scriptEpoch,
   selectedLine,
@@ -107,6 +118,8 @@ export default function StagePanel({
   project: string | null;
   script: string;
   scriptIsOld?: boolean;
+  scripts?: string[];
+  onOpenScript?: (name: string) => void;
   workerUp: boolean;
   scriptEpoch: number;
   selectedLine: number | null;
@@ -224,7 +237,13 @@ export default function StagePanel({
     setError(null);
     setFrame(0);
     setPlaying(false);
-    setPreviewGraph(null);
+    const cachedGraph = graphCache.get(graphCacheKey(project, script));
+    setPreviewGraph(cachedGraph ? cachedGraph.graph : null);
+    if (cachedGraph) {
+      setFps(cachedGraph.fps);
+      setCanvas(cachedGraph.canvas);
+      setTotalFrames(cachedGraph.totalFrames);
+    }
     setSelectedMark(null);
     setLoopSelection(false);
     setSelectionRange(null);
@@ -294,6 +313,7 @@ export default function StagePanel({
     let cancelled = false;
     loadPreviewGraph(project, script)
       .then((next) => {
+        graphCache.set(graphCacheKey(project, script), next);
         if (cancelled) return;
         setPreviewGraph(next.graph);
         if (next.fps) setFps(next.fps);
@@ -1283,6 +1303,21 @@ export default function StagePanel({
             <div className="flex items-center gap-2 border-b border-studio-border bg-studio-panel px-3 py-1.5" data-testid="stage-script-banner">
               <span className="text-[10px] uppercase tracking-wide text-studio-muted">Script</span>
               <ScriptIdentity name={script} old={scriptIsOld} />
+              {onOpenScript && scripts.length > 1 ? (
+                <select
+                  className="ml-1 max-w-[220px] rounded border border-studio-border bg-studio-raised px-1.5 py-0.5 text-[11px] text-neutral-200"
+                  value={script}
+                  title="Each script file has its own timeline. Switching shows that script's stage; nothing is deleted."
+                  data-testid="stage-script-switch"
+                  onChange={(event) => onOpenScript(event.target.value)}
+                >
+                  {scripts.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
             </div>
             <div className="relative flex min-h-0 flex-1 items-center justify-center p-3">
             {assetFocus && project ? (
@@ -1470,6 +1505,9 @@ export default function StagePanel({
                     scriptText={scriptText}
                     sceneId={sceneId}
                     playheadLine={playheadLine ?? selectedLine}
+                    playheadFrame={frame}
+                    sceneStartFrame={lanes?.scenes.find((item) => item.id === sceneId)?.startFrame ?? 0}
+                    fps={fps}
                     cameraBlocks={cameraBlocks}
                     selectedLine={selectedLine}
                     onSeek={seekTo}

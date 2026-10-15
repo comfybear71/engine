@@ -15,7 +15,9 @@ const DISPLAY_HEIGHT = 480;
 
 type TextureMap = Map<string, HTMLImageElement>;
 
-const LAZY_TEXTURE_LIMIT = 48;
+const LAZY_TEXTURE_LIMIT = 200;
+const LOOKAHEAD_FRAMES = 72;
+const MAX_PARALLEL_LOADS = 6;
 
 function loadTexture(project: string, rel: string): Promise<HTMLImageElement | null> {
   const src = assetUrl(project, rel, { preview: true });
@@ -23,7 +25,11 @@ function loadTexture(project: string, rel: string): Promise<HTMLImageElement | n
   return new Promise((resolve) => {
     const img = new Image();
     img.decoding = "async";
-    img.onload = () => resolve(img);
+    img.onload = () => {
+      // Decode off the main thread now so the first draw of this frame does not stall playback.
+      const decoded = typeof img.decode === "function" ? img.decode().catch(() => undefined) : Promise.resolve();
+      void decoded.then(() => resolve(img));
+    };
     img.onerror = () => resolve(null);
     img.src = src;
   });
@@ -127,15 +133,15 @@ export default function PreviewCanvas({
     const canvas = canvasRef.current;
     if (!canvas || !graph) return;
     const evaluated = evaluateFrame(graph, frame);
-    const lookahead = sequenceLookahead(graph, frame);
+    const lookahead = sequenceLookahead(graph, frame, LOOKAHEAD_FRAMES);
     const keep = new Set(lookahead);
-    const wanted = [
-      ...evaluated.commands.map((cmd) => cmd.rel),
-      ...lookahead,
-    ];
+    const current = evaluated.commands.map((cmd) => cmd.rel);
+    const wanted = [...current, ...lookahead];
+    const currentSet = new Set(current);
     for (const rel of wanted) {
       if (!rel) continue;
       if (texturesRef.current.has(rel) || lazyRef.current.has(rel) || pendingRef.current.has(rel)) continue;
+      if (!currentSet.has(rel) && pendingRef.current.size >= MAX_PARALLEL_LOADS) break;
       pendingRef.current.add(rel);
       void loadTexture(project, rel).then((img) => {
         pendingRef.current.delete(rel);

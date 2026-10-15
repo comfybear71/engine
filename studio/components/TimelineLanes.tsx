@@ -535,9 +535,24 @@ export default function TimelineLanes({
     onEditScript(next, { lanes: optimistic, ids: [...ids] });
   }
 
+  function splitSeeds(): Set<string> {
+    if (selectedIds.size > 0) return selectedIds;
+    if (selectedLine != null) {
+      const fromLine = allBlocks.filter((block) => block.scriptLine === selectedLine);
+      if (fromLine.some((block) => frame > block.startFrame && frame < block.endFrame)) {
+        return new Set(fromLine.map((block) => block.id));
+      }
+    }
+    return new Set(
+      allBlocks
+        .filter((block) => !isMouthBlock(block) && blockIsTrimmable(block) && frame > block.startFrame && frame < block.endFrame)
+        .map((block) => block.id)
+    );
+  }
+
   function applySplit() {
     if (!onEditScript || !scriptText) return;
-    const seeds = selectedIds.size > 0 ? selectedIds : new Set(allBlocks.filter((block) => block.scriptLine === selectedLine).map((block) => block.id));
+    const seeds = splitSeeds();
     if (seeds.size === 0) return;
     const groups = new Map<number, Set<string>>();
     for (const id of relatedMoveIds(allBlocks, seeds)) {
@@ -571,7 +586,7 @@ export default function TimelineLanes({
 
   function canSplitSelection(): boolean {
     if (!scriptText) return false;
-    const seeds = selectedIds.size > 0 ? selectedIds : new Set(allBlocks.filter((block) => block.scriptLine === selectedLine).map((block) => block.id));
+    const seeds = splitSeeds();
     if (seeds.size === 0) return false;
     const take = takeWindowForIds(allBlocks, relatedMoveIds(allBlocks, seeds));
     if (!take) return false;
@@ -623,6 +638,11 @@ export default function TimelineLanes({
     if (seeds.size === 0) return;
     if (selectionIsMouthOnly(allBlocks, seeds)) {
       applyClearLipSync();
+      return;
+    }
+    const hasDialogue = allBlocks.some((block) => seeds.has(block.id) && block.lane === "dialogue");
+    if (!hasDialogue) {
+      applyDeleteLines(ripple);
       return;
     }
     setDeleteConfirm({ ripple });
@@ -1045,6 +1065,11 @@ export default function TimelineLanes({
         return;
       }
       if (!(event.ctrlKey || event.metaKey)) return;
+      if (key === "b") {
+        event.preventDefault();
+        applySplit();
+        return;
+      }
       if (key === "c") {
         event.preventDefault();
         applyCopy();
@@ -1106,7 +1131,11 @@ export default function TimelineLanes({
     "flex h-6 w-6 items-center justify-center rounded border border-neutral-600 bg-black/40 text-white hover:bg-neutral-700 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-studio-accent";
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-studio-panel" data-testid="timeline-lanes">
+    <div
+      className="relative flex h-full min-h-0 select-none flex-col bg-studio-panel"
+      data-testid="timeline-lanes"
+      onDragStart={(event) => event.preventDefault()}
+    >
       <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-[11px] text-studio-muted">
         <span className="uppercase tracking-[0.14em]">Timeline</span>
         <div className="flex items-center gap-1" data-testid="timeline-edit-controls">
@@ -1135,7 +1164,7 @@ export default function TimelineLanes({
           <button
             type="button"
             data-testid="timeline-split"
-            title="Split selected block(s) at the playhead (S)"
+            title="Split at the playhead (Ctrl+B or S). Splits the selection, or everything under the playhead when nothing is selected."
             aria-label="Split at playhead"
             onClick={() => applySplit()}
             disabled={!onEditScript || !canSplitSelection()}

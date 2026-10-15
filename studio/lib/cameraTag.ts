@@ -30,7 +30,7 @@ export function normalizeOver(raw: string): string | null {
   return `${n}s`;
 }
 
-export function buildCameraTag(form: CameraMoveForm): CameraTagResult {
+export function buildCameraTag(form: CameraMoveForm, opts?: { atTime?: string | null }): CameraTagResult {
   const over = normalizeOver(form.over);
   if (!over) return { ok: false, error: "over is required (e.g. 2s)" };
 
@@ -59,6 +59,7 @@ export function buildCameraTag(form: CameraMoveForm): CameraTagResult {
 
   bits.push(`over=${over}`);
   if (form.ease === "inout") bits.push("ease=inout");
+  if (opts?.atTime) bits.push(`at_time=${opts.atTime}`, "wait=false");
   return { ok: true, tag: `[Camera: ${bits.join(" ")}]` };
 }
 
