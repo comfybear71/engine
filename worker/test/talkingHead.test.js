@@ -242,6 +242,129 @@ describe("talking head chain", () => {
     assert.equal(frameCalls.length, 0);
   });
 
+  describe("Comfy Cloud LTX engine", () => {
+    const savedComfy = process.env.COMFY_CLOUD_API_KEY;
+    let uploads;
+    let submitted;
+
+    function makeComfyFetch() {
+      let n = 0;
+      return async (url, init = {}) => {
+        const u = String(url);
+        assert.equal(init.headers && init.headers["X-API-Key"] !== undefined || !u.includes("cloud.comfy.org"), true);
+        if (u.endsWith("/api/upload/image")) {
+          const file = init.body.get("image");
+          uploads.push({ name: file.name, size: file.size });
+          return { ok: true, json: async () => ({ name: file.name, subfolder: "" }) };
+        }
+        if (u.endsWith("/api/prompt")) {
+          n += 1;
+          submitted.push(JSON.parse(init.body).prompt);
+          return { ok: true, json: async () => ({ prompt_id: `p${n}` }) };
+        }
+        if (u.includes("/api/jobs/")) {
+          return {
+            ok: true,
+            json: async () => ({ status: "completed", outputs: { 341: { images: [{ filename: "clip.mp4", subfolder: "video", type: "output" }] } } }),
+          };
+        }
+        if (u.includes("/api/view")) {
+          return { ok: false, status: 302, headers: { get: () => "https://signed.test/clip.mp4" } };
+        }
+        return { ok: true, arrayBuffer: async () => new TextEncoder().encode("mp4-bytes").buffer };
+      };
+    }
+
+    beforeEach(() => {
+      uploads = [];
+      submitted = [];
+      process.env.COMFY_CLOUD_API_KEY = "comfy-test-key";
+    });
+
+    afterEach(() => {
+      if (savedComfy === undefined) delete process.env.COMFY_CLOUD_API_KEY;
+      else process.env.COMFY_CLOUD_API_KEY = savedComfy;
+    });
+
+    test("sends each window's image, audio slice, words and length to Comfy Cloud and keys the result as head on black", async () => {
+      writeAudio(14);
+      let capturedMeta = null;
+      const options = {
+        ...chainOptions(),
+        fetchFn: makeComfyFetch(),
+        padImage: async (input, out) => fs.copyFileSync(input, out),
+        captureFn: async (_v, _d, meta) => {
+          capturedMeta = meta;
+          return { fps: 24, frameCount: 240 };
+        },
+      };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 14, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+
+      assert.equal(requests.length, 0, "Grok must not be called");
+      assert.equal(submitted.length, started.windows.length);
+      assert.equal(uploads.length, started.windows.length * 2);
+      submitted.forEach((graph, i) => {
+        assert.equal(graph["269"].inputs.image, uploads[i * 2].name);
+        assert.equal(graph["276"].inputs.audio, uploads[i * 2 + 1].name);
+        assert.equal(graph["340:331"].inputs.value, Math.max(1, started.windows[i].duration));
+        assert.match(graph["340:319"].inputs.value, new RegExp(started.windows[i].text.split(" ")[0]));
+        assert.equal(graph["340:349"].inputs.value, false);
+      });
+      assert.equal(uploads[0].size, Buffer.from("REFERENCE").length);
+
+      assert.equal(capturedMeta.keyMode, "head-black");
+      const shots = listShots(projectDir, "rodney");
+      assert.equal(shots.length, started.windows.length);
+      for (const shot of shots) {
+        assert.equal(shot.status, "ready");
+        assert.equal(shot.engine, "ltx");
+        assert.equal(shot.keyMode, "head-black");
+        assert.equal(shot.background, "black");
+      }
+      assert.deepEqual(frameCalls, started.windows.slice(0, -1).map((w) => w.duration));
+    });
+
+    test("refuses LTX up front when no Comfy Cloud key is configured", async () => {
+      delete process.env.COMFY_CLOUD_API_KEY;
+      writeAudio(7);
+      await assert.rejects(
+        makeTalkingHead(
+          projectDir,
+          "rodney",
+          { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 7, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+          chainOptions()
+        ),
+        /COMFY_CLOUD_API_KEY/
+      );
+      assert.equal(listShots(projectDir, "rodney").length, 0);
+    });
+
+    test("a Comfy Cloud failure is recorded on the window with its reason", async () => {
+      writeAudio(7);
+      const options = {
+        ...chainOptions(),
+        padImage: async (input, out) => fs.copyFileSync(input, out),
+        fetchFn: async (url) => (String(url).endsWith("/api/upload/image") ? { ok: false, status: 402 } : { ok: true, json: async () => ({}) }),
+      };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 7, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+      const [shot] = listShots(projectDir, "rodney");
+      assert.equal(shot.status, "error");
+      assert.match(shot.error, /out of credits/);
+    });
+  });
+
   test("a failed window stops the chain and resume continues from it", async () => {
     writeAudio(24);
     const started = await makeTalkingHead(

@@ -72,6 +72,7 @@ function describeEngineSettings(env = process.env, options = {}) {
   const key = typeof env.XAI_API_KEY === "string" ? env.XAI_API_KEY.trim() : "";
   return {
     xaiKeyConfigured: Boolean(key),
+    comfyKeyConfigured: Boolean(typeof env.COMFY_CLOUD_API_KEY === "string" && env.COMFY_CLOUD_API_KEY.trim()),
     xaiImageModel: env.XAI_IMAGE_MODEL || "grok-imagine-image-2.0",
     envPath: resolveEnvPath(options),
   };

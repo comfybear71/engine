@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatSeconds } from "@/lib/talkingHead";
 import {
   WORKER_URL,
+  loadEngineSettings,
   planTalkingHead,
   startTalkingHead,
   uploadTalkingHeadStart,
@@ -13,6 +14,8 @@ import {
 } from "@/lib/worker";
 
 const promptKey = (project: string, characterId: string) => `studio.talkingHeadPrompt.${project}.${characterId}`;
+const engineKey = (project: string, characterId: string) => `studio.talkingHeadEngine.${project}.${characterId}`;
+type TalkEngine = "grok" | "ltx";
 const startKey = (project: string, characterId: string) => `studio.talkingHeadStart.${project}.${characterId}`;
 
 function thumbUrl(project: string, characterId: string, start: TalkStart): string | null {
@@ -49,6 +52,8 @@ export default function TalkingHeadDialog({
   const [starts, setStarts] = useState<TalkStart[]>([]);
   const [startRel, setStartRel] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [engine, setEngine] = useState<TalkEngine>("grok");
+  const [comfyConfigured, setComfyConfigured] = useState<boolean | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -84,17 +89,44 @@ export default function TalkingHeadDialog({
     };
   }, [project, characterId, range.audioRel, range.inSec, range.durationSec]);
 
+  useEffect(() => {
+    let cancelled = false;
+    let saved = "";
+    try {
+      saved = window.localStorage.getItem(engineKey(project, characterId)) || "";
+    } catch {
+      saved = "";
+    }
+    loadEngineSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        const configured = Boolean(settings.comfyKeyConfigured);
+        setComfyConfigured(configured);
+        setEngine(saved === "grok" ? "grok" : saved === "ltx" || configured ? "ltx" : "grok");
+      })
+      .catch(() => {
+        if (!cancelled) setEngine(saved === "ltx" ? "ltx" : "grok");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project, characterId]);
+
+  const ltx = engine === "ltx";
+  const engineName = ltx ? "LTX" : "Grok";
   const windows = plan?.windows ?? [];
   const clipSeconds = windows.reduce((sum, w) => sum + w.clipSec, 0);
   const chosen = starts.find((item) => item.rel === startRel) || null;
   const blocker = !plan
     ? null
-    : !plan.hasWords
+    : ltx && comfyConfigured === false
+      ? "COMFY_CLOUD_API_KEY is not set. Add it to the engine .env file and restart the engine, or switch to Grok."
+      : !plan.hasWords
       ? "No transcript for this audio. Re-import it with transcription on so the words are known."
       : !chosen
         ? "Choose the head image to start from, or upload one. It should be a head with no neck or collar."
         : chosen.fullBody
-          ? "The full-body reference would make Grok draw a body. Pick or upload a head image."
+          ? `The full-body reference would make ${engineName} draw a body. Pick or upload a head image.`
           : null;
 
   async function onUpload(file: File | undefined) {
@@ -122,10 +154,11 @@ export default function TalkingHeadDialog({
       try {
         window.localStorage.setItem(promptKey(project, characterId), prompt.trim());
         window.localStorage.setItem(startKey(project, characterId), startRel);
+        window.localStorage.setItem(engineKey(project, characterId), engine);
       } catch {
         /* optional */
       }
-      await startTalkingHead(project, characterId, { ...range, prompt: prompt.trim(), refRel: startRel });
+      await startTalkingHead(project, characterId, { ...range, prompt: prompt.trim(), refRel: startRel, engine });
       onStarted(characterId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start the talking head");
@@ -148,7 +181,7 @@ export default function TalkingHeadDialog({
               Make talking head
             </h2>
             <p className="text-[11px] text-studio-muted">
-              Grok head clips for this audio, chained last frame to first frame. They arrive in {characterId}&apos;s Head Rig.
+              {engineName} head clips for this audio, chained last frame to first frame. They arrive in {characterId}&apos;s Head Rig.
             </p>
           </div>
           <button type="button" className="text-sm text-studio-muted hover:text-white" onClick={onClose}>
@@ -169,8 +202,29 @@ export default function TalkingHeadDialog({
                   {windows.length > 1 ? " (chained one after another)" : ""}
                 </span>
                 <span>
-                  Grok video <span className="text-neutral-200">{clipSeconds}s</span>
+                  {ltx ? "LTX video" : "Grok video"}{" "}
+                  <span className="text-neutral-200">
+                    {ltx ? Math.round(windows.reduce((sum, w) => sum + w.duration, 0) * 10) / 10 : clipSeconds}s
+                  </span>
                 </span>
+              </div>
+
+              <div className="flex items-center gap-2 text-[11px]" data-testid="talking-head-engine">
+                <span className="text-studio-muted">Generate with</span>
+                {(["ltx", "grok"] as const).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    data-testid={`talking-head-engine-${option}`}
+                    aria-pressed={engine === option}
+                    onClick={() => setEngine(option)}
+                    className={`rounded border px-2 py-0.5 ${
+                      engine === option ? "border-studio-accent bg-studio-accent/10 text-white" : "border-studio-border text-studio-muted hover:bg-studio-raised"
+                    }`}
+                  >
+                    {option === "ltx" ? "Comfy Cloud LTX (hears the audio)" : "Grok"}
+                  </button>
+                ))}
               </div>
 
               <div>
@@ -221,12 +275,12 @@ export default function TalkingHeadDialog({
                     );
                   })}
                   {starts.length === 0 ? (
-                    <p className="text-[11px] text-amber-300">No head images yet. Upload the head image you want Grok to start from.</p>
+                    <p className="text-[11px] text-amber-300">No head images yet. Upload the head image you want {engineName} to start from.</p>
                   ) : null}
                 </div>
                 {chosen?.fullBody ? (
                   <p className="mt-1 text-[11px] text-amber-300" data-testid="talking-head-body-warning">
-                    This is the full-body reference. Grok will start from a body, not a head. Pick or upload a head image instead.
+                    This is the full-body reference. {engineName} will start from a body, not a head. Pick or upload a head image instead.
                   </p>
                 ) : null}
               </div>
@@ -257,7 +311,9 @@ export default function TalkingHeadDialog({
                 />
               </label>
               <p className="text-[11px] text-studio-muted">
-                Grok does not hear the audio. It acts out each clip&apos;s words, and every clip is trimmed to its audio, so lip timing is approximate.
+                {ltx
+                  ? "LTX hears each clip's audio and lip-syncs to it, using Comfy Cloud credits. The head is filmed on black and the black is keyed out (dark hair and beard are kept). Non-16:9 start images are padded with black, never cropped."
+                  : "Grok does not hear the audio. It acts out each clip's words, and every clip is trimmed to its audio, so lip timing is approximate."}
               </p>
             </>
           ) : null}

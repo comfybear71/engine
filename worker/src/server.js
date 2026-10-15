@@ -442,6 +442,7 @@ function createApp(options = {}) {
     const settings = describeEngineSettings(process.env, envPath ? { envPath } : {});
     res.json({
       xaiKeyConfigured: settings.xaiKeyConfigured,
+      comfyKeyConfigured: settings.comfyKeyConfigured,
       xaiImageModel: settings.xaiImageModel,
     });
   });

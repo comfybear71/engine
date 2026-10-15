@@ -15,6 +15,7 @@ const { resolvePythonBin, PYTHON_DIR } = require("./pythonRuntime");
 const { parseMultipartBuffer, collectRawBody } = require("./importAudio");
 const { inferCategoryFromAction, writeActionJson, slugClipId } = require("./factoryLibrary");
 const { isSafeFolderName } = require("./studioProjects");
+const comfyCloud = require("./comfyCloud");
 
 const VIDEO_MODEL = "grok-imagine-video-1.5";
 const VIDEO_GENERATIONS_URL = "https://api.x.ai/v1/videos/generations";
@@ -117,6 +118,7 @@ async function runShotCapture(videoPath, outDir, meta = {}, options = {}) {
   if (meta.refImage) args.push("--ref-image", meta.refImage);
   if (meta.background) args.push("--background", meta.background);
   if (meta.category) args.push("--category", meta.category);
+  if (meta.keyMode) args.push("--key-mode", meta.keyMode);
 
   const { code, stdout, stderr } = await spawnCmd(pythonBin, args, { cwd: PYTHON_DIR });
   const trimmed = stdout.trim();
@@ -214,6 +216,19 @@ async function downloadVideo(url, destPath, fetchFn) {
   return buf.length;
 }
 
+/**
+ * Fit an image inside 1280x720 with black bars (never crop or stretch).
+ * LTX's own resize centre-crops anything that is not 16:9, which would cut
+ * the top of a hat or the chin off a head shot.
+ */
+async function padImageTo16x9(inputPath, outPng) {
+  const { FRAME_WIDTH: w, FRAME_HEIGHT: h } = comfyCloud;
+  const vf = `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1`;
+  const { code, stderr } = await spawnCmd("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-i", inputPath, "-vf", vf, "-frames:v", "1", outPng]);
+  if (code !== 0 || !fs.existsSync(outPng)) throw shotError(`Could not prepare the start image for LTX: ${stderr.trim().split("\n").pop() || "ffmpeg failed"}`);
+  return outPng;
+}
+
 // ── In-progress jobs tracking ───────────────────────────────────────
 
 const activeJobs = new Map();
@@ -287,14 +302,36 @@ async function runGrokShot(dir, info, job) {
   activeJobs.set(jobKey, { status: "making", startedAt: Date.now() });
   try {
     throwIfCancelled(options.isCancelled);
-    const requestId = await startGrokVideo(fullPrompt, imageBase64, dur, options.fetchFn);
-    activeJobs.set(jobKey, { status: "making", requestId, startedAt: Date.now() });
-    info.requestId = requestId;
-    writeShotJson(dir, info);
-
-    const videoUrl = await pollGrokVideo(requestId, options.fetchFn, options.pollIntervalMs, options.isCancelled);
     const sourcePath = path.join(dir, "source.mp4");
-    await downloadVideo(videoUrl, sourcePath, options.fetchFn);
+    if (job.engine === "ltx") {
+      const startPng = path.join(dir, "ltx_start.png");
+      const padInput = path.join(dir, "ltx_start_in.png");
+      fs.writeFileSync(padInput, Buffer.from(imageBase64, "base64"));
+      await (options.padImage || padImageTo16x9)(padInput, startPng);
+      fs.rmSync(padInput, { force: true });
+      const { promptId } = await comfyCloud.generateLtxVideo({
+        imageBytes: fs.readFileSync(startPng),
+        audioBytes: fs.readFileSync(path.join(dir, job.audioFile || "audio.wav")),
+        prompt: fullPrompt,
+        durationSec: job.durationSec,
+        destPath: sourcePath,
+        onSubmitted: (id) => {
+          activeJobs.set(jobKey, { status: "making", requestId: id, startedAt: Date.now() });
+          info.requestId = id;
+          writeShotJson(dir, info);
+        },
+        options,
+      });
+      info.requestId = promptId;
+    } else {
+      const requestId = await startGrokVideo(fullPrompt, imageBase64, dur, options.fetchFn);
+      activeJobs.set(jobKey, { status: "making", requestId, startedAt: Date.now() });
+      info.requestId = requestId;
+      writeShotJson(dir, info);
+
+      const videoUrl = await pollGrokVideo(requestId, options.fetchFn, options.pollIntervalMs, options.isCancelled);
+      await downloadVideo(videoUrl, sourcePath, options.fetchFn);
+    }
     throwIfCancelled(options.isCancelled);
     info.filename = "source.mp4";
     writeShotJson(dir, info);
@@ -306,6 +343,7 @@ async function runGrokShot(dir, info, job) {
       refImage: info.refImage || "",
       background: info.background,
       category: info.category,
+      keyMode: info.keyMode || "",
     }, options);
 
     info.fps = result.fps;
@@ -1022,6 +1060,7 @@ module.exports = {
   internals: {
     lastFrameBase64,
     runGrokShot,
+    padImageTo16x9,
     shotsDir,
     shotDir,
     readShotJson,

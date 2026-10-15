@@ -191,6 +191,49 @@ def key_flat(bgr: np.ndarray, bg_color: tuple[float, float, float],
     return src
 
 
+# ── Dark head on a black backdrop ────────────────────────────────────
+
+HEAD_BLACK_KEY = "head-black"
+
+
+def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, close_frac: float = 0.115,
+                      feather_px: float = 1.2) -> np.ndarray:
+    """Key a head shot filmed on pure black (an LTX talking head).
+
+    A colour key cannot work here: black hair, the shadow under a hat brim
+    and a dark beard are as black as the backdrop, and they touch it, so
+    key_flat() eats them. Instead only near-pure black connected to the
+    frame border (including any letterbox bars) counts as backdrop, then
+    the head silhouette is closed and its convex hull filled so hair that
+    merges into the black stays solid. Pixel colours are never changed, only alpha.
+    """
+    h, w = bgr.shape[:2]
+    gray = cv2.GaussianBlur(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), (0, 0), 1)
+    candidate = (gray <= dark_thresh).astype(np.uint8)
+    _, labels = cv2.connectedComponents(candidate, connectivity=4)
+    border = set(labels[0].tolist()) | set(labels[-1].tolist())
+    border |= set(labels[:, 0].tolist()) | set(labels[:, -1].tolist())
+    border.discard(0)
+    background = np.isin(labels, list(border)).astype(np.uint8)
+    foreground = (1 - background).astype(np.uint8)
+
+    k = max(3, int(round(h * close_frac)) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    closed = cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    min_area = 0.002 * h * w
+    keep = [c for c in contours if cv2.contourArea(c) >= min_area]
+    mask = np.zeros_like(closed)
+    cv2.drawContours(mask, [cv2.convexHull(c) for c in keep], -1, 1, cv2.FILLED)
+
+    alpha = (mask * 255).astype(np.uint8)
+    if feather_px > 0:
+        alpha = cv2.GaussianBlur(alpha, (0, 0), feather_px)
+    out = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
+    out[:, :, 3] = alpha
+    return out
+
+
 # ── Watermark removal ────────────────────────────────────────────────
 
 def remove_watermark(bgra: np.ndarray) -> np.ndarray:
@@ -222,12 +265,14 @@ def remove_watermark(bgra: np.ndarray) -> np.ndarray:
 
 # ── Frame processing ─────────────────────────────────────────────────
 
-def process_frame(bgr: np.ndarray, bg_hint: str = "") -> np.ndarray:
+def process_frame(bgr: np.ndarray, bg_hint: str = "", key_mode: str = "") -> np.ndarray:
     """Key the background and remove watermark from a single frame.
 
     bg_hint: if "green", always use green keying (we told Grok to use
     a green screen, so trust that over border-pixel auto-detection).
     """
+    if key_mode == HEAD_BLACK_KEY:
+        return remove_watermark(key_head_on_black(bgr))
     if bg_hint == "green":
         kind, bg_color = "green", None
     else:
@@ -248,9 +293,9 @@ def rgba_on_black(bgra: np.ndarray) -> np.ndarray:
 
 
 def _process_and_write_frame(bgr: np.ndarray, idx: int, cut_dir: Path, thumb_dir: Path,
-                              thumb_h: int = 160, bg_hint: str = "") -> None:
+                              thumb_h: int = 160, bg_hint: str = "", key_mode: str = "") -> None:
     """Key one raw frame and write its cut/ PNG + thumb/ JPG."""
-    keyed = process_frame(bgr, bg_hint=bg_hint)
+    keyed = process_frame(bgr, bg_hint=bg_hint, key_mode=key_mode)
 
     cut_path = cut_dir / f"f_{idx:04d}.png"
     cv2.imwrite(str(cut_path), keyed)
@@ -307,7 +352,8 @@ def _write_poster_and_preview(out: Path, cut_dir: Path, frame_count: int, fps: f
 # ── Main pipeline ────────────────────────────────────────────────────
 
 def run(video_path: str, out_dir: str, name: str = "", prompt: str = "",
-        ref_image: str = "", background: str = "", category: str = "") -> dict:
+        ref_image: str = "", background: str = "", category: str = "",
+        key_mode: str = "") -> dict:
     video = Path(video_path)
     out = Path(out_dir)
 
@@ -355,7 +401,7 @@ def run(video_path: str, out_dir: str, name: str = "", prompt: str = "",
         bgr = cv2.imread(str(raw_path), cv2.IMREAD_COLOR)
         if bgr is None:
             continue
-        _process_and_write_frame(bgr, idx, cut_dir, thumb_dir, bg_hint=background)
+        _process_and_write_frame(bgr, idx, cut_dir, thumb_dir, bg_hint=background, key_mode=key_mode)
 
     # 3 + 4. poster.jpg and preview.mp4
     _write_poster_and_preview(out, cut_dir, frame_count, fps)
@@ -369,6 +415,7 @@ def run(video_path: str, out_dir: str, name: str = "", prompt: str = "",
         "prompt": prompt,
         "refImage": ref_image,
         "background": background or "auto",
+        **({"keyMode": key_mode} if key_mode else {}),
         "fps": fps,
         "frameCount": frame_count,
         "in": 1,
@@ -413,11 +460,13 @@ def reprocess(out_dir: str) -> dict:
     shot_json_path = out / "shot.json"
     fps = 24.0
     bg_hint = ""
+    key_mode = ""
     if shot_json_path.exists():
         try:
             shot_info = json.loads(shot_json_path.read_text())
             fps = float(shot_info.get("fps") or 24.0)
             bg_hint = str(shot_info.get("background") or "")
+            key_mode = str(shot_info.get("keyMode") or "")
         except Exception:
             pass
 
@@ -431,7 +480,7 @@ def reprocess(out_dir: str) -> dict:
         bgr = cv2.imread(str(raw_path), cv2.IMREAD_COLOR)
         if bgr is None:
             continue
-        _process_and_write_frame(bgr, idx, cut_dir, thumb_dir, bg_hint=bg_hint)
+        _process_and_write_frame(bgr, idx, cut_dir, thumb_dir, bg_hint=bg_hint, key_mode=key_mode)
 
     _write_poster_and_preview(out, cut_dir, frame_count, fps)
 
@@ -456,6 +505,7 @@ def main():
     parser.add_argument("--ref-image", default="", help="Reference image used")
     parser.add_argument("--background", default="", help="Background type hint (green/black)")
     parser.add_argument("--category", default="", help="Category hint")
+    parser.add_argument("--key-mode", default="", help="Keyer override, e.g. head-black for a dark head on black")
     args = parser.parse_args()
 
     try:
@@ -472,6 +522,7 @@ def main():
                 ref_image=args.ref_image,
                 background=args.background,
                 category=args.category,
+                key_mode=args.key_mode,
             )
         print(json.dumps(result))
     except Exception as e:
