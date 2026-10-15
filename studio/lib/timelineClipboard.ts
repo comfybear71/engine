@@ -188,7 +188,7 @@ export function isDeletableScriptLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith("#")) return false;
   if (/^\[(?:Scene|Location|Cast|Pause|View)\s*:/i.test(trimmed)) return false;
-  if (/^\[(?:Action|Prop|Layer|Move|Pose|Swing|Camera|Audio)\s*:/i.test(trimmed)) return true;
+  if (/^\[(?:Action|Do|Insert|Clip|Prop|Layer|Move|Pose|Swing|Camera|Audio)\s*:/i.test(trimmed)) return true;
   return !trimmed.startsWith("[") && trimmed.includes(":");
 }
 
