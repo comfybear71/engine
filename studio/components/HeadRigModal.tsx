@@ -1239,7 +1239,7 @@ export default function HeadRigModal({
         )}
 
         {/* ══════════ MAIN AREA — Canvas + Timeline ══════════ */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Toggle sidebar + Rig controls */}
           <div className="flex items-center gap-3 border-b border-[#222] bg-[#161616] px-3 py-1.5">
             <button type="button" className="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-[#333] hover:text-white"
@@ -1302,13 +1302,13 @@ export default function HeadRigModal({
           </div>
 
           {/* Canvas preview */}
-          <div className="flex flex-1 flex-col items-center justify-center overflow-hidden bg-[#0a0a0a] p-3">
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden bg-[#0a0a0a] p-3">
             <canvas
               ref={canvasRef}
               width={CANVAS_W}
               height={CANVAS_H}
               className="rounded-md border border-studio-border"
-              style={{ cursor: editingHead ? "crosshair" : "default", width: CANVAS_W, height: CANVAS_H, maxHeight: "55vh", objectFit: "contain" }}
+              style={{ cursor: editingHead ? "crosshair" : "default", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
               onMouseDown={onCanvasMouseDown}
               onMouseMove={onCanvasMouseMove}
               onMouseUp={onCanvasMouseUp}
