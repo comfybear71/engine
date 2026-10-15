@@ -240,7 +240,9 @@ export default function HeadRigModal({
       setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
     };
     img.onerror = () => { shotDimsLoadingRef.current.delete(shotId); };
-    img.src = shotMediaUrl(project, characterId, shotId, "cut/f_0001.png");
+    // ?_co=1 busts browser cache so it makes a fresh CORS request instead
+    // of reusing a non-CORS cached copy from timeline thumbnails
+    img.src = shotMediaUrl(project, characterId, shotId, "cut/f_0001.png") + "?_co=1";
   }
 
   // Per-frame image cache (shotId#frame -> Image), with a bump counter to
@@ -260,7 +262,9 @@ export default function HeadRigModal({
     img.crossOrigin = "anonymous";
     img.onload = () => { frameImgCacheRef.current.set(key, img); frameImgLoadingRef.current.delete(key); setRedrawTick((t) => t + 1); };
     img.onerror = () => { frameImgLoadingRef.current.delete(key); };
-    img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
+    // ?_co=1 busts browser cache — without it the browser can serve a
+    // non-CORS cached copy from timeline thumbnails, failing the CORS check
+    img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`) + "?_co=1";
   }
 
   function getFrameImage(shotId: string, frame: number): HTMLImageElement | null {
