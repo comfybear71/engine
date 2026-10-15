@@ -685,47 +685,51 @@ export default function HeadRigModal({
   }
 
   function bladeAtPlayhead() {
-    // Try the selected segment first; if none selected or playhead isn't inside
-    // it, auto-find whichever segment on either track the playhead sits inside.
-    let sel = selectedSeg();
-    if (sel) {
-      const end = segEnd(sel.seg);
-      if (scrubFrame <= sel.seg.start || scrubFrame > end) sel = null;
-    }
-    if (!sel) {
-      // Auto-detect: check body then head
-      const bodySeg = activeSegmentAt(bodySegments, scrubFrame);
-      if (bodySeg && scrubFrame > bodySeg.start && scrubFrame <= segEnd(bodySeg)) {
-        sel = { track: "body", seg: bodySeg };
-      } else {
-        const headSeg = activeSegmentAt(headSegments, scrubFrame);
-        if (headSeg && scrubFrame > headSeg.start && scrubFrame <= segEnd(headSeg)) {
-          sel = { track: "head", seg: headSeg };
-        }
+    // Use refs to avoid stale closures — the keyboard handler may hold old state
+    const curBody = segmentsRef.current.body;
+    const curHead = segmentsRef.current.head;
+    const frame = scrubFrame;
+
+    // Find segment under playhead — selected first, then auto-detect
+    let track: TrackName | null = null;
+    let segId: string | null = null;
+
+    if (selectedSegment) {
+      const list = selectedSegment.track === "body" ? curBody : curHead;
+      const seg = list.find((s) => s.id === selectedSegment.id);
+      if (seg && frame > seg.start && frame <= segEnd(seg)) {
+        track = selectedSegment.track;
+        segId = seg.id;
       }
     }
-    if (!sel) return;
-    const seg = sel.seg;
-    const splitSourceFrame = sourceFrameOf(seg, scrubFrame);
-    if (sel.track === "body") {
-      const secondId = genSegId();
-      setBodySegments((prev) => prev.flatMap((s) => {
-        if (s.id !== seg.id) return [s];
-        const first: Segment = { ...s, outFrame: splitSourceFrame - 1 };
-        const second: Segment = { ...s, id: secondId, start: scrubFrame, inFrame: splitSourceFrame };
-        return [first, second];
-      }));
-      setSelectedSegment({ track: "body", id: secondId });
-    } else {
-      const secondId = genSegId();
-      setHeadSegments((prev) => prev.flatMap((s) => {
-        if (s.id !== seg.id) return [s];
-        const first: HeadSegment = { ...(s as HeadSegment), outFrame: splitSourceFrame - 1 };
-        const second: HeadSegment = { ...(s as HeadSegment), id: secondId, start: scrubFrame, inFrame: splitSourceFrame };
-        return [first, second];
-      }));
-      setSelectedSegment({ track: "head", id: secondId });
+
+    if (!segId) {
+      for (const s of curBody) {
+        if (frame > s.start && frame <= segEnd(s)) { track = "body"; segId = s.id; break; }
+      }
     }
+    if (!segId) {
+      for (const s of curHead) {
+        if (frame > s.start && frame <= segEnd(s)) { track = "head"; segId = s.id; break; }
+      }
+    }
+    if (!track || !segId) return;
+
+    const secondId = genSegId();
+    const splitter = (prev: any[]) => prev.flatMap((s: any) => {
+      if (s.id !== segId) return [s];
+      const splitSrc = sourceFrameOf(s, frame);
+      const first = { ...s, outFrame: splitSrc - 1 };
+      const second = { ...s, id: secondId, start: frame, inFrame: splitSrc };
+      return [first, second];
+    });
+
+    if (track === "body") {
+      setBodySegments(splitter as any);
+    } else {
+      setHeadSegments(splitter as any);
+    }
+    setSelectedSegment({ track, id: secondId });
   }
 
   function trimSelectedEdge(edge: "in" | "out") {
@@ -1419,13 +1423,12 @@ function TrackRow({
               title={`${shot?.name || seg.shotId} · frames ${seg.inFrame}-${seg.outFrame}`}
             >
               <div className="flex h-full">
-                {Array.from({ length: Math.min(segLength(seg), 24) }, (_, i) => {
-                  const frac = Math.min(segLength(seg), 24) <= 1 ? 0 : i / (Math.min(segLength(seg), 24) - 1);
-                  const frame = Math.round(seg.inFrame + frac * (segLength(seg) - 1));
+                {Array.from({ length: segLength(seg) }, (_, i) => {
+                  const frame = seg.inFrame + i;
                   const pad = String(frame).padStart(4, "0");
                   return (
                     <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`)} alt=""
-                      className="h-full shrink-0 object-cover" style={{ width: `${100 / Math.min(segLength(seg), 24)}%`, background: "#0a0a0a" }}
+                      className="h-full shrink-0 object-cover" style={{ width: `${100 / segLength(seg)}%`, background: "#0a0a0a" }}
                       onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                   );
                 })}
