@@ -38,20 +38,6 @@ interface ShotDetail extends ShotInfo {
   frames: ShotFrame[];
 }
 
-// ── Category display ────────────────────────────────────────────────
-
-const CATEGORIES = [
-  { id: "expressions", label: "Expressions" },
-  { id: "mouth_tongue", label: "Mouth/Tongue" },
-  { id: "walks", label: "Walks" },
-  { id: "turns_looks", label: "Turns" },
-  { id: "head_moves", label: "Head moves" },
-  { id: "mic", label: "Mic" },
-  { id: "arms_gestures", label: "Arms/Gestures" },
-  { id: "idle_stand", label: "Idle/Stand" },
-  { id: "inserts", label: "Inserts" },
-  { id: "other", label: "Other" },
-];
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -283,11 +269,7 @@ function ShotDetailView({
   const [currentFrame, setCurrentFrame] = useState(1);
   const [inFrame, setInFrame] = useState(1);
   const [outFrame, setOutFrame] = useState(1);
-  const [name, setName] = useState("");
-  const [category, setCategory] = useState("");
   const [saving, setSaving] = useState(false);
-  const [resizeMode, setResizeMode] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -299,8 +281,6 @@ function ShotDetailView({
       setDetail(data);
       setInFrame(data.in || 1);
       setOutFrame(data.out || data.frameCount);
-      setName(data.name || data.id);
-      setCategory(data.category || "other");
       setCurrentFrame(data.in || 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed");
@@ -309,70 +289,9 @@ function ShotDetailView({
 
   useEffect(() => { load(); }, [load]);
 
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await workerFetch(
-        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, category, in: inFrame, out: outFrame }),
-        }
-      );
-      onReload();
-    } catch {}
-    setSaving(false);
-  };
-
-  const handleDelete = async (frameN: number) => {
-    try {
-      await workerFetch(
-        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}/frames/${frameN}`,
-        { method: "DELETE" }
-      );
-      load();
-    } catch {}
-  };
-
-  const handleSaveSlot = async (frameN: number) => {
-    try {
-      await workerFetch(
-        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}/frames/${frameN}/save-slot`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ slot: "body", view: "front" }),
-        }
-      );
-    } catch {}
-  };
-
-  const handleUseAsActionShot = async () => {
-    setSaving(true);
-    try {
-      const res = await workerFetch(
-        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}/use`,
-        { method: "POST" }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error || "Failed");
-      }
-      const result = await res.json();
-      setError("");
-      onReload();
-      load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed");
-    }
-    setSaving(false);
-  };
-
   if (error && !detail) return <div className="shots-error">{error}</div>;
   if (!detail) return <div className="shots-loading">Loading…</div>;
 
-  const previewUrl = shotMediaUrl(project, characterId, shotId, "preview.mp4");
   const currentCutUrl = shotMediaUrl(
     project, characterId, shotId,
     `cut/f_${String(currentFrame).padStart(4, "0")}.png`
@@ -382,7 +301,7 @@ function ShotDetailView({
     <div className="shots-detail" data-testid="shots-detail">
       <div className="shots-detail-header">
         <button type="button" onClick={onBack} className="shots-back-btn">← Back</button>
-        <span className="shots-detail-title">{name}</span>
+        <span className="shots-detail-title">{detail?.name || shotId}</span>
       </div>
 
       {/* Big player area */}
@@ -416,49 +335,8 @@ function ShotDetailView({
         <span className="shots-inout-count">{outFrame - inFrame + 1} frames selected</span>
       </div>
 
-      {/* Rename / Category */}
-      <div className="shots-meta-edit">
-        <label className="shots-field">
-          <span>Name</span>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
-        <label className="shots-field">
-          <span>Category</span>
-          <select value={category} onChange={(e) => setCategory(e.target.value)}>
-            {CATEGORIES.map((c) => (
-              <option key={c.id} value={c.id}>{c.label}</option>
-            ))}
-          </select>
-        </label>
-        <button type="button" onClick={handleSave} disabled={saving} className="shots-save-btn">
-          {saving ? "Saving…" : "Save"}
-        </button>
-      </div>
-
-      {/* Per-frame actions */}
-      <div className="shots-frame-actions">
-        <button type="button" onClick={() => handleDelete(currentFrame)} className="shots-btn-danger">
-          Delete frame {currentFrame}
-        </button>
-        <button type="button" onClick={() => handleSaveSlot(currentFrame)} className="shots-btn">
-          Save to slot
-        </button>
-        <button type="button" onClick={() => setResizeMode(!resizeMode)} className="shots-btn"
-          style={{ background: resizeMode ? "#e0a040" : undefined, color: resizeMode ? "#111" : undefined }}>
-          {resizeMode ? "Cancel Resize" : "Resize Head"}
-        </button>
-      </div>
-
-      {/* Use as Action Shot */}
+      {/* Delete shot */}
       <div className="shots-use-action">
-        <button
-          type="button"
-          onClick={handleUseAsActionShot}
-          disabled={saving}
-          className="shots-action-btn"
-        >
-          {saving ? "Creating…" : "Use as Action Shot"}
-        </button>
         <button
           type="button"
           onClick={async () => {
@@ -487,24 +365,9 @@ function ShotDetailView({
         >
           Delete shot
         </button>
-        {detail.actionId && (
-          <span className="shots-action-done">✓ Action: {detail.actionId}</span>
-        )}
       </div>
 
       {error && <div className="shots-error">{error}</div>}
-
-      {/* Resize head mode */}
-      {resizeMode && (
-        <ResizeHeadPanel
-          project={project}
-          characterId={characterId}
-          shotId={shotId}
-          frameUrl={currentCutUrl}
-          onDone={() => { setResizeMode(false); load(); onReload(); }}
-          onCancel={() => setResizeMode(false)}
-        />
-      )}
 
       {/* Frame strip at bottom */}
       <div className="shots-detail-strip">
@@ -522,169 +385,6 @@ function ShotDetailView({
               onClick={() => setCurrentFrame(f.n)}
             />
           ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Resize Head Panel ──────────────────────────────────────────────
-
-function ResizeHeadPanel({
-  project,
-  characterId,
-  shotId,
-  frameUrl,
-  onDone,
-  onCancel,
-}: {
-  project: string;
-  characterId: string;
-  shotId: string;
-  frameUrl: string;
-  onDone: () => void;
-  onCancel: () => void;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const [neckY, setNeckY] = useState(0.35);
-  const [headScale, setHeadScale] = useState(0.7);
-  const [applying, setApplying] = useState(false);
-  const [error, setError] = useState("");
-  const [imgLoaded, setImgLoaded] = useState(false);
-
-  // Load the frame image
-  useEffect(() => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => { imgRef.current = img; setImgLoaded(true); };
-    img.src = frameUrl;
-  }, [frameUrl]);
-
-  // Draw preview whenever neckY, headScale, or image changes
-  useEffect(() => {
-    if (!imgLoaded || !imgRef.current || !canvasRef.current) return;
-    const canvas = canvasRef.current;
-    const img = imgRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const maxW = 360;
-    const maxH = 300;
-    const scale = Math.min(1, maxW / img.width, maxH / img.height);
-    const dw = Math.round(img.width * scale);
-    const dh = Math.round(img.height * scale);
-    canvas.width = dw;
-    canvas.height = dh;
-
-    // Clear
-    ctx.clearRect(0, 0, dw, dh);
-
-    const splitRow = Math.round(neckY * dh);
-    const headH = splitRow;
-    const bodyY = splitRow;
-    const bodyH = dh - splitRow;
-
-    // Draw scaled head
-    const scaledHeadH = Math.round(headH * headScale);
-    const scaledHeadW = Math.round(dw * headScale);
-    const headX = Math.round((dw - scaledHeadW) / 2);
-    const headY = splitRow - scaledHeadH;
-
-    // Source head region from image
-    const srcSplitRow = Math.round(neckY * img.height);
-    ctx.drawImage(img, 0, 0, img.width, srcSplitRow,
-                  headX, headY, scaledHeadW, scaledHeadH);
-
-    // Draw body unchanged
-    ctx.drawImage(img, 0, srcSplitRow, img.width, img.height - srcSplitRow,
-                  0, bodyY, dw, bodyH);
-
-    // Draw neck line
-    ctx.strokeStyle = "#e0a040";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.beginPath();
-    ctx.moveTo(0, splitRow);
-    ctx.lineTo(dw, splitRow);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Label
-    ctx.fillStyle = "#e0a040";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("← neck line", 4, splitRow - 4);
-  }, [imgLoaded, neckY, headScale]);
-
-  // Click on canvas to set neck line
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const y = (e.clientY - rect.top) / rect.height;
-    setNeckY(Math.max(0.05, Math.min(0.95, y)));
-  };
-
-  const handleApply = async () => {
-    setApplying(true);
-    setError("");
-    try {
-      const res = await workerFetch(
-        `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}/resize-head`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ neckY, headScale }),
-        }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error || "Resize failed");
-      }
-      onDone();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed");
-    }
-    setApplying(false);
-  };
-
-  return (
-    <div className="shots-resize-panel">
-      <div className="shots-resize-layout">
-        <div className="shots-resize-preview">
-          <canvas
-            ref={canvasRef}
-            onClick={handleCanvasClick}
-            style={{ cursor: "crosshair" }}
-          />
-          <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>
-            Click to set neck line position
-          </div>
-        </div>
-        <div className="shots-resize-controls">
-          <label className="shots-field">
-            <span>Neck position: {Math.round(neckY * 100)}%</span>
-            <input type="range" min={5} max={95} value={Math.round(neckY * 100)}
-              onChange={(e) => setNeckY(Number(e.target.value) / 100)} />
-          </label>
-          <label className="shots-field">
-            <span>Head scale: {headScale.toFixed(2)}x</span>
-            <input type="range" min={10} max={200} value={Math.round(headScale * 100)}
-              onChange={(e) => setHeadScale(Number(e.target.value) / 100)} />
-          </label>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <button type="button" onClick={handleApply} disabled={applying}
-              className="shots-action-btn" style={{ flex: 1 }}>
-              {applying ? "Applying to all frames…" : "Apply to all frames"}
-            </button>
-            <button type="button" onClick={onCancel} className="shots-btn" style={{ flex: "0 0 auto" }}>
-              Cancel
-            </button>
-          </div>
-          {error && <div className="shots-error" style={{ marginTop: 6 }}>{error}</div>}
-          <div style={{ fontSize: 11, color: "#888", marginTop: 8 }}>
-            Originals backed up to _pre_resize/ folder
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -1073,59 +773,44 @@ export default function ActionShotsPage({
     );
   }
 
-  // Only show completed combined shots from the Build Character page
-  const combinedShots = shots.filter((s) => s.shotType === "combined" && s.status === "ready");
+  const readyShots = shots.filter((s) => s.status === "ready");
 
   return (
     <div className="shots-page" data-testid="shots-page">
-      {/* Top bar — simplified: combined shots come from Build Character page */}
-      <div className="shots-topbar">
-        <span style={{ fontSize: 11, color: "#999" }}>
-          Combined clips from Build Character appear here. Use the character page to create new ones.
-        </span>
-      </div>
-
       {loading ? (
         <div className="shots-loading">Loading shots…</div>
-      ) : combinedShots.length === 0 ? (
+      ) : readyShots.length === 0 ? (
         <div className="shots-empty">
-          No combined shots yet. Go to the character page to combine head + body shots, then send them here.
+          No action shots yet.
         </div>
       ) : (
-        <div className="shots-category" data-testid="shots-cat-combined">
-          <div className="shots-category-header">Combined Clips</div>
-          <div className="shots-grid">
-            {combinedShots.map((shot) => (
-              <ShotCard
-                key={shot.id}
-                project={project}
-                characterId={characterId}
-                shot={shot}
-                onClick={() => {
-                  if (shot.status === "ready") {
-                    setSelectedShot(shot.id);
+        <div className="shots-grid shots-grid-6">
+          {readyShots.map((shot) => (
+            <ShotCard
+              key={shot.id}
+              project={project}
+              characterId={characterId}
+              shot={shot}
+              onClick={() => setSelectedShot(shot.id)}
+              onDelete={async () => {
+                if (!confirm("Delete this shot?")) return;
+                try {
+                  const res = await workerFetch(
+                    `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shot.id)}`,
+                    { method: "DELETE" }
+                  );
+                  if (!res.ok) {
+                    const body = await res.json().catch(() => ({ error: "Delete failed" }));
+                    alert(body.error || "Delete failed");
+                    return;
                   }
-                }}
-                onDelete={async () => {
-                  if (!confirm("Delete this combined shot?")) return;
-                  try {
-                    const res = await workerFetch(
-                      `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shot.id)}`,
-                      { method: "DELETE" }
-                    );
-                    if (!res.ok) {
-                      const body = await res.json().catch(() => ({ error: "Delete failed" }));
-                      alert(body.error || "Delete failed");
-                      return;
-                    }
-                    loadShots();
-                  } catch (err) {
-                    alert(err instanceof Error ? err.message : "Delete failed");
-                  }
-                }}
-              />
-            ))}
-          </div>
+                  loadShots();
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : "Delete failed");
+                }
+              }}
+            />
+          ))}
         </div>
       )}
     </div>

@@ -1055,7 +1055,7 @@ export default function AssetsPanel({
     <div className={pool ? "flex shrink-0 flex-wrap items-center justify-end gap-2" : "studio-factory-actions"}>
       {!pool ? (
         <>
-          {nav.page !== "character" ? (
+          {nav.page !== "character" && !(nav.page === "section" && nav.section === "actions") ? (
             <>
               <button
                 type="button"

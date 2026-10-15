@@ -2337,13 +2337,18 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  padding-bottom: 8px;
+  padding: 8px;
+}
+.shots-grid-6 {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  padding: 8px;
 }
 
 /* ── Shot Card ───────────────────────────────────────────────── */
 
 .shots-card {
-  width: 240px;
   display: flex;
   flex-direction: column;
   background: #1a1a1a;
@@ -2358,7 +2363,7 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
 .shots-card-poster {
   position: relative;
   width: 100%;
-  aspect-ratio: 16/9;
+  aspect-ratio: 3/4;
   background: #000;
   overflow: hidden;
 }
