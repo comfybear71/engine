@@ -361,6 +361,34 @@ describe("talking head chain", () => {
       assert.equal(uploads.length, 2, "no second upload");
     });
 
+    test("retrying after the earlier Comfy job was cancelled starts a fresh job in the same click", async () => {
+      writeAudio(7);
+      const base = makeComfyFetch();
+      let cancelFirst = false;
+      const fetchFn = async (url, init) => {
+        if (String(url).includes("/api/jobs/p1") && cancelFirst) return { ok: true, status: 200, json: async () => ({ status: "cancelled" }) };
+        if (String(url).includes("/api/jobs/p1")) throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }) });
+        return base(url, init);
+      };
+      const options = { ...chainOptions(), fetchFn, padImage: async (input, out) => fs.copyFileSync(input, out) };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 7, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+      assert.equal(listShots(projectDir, "rodney")[0].requestId, "p1");
+
+      cancelFirst = true;
+      const resumed = await resumeTalkingHead(projectDir, "rodney", started.group, options);
+      await resumed.completion;
+      const [shot] = listShots(projectDir, "rodney");
+      assert.equal(shot.status, "ready");
+      assert.equal(submitted.length, 2, "one fresh job after the cancelled one");
+      assert.equal(uploads.length, 4);
+    });
+
     test("refuses LTX up front when no Comfy Cloud key is configured", async () => {
       delete process.env.COMFY_CLOUD_API_KEY;
       writeAudio(7);

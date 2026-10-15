@@ -304,32 +304,44 @@ async function runGrokShot(dir, info, job) {
     throwIfCancelled(options.isCancelled);
     const sourcePath = path.join(dir, "source.mp4");
     if (job.engine === "ltx") {
-      const resumePromptId = info.engine === "ltx" && typeof info.requestId === "string" ? info.requestId : "";
-      let imageBytes = Buffer.alloc(0);
-      let audioBytes = Buffer.alloc(0);
-      if (!resumePromptId) {
-        const startPng = path.join(dir, "ltx_start.png");
-        const padInput = path.join(dir, "ltx_start_in.png");
-        fs.writeFileSync(padInput, Buffer.from(imageBase64, "base64"));
-        await (options.padImage || padImageTo16x9)(padInput, startPng);
-        fs.rmSync(padInput, { force: true });
-        imageBytes = fs.readFileSync(startPng);
-        audioBytes = fs.readFileSync(path.join(dir, job.audioFile || "audio.wav"));
+      const runLtx = async (resumePromptId) => {
+        let imageBytes = Buffer.alloc(0);
+        let audioBytes = Buffer.alloc(0);
+        if (!resumePromptId) {
+          const startPng = path.join(dir, "ltx_start.png");
+          const padInput = path.join(dir, "ltx_start_in.png");
+          fs.writeFileSync(padInput, Buffer.from(imageBase64, "base64"));
+          await (options.padImage || padImageTo16x9)(padInput, startPng);
+          fs.rmSync(padInput, { force: true });
+          imageBytes = fs.readFileSync(startPng);
+          audioBytes = fs.readFileSync(path.join(dir, job.audioFile || "audio.wav"));
+        }
+        return comfyCloud.generateLtxVideo({
+          resumePromptId,
+          imageBytes,
+          audioBytes,
+          prompt: fullPrompt,
+          durationSec: job.durationSec,
+          destPath: sourcePath,
+          onSubmitted: (id) => {
+            activeJobs.set(jobKey, { status: "making", requestId: id, startedAt: Date.now() });
+            info.requestId = id;
+            writeShotJson(dir, info);
+          },
+          options,
+        });
+      };
+      const previousJob = info.engine === "ltx" && typeof info.requestId === "string" ? info.requestId : "";
+      let outcome;
+      try {
+        outcome = await runLtx(previousJob);
+      } catch (err) {
+        // The earlier job was cancelled, failed or expired on Comfy's side: start a fresh one now.
+        if (!previousJob || (err.code !== "EJOBFAILED" && err.code !== "ENOJOB")) throw err;
+        delete info.requestId;
+        outcome = await runLtx("");
       }
-      const { promptId } = await comfyCloud.generateLtxVideo({
-        resumePromptId,
-        imageBytes,
-        audioBytes,
-        prompt: fullPrompt,
-        durationSec: job.durationSec,
-        destPath: sourcePath,
-        onSubmitted: (id) => {
-          activeJobs.set(jobKey, { status: "making", requestId: id, startedAt: Date.now() });
-          info.requestId = id;
-          writeShotJson(dir, info);
-        },
-        options,
-      });
+      const { promptId } = outcome;
       info.requestId = promptId;
     } else {
       const requestId = await startGrokVideo(fullPrompt, imageBase64, dur, options.fetchFn);
