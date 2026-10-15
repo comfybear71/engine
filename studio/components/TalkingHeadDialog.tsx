@@ -128,6 +128,8 @@ export default function TalkingHeadDialog({
     ? null
     : ltx && comfyConfigured === false
       ? "COMFY_CLOUD_API_KEY is not set. Add it to the engine .env file and restart the engine, or switch to Grok."
+      : ltx && !subject.trim().includes(",")
+        ? "Fill in \"Who is on screen\" below: the name, a comma, then a short look (see the example in the box)."
       : !plan.hasWords
       ? "No transcript for this audio. Re-import it with transcription on so the words are known."
       : !chosen
@@ -311,13 +313,13 @@ export default function TalkingHeadDialog({
 
               {ltx ? (
                 <label className="block">
-                  <span className="mb-1 block text-[11px] text-studio-muted">
-                    Who is on screen (name first, then a short look, e.g. &quot;Rodney, a man with a red felt hat and dark beard&quot;)
+                  <span className="mb-1 block text-[11px] font-semibold text-amber-300">
+                    Required: who is on screen (name, then a short look)
                   </span>
                   <input
                     className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-xs text-neutral-200"
                     value={subject}
-                    placeholder={characterId}
+                    placeholder={`e.g. ${characterId}, a man with a red felt hat and dark beard`}
                     data-testid="talking-head-subject"
                     onChange={(event) => setSubject(event.target.value)}
                   />
