@@ -215,9 +215,9 @@ function buildLtxPrompt(talk) {
   const says = words ? `${name} says: "${words}".` : `${name} listens quietly, mouth closed.`;
   return (
     "Use the provided start image as the first frame. " +
-    `${subject}, is prominent, mouth and head move naturally while speaking, subtle expression. ` +
-    "Head only, same framing as the start image, plain black background, no neck, no collar, no clothing, no shoulders, nothing new enters frame. " +
-    `${says} Camera holds, locked off, no zoom. Same person as the start image.`
+    `${subject} is prominent, mouth and head move naturally while speaking, subtle gesture. ` +
+    "Props and background stay exactly as the start image, nothing new enters frame. " +
+    `${says} Camera holds. Same person and objects as the start image.`
   );
 }
 
