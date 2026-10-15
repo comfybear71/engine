@@ -299,18 +299,29 @@ export default function HeadRigModal({
   }, [project, characterId]);
 
   // ── When rig key changes, load its saved timeline (fresh client ids) ──
-  // Also filter out segments that reference shots no longer in the library.
   useEffect(() => {
     const entry = rigs[rigKey];
     legacyKeyframesRef.current = entry?.keyframes;
-    const shotIds = new Set(shots.map((s) => s.id));
-    const validSeg = (s: any) => shotIds.has(s.shotId);
-    setBodySegments((entry?.bodySegments || []).filter(validSeg).map((s) => ({ ...s, id: genSegId() })));
-    setHeadSegments((entry?.headSegments || []).filter(validSeg).map((s) => ({ ...s, id: genSegId() })));
+    setBodySegments((entry?.bodySegments || []).map((s) => ({ ...s, id: genSegId() })));
+    setHeadSegments((entry?.headSegments || []).map((s) => ({ ...s, id: genSegId() })));
     setSelectedSegment(null);
     setScrubFrame(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rigKey, rigs, shots]);
+  }, [rigKey, rigs]);
+
+  // Filter out segments referencing deleted shots — separate effect so it
+  // doesn't regenerate IDs or clear selection on every shots refresh.
+  const shotIdsSet = useMemo(() => new Set(shots.map((s) => s.id)), [shots]);
+  useEffect(() => {
+    setBodySegments((prev) => {
+      const filtered = prev.filter((s) => shotIdsSet.has(s.shotId));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+    setHeadSegments((prev) => {
+      const filtered = prev.filter((s) => shotIdsSet.has(s.shotId));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [shotIdsSet]);
 
   const shotsById = useMemo(() => {
     const map = new Map<string, ShotInfo>();
@@ -651,11 +662,10 @@ export default function HeadRigModal({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    // Convert CSS pixels to canvas pixels (canvas may be CSS-scaled)
-    const cssToCanvasX = canvas.width / rect.width;
-    const cssToCanvasY = canvas.height / rect.height;
-    const mx = (e.clientX - rect.left) * cssToCanvasX;
-    const my = (e.clientY - rect.top) * cssToCanvasY;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const my = (e.clientY - rect.top) * scaleY;
     const { scale, bw, bh, bx, by } = layoutBasis(scrubFrame);
 
     const hw = dims.w * head.headScale * scale;
@@ -665,18 +675,18 @@ export default function HeadRigModal({
 
     const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
     for (const [cx, cy] of corners) {
-      if (Math.abs(mx - cx) < 10 && Math.abs(my - cy) < 10) {
+      if (Math.abs(mx - cx) < 14 && Math.abs(my - cy) < 14) {
         setSelectedSegment({ track: "head", id: head.id });
         canvasDragRef.current = { kind: "scale", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
         e.preventDefault();
         return;
       }
     }
-    if (mx >= hx && mx <= hx + hw && my >= hy && my <= hy + hh) {
-      setSelectedSegment({ track: "head", id: head.id });
-      canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
-      e.preventDefault();
-    }
+    // Any click on the canvas moves the head when editing — no need for
+    // precise hit-testing which can fail if CSS-to-canvas scaling is off.
+    setSelectedSegment({ track: "head", id: head.id });
+    canvasDragRef.current = { kind: "move", startX: e.clientX, startY: e.clientY, origAnchorX: head.anchorX, origAnchorY: head.anchorY, origScale: head.headScale };
+    e.preventDefault();
   }
 
   function updateHeadSegment(id: string, patch: Partial<HeadSegment>) {
@@ -1371,7 +1381,7 @@ export default function HeadRigModal({
               width={CANVAS_W}
               height={CANVAS_H}
               className="rounded-md border border-studio-border"
-              style={{ cursor: editingHead ? "crosshair" : "default", width: CANVAS_W, height: CANVAS_H, maxHeight: "55vh", objectFit: "contain" }}
+              style={{ cursor: editingHead ? "crosshair" : "default", maxWidth: "100%", maxHeight: "55vh", aspectRatio: `${CANVAS_W} / ${CANVAS_H}` }}
               onMouseDown={onCanvasMouseDown}
               onMouseMove={onCanvasMouseMove}
               onMouseUp={onCanvasMouseUp}
