@@ -24,6 +24,16 @@ function thumbUrl(project: string, characterId: string, start: TalkStart): strin
   return `${WORKER_URL}/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/media?rel=${encodeURIComponent(start.thumb)}`;
 }
 
+function defaultSubject(characterId: string): string {
+  const name = characterId.replace(/[_-]+/g, " ").trim();
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)}, `;
+}
+
+function hasLook(subject: string): boolean {
+  const comma = subject.indexOf(",");
+  return comma > 0 && subject.slice(comma + 1).trim().length >= 8;
+}
+
 function readFileBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -100,9 +110,9 @@ export default function TalkingHeadDialog({
       saved = "";
     }
     try {
-      setSubject(window.localStorage.getItem(subjectKey(project, characterId)) || "");
+      setSubject(window.localStorage.getItem(subjectKey(project, characterId)) || defaultSubject(characterId));
     } catch {
-      setSubject("");
+      setSubject(defaultSubject(characterId));
     }
     loadEngineSettings()
       .then((settings) => {
@@ -128,6 +138,8 @@ export default function TalkingHeadDialog({
     ? null
     : ltx && comfyConfigured === false
       ? "COMFY_CLOUD_API_KEY is not set. Add it to the engine .env file and restart the engine, or switch to Grok."
+      : ltx && !hasLook(subject)
+        ? "Finish \"Who is on screen\" below: after the name, add a short look, e.g. a man with a red felt hat and dark beard."
       : !plan.hasWords
       ? "No transcript for this audio. Re-import it with transcription on so the words are known."
       : !chosen
@@ -311,13 +323,13 @@ export default function TalkingHeadDialog({
 
               {ltx ? (
                 <label className="block">
-                  <span className="mb-1 block text-[11px] text-studio-muted">
-                    Who is on screen (name first, then a short look, e.g. &quot;Rodney, a man with a red felt hat and dark beard&quot;)
+                  <span className="mb-1 block text-[11px] font-semibold text-amber-300">
+                    Required: who is on screen (name, then a short look)
                   </span>
                   <input
                     className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-xs text-neutral-200"
                     value={subject}
-                    placeholder={characterId}
+                    placeholder={`e.g. ${characterId}, a man with a red felt hat and dark beard`}
                     data-testid="talking-head-subject"
                     onChange={(event) => setSubject(event.target.value)}
                   />
