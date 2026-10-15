@@ -235,6 +235,7 @@ export default function HeadRigModal({
     if (!shotId || shotDims[shotId] || shotDimsLoadingRef.current.has(shotId)) return;
     shotDimsLoadingRef.current.add(shotId);
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = () => {
       setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
     };
@@ -244,20 +245,29 @@ export default function HeadRigModal({
 
   // Per-frame image cache (shotId#frame -> Image), with a bump counter to
   // force a redraw once a requested frame finishes loading.
+  // IMPORTANT: Only ONE Image object per key ever gets created — both
+  // getFrameImage() and the preload effect go through loadFrameImage().
   const frameImgCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const frameImgLoadingRef = useRef<Set<string>>(new Set());
   const [redrawTick, setRedrawTick] = useState(0);
-  function getFrameImage(shotId: string, frame: number): HTMLImageElement | null {
+
+  function loadFrameImage(shotId: string, frame: number): void {
     const key = `${shotId}#${frame}`;
-    const cached = frameImgCacheRef.current.get(key);
-    if (cached) return cached.complete && cached.naturalWidth > 0 ? cached : null;
-    if (frameImgLoadingRef.current.has(key)) return null;
+    if (frameImgCacheRef.current.has(key) || frameImgLoadingRef.current.has(key)) return;
     frameImgLoadingRef.current.add(key);
     const pad = String(Math.max(1, frame)).padStart(4, "0");
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = () => { frameImgCacheRef.current.set(key, img); frameImgLoadingRef.current.delete(key); setRedrawTick((t) => t + 1); };
     img.onerror = () => { frameImgLoadingRef.current.delete(key); };
     img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`);
+  }
+
+  function getFrameImage(shotId: string, frame: number): HTMLImageElement | null {
+    const key = `${shotId}#${frame}`;
+    const cached = frameImgCacheRef.current.get(key);
+    if (cached) return cached;
+    loadFrameImage(shotId, frame);
     return null;
   }
 
@@ -266,13 +276,7 @@ export default function HeadRigModal({
     const segs = [...bodySegments, ...headSegments];
     for (const seg of segs) {
       for (let f = seg.inFrame; f <= seg.outFrame; f++) {
-        const key = `${seg.shotId}#${f}`;
-        if (!frameImgCacheRef.current.has(key)) {
-          const pad = String(Math.max(1, f)).padStart(4, "0");
-          const img = new Image();
-          img.onload = () => { frameImgCacheRef.current.set(key, img); setRedrawTick((t) => t + 1); };
-          img.src = shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`);
-        }
+        loadFrameImage(seg.shotId, f);
       }
     }
   }, [bodySegments, headSegments, project, characterId]);
