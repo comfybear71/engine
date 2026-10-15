@@ -195,7 +195,50 @@ function loadHeadRig(projectDir, globalAssetsDir, characterId) {
   const refRel = character.reference
     ? posixJoin("characters", characterId, character.reference)
     : null;
-  return { ok: true, rigs: character.headRig || {}, reference: refRel };
+  return { ok: true, rigs: character.headRig || {}, reference: refRel, standard: character.headStandard || null };
+}
+
+/**
+ * Validate the character-wide "standard head": the visible head's height as a
+ * fraction of the body frame height, where its centre sits (fractions of the
+ * body frame), and an optional per-rig-key multiplier (front is the base).
+ */
+function normalizeHeadStandard(raw) {
+  if (!raw || typeof raw !== "object") throw localError("head standard must be an object");
+  const height = Number(raw.height);
+  const centerX = Number(raw.centerX);
+  const centerY = Number(raw.centerY);
+  if (!Number.isFinite(height) || height < 0.02 || height > 1.5) throw localError("height must be between 0.02 and 1.5");
+  if (!Number.isFinite(centerX) || centerX < -0.5 || centerX > 1.5) throw localError("centerX must be -0.5 to 1.5");
+  if (!Number.isFinite(centerY) || centerY < -0.5 || centerY > 1.5) throw localError("centerY must be -0.5 to 1.5");
+  const views = {};
+  if (raw.views && typeof raw.views === "object" && !Array.isArray(raw.views)) {
+    for (const [key, value] of Object.entries(raw.views)) {
+      const k = String(key).trim();
+      const factor = Number(value);
+      if (!k || !/^[A-Za-z0-9_]+$/.test(k)) throw localError(`Invalid view key "${key}"`);
+      if (!Number.isFinite(factor) || factor < 0.2 || factor > 5) throw localError(`views.${k} must be between 0.2 and 5`);
+      if (Math.abs(factor - 1) > 1e-6) views[k] = factor;
+    }
+  }
+  return { height, centerX, centerY, views };
+}
+
+function saveHeadStandard(projectDir, globalAssetsDir, characterId, body) {
+  if (!isSafeFolderName(characterId)) throw localError("Invalid character id");
+  const standard = normalizeHeadStandard(body);
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  character.headStandard = standard;
+  writeCharacterJson(projectDir, characterId, character, null);
+  return { ok: true, standard };
+}
+
+function clearHeadStandard(projectDir, globalAssetsDir, characterId) {
+  if (!isSafeFolderName(characterId)) throw localError("Invalid character id");
+  const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
+  delete character.headStandard;
+  writeCharacterJson(projectDir, characterId, character, null);
+  return { ok: true, standard: null };
 }
 
 /**
@@ -330,5 +373,8 @@ module.exports = {
   loadHeadRig,
   saveHeadRig,
   deleteHeadRig,
+  saveHeadStandard,
+  clearHeadStandard,
+  normalizeHeadStandard,
   decodeImageBuffer,
 };
