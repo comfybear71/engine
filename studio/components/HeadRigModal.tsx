@@ -280,15 +280,19 @@ export default function HeadRigModal({
     return null;
   }
 
-  // Preload frame images for all segments so playback doesn't blink
+  // Preload a window of frames around the current scrub position so
+  // nearby frames are ready when you step/play. Only loads ~10 ahead
+  // instead of ALL frames at once (which overwhelms the browser).
   useEffect(() => {
     const segs = [...bodySegments, ...headSegments];
     for (const seg of segs) {
-      for (let f = seg.inFrame; f <= seg.outFrame; f++) {
+      const lo = Math.max(seg.inFrame, scrubFrame - 2);
+      const hi = Math.min(seg.outFrame, scrubFrame + 10);
+      for (let f = lo; f <= hi; f++) {
         loadFrameImage(seg.shotId, f);
       }
     }
-  }, [bodySegments, headSegments, project, characterId]);
+  }, [bodySegments, headSegments, scrubFrame, project, characterId]);
 
   // ── Load shots + rigs ──
   useEffect(() => {
