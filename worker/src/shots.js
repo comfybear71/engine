@@ -225,7 +225,10 @@ function listShots(projectDir, characterId) {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith("_")) continue;
-    const info = readShotJson(path.join(dir, entry.name));
+    const shotPath = path.join(dir, entry.name);
+    // Skip if deleted marker exists (fallback for when shot.json was locked)
+    if (fs.existsSync(path.join(shotPath, "._deleted"))) continue;
+    const info = readShotJson(shotPath);
     if (info && info.status !== "deleted") {
       // Add frame list info
       const thumbDir = path.join(dir, entry.name, "thumb");
@@ -621,8 +624,13 @@ function deleteShot(projectDir, characterId, shotId) {
       info.status = "deleted";
       info.deletedAt = new Date().toISOString();
       writeShotJson(dir, info);
-    } catch (writeErr) {
-      throw shotError(`Could not delete shot: ${renameErr.message}`, "EPERM");
+    } catch (_writeErr) {
+      // shot.json also locked — write a separate marker file as last resort.
+      try {
+        fs.writeFileSync(path.join(dir, "._deleted"), stamp.toString());
+      } catch (_markerErr) {
+        throw shotError(`Could not delete shot: ${renameErr.message}`, "EPERM");
+      }
     }
   }
   return { deleted: shotId };
