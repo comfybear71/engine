@@ -14,7 +14,7 @@
  * Never writes timeline.json -- caller must use parseProjectToTemp.
  */
 
-const LANES = ["body", "face", "props", "dialogue", "mouth", "audio", "sfx", "camera", "inserts"];
+const LANES = ["body", "face", "props", "action", "dialogue", "mouth", "audio", "sfx", "camera", "inserts"];
 
 const FACE_KEYS = new Set(["face", "eyes", "head", "brow", "brows", "expression"]);
 const BODY_KEYS = new Set(["body", "at", "flip", "scale", "z"]);
@@ -56,6 +56,8 @@ function assignActionLane(event) {
   if (lane === "dialogue" || lane === "audio" || lane === "sfx" || lane === "camera" || lane === "mouth" || lane === "inserts") {
     return lane;
   }
+  const doTag = String((event && event.tag) || "").toLowerCase() === "do";
+  if (doTag) return "action";
   if (lane === "body" || lane === "face" || lane === "props") return lane;
 
   const tag = String((event && event.tag) || "").toLowerCase();
@@ -64,7 +66,7 @@ function assignActionLane(event) {
   if (tag === "dialogue") return "dialogue";
   if (tag === "audio") return "audio";
   if (tag === "prop" || (event && event.subjectKind === "prop")) return "props";
-  if (tag === "move" || tag === "pose" || tag === "swing" || tag === "do") return "body";
+  if (tag === "move" || tag === "pose" || tag === "swing") return "body";
 
   const keys = eventKeys(event || {});
   const label = event && event.label;
@@ -114,7 +116,7 @@ function extendActionHolds(events, sceneLengthById, fps) {
   const byKey = new Map();
   for (let i = 0; i < out.length; i++) {
     const event = out[i];
-    if (event.lane !== "body" && event.lane !== "face" && event.lane !== "props") continue;
+    if (event.lane !== "body" && event.lane !== "face" && event.lane !== "props" && event.lane !== "action") continue;
     if (!isInstant(event)) continue;
     const key = `${event.sceneId}::${event.lane}::${event.subject || ""}`;
     const list = byKey.get(key) || [];

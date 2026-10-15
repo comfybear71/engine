@@ -65,6 +65,8 @@ describe("studio action lane assignment", () => {
     assert.equal(assignActionLane({ lane: "action", tag: "action", keys: ["face"] }), "face");
     assert.equal(assignActionLane({ lane: "action", tag: "prop", subjectKind: "prop" }), "props");
     assert.equal(assignActionLane({ lane: "action", tag: "layer", subjectKind: "prop" }), "props");
+    assert.equal(assignActionLane({ lane: "action", tag: "do" }), "action");
+    assert.equal(assignActionLane({ lane: "body", tag: "do" }), "action");
     assert.equal(assignActionLane({ lane: "camera", tag: "camera" }), "camera");
     assert.equal(assignActionLane({ lane: "inserts", tag: "insert" }), "inserts");
     assert.equal(assignActionLane({ tag: "insert" }), "inserts");
@@ -127,7 +129,7 @@ describe("studio action lane assignment", () => {
         },
       ],
     });
-    assert.deepEqual(built.lanes, ["body", "face", "props", "dialogue", "mouth", "audio", "sfx", "camera", "inserts"]);
+    assert.deepEqual(built.lanes, ["body", "face", "props", "action", "dialogue", "mouth", "audio", "sfx", "camera", "inserts"]);
     const byLane = (id) => built.blocks.filter((b) => b.lane === id);
     assert.ok(byLane("body").some((b) => b.scriptLine === 3));
     assert.ok(byLane("body").some((b) => b.scriptLine === 4));
