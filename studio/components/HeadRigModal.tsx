@@ -154,6 +154,9 @@ export default function HeadRigModal({
   } | null>(null);
   const [, forceDragTick] = useState(0); // re-render while dragging segment blocks
 
+  // Right-click context menu
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; track: TrackName; id: string } | null>(null);
+
   // Canvas drag state (move/scale a head segment's anchor)
   const canvasDragRef = useRef<{
     kind: "move" | "scale";
@@ -302,7 +305,8 @@ export default function HeadRigModal({
     let by = ch - bh - ch * 0.03;
 
     if (body) {
-      const dims = shotDims[body.shotId];
+      const img = getFrameImage(body.shotId, sourceFrameOf(body, frame));
+      const dims = shotDims[body.shotId] || (img ? { w: img.naturalWidth, h: img.naturalHeight } : null);
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
@@ -310,15 +314,14 @@ export default function HeadRigModal({
         bh = dims.h * scale;
         bx = (cw - bw) / 2;
         by = ch - bh - ch * 0.03;
-        const img = getFrameImage(body.shotId, sourceFrameOf(body, frame));
         if (img) ctx.drawImage(img, bx, by, bw, bh);
       }
     }
 
     if (head) {
-      const dims = shotDims[head.shotId];
+      const img = getFrameImage(head.shotId, sourceFrameOf(head, frame));
+      const dims = shotDims[head.shotId] || (img ? { w: img.naturalWidth, h: img.naturalHeight } : null);
       if (dims && dims.w > 0) {
-        const img = getFrameImage(head.shotId, sourceFrameOf(head, frame));
         if (img) {
           const hw = dims.w * head.headScale * scale;
           const hh = dims.h * head.headScale * scale;
@@ -682,24 +685,47 @@ export default function HeadRigModal({
     }
   }
 
-  function bladeSelected() {
-    const sel = selectedSeg();
+  function bladeAtPlayhead() {
+    // Try the selected segment first; if none selected or playhead isn't inside
+    // it, auto-find whichever segment on either track the playhead sits inside.
+    let sel = selectedSeg();
+    if (sel) {
+      const end = segEnd(sel.seg);
+      if (scrubFrame <= sel.seg.start || scrubFrame > end) sel = null;
+    }
+    if (!sel) {
+      // Auto-detect: check body then head
+      const bodySeg = activeSegmentAt(bodySegments, scrubFrame);
+      if (bodySeg && scrubFrame > bodySeg.start && scrubFrame <= segEnd(bodySeg)) {
+        sel = { track: "body", seg: bodySeg };
+      } else {
+        const headSeg = activeSegmentAt(headSegments, scrubFrame);
+        if (headSeg && scrubFrame > headSeg.start && scrubFrame <= segEnd(headSeg)) {
+          sel = { track: "head", seg: headSeg };
+        }
+      }
+    }
     if (!sel) return;
     const seg = sel.seg;
-    const end = segEnd(seg);
-    if (scrubFrame <= seg.start || scrubFrame > end) return; // playhead must be strictly inside
     const splitSourceFrame = sourceFrameOf(seg, scrubFrame);
     if (sel.track === "body") {
-      const first: Segment = { ...seg, outFrame: splitSourceFrame - 1 };
-      const second: Segment = { ...seg, id: genSegId(), start: scrubFrame, inFrame: splitSourceFrame };
-      setBodySegments((prev) => prev.flatMap((s) => (s.id === seg.id ? [first, second] : [s])));
-      setSelectedSegment({ track: "body", id: second.id });
+      const secondId = genSegId();
+      setBodySegments((prev) => prev.flatMap((s) => {
+        if (s.id !== seg.id) return [s];
+        const first: Segment = { ...s, outFrame: splitSourceFrame - 1 };
+        const second: Segment = { ...s, id: secondId, start: scrubFrame, inFrame: splitSourceFrame };
+        return [first, second];
+      }));
+      setSelectedSegment({ track: "body", id: secondId });
     } else {
-      const h = seg as HeadSegment;
-      const first: HeadSegment = { ...h, outFrame: splitSourceFrame - 1 };
-      const second: HeadSegment = { ...h, id: genSegId(), start: scrubFrame, inFrame: splitSourceFrame };
-      setHeadSegments((prev) => prev.flatMap((s) => (s.id === h.id ? [first, second] : [s])));
-      setSelectedSegment({ track: "head", id: second.id });
+      const secondId = genSegId();
+      setHeadSegments((prev) => prev.flatMap((s) => {
+        if (s.id !== seg.id) return [s];
+        const first: HeadSegment = { ...(s as HeadSegment), outFrame: splitSourceFrame - 1 };
+        const second: HeadSegment = { ...(s as HeadSegment), id: secondId, start: scrubFrame, inFrame: splitSourceFrame };
+        return [first, second];
+      }));
+      setSelectedSegment({ track: "head", id: secondId });
     }
   }
 
@@ -723,6 +749,34 @@ export default function HeadRigModal({
     }
   }
 
+  // ── Context menu handlers ──
+  function handleCtxMenu(e: React.MouseEvent, track: TrackName, id: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedSegment({ track, id });
+    setCtxMenu({ x: e.clientX, y: e.clientY, track, id });
+  }
+  function ctxDelete() {
+    if (!ctxMenu) return;
+    const { track, id } = ctxMenu;
+    if (track === "body") setBodySegments((prev) => prev.filter((s) => s.id !== id));
+    else setHeadSegments((prev) => prev.filter((s) => s.id !== id));
+    setSelectedSegment(null);
+    setCtxMenu(null);
+  }
+  function ctxCopy() {
+    if (!ctxMenu) return;
+    const { track, id } = ctxMenu;
+    const list = track === "body" ? bodySegments : headSegments;
+    const seg = list.find((s) => s.id === id);
+    if (seg) clipboardRef.current = { track, seg };
+    setCtxMenu(null);
+  }
+  function ctxPaste() {
+    pasteClipboard();
+    setCtxMenu(null);
+  }
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement).tagName;
@@ -730,15 +784,18 @@ export default function HeadRigModal({
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
 
-      if (ctrl && key === "b") { e.preventDefault(); bladeSelected(); return; }
+      if (ctrl && key === "b") { e.preventDefault(); bladeAtPlayhead(); return; }
       if (key === "delete" || key === "backspace") { deleteSelected(); return; }
       if (key === "i" && !ctrl) { e.preventDefault(); trimSelectedEdge("in"); return; }
       if (key === "o" && !ctrl) { e.preventDefault(); trimSelectedEdge("out"); return; }
       if (ctrl && key === "c") { copySelected(); return; }
       if (ctrl && key === "v") { pasteClipboard(); return; }
     }
+    // Close context menu on click outside
+    function onClickAnywhere() { setCtxMenu(null); }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("mousedown", onClickAnywhere);
+    return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("mousedown", onClickAnywhere); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSegment, bodySegments, headSegments, scrubFrame]);
 
@@ -1075,6 +1132,7 @@ export default function HeadRigModal({
                     project={project} characterId={characterId}
                     onSelect={(id) => setSelectedSegment({ track: "body", id })}
                     onSegMouseDown={(e, seg, edge) => onSegmentMouseDown(e, "body", seg, edge)}
+                    onContextMenu={(e, id) => handleCtxMenu(e, "body", id)}
                     playheadPct={playheadPct}
                   />
                   {/* ── HEAD TRACK (V2) ── */}
@@ -1088,6 +1146,7 @@ export default function HeadRigModal({
                     project={project} characterId={characterId}
                     onSelect={(id) => setSelectedSegment({ track: "head", id })}
                     onSegMouseDown={(e, seg, edge) => onSegmentMouseDown(e, "head", seg, edge)}
+                    onContextMenu={(e, id) => handleCtxMenu(e, "head", id)}
                     playheadPct={playheadPct}
                   />
                 </div>
@@ -1098,11 +1157,35 @@ export default function HeadRigModal({
 
         <div className="flex items-center justify-between border-t border-[#222] bg-[#141414] px-4 py-1.5">
           <span className="text-[9px] text-neutral-600">
-            <b className="text-neutral-500">Click</b> select · <b className="text-neutral-500">Drag</b> move · <b className="text-neutral-500">Drag edge</b> trim · <b className="text-neutral-500">I/O</b> trim at playhead · <b className="text-neutral-500">Ctrl+B</b> split · <b className="text-neutral-500">Del</b> remove · <b className="text-neutral-500">Ctrl+C/V</b> copy/paste
+            <b className="text-neutral-500">Click</b> select · <b className="text-neutral-500">Drag</b> move · <b className="text-neutral-500">Drag edge</b> trim · <b className="text-neutral-500">I/O</b> trim at playhead · <b className="text-neutral-500">Ctrl+B</b> split · <b className="text-neutral-500">Del</b> remove · <b className="text-neutral-500">Ctrl+C/V</b> copy/paste · <b className="text-neutral-500">Right-click</b> menu
           </span>
           <span className="font-mono text-[9px] text-neutral-600">F{scrubFrame} / {maxFrames}</span>
         </div>
       </div>
+
+      {/* ── Right-click context menu ── */}
+      {ctxMenu ? (
+        <div
+          className="fixed z-50 min-w-[160px] rounded border border-[#333] bg-[#1a1a1a] py-1 shadow-xl"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-200 hover:bg-[#333]"
+            onClick={ctxCopy}>
+            <span className="w-4 text-center">📋</span> Copy <span className="ml-auto text-[10px] text-neutral-500">Ctrl+C</span>
+          </button>
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-200 hover:bg-[#333] disabled:opacity-40"
+            disabled={!clipboardRef.current}
+            onClick={ctxPaste}>
+            <span className="w-4 text-center">📌</span> Paste <span className="ml-auto text-[10px] text-neutral-500">Ctrl+V</span>
+          </button>
+          <div className="my-1 h-px bg-[#333]" />
+          <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-400 hover:bg-[#333]"
+            onClick={ctxDelete}>
+            <span className="w-4 text-center">🗑</span> Delete <span className="ml-auto text-[10px] text-neutral-500">Del</span>
+          </button>
+        </div>
+      ) : null}
 
       {/* ── Shot Browser + Bake Outputs ──────────────────────────── */}
       <div className="mt-4 rounded-md border border-studio-border bg-[#1a1a1a] p-3">
@@ -1293,7 +1376,7 @@ export default function HeadRigModal({
 
 function TrackRow({
   label, code, codeClass, bg, ringClass, segments, maxFrames, shotsById, project, characterId,
-  isSelected, onSelect, onSegMouseDown, playheadPct,
+  isSelected, onSelect, onSegMouseDown, onContextMenu, playheadPct,
 }: {
   label: string;
   code: string;
@@ -1308,6 +1391,7 @@ function TrackRow({
   isSelected: (id: string) => boolean;
   onSelect: (id: string) => void;
   onSegMouseDown: (e: React.MouseEvent, seg: Segment, edge?: "in" | "out") => void;
+  onContextMenu?: (e: React.MouseEvent, id: string) => void;
   playheadPct: string;
 }) {
   return (
@@ -1332,6 +1416,7 @@ function TrackRow({
               style={{ left, width, zIndex: selected ? 6 : 2 }}
               onMouseDown={(e) => onSegMouseDown(e, seg)}
               onClick={(e) => { e.stopPropagation(); onSelect(seg.id); }}
+              onContextMenu={(e) => { if (onContextMenu) onContextMenu(e, seg.id); }}
               title={`${shot?.name || seg.shotId} · frames ${seg.inFrame}-${seg.outFrame}`}
             >
               <div className="flex h-full">
@@ -1341,7 +1426,7 @@ function TrackRow({
                   const pad = String(frame).padStart(4, "0");
                   return (
                     <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`)} alt=""
-                      className="h-full shrink-0 object-contain" style={{ width: `${100 / Math.min(segLength(seg), 24)}%`, background: "#0a0a0a" }}
+                      className="h-full shrink-0 object-cover" style={{ width: `${100 / Math.min(segLength(seg), 24)}%`, background: "#0a0a0a" }}
                       onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                   );
                 })}
