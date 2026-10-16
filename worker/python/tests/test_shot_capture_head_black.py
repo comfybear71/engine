@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -66,3 +68,14 @@ def test_dark_pocket_reached_only_through_a_narrow_gap_stays_solid() -> None:
     assert alpha[348, 470] == 255
     assert alpha[20, 20] == 0
     assert alpha[360, 200] == 0
+
+
+def test_pure_black_hair_and_brim_underside_are_not_bitten_out() -> None:
+    """A real LTX frame (downscaled) whose left brim/hair and beard are exactly
+    as black as the backdrop; the opening alone used to cut round chunks there."""
+    frame = cv2.imread(str(Path(__file__).parent / "fixtures" / "ltx_head_black_dark_hair.png"))
+    alpha = key_head_on_black(frame)[:, :, 3]
+    for x, y in ((436, 159), (207, 162), (265, 273)):
+        assert alpha[y, x] == 255, (x, y)
+    assert alpha[5, 5] == 0
+    assert alpha[340, 630] == 0
