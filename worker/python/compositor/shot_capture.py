@@ -196,8 +196,25 @@ def key_flat(bgr: np.ndarray, bg_color: tuple[float, float, float],
 HEAD_BLACK_KEY = "head-black"
 
 
+def _lit_silhouette(gray: np.ndarray, close_frac: float, min_area: float, lit_thresh: int = 3) -> np.ndarray:
+    """Filled outline of everything lit at all, with concavities up to
+    close_frac of the frame height bridged. Black hair and the underside of a
+    hat brim are exactly as black as the backdrop, so colour cannot find
+    them; their shape can: they sit in the concave gaps of the lit outline."""
+    h, w = gray.shape[:2]
+    lit = (gray > lit_thresh).astype(np.uint8)
+    k = max(3, int(round(h * close_frac)) | 1)
+    padded = cv2.copyMakeBorder(lit, k, k, k, k, cv2.BORDER_CONSTANT, value=0)
+    closed = cv2.morphologyEx(padded, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))[k:-k, k:-k]
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    out = np.zeros_like(lit)
+    cv2.drawContours(out, [c for c in contours if cv2.contourArea(c) >= min_area], -1, 1, cv2.FILLED)
+    return out
+
+
 def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, open_frac: float = 0.14,
-                      close_frac: float = 0.03, feather_px: float = 1.2) -> np.ndarray:
+                      close_frac: float = 0.03, feather_px: float = 1.2,
+                      fill_frac: float = 0.10) -> np.ndarray:
     """Key a head shot filmed on pure black (an LTX talking head).
 
     A colour key cannot work here: black hair, the shadow under a hat brim
@@ -207,8 +224,11 @@ def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, open_frac: float = 
     backdrop is then opened, which removes any pocket of hair or hat shadow
     that only reaches the backdrop through a narrow gap, so those stay solid
     while the open backdrop is still removed right up to the head outline.
-    A convex hull is deliberately not used: it leaves straight-edged black
-    corners around the head once it is composited.
+    Black hair and a black hat-brim underside are indistinguishable from the
+    backdrop by colour, so the opening alone bites round chunks out of them;
+    the lit outline is closed (fill_frac) and unioned back in to restore
+    them. A convex hull is deliberately not used: it leaves straight-edged
+    black corners around the head once it is composited.
     Pixel colours are never changed, only alpha.
     """
     h, w = bgr.shape[:2]
@@ -233,6 +253,7 @@ def key_head_on_black(bgr: np.ndarray, dark_thresh: int = 8, open_frac: float = 
     keep = [c for c in contours if cv2.contourArea(c) >= min_area]
     mask = np.zeros_like(foreground)
     cv2.drawContours(mask, keep, -1, 1, cv2.FILLED)
+    mask |= _lit_silhouette(gray, close_frac=fill_frac, min_area=min_area)
 
     alpha = (mask * 255).astype(np.uint8)
     if feather_px > 0:
