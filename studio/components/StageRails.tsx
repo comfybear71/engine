@@ -1,7 +1,7 @@
 "use client";
 
 export type LeftPoolId = "assets" | "media" | "effects";
-export type RightDrawerId = "marks" | "layers" | "script" | "camera";
+export type RightDrawerId = "marks" | "layers" | "props" | "script" | "camera";
 
 function IconUsers() {
   return (
@@ -52,6 +52,16 @@ function IconLayers() {
   );
 }
 
+function IconProp() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M5 20h14M8 20V9l4-4 4 4v11" />
+      <path d="M12 12v8" />
+      <path d="M19 4v4M17 6h4" />
+    </svg>
+  );
+}
+
 function IconScript() {
   return (
     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -79,6 +89,7 @@ const LEFT_ITEMS: { id: LeftPoolId; label: string; icon: typeof IconUsers }[] = 
 const RIGHT_ITEMS: { id: RightDrawerId; label: string; icon: typeof IconCrosshair }[] = [
   { id: "marks", label: "Marks", icon: IconCrosshair },
   { id: "layers", label: "Layers", icon: IconLayers },
+  { id: "props", label: "Props", icon: IconProp },
   { id: "script", label: "Script", icon: IconScript },
   { id: "camera", label: "Camera", icon: IconCamera },
 ];

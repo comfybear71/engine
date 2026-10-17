@@ -8,7 +8,7 @@ import ImportAudioDialog from "@/components/ImportAudioDialog";
 import TalkingHeadDialog from "@/components/TalkingHeadDialog";
 import PreviewCanvas from "@/components/PreviewCanvas";
 import PanelSplitter from "@/components/PanelSplitter";
-import { LayersInspector, MarksInspector, ScriptInspector } from "@/components/StageInspectors";
+import { LayersInspector, MarksInspector, PropsInspector, ScriptInspector } from "@/components/StageInspectors";
 import { LeftIconRail, RightIconRail, type LeftPoolId, type RightDrawerId } from "@/components/StageRails";
 import TimelineLanes from "@/components/TimelineLanes";
 import ScriptIdentity from "@/components/ScriptIdentity";
@@ -16,6 +16,8 @@ import TransportBar from "@/components/TransportBar";
 import type { AssetFocus } from "@/lib/assetEditor";
 import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import { ASSET_DRAG_MIME, applyStagePlacement, parseAssetDrag } from "@/lib/stageAssets";
+import { applyPropEdit, scenePropStates, type PropScope } from "@/lib/stageProps";
+import { fileToImageBase64 } from "@/lib/assetEditor";
 import {
   AUDIO_SCRUB_PREVIEW_MS,
   AUDIO_SYNC_SLACK_SEC,
@@ -73,7 +75,9 @@ import {
   loadPreviewGraph,
   loadScript,
   loadStage,
+  loadStaging,
   loadStudioSettings,
+  importStillAsset,
   saveMouthCue,
   saveScript,
   saveStudioSettings,
@@ -86,6 +90,7 @@ import {
   type LanesResponse,
   type PreviewSegmentStatus,
   type Mark,
+  type PropAsset,
   type PlaybackStatus,
   type PreviewGraph,
   type StageInfo,
@@ -168,6 +173,9 @@ export default function StagePanel({
   const [loopSelection, setLoopSelection] = useState(false);
   const [assetFocus, setAssetFocus] = useState<AssetFocus | null>(null);
   const [assetEpoch, setAssetEpoch] = useState(0);
+  const [stagingProps, setStagingProps] = useState<PropAsset[]>([]);
+  const [propsBusy, setPropsBusy] = useState(false);
+  const [propsMessage, setPropsMessage] = useState<string | null>(null);
   const [selectionRange, setSelectionRange] = useState<{
     start: number;
     end: number;
@@ -411,6 +419,26 @@ export default function StagePanel({
   }, [stage, currentScene]);
 
   const layers: StageLayer[] = currentScene?.layers || [];
+  const sceneStartFrame = lanes?.scenes.find((item) => item.id === (currentScene?.id ?? sceneId))?.startFrame ?? 0;
+  const sceneProps = useMemo(
+    () => scenePropStates(stagingProps, currentScene?.location ?? null, layers, Math.max(0, frame - sceneStartFrame)),
+    [stagingProps, currentScene, layers, frame, sceneStartFrame]
+  );
+
+  useEffect(() => {
+    if (!project || !workerUp) return;
+    let cancelled = false;
+    loadStaging(project)
+      .then((staging) => {
+        if (!cancelled) setStagingProps(staging.props);
+      })
+      .catch(() => {
+        if (!cancelled) setStagingProps([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project, workerUp, assetEpoch]);
   const maxFrame = Math.max(0, totalFrames - 1);
   const scriptLines = useMemo(() => scriptText.split("\n"), [scriptText]);
   const playheadLine = useMemo(
@@ -1236,6 +1264,45 @@ export default function StagePanel({
     if (next !== scriptText) onEditScript(next);
   }
 
+  function changeProp(propId: string, action: "hide" | "show", scope: PropScope) {
+    const state = sceneProps.find((item) => item.id === propId);
+    const next = applyPropEdit({
+      script: scriptText,
+      propId,
+      action,
+      scope,
+      frame,
+      fps,
+      scenes: lanes?.scenes || [],
+      playheadLine: playheadLine ?? selectedLine,
+      placed: state?.placed ?? true,
+      defaultAt: { x: Math.round(canvas.width / 2), y: Math.round(canvas.height * 0.85) },
+    });
+    if (next === scriptText) return;
+    setPropsMessage(
+      `${propId} ${action === "hide" ? "removed" : "added"} ${scope === "scene" ? "for the whole scene" : "from the playhead on"}.`
+    );
+    onEditScript(next);
+  }
+
+  async function importProp(file: File) {
+    const location = currentScene?.location;
+    if (!project || !location) return;
+    setPropsBusy(true);
+    setPropsMessage(null);
+    try {
+      const imageBase64 = await fileToImageBase64(file);
+      const result = await importStillAsset(project, { kind: "prop", name: file.name, location, imageBase64 });
+      setAssetEpoch((n) => n + 1);
+      setLanesEpoch((n) => n + 1);
+      setPropsMessage(`Added ${result.id} to ${location}. It is on stage for the whole scene.`);
+    } catch (err) {
+      setPropsMessage(err instanceof Error ? err.message : "Could not add the prop");
+    } finally {
+      setPropsBusy(false);
+    }
+  }
+
   async function insertImportedAudio(tag: string) {
     if (!project) return;
     const after = findInsertAfterLine(scriptText, playheadLine ?? selectedLine, sceneId);
@@ -1499,6 +1566,18 @@ export default function StagePanel({
                 ) : null}
                 {rightDrawer === "layers" ? (
                   <LayersInspector layers={layers} onClose={() => setRightDrawer(null)} />
+                ) : null}
+                {rightDrawer === "props" ? (
+                  <PropsInspector
+                    project={project}
+                    locationLabel={currentScene?.location ?? null}
+                    props={sceneProps}
+                    busy={propsBusy}
+                    message={propsMessage}
+                    onChange={changeProp}
+                    onImport={(file) => void importProp(file)}
+                    onClose={() => setRightDrawer(null)}
+                  />
                 ) : null}
                 {rightDrawer === "script" ? (
                   <ScriptInspector

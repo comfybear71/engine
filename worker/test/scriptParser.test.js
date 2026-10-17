@@ -802,6 +802,45 @@ describe("prop layers", () => {
     assert.ok(propLayers[1].timing.end_frame > propLayers[1].timing.start_frame);
   });
 
+  test("Stage page props: hide/show lines with at_time work from the end of the scene", async () => {
+    const isolated = createFixtureLibrary();
+    isolated.writePng(path.join(isolated.globalAssetsDir, "backgrounds", "room_a", "props", "letterbox.png"));
+    isolated.writePng(path.join(isolated.globalAssetsDir, "backgrounds", "room_a", "props", "plant.png"));
+    isolated.writeJson(path.join(isolated.globalAssetsDir, "backgrounds", "room_a", "staging.json"), {
+      marks: { centre: { x: 500, y: 1000, scale: 1.0 }, left: { x: 450, y: 1000, scale: 1.0 }, right: { x: 550, y: 1000, scale: 1.0 } },
+      auto_order: ["left", "right"],
+      props: {
+        letterbox: { asset: "props/letterbox.png", x: 300, y: 1000, z: 5 },
+        plant: { asset: "props/plant.png", z: 5 },
+      },
+    });
+    const body = ["[Scene: Intro]", "[Location: room_a]", "[Cast: Alice]", "Alice: Walking past the box.", "[Pause: 48]"];
+    const parse = async (extra) => {
+      const result = await parseScript(isolated.projectDir, isolated.globalAssetsDir, [...body, ...extra].join("\n"));
+      assert.deepEqual(result.errors, []);
+      return layersFor(result.timeline).filter((l) => l.prop_id);
+    };
+
+    const whole = await parse(["[Prop: letterbox hide at_time=0s]"]);
+    assert.deepEqual(whole.map((l) => l.prop_id), []);
+
+    const fromHere = await parse(["[Prop: letterbox hide at_time=1s]"]);
+    assert.equal(fromHere.length, 1);
+    assert.equal(fromHere[0].timing.start_frame || 0, 0);
+    assert.equal(fromHere[0].timing.end_frame, 24);
+
+    const added = await parse(["[Prop: plant show at=450,900 at_time=1s]"]);
+    const plant = added.filter((l) => l.prop_id === "plant");
+    assert.equal(plant.length, 1);
+    assert.equal(plant[0].timing.start_frame, 24);
+    assert.equal(plant[0].transform.x, 450);
+    assert.equal(plant[0].transform.y, 900);
+
+    const wholeAdd = await parse(["[Prop: plant show at=450,900 at_time=0s]"]);
+    assert.equal(wholeAdd.filter((l) => l.prop_id === "plant").length, 1);
+    isolated.cleanup();
+  });
+
   test("lint/parse errors when a declared prop asset is missing", async () => {
     const isolated = createFixtureLibrary();
     isolated.writeJson(path.join(isolated.globalAssetsDir, "backgrounds", "room_a", "staging.json"), {

@@ -2,7 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import { DrawerHeader } from "@/components/StageRails";
-import type { LaneBlock, Mark, StageLayer } from "@/lib/worker";
+import type { PropScope, ScenePropState } from "@/lib/stageProps";
+import { assetUrl, type LaneBlock, type Mark, type StageLayer } from "@/lib/worker";
 
 export function MarksInspector({
   locationLabel,
@@ -144,6 +145,129 @@ export function ScriptInspector({
             );
           })}
         </ol>
+      </div>
+    </div>
+  );
+}
+
+export function PropsInspector({
+  project,
+  locationLabel,
+  props,
+  busy,
+  message,
+  onChange,
+  onImport,
+  onClose,
+}: {
+  project: string;
+  locationLabel: string | null;
+  props: ScenePropState[];
+  busy: boolean;
+  message: string | null;
+  onChange: (propId: string, action: "hide" | "show", scope: PropScope) => void;
+  onImport: (file: File) => void;
+  onClose: () => void;
+}) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const btn =
+    "rounded border border-studio-border px-1.5 py-1 text-[11px] text-neutral-200 hover:border-studio-accent hover:text-white disabled:opacity-40";
+  return (
+    <div className="flex h-full min-h-0 flex-col" data-testid="props-drawer">
+      <DrawerHeader title="Props" onClose={onClose} />
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <p className="mb-2 text-[11px] text-studio-muted">
+          {locationLabel ? `Location ${locationLabel}. ` : "This scene has no location. "}
+          Changes apply at the playhead, or to the whole scene. They are written to the script as [Prop:] lines.
+        </p>
+        <ul className="space-y-2">
+          {props.map((prop) => (
+            <li
+              key={prop.id}
+              data-testid={`props-row-${prop.id}`}
+              data-visible={prop.visible ? "true" : "false"}
+              className="rounded-md bg-studio-raised p-2"
+            >
+              <div className="flex items-center gap-2">
+                {prop.thumbRel ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={assetUrl(project, prop.thumbRel, { thumb: true, v: prop.mtime }) ?? undefined}
+                    alt=""
+                    className="h-9 w-9 shrink-0 rounded bg-black/40 object-contain"
+                  />
+                ) : null}
+                <span className="min-w-0 flex-1 truncate text-sm text-neutral-200">{prop.id}</span>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                    prop.visible ? "bg-emerald-900/50 text-emerald-300" : "bg-black/40 text-studio-muted"
+                  }`}
+                >
+                  {prop.visible ? "On stage" : "Off"}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {prop.visible ? (
+                  <>
+                    <button type="button" disabled={busy} data-testid={`props-remove-${prop.id}`} className={btn} onClick={() => onChange(prop.id, "hide", "here")}>
+                      Remove from here
+                    </button>
+                    <button type="button" disabled={busy} data-testid={`props-remove-scene-${prop.id}`} className={btn} onClick={() => onChange(prop.id, "hide", "scene")}>
+                      Remove from scene
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" disabled={busy} data-testid={`props-add-${prop.id}`} className={btn} onClick={() => onChange(prop.id, "show", "here")}>
+                      Add here
+                    </button>
+                    <button type="button" disabled={busy} data-testid={`props-add-scene-${prop.id}`} className={btn} onClick={() => onChange(prop.id, "show", "scene")}>
+                      Add to whole scene
+                    </button>
+                  </>
+                )}
+              </div>
+            </li>
+          ))}
+          {props.length === 0 ? (
+            <li className="text-sm text-studio-muted">
+              {locationLabel ? "No props in this location yet." : "Pick a location for this scene first."}
+            </li>
+          ) : null}
+        </ul>
+        {locationLabel ? (
+          <div className="mt-3 border-t border-studio-border pt-3">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png"
+              className="hidden"
+              data-testid="props-import-input"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) onImport(file);
+              }}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              data-testid="props-import"
+              className="w-full rounded-md border border-studio-accent/50 bg-studio-raised px-2 py-1.5 text-[12px] text-neutral-200 hover:border-studio-accent hover:text-white disabled:opacity-40"
+              onClick={() => fileRef.current?.click()}
+            >
+              Add a new prop (PNG)…
+            </button>
+            <p className="mt-1 text-[11px] text-studio-muted">
+              A new prop lands in this location and is on stage for the whole scene. Use Remove to take it out again.
+            </p>
+          </div>
+        ) : null}
+        {message ? (
+          <p className="mt-2 text-[11px] text-studio-muted" data-testid="props-message">
+            {message}
+          </p>
+        ) : null}
       </div>
     </div>
   );
