@@ -365,15 +365,20 @@ export default function HeadRigModal({
   // Shot natural dimensions, cached per shot id (lazily loaded)
   const [shotDims, setShotDims] = useState<Record<string, { w: number; h: number }>>({});
   const shotDimsLoadingRef = useRef<Set<string>>(new Set());
-  function ensureShotDims(shotId: string) {
-    if (!shotId || shotDims[shotId] || shotDimsLoadingRef.current.has(shotId)) return;
+  const shotDimsVersionRef = useRef<Record<string, number>>({});
+  function ensureShotDims(shotId: string, force = false) {
+    if (!shotId) return;
+    if (!force && (shotDims[shotId] || shotDimsLoadingRef.current.has(shotId))) return;
+    const version = mediaVersion[shotId] || 0;
     shotDimsLoadingRef.current.add(shotId);
     const img = new Image();
     img.onload = () => {
+      shotDimsLoadingRef.current.delete(shotId);
+      if ((shotDimsVersionRef.current[shotId] || 0) !== version) return;
       setShotDims((prev) => ({ ...prev, [shotId]: { w: img.naturalWidth, h: img.naturalHeight } }));
     };
     img.onerror = () => { shotDimsLoadingRef.current.delete(shotId); };
-    img.src = shotMediaUrl(project, characterId, shotId, "cut/f_0001.png");
+    img.src = shotMediaUrl(project, characterId, shotId, "cut/f_0001.png", version);
   }
 
   // Bumped per-shot whenever a shot's frames are re-keyed on disk (see
@@ -539,6 +544,25 @@ export default function HeadRigModal({
     for (const s of headSegments) max = Math.max(max, segEnd(s));
     return max;
   }, [bodySegments, headSegments]);
+
+  // A redone or re-keyed clip can come back at a different pixel size (Grok vs
+  // LTX), so forget the old size and read it again; until it arrives the
+  // preview falls back to each loaded frame's own size, so nothing is stretched.
+  useEffect(() => {
+    for (const shotId of Object.keys(mediaVersion)) {
+      const version = mediaVersion[shotId] || 0;
+      if ((shotDimsVersionRef.current[shotId] || 0) === version) continue;
+      shotDimsVersionRef.current[shotId] = version;
+      setShotDims((prev) => {
+        if (!(shotId in prev)) return prev;
+        const next = { ...prev };
+        delete next[shotId];
+        return next;
+      });
+      ensureShotDims(shotId, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaVersion]);
 
   // Pre-fetch natural dimensions for every shot currently placed on the body track
   useEffect(() => {
