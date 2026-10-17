@@ -11,6 +11,11 @@ export type TalkMeta = {
   audioRel?: string;
   audioInSec?: number;
   audioOutSec?: number;
+  startSec?: number;
+  endSec?: number;
+  subject?: string;
+  basePrompt?: string;
+  characterId?: string;
 };
 
 export type TalkShot = {
