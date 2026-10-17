@@ -3,6 +3,7 @@
 import React, { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { WORKER_URL, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
 import { groupTalkShots, orderLtxChains, placeTalkWindows, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
+import { clipDetailsText, promptSaysMouthClosed } from "@/lib/clipDetails";
 import { audioAtFrame, audioLaneItems, audioPeaks, sliceAudioPeaks, SHOT_AUDIO_REL, type AudioLaneItem } from "@/lib/headRigAudio";
 import {
   alphaBox,
@@ -53,6 +54,12 @@ interface ShotInfo {
   engine?: string;
   hasPrevious?: boolean;
   talk?: TalkMeta;
+  prompt?: string;
+  requestId?: string;
+  keyMode?: string;
+  background?: string;
+  refImage?: string;
+  headSizeTarget?: number;
 }
 
 /** One clip reference placed on a track. Many segments can reference the
@@ -267,6 +274,7 @@ export default function HeadRigModal({
   const [talkShots, setTalkShots] = useState<ShotInfo[]>([]);
   const [talkBusy, setTalkBusy] = useState<string | null>(null);
   const [talkMenu, setTalkMenu] = useState<TalkMenuState | null>(null);
+  const [detailsShotId, setDetailsShotId] = useState<string | null>(null);
   const [rigs, setRigs] = useState<Record<string, RigEntry>>({});
   const [rigKey, setRigKey] = useState("front");
   const [charRefRel, setCharRefRel] = useState("");
@@ -1433,7 +1441,7 @@ export default function HeadRigModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [talkActive]);
 
-  function openTalkMenu(e: React.MouseEvent, shot: { talk?: TalkMeta; status: string; engine?: string; hasPrevious?: boolean }) {
+  function openTalkMenu(e: React.MouseEvent, shot: { id?: string; talk?: TalkMeta; status: string; engine?: string; hasPrevious?: boolean }) {
     if (!shot.talk) return;
     e.preventDefault();
     e.stopPropagation();
@@ -1441,6 +1449,7 @@ export default function HeadRigModal({
     setTalkMenu({
       x: e.clientX,
       y: e.clientY,
+      shotId: shot.id || "",
       group: shot.talk.group,
       index: shot.talk.index,
       engine: shot.engine || shot.talk.engine || "grok",
@@ -2680,8 +2689,22 @@ export default function HeadRigModal({
           onClose={() => setTalkMenu(null)}
           onRedo={(engine) => { const m = talkMenu; setTalkMenu(null); void handleRedoTalkClip(m.group, m.index, engine); }}
           onUndo={() => { const m = talkMenu; setTalkMenu(null); void handleUndoRedoClip(m.group, m.index); }}
+          onDetails={() => { const m = talkMenu; setTalkMenu(null); setDetailsShotId(m.shotId); }}
         />
       ) : null}
+
+      {(() => {
+        const detailsShot = detailsShotId ? talkShots.find((s) => s.id === detailsShotId) || null : null;
+        return detailsShot ? (
+          <ClipDetailsDialog
+            shot={detailsShot}
+            project={project}
+            characterId={characterId}
+            version={mediaVersion[detailsShot.id]}
+            onClose={() => setDetailsShotId(null)}
+          />
+        ) : null;
+      })()}
 
       {/* ── Right-click context menu ── */}
       {ctxMenu ? (
@@ -2773,6 +2796,11 @@ export default function HeadRigModal({
                   title="Regenerate this clip with LTX (Comfy Cloud credits). Every copy of it on the timeline updates.">
                   <span className="w-4 text-center">🎙</span> Redo with LTX
                 </button>
+                <button type="button" className={itemClass} data-testid="ctx-clip-details"
+                  onClick={() => { setCtxMenu(null); setDetailsShotId(clip.id); }}
+                  title="See the prompt, audio range and start image this clip was made from.">
+                  <span className="w-4 text-center">ⓘ</span> Details
+                </button>
                 <button type="button" disabled={busy} className={itemClass} data-testid="ctx-redo-grok" onClick={() => ctxRedoClip("grok")}
                   title="Regenerate this clip with Grok (Grok credits). Every copy of it on the timeline updates.">
                   <span className="w-4 text-center">🅶</span> Redo with Grok
@@ -2823,12 +2851,13 @@ export default function HeadRigModal({
   );
 }
 
-type TalkMenuState = { x: number; y: number; group: string; index: number; engine: string; hasPrevious: boolean };
+type TalkMenuState = { x: number; y: number; shotId: string; group: string; index: number; engine: string; hasPrevious: boolean };
 
-function TalkClipMenu({ menu, busy, onClose, onRedo, onUndo }: {
+function TalkClipMenu({ menu, busy, onClose, onRedo, onUndo, onDetails }: {
   menu: TalkMenuState;
   busy: boolean;
   onClose: () => void;
+  onDetails: () => void;
   onRedo: (engine: "grok" | "ltx") => void;
   onUndo: () => void;
 }) {
@@ -2878,6 +2907,10 @@ function TalkClipMenu({ menu, busy, onClose, onRedo, onUndo }: {
       <button type="button" disabled={busy} className={itemClass} data-testid="talk-menu-ltx" onClick={() => onRedo("ltx")}
         title="LTX lip-syncs to the audio (Comfy Cloud credits).">
         <span className="w-4 text-center">🎙</span> {current === "ltx" ? "Redo with LTX" : "Send back to LTX"}
+      </button>
+      <button type="button" className={itemClass} data-testid="talk-menu-details" onClick={onDetails}
+        title="See the prompt, audio range and start image this clip was made from.">
+        <span className="w-4 text-center">ⓘ</span> Details
       </button>
       {menu.hasPrevious ? (
         <>
@@ -3237,6 +3270,86 @@ function TrackRow({
           );
         })}
         <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500" style={{ left: playheadPct, zIndex: 10 }} />
+      </div>
+    </div>
+  );
+}
+
+// ── Clip details ────────────────────────────────────────────────────
+
+function ClipDetailsDialog({ shot, project, characterId, version, onClose }: {
+  shot: ShotInfo;
+  project: string;
+  characterId: string;
+  version?: number;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [startRel, setStartRel] = useState<"ltx_start.png" | "start_frame.png" | null>("ltx_start.png");
+  const text = clipDetailsText(shot);
+  const closedMouth = promptSaysMouthClosed(shot.prompt);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4" onMouseDown={onClose} data-testid="clip-details">
+      <div
+        className="flex max-h-full w-full max-w-[640px] flex-col overflow-hidden rounded-lg border border-[#333] bg-[#161616] shadow-2xl"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[#2a2a2a] px-4 py-2.5">
+          <div className="text-sm font-semibold text-neutral-100">{shot.name || shot.id} · details</div>
+          <button type="button" className="text-sm text-neutral-400 hover:text-white" onClick={onClose}>Close</button>
+        </div>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+          {closedMouth ? (
+            <p className="rounded border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200" data-testid="clip-details-warning">
+              This prompt tells the character to keep the mouth closed: no transcript words were found for this window. If the audio does have speech here, the transcript timing is off.
+            </p>
+          ) : null}
+          <pre className="whitespace-pre-wrap break-words rounded bg-black/40 p-3 font-mono text-[12px] leading-relaxed text-neutral-200" data-testid="clip-details-text">{text}</pre>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <div className="mb-1 text-[11px] uppercase tracking-wide text-neutral-500">Audio of this clip</div>
+              <audio controls preload="none" className="w-full" src={shotMediaUrl(project, characterId, shot.id, SHOT_AUDIO_REL, version)} data-testid="clip-details-audio" />
+            </div>
+            {startRel ? (
+              <div>
+                <div className="mb-1 text-[11px] uppercase tracking-wide text-neutral-500">
+                  {startRel === "ltx_start.png" ? "Start image sent to LTX" : "Start image"}
+                </div>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  key={startRel}
+                  src={shotMediaUrl(project, characterId, shot.id, startRel, version)}
+                  alt="start image"
+                  className="max-h-[180px] rounded border border-[#2a2a2a] bg-black object-contain"
+                  data-testid="clip-details-start"
+                  onError={() => setStartRel(startRel === "ltx_start.png" ? "start_frame.png" : null)}
+                />
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-[#2a2a2a] px-4 py-2.5">
+          <button type="button" className="rounded bg-[#2a2a2a] px-3 py-1.5 text-sm text-neutral-100 hover:bg-[#3a3a3a]" data-testid="clip-details-copy" onClick={() => void copy()}>
+            {copied ? "Copied" : "Copy details"}
+          </button>
+        </div>
       </div>
     </div>
   );
