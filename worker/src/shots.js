@@ -990,7 +990,13 @@ function normalizeSegment(projectDir, characterId, raw, isHead) {
     const bodyScale = Number(raw.bodyScale);
     if (Number.isFinite(bodyScale) && bodyScale > 0) {
       const clamped = Math.max(0.3, Math.min(2.5, Math.round(bodyScale * 1000) / 1000));
-      if (Math.abs(clamped - 1) > 1e-6) seg.bodyScale = clamped;
+      if (Math.abs(clamped - 1) > 1e-6) {
+        seg.bodyScale = clamped;
+        for (const key of ["bodyPivotX", "bodyPivotY"]) {
+          const value = Number(raw[key]);
+          if (raw[key] != null && Number.isFinite(value)) seg[key] = Math.max(0, Math.min(1, Math.round(value * 1000) / 1000));
+        }
+      }
     }
   }
   if (isHead) {
@@ -1025,7 +1031,7 @@ async function bakeTimeline(projectDir, characterId, opts = {}) {
 
   const specPath = path.join(outDir, "_bake_spec.json");
   fs.writeFileSync(specPath, JSON.stringify({
-    bodySegments: bodySegments.map((s) => ({ cutDir: s.cutDir, inFrame: s.inFrame, outFrame: s.outFrame, start: s.start, speed: s.speed, reverse: s.reverse, bodyScale: s.bodyScale })),
+    bodySegments: bodySegments.map((s) => ({ cutDir: s.cutDir, inFrame: s.inFrame, outFrame: s.outFrame, start: s.start, speed: s.speed, reverse: s.reverse, bodyScale: s.bodyScale, bodyPivotX: s.bodyPivotX, bodyPivotY: s.bodyPivotY })),
     headSegments: headSegments.map((s) => ({ cutDir: s.cutDir, inFrame: s.inFrame, outFrame: s.outFrame, start: s.start, speed: s.speed, reverse: s.reverse, anchorX: s.anchorX, anchorY: s.anchorY, headScale: s.headScale })),
     fps,
   }));
