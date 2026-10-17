@@ -1,0 +1,48 @@
+"use strict";
+
+const { describe, test, before, after } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const { loadHeadRig, saveHeadRig } = require("../src/characterLocal");
+
+describe("head rig segment speed and reverse", () => {
+  let root;
+  let projectDir;
+
+  before(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "head-rig-seg-"));
+    projectDir = path.join(root, "proj");
+    const dir = path.join(projectDir, "characters", "rodney");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "character.json"), JSON.stringify({ id: "rodney", display_name: "Rodney" }));
+  });
+
+  after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  test("speed and reverse survive a save, and the defaults are not stored", () => {
+    saveHeadRig(projectDir, null, "rodney", {
+      key: "front",
+      bodySegments: [
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 1, speed: 2, reverse: true },
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 6, speed: 1, reverse: false },
+      ],
+      headSegments: [{ shotId: "h", inFrame: 2, outFrame: 5, start: 1, speed: 0.5, anchorX: 0.5, anchorY: 0.2, headScale: 1 }],
+    });
+    const rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.equal(rig.bodySegments[0].speed, 2);
+    assert.equal(rig.bodySegments[0].reverse, true);
+    assert.equal("speed" in rig.bodySegments[1], false);
+    assert.equal("reverse" in rig.bodySegments[1], false);
+    assert.equal(rig.headSegments[0].speed, 0.5);
+  });
+
+  test("a silly speed is rejected", () => {
+    assert.throws(
+      () => saveHeadRig(projectDir, null, "rodney", { key: "front", bodySegments: [{ shotId: "a", inFrame: 1, outFrame: 3, start: 1, speed: 50 }] }),
+      /speed/
+    );
+  });
+});

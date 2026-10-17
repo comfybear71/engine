@@ -103,3 +103,44 @@ def test_head_does_not_move_while_its_visible_box_changes(tmp_path):
     a = _red_box(out / "cut" / "f_0001.png")
     b = _red_box(out / "cut" / "f_0002.png")
     assert a[0] == b[0]
+
+
+def _seg(start, in_frame, out_frame, **extra):
+    return {"cutDir": "x", "start": start, "inFrame": in_frame, "outFrame": out_frame, **extra}
+
+
+def test_speed_and_reverse_pick_the_same_source_frames_as_the_studio():
+    fast = _seg(1, 1, 10, speed=2)
+    assert bake.segment_length(fast) == 5
+    assert [bake.source_frame_number(fast, f) for f in range(1, 6)] == [1, 3, 5, 7, 9]
+    slow = _seg(11, 1, 4, speed=0.5)
+    assert bake.segment_length(slow) == 8
+    assert [bake.source_frame_number(slow, f) for f in (11, 12, 13, 14, 18)] == [1, 1, 2, 2, 4]
+    rev = _seg(5, 11, 15, reverse=True)
+    assert [bake.source_frame_number(rev, f) for f in range(5, 10)] == [15, 14, 13, 12, 11]
+    both = _seg(1, 1, 10, reverse=True, speed=2)
+    assert [bake.source_frame_number(both, f) for f in range(1, 6)] == [10, 8, 6, 4, 2]
+    assert bake.segment_length(_seg(1, 1, 5, speed=2)) == 3
+    assert bake.source_frame_number(_seg(1, 1, 10, speed=3), 99) == 10
+
+
+def test_baked_frames_follow_a_reversed_fast_clip(tmp_path: Path):
+    frames = []
+    for i in range(1, 7):
+        img = np.zeros((40, 40, 4), dtype=np.uint8)
+        img[:, :, 3] = 255
+        img[:, :, 2] = i * 30
+        frames.append(img)
+    cut = _write_shot(tmp_path, "body", frames)
+    spec = {
+        "fps": 24,
+        "bodySegments": [{"cutDir": str(cut), "inFrame": 1, "outFrame": 6, "start": 1, "speed": 2, "reverse": True}],
+        "headSegments": [],
+    }
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec))
+    out = tmp_path / "out"
+    result = bake.run(str(spec_path), str(out), 24)
+    assert result["frameCount"] == 3
+    reds = [int(cv2.imread(str(out / "cut" / f"f_{i:04d}.png"), cv2.IMREAD_UNCHANGED)[0, 0, 2]) for i in (1, 2, 3)]
+    assert reds == [180, 120, 60]
