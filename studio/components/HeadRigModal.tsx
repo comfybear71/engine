@@ -3,6 +3,7 @@
 import React, { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { WORKER_URL, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
 import { groupTalkShots, orderLtxChains, placeTalkWindows, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
+import { audioAtFrame, audioLaneItems, audioPeaks, sliceAudioPeaks, SHOT_AUDIO_REL, type AudioLaneItem } from "@/lib/headRigAudio";
 import {
   alphaBox,
   fitToStandard,
@@ -42,6 +43,7 @@ interface ShotInfo {
   status: string;
   shotType?: string;
   frameCount: number;
+  fps?: number;
   actionId?: string; // set when sent to Action Shots
   sourceBody?: string;
   sourceHead?: string;
@@ -898,6 +900,134 @@ export default function HeadRigModal({
     drawFrame(scrubFrame);
   }, [playing, scrubFrame, bodySegments, headSegments, selectedSegment, shotDims, redrawTick, metricsTick, standard, rigKey, showGround, drawFrame]);
 
+  // ── Dialogue audio: each talking-head clip carries the slice of audio it was made from ──
+  const [soundOn, setSoundOn] = useState(true);
+  const soundOnRef = useRef(soundOn);
+  useEffect(() => { soundOnRef.current = soundOn; }, [soundOn]);
+  const audioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const audioNowRef = useRef<string | null>(null);
+  const [auditionSeg, setAuditionSeg] = useState<string | null>(null);
+  const auditionRef = useRef<{ el: HTMLAudioElement; stopAt: number } | null>(null);
+  const [wavePeaks, setWavePeaks] = useState<Record<string, { peaks: number[]; duration: number }>>({});
+  const waveLoadingRef = useRef<Set<string>>(new Set());
+
+  const audioUrlFor = useCallback(
+    (shotId: string) => shotMediaUrl(project, characterId, shotId, SHOT_AUDIO_REL, mediaVersionRef.current[shotId]),
+    [project, characterId]
+  );
+
+  function audioElFor(shotId: string): HTMLAudioElement {
+    let el = audioElsRef.current.get(shotId);
+    if (!el) {
+      el = new Audio(audioUrlFor(shotId));
+      el.preload = "auto";
+      audioElsRef.current.set(shotId, el);
+    }
+    return el;
+  }
+
+  function stopAudio() {
+    audioNowRef.current = null;
+    audioElsRef.current.forEach((el) => { if (!el.paused) el.pause(); });
+  }
+
+  function stopAudition() {
+    const a = auditionRef.current;
+    if (a) { a.el.pause(); auditionRef.current = null; }
+    setAuditionSeg(null);
+  }
+
+  /** Keep the dialogue under the playhead playing at the right spot (called every frame while playing). */
+  function syncAudio(frame: number) {
+    if (!soundOnRef.current) { stopAudio(); return; }
+    const at = audioAtFrame(segmentsRef.current.head, shotsByIdRef.current, frame, fps);
+    if (!at || at.rate < 0.25 || at.rate > 4) { stopAudio(); return; }
+    const el = audioElFor(at.shotId);
+    if (audioNowRef.current !== at.segId) {
+      audioElsRef.current.forEach((other) => { if (other !== el && !other.paused) other.pause(); });
+      audioNowRef.current = at.segId;
+      el.currentTime = at.timeSec;
+      el.playbackRate = at.rate;
+      void el.play().catch(() => undefined);
+      return;
+    }
+    el.playbackRate = at.rate;
+    if (Math.abs(el.currentTime - at.timeSec) > 0.25) el.currentTime = at.timeSec;
+    if (el.paused && !el.ended) void el.play().catch(() => undefined);
+  }
+
+  function toggleAudition(item: AudioLaneItem) {
+    if (auditionSeg === item.segId) { stopAudition(); return; }
+    stopAudition();
+    if (playing) handlePlay();
+    stopAudio();
+    const el = audioElFor(item.shotId);
+    el.playbackRate = 1;
+    el.currentTime = item.fromSec;
+    auditionRef.current = { el, stopAt: item.toSec };
+    setAuditionSeg(item.segId);
+    const onTime = () => {
+      const a = auditionRef.current;
+      if (!a || a.el !== el) { el.removeEventListener("timeupdate", onTime); return; }
+      if (el.currentTime >= a.stopAt || el.ended) {
+        el.removeEventListener("timeupdate", onTime);
+        stopAudition();
+      }
+    };
+    el.addEventListener("timeupdate", onTime);
+    void el.play().catch(() => stopAudition());
+  }
+
+  const audioItems = useMemo(
+    () => audioLaneItems(headSegments, shotsById, fps),
+    [headSegments, shotsById, fps]
+  );
+
+  useEffect(() => {
+    for (const item of audioItems) {
+      const key = `${item.shotId}#${mediaVersion[item.shotId] || 0}`;
+      if (wavePeaks[key] || waveLoadingRef.current.has(key)) continue;
+      waveLoadingRef.current.add(key);
+      (async () => {
+        try {
+          const res = await fetch(shotMediaUrl(project, characterId, item.shotId, SHOT_AUDIO_REL, mediaVersion[item.shotId]));
+          if (!res.ok) return;
+          const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          if (!Ctx) return;
+          const ctx = new Ctx();
+          try {
+            const buf = await ctx.decodeAudioData(await res.arrayBuffer());
+            setWavePeaks((prev) => ({ ...prev, [key]: { peaks: audioPeaks(buf.getChannelData(0), 600), duration: buf.duration } }));
+          } finally {
+            void ctx.close();
+          }
+        } catch {
+          // No waveform for this clip: the block is still shown and playable.
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioItems, mediaVersion, project, characterId]);
+
+  useEffect(() => {
+    if (!playing) { stopAudio(); return; }
+    stopAudition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing]);
+
+  useEffect(() => {
+    if (!soundOn) { stopAudio(); stopAudition(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soundOn]);
+
+  useEffect(() => {
+    const els = audioElsRef.current;
+    return () => {
+      els.forEach((el) => el.pause());
+      els.clear();
+    };
+  }, []);
+
   // ── Playback loop ──
   function handlePlay() {
     if (playing) {
@@ -914,6 +1044,7 @@ export default function HeadRigModal({
     if (!playing) return;
     let frame = scrubFrame >= maxFrames ? 1 : scrubFrame;
     let lastTime = performance.now();
+    syncAudio(frame);
 
     function tick(now: number) {
       const interval = 1000 / Math.max(1, fps);
@@ -922,6 +1053,7 @@ export default function HeadRigModal({
         frame = frame >= maxFrames ? 1 : frame + 1;
         setScrubFrame(frame);
         drawFrame(frame);
+        syncAudio(frame);
       }
       playRafRef.current = requestAnimationFrame(tick);
     }
@@ -2393,6 +2525,10 @@ export default function HeadRigModal({
             <button type="button" className="rounded px-2.5 py-1.5 text-lg text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setScrubFrame(maxFrames)} title="Go to end">⏭</button>
           </div>
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1 text-[12px] text-neutral-400" title="Play the dialogue audio of the talking-head clips while the timeline plays">
+              <input type="checkbox" data-testid="head-rig-sound" checked={soundOn} onChange={(e) => setSoundOn(e.target.checked)} />
+              Sound
+            </label>
             <button type="button" className="h-8 w-8 rounded text-base text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.max(1, z - 0.5))} title="Zoom out">−</button>
             <span className="w-10 text-center font-mono text-[12px] text-neutral-500">{timelineZoom === 1 ? "Fit" : `${timelineZoom}×`}</span>
             <button type="button" className="h-8 w-8 rounded text-base text-neutral-400 hover:bg-[#333] hover:text-white" onClick={() => setTimelineZoom((z) => Math.min(6, z + 0.5))} title="Zoom in">+</button>
@@ -2461,6 +2597,19 @@ export default function HeadRigModal({
                     onSelect={(id) => setSelectedSegment({ track: "head", id })}
                     onSegMouseDown={(e, seg, edge) => onSegmentMouseDown(e, "head", seg, edge)}
                     onContextMenu={(e, id) => handleCtxMenu(e, "head", id)}
+                    playheadPct={playheadPct}
+                  />
+                  {/* ── DIALOGUE AUDIO (A1): the audio each talking-head clip was made from ── */}
+                  <AudioLane
+                    items={audioItems}
+                    maxFrames={maxFrames}
+                    shotsById={shotsById}
+                    mediaVersion={mediaVersion}
+                    wavePeaks={wavePeaks}
+                    auditionSeg={auditionSeg}
+                    selectedHeadId={selectedSegment?.track === "head" ? selectedSegment.id : null}
+                    onSelect={(id) => setSelectedSegment({ track: "head", id })}
+                    onAudition={toggleAudition}
                     playheadPct={playheadPct}
                   />
                 </div>
@@ -3055,6 +3204,86 @@ function TrackRow({
                 onMouseDown={(e) => onSegMouseDown(e, seg, "in")} />
               <div className="absolute inset-y-0 right-0 flex w-2 cursor-ew-resize items-center justify-center bg-[#e0a040]/60 hover:bg-[#e0a040]"
                 onMouseDown={(e) => onSegMouseDown(e, seg, "out")} />
+            </div>
+          );
+        })}
+        <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-red-500" style={{ left: playheadPct, zIndex: 10 }} />
+      </div>
+    </div>
+  );
+}
+
+// ── Dialogue audio lane ─────────────────────────────────────────────
+
+function AudioLane({
+  items, maxFrames, shotsById, mediaVersion, wavePeaks, auditionSeg, selectedHeadId, onSelect, onAudition, playheadPct,
+}: {
+  items: AudioLaneItem[];
+  maxFrames: number;
+  shotsById: Map<string, ShotInfo>;
+  mediaVersion: Record<string, number>;
+  wavePeaks: Record<string, { peaks: number[]; duration: number }>;
+  auditionSeg: string | null;
+  selectedHeadId: string | null;
+  onSelect: (id: string) => void;
+  onAudition: (item: AudioLaneItem) => void;
+  playheadPct: string;
+}) {
+  return (
+    <div className="flex" data-testid="audio-lane">
+      <div className="flex w-[120px] shrink-0 items-center gap-2 border-b border-r border-[#222] bg-[#161616] px-3 py-2">
+        <span className="rounded bg-purple-600 px-1.5 py-0.5 text-[11px] font-bold text-white">A1</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium text-neutral-300">Dialogue</div>
+          <div className="text-[11px] text-neutral-500">{items.length} piece{items.length === 1 ? "" : "s"}</div>
+        </div>
+      </div>
+      <div className="relative flex-1 overflow-hidden border-b border-[#222]" style={{ height: 52, background: "#1a1624" }}>
+        {items.length === 0 ? (
+          <div className="pointer-events-none flex h-full items-center px-3 text-[11px] text-neutral-600">
+            Talking-head clips (LTX / Grok) show their audio here.
+          </div>
+        ) : null}
+        {items.map((item) => {
+          const shot = shotsById.get(item.shotId);
+          const left = `${((item.start - 1) / Math.max(maxFrames, 1)) * 100}%`;
+          const width = `${(item.length / Math.max(maxFrames, 1)) * 100}%`;
+          const wave = wavePeaks[`${item.shotId}#${mediaVersion[item.shotId] || 0}`];
+          const slice = wave ? sliceAudioPeaks(wave.peaks, wave.duration, item.fromSec, item.toSec) : [];
+          const selected = selectedHeadId === item.segId;
+          const playingThis = auditionSeg === item.segId;
+          const n = slice.length;
+          const path = n
+            ? `M0,50 ${slice.map((v, i) => `L${i},${50 - Math.max(1, v * 48)}`).join(" ")} L${n - 1},50 ${slice
+                .map((v, i) => `L${n - 1 - i},${50 + Math.max(1, slice[n - 1 - i] * 48)}`)
+                .join(" ")} Z`
+            : "";
+          return (
+            <div
+              key={item.segId}
+              data-testid={`audio-piece-${item.segId}`}
+              className={`absolute inset-y-0 select-none overflow-hidden rounded-sm border ${selected ? "border-[#e0a040]" : "border-black/40"}`}
+              style={{ left, width, background: "#2b2140", zIndex: selected ? 6 : 2 }}
+              title={`${shot?.name || item.shotId} audio · ${item.fromSec.toFixed(1)}–${item.toSec.toFixed(1)} s${item.reverse ? " · reversed clip: silent" : ""}${item.speed !== 1 ? ` · ${item.speed}×` : ""}`}
+              onClick={(e) => { e.stopPropagation(); onSelect(item.segId); }}
+            >
+              {n ? (
+                <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${Math.max(1, n - 1)} 100`} preserveAspectRatio="none">
+                  <path d={path} fill="#b48cff" fillOpacity={item.reverse ? 0.25 : 0.85} />
+                </svg>
+              ) : null}
+              <button
+                type="button"
+                data-testid={`audio-play-${item.segId}`}
+                className="absolute left-1 top-1 z-10 rounded bg-black/70 px-1.5 text-[11px] text-neutral-100 hover:bg-black"
+                onClick={(e) => { e.stopPropagation(); onAudition(item); }}
+                title={playingThis ? "Stop" : "Hear just this piece"}
+              >
+                {playingThis ? "■" : "▶"}
+              </button>
+              <div className="pointer-events-none absolute bottom-0 left-0 right-0 truncate bg-gradient-to-t from-black/70 to-transparent px-1 py-0.5 pl-8 text-[11px] text-neutral-200">
+                {shot?.name || item.shotId}
+              </div>
             </div>
           );
         })}
