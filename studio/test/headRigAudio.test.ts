@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { audioAtFrame, audioLaneItems, audioPeaks, shotHasAudio, sliceAudioPeaks } from "../lib/headRigAudio.ts";
+import { audioAtFrame, audioLaneHasShot, audioLaneItems, audioPeaks, deriveAudioPieces, shotHasAudio, sliceAudioPeaks } from "../lib/headRigAudio.ts";
 
 const shots = new Map([
   ["talk", { fps: 24, talk: { audio: "audio.wav" } }],
@@ -41,5 +41,27 @@ describe("head rig audio lane", () => {
     assert.deepEqual(peaks, [0.2, 1, 0, 1]);
     assert.deepEqual(sliceAudioPeaks(peaks, 4, 1, 3), [1, 0]);
     assert.deepEqual(audioPeaks([], 3), [0, 0, 0]);
+  });
+
+  test("an older rig's audio lane is built once from its head clips that have audio, keeping place, cut and speed", () => {
+    let n = 0;
+    const heads = [
+      { shotId: "talk", start: 5, inFrame: 3, outFrame: 30, speed: 2, reverse: true },
+      { shotId: "plain", start: 40, inFrame: 1, outFrame: 10 },
+      { shotId: "talk", start: 60, inFrame: 1, outFrame: 24 },
+    ];
+    const pieces = deriveAudioPieces(heads, shots, () => `p${++n}`);
+    assert.deepEqual(pieces, [
+      { id: "p1", shotId: "talk", start: 5, inFrame: 3, outFrame: 30, speed: 2, reverse: true },
+      { id: "p2", shotId: "talk", start: 60, inFrame: 1, outFrame: 24 },
+    ]);
+  });
+
+  test("audio plays from the lane's own pieces, not from the head clips", () => {
+    const lane = [{ id: "keep", shotId: "talk", start: 1, inFrame: 1, outFrame: 48 }];
+    assert.equal(audioAtFrame(lane, shots, 25, 24)?.segId, "keep");
+    assert.equal(audioAtFrame([], shots, 25, 24), null);
+    assert.equal(audioLaneHasShot(lane, "talk"), true);
+    assert.equal(audioLaneHasShot(lane, "other"), false);
   });
 });

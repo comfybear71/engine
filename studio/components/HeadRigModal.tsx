@@ -4,7 +4,7 @@ import React, { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useR
 import { WORKER_URL, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
 import { groupTalkShots, orderLtxChains, placeTalkWindows, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
 import { clipDetailsText, promptSaysMouthClosed } from "@/lib/clipDetails";
-import { audioAtFrame, audioLaneItems, audioPeaks, sliceAudioPeaks, SHOT_AUDIO_REL, type AudioLaneItem } from "@/lib/headRigAudio";
+import { audioAtFrame, audioLaneHasShot, audioLaneItems, audioPeaks, deriveAudioPieces, shotHasAudio, sliceAudioPeaks, SHOT_AUDIO_REL, type AudioLaneItem } from "@/lib/headRigAudio";
 import {
   alphaBox,
   fitToStandard,
@@ -104,9 +104,10 @@ interface RigEntry {
   keyframes?: Keyframe[];
   bodySegments?: StoredSegment[];
   headSegments?: StoredHeadSegment[];
+  audioSegments?: StoredSegment[];
 }
 
-type TrackName = "body" | "head";
+type TrackName = "body" | "head" | "audio";
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -289,6 +290,9 @@ export default function HeadRigModal({
   // ── The multi-segment timeline (this rig key's "scratch board") ──
   const [bodySegments, setBodySegments] = useState<Segment[]>([]);
   const [headSegments, setHeadSegments] = useState<HeadSegment[]>([]);
+  const [audioSegments, setAudioSegments] = useState<Segment[]>([]);
+  const [shotsLoaded, setShotsLoaded] = useState(false);
+  const audioDerivePendingRef = useRef<StoredHeadSegment[] | null>(null);
   const [selectedSegment, setSelectedSegment] = useState<{ track: TrackName; id: string } | null>(null);
   const legacyKeyframesRef = useRef<Keyframe[] | undefined>(undefined); // round-tripped untouched
 
@@ -315,10 +319,10 @@ export default function HeadRigModal({
 
   // Undo / redo of the whole recipe (body + head tracks). A drag or a burst
   // of wheel/handle edits counts as one step.
-  type Snapshot = { body: Segment[]; head: HeadSegment[] };
+  type Snapshot = { body: Segment[]; head: HeadSegment[]; audio: Segment[] };
   const undoRef = useRef<Snapshot[]>([]);
   const redoRef = useRef<Snapshot[]>([]);
-  const prevSnapRef = useRef<Snapshot>({ body: [], head: [] });
+  const prevSnapRef = useRef<Snapshot>({ body: [], head: [], audio: [] });
   const skipHistoryRef = useRef(true);
   const gestureBaseRef = useRef<Snapshot | null>(null);
   const lastPushAtRef = useRef(0);
@@ -357,8 +361,8 @@ export default function HeadRigModal({
 
   // Refs mirroring the latest state for the rAF playback loop (so the loop
   // doesn't need to restart every time a segment is edited)
-  const segmentsRef = useRef<{ body: Segment[]; head: HeadSegment[] }>({ body: [], head: [] });
-  useEffect(() => { segmentsRef.current = { body: bodySegments, head: headSegments }; }, [bodySegments, headSegments]);
+  const segmentsRef = useRef<{ body: Segment[]; head: HeadSegment[]; audio: Segment[] }>({ body: [], head: [], audio: [] });
+  useEffect(() => { segmentsRef.current = { body: bodySegments, head: headSegments, audio: audioSegments }; }, [bodySegments, headSegments, audioSegments]);
   const selectedRef = useRef(selectedSegment);
   useEffect(() => { selectedRef.current = selectedSegment; }, [selectedSegment]);
 
@@ -439,6 +443,7 @@ export default function HeadRigModal({
           const data: ShotInfo[] = await shotsRes.json();
           setShots(data.filter((s) => s.status === "ready"));
           setTalkShots(data.filter((s) => s.talk));
+          setShotsLoaded(true);
         }
         if (rigRes.ok) {
           const data = await rigRes.json();
@@ -460,6 +465,16 @@ export default function HeadRigModal({
     gestureBaseRef.current = null;
     setBodySegments((entry?.bodySegments || []).map((s) => ({ ...s, id: genSegId() })));
     setHeadSegments((entry?.headSegments || []).map((s) => ({ ...s, id: genSegId() })));
+    // Rigs saved before the audio lane existed have no audioSegments: build the lane once from their head clips.
+    audioDerivePendingRef.current = null;
+    if (entry?.audioSegments) {
+      setAudioSegments(entry.audioSegments.map((s) => ({ ...s, id: genSegId() })));
+    } else if (entry?.headSegments?.length && shotsLoaded) {
+      setAudioSegments(deriveAudioPieces(entry.headSegments, shotsById, genSegId));
+    } else {
+      setAudioSegments([]);
+      if (entry?.headSegments?.length) audioDerivePendingRef.current = entry.headSegments;
+    }
     setSelectedSegment(null);
     setScrubFrame(1);
     historyTick((n) => n + 1);
@@ -467,14 +482,14 @@ export default function HeadRigModal({
   }, [rigKey, rigs]);
 
   useEffect(() => {
-    const current: Snapshot = { body: bodySegments, head: headSegments };
+    const current: Snapshot = { body: bodySegments, head: headSegments, audio: audioSegments };
     const previous = prevSnapRef.current;
     prevSnapRef.current = current;
     if (skipHistoryRef.current) {
       skipHistoryRef.current = false;
       return;
     }
-    if (previous.body === current.body && previous.head === current.head) return;
+    if (previous.body === current.body && previous.head === current.head && previous.audio === current.audio) return;
     const now = Date.now();
     if (dragSegRef.current || canvasDragRef.current) {
       if (!gestureBaseRef.current) gestureBaseRef.current = previous;
@@ -488,7 +503,7 @@ export default function HeadRigModal({
     lastPushAtRef.current = now;
     undoRef.current = [...undoRef.current.slice(-79), previous];
     historyTick((n) => n + 1);
-  }, [bodySegments, headSegments]);
+  }, [bodySegments, headSegments, audioSegments]);
 
   function commitGesture() {
     const base = gestureBaseRef.current;
@@ -505,6 +520,7 @@ export default function HeadRigModal({
     prevSnapRef.current = snap;
     setBodySegments(snap.body);
     setHeadSegments(snap.head);
+    setAudioSegments(snap.audio);
     setSelectedSegment(null);
   }
 
@@ -512,7 +528,7 @@ export default function HeadRigModal({
     const snap = undoRef.current[undoRef.current.length - 1];
     if (!snap) return;
     undoRef.current = undoRef.current.slice(0, -1);
-    redoRef.current = [...redoRef.current, { body: segmentsRef.current.body, head: segmentsRef.current.head }];
+    redoRef.current = [...redoRef.current, { body: segmentsRef.current.body, head: segmentsRef.current.head, audio: segmentsRef.current.audio }];
     applySnapshot(snap);
     historyTick((n) => n + 1);
   }
@@ -521,7 +537,7 @@ export default function HeadRigModal({
     const snap = redoRef.current[redoRef.current.length - 1];
     if (!snap) return;
     redoRef.current = redoRef.current.slice(0, -1);
-    undoRef.current = [...undoRef.current, { body: segmentsRef.current.body, head: segmentsRef.current.head }];
+    undoRef.current = [...undoRef.current, { body: segmentsRef.current.body, head: segmentsRef.current.head, audio: segmentsRef.current.audio }];
     applySnapshot(snap);
     historyTick((n) => n + 1);
   }
@@ -538,6 +554,10 @@ export default function HeadRigModal({
       const filtered = prev.filter((s) => shotIdsSet.has(s.shotId));
       return filtered.length === prev.length ? prev : filtered;
     });
+    setAudioSegments((prev) => {
+      const filtered = prev.filter((s) => shotIdsSet.has(s.shotId));
+      return filtered.length === prev.length ? prev : filtered;
+    });
   }, [shotIdsSet]);
 
   const shotsById = useMemo(() => {
@@ -546,12 +566,21 @@ export default function HeadRigModal({
     return map;
   }, [shots]);
 
+  useEffect(() => {
+    const heads = audioDerivePendingRef.current;
+    if (!heads || !shotsLoaded) return;
+    audioDerivePendingRef.current = null;
+    skipHistoryRef.current = true;
+    setAudioSegments(deriveAudioPieces(heads, shotsById, genSegId));
+  }, [shotsLoaded, shotsById]);
+
   const maxFrames = useMemo(() => {
     let max = 1;
     for (const s of bodySegments) max = Math.max(max, segEnd(s));
     for (const s of headSegments) max = Math.max(max, segEnd(s));
+    for (const s of audioSegments) max = Math.max(max, segEnd(s));
     return max;
-  }, [bodySegments, headSegments]);
+  }, [bodySegments, headSegments, audioSegments]);
 
   // A redone or re-keyed clip can come back at a different pixel size (Grok vs
   // LTX), so forget the old size and read it again; until it arrives the
@@ -972,7 +1001,7 @@ export default function HeadRigModal({
   /** Keep the dialogue under the playhead playing at the right spot (called every frame while playing). */
   function syncAudio(frame: number) {
     if (!soundOnRef.current) { stopAudio(); return; }
-    const at = audioAtFrame(segmentsRef.current.head, shotsByIdRef.current, frame, fps);
+    const at = audioAtFrame(segmentsRef.current.audio, shotsByIdRef.current, frame, fps);
     if (!at || at.rate < 0.25 || at.rate > 4) { stopAudio(); return; }
     const el = audioElFor(at.shotId);
     if (audioNowRef.current !== at.segId) {
@@ -1011,8 +1040,8 @@ export default function HeadRigModal({
   }
 
   const audioItems = useMemo(
-    () => audioLaneItems(headSegments, shotsById, fps),
-    [headSegments, shotsById, fps]
+    () => audioLaneItems(audioSegments, shotsById, fps),
+    [audioSegments, shotsById, fps]
   );
 
   useEffect(() => {
@@ -1371,6 +1400,7 @@ export default function HeadRigModal({
         key: rigKey,
         bodySegments: bodySegments.map(({ id, ...rest }) => rest),
         headSegments: headSegments.map(({ id, ...rest }) => rest),
+        audioSegments: audioSegments.map(({ id, ...rest }) => rest),
       };
       if (legacyKeyframesRef.current && legacyKeyframesRef.current.length > 0) {
         body.keyframes = legacyKeyframesRef.current;
@@ -1520,13 +1550,15 @@ export default function HeadRigModal({
     const ready = group.shots.filter((s) => s.status === "ready");
     if (!ready.length) return;
     const ids = ready.map(() => genSegId());
-    const base = (list: HeadSegment[]) => (list.length ? Math.max(...list.map(segEnd)) + 1 : 1);
+    const headNow = segmentsRef.current.head;
+    const placed = placeTalkWindows(group.shots, headNow.length ? Math.max(...headNow.map(segEnd)) + 1 : 1);
     setHeadSegments((prev) => [
       ...prev,
-      ...placeTalkWindows(group.shots, base(prev)).map((p, i) => ({
+      ...placed.map((p, i) => ({
         id: ids[i], ...p, anchorX: 0.5, anchorY: 0.15, headScale: 1.0,
       })),
     ]);
+    addDialogueFor(placed);
     if (standardRef.current) {
       placeTalkWindows(group.shots, 1).forEach((p, i) => {
         void fitPatchFor({ id: ids[i], ...p, anchorX: 0.5, anchorY: 0.15, headScale: 1 }, standardRef.current).then((patch) => {
@@ -1534,6 +1566,30 @@ export default function HeadRigModal({
         });
       });
     }
+  }
+
+  /** Put the audio of clips just placed on the head track onto the Dialogue lane (once per clip; after that the lane is independent). */
+  function addDialogueFor(placed: { shotId: string; start: number; inFrame: number; outFrame: number }[]) {
+    setAudioSegments((prev) => {
+      let next = prev;
+      for (const p of placed) {
+        if (!shotHasAudio(shotsByIdRef.current.get(p.shotId)) || audioLaneHasShot(next, p.shotId)) continue;
+        const start = placeInFreeSlot(next, p.start, p.outFrame - p.inFrame + 1);
+        next = [...next, { id: genSegId(), shotId: p.shotId, inFrame: p.inFrame, outFrame: p.outFrame, start }];
+      }
+      return next;
+    });
+  }
+
+  /** Put this clip's own audio on the Dialogue lane at the playhead (or where the clip sits), even if it is already there. */
+  function addClipAudioToLane(shotId: string, at: number) {
+    const shot = shotsByIdRef.current.get(shotId);
+    if (!shotHasAudio(shot)) return;
+    const outFrame = shot?.frameCount || 1;
+    const id = genSegId();
+    setAudioSegments((prev) => [...prev, { id, shotId, inFrame: 1, outFrame, start: placeInFreeSlot(prev, at, outFrame) }]);
+    setSelectedSegment({ track: "audio", id });
+    setSaved(false);
   }
 
   // ── Add a shot (full frame range) to the end of a track ──
@@ -1545,10 +1601,13 @@ export default function HeadRigModal({
       });
     } else {
       const id = genSegId();
+      const headNow = segmentsRef.current.head;
+      const headStart = headNow.length ? Math.max(...headNow.map(segEnd)) + 1 : 1;
       setHeadSegments((prev) => {
         const start = prev.length ? Math.max(...prev.map(segEnd)) + 1 : 1;
         return [...prev, { id, shotId: shot.id, inFrame: 1, outFrame: shot.frameCount || 1, start, anchorX: 0.5, anchorY: 0.15, headScale: 1.0 }];
       });
+      addDialogueFor([{ shotId: shot.id, start: headStart, inFrame: 1, outFrame: shot.frameCount || 1 }]);
       if (standardRef.current) {
         void fitPatchFor({ id, shotId: shot.id, inFrame: 1, outFrame: shot.frameCount || 1, start: 1, anchorX: 0.5, anchorY: 0.15, headScale: 1 }, standardRef.current).then((patch) => {
           if (patch) setHeadSegments((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
@@ -1581,8 +1640,8 @@ export default function HeadRigModal({
       const rect = el.getBoundingClientRect();
       const pxPerFrame = rect.width / Math.max(maxFrames, 1);
       const deltaFrames = Math.round((e.clientX - drag.startClientX) / Math.max(pxPerFrame, 0.01));
-      const setter = drag.track === "body" ? setBodySegments : setHeadSegments;
-      const list = drag.track === "body" ? segmentsRef.current.body : segmentsRef.current.head;
+      const setter = setterOf(drag.track);
+      const list = segmentsRef.current[drag.track];
       const current = list.find((s) => s.id === drag.id);
       if (!current) return;
       const others = list.filter((s) => s.id !== drag.id);
@@ -1592,7 +1651,7 @@ export default function HeadRigModal({
       const thresholdFrames = e.altKey ? 0 : Math.max(1, Math.round(8 / Math.max(pxPerFrame, 0.01)));
       const targets = collectSnapTargets({
         playhead: scrubFrame,
-        tracks: [segmentsRef.current.body, segmentsRef.current.head],
+        tracks: [segmentsRef.current.body, segmentsRef.current.head, segmentsRef.current.audio],
         ignoreId: drag.id,
       });
 
@@ -1666,7 +1725,7 @@ export default function HeadRigModal({
 
   function selectedSeg(): { track: TrackName; seg: Segment | HeadSegment } | null {
     if (!selectedSegment) return null;
-    const list = selectedSegment.track === "body" ? bodySegments : headSegments;
+    const list = listOf(selectedSegment.track);
     const seg = list.find((s) => s.id === selectedSegment.id);
     return seg ? { track: selectedSegment.track, seg } : null;
   }
@@ -1674,8 +1733,8 @@ export default function HeadRigModal({
   function deleteSelected(ripple = false) {
     const sel = selectedSeg();
     if (!sel) return;
-    if (sel.track === "body") setBodySegments((prev) => (ripple ? rippleDelete(prev, sel.seg.id) : prev.filter((s) => s.id !== sel.seg.id)));
-    else setHeadSegments((prev) => (ripple ? rippleDelete(prev, sel.seg.id) : prev.filter((s) => s.id !== sel.seg.id)));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (setterOf(sel.track) as any)((prev: Segment[]) => (ripple ? rippleDelete(prev, sel.seg.id) : prev.filter((s) => s.id !== sel.seg.id)));
     setSelectedSegment(null);
   }
 
@@ -1696,17 +1755,11 @@ export default function HeadRigModal({
     const length = segLength(clip.seg);
     const where = at ?? scrubFrame;
     const newId = genSegId();
-    if (clip.track === "body") {
-      setBodySegments((prev) => {
-        const start = placeInFreeSlot(prev, where, length);
-        return [...prev, { ...(clip.seg as Segment), id: newId, start }];
-      });
-    } else {
-      setHeadSegments((prev) => {
-        const start = placeInFreeSlot(prev, where, length);
-        return [...prev, { ...(clip.seg as HeadSegment), id: newId, start }];
-      });
-    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (setterOf(clip.track) as any)((prev: Segment[]) => {
+      const start = placeInFreeSlot(prev, where, length);
+      return [...prev, { ...clip.seg, id: newId, start }];
+    });
     setSelectedSegment({ track: clip.track, id: newId });
   }
 
@@ -1720,18 +1773,20 @@ export default function HeadRigModal({
   function bladeAtPlayhead() {
     const curBody = segmentsRef.current.body;
     const curHead = segmentsRef.current.head;
+    const curAudio = segmentsRef.current.audio;
     const frame = scrubFrame;
     const straddles = (seg: Segment) => frame > seg.start && frame <= segEnd(seg);
 
     const targets = new Set<string>();
     const sel = selectedRef.current;
     if (sel) {
-      const picked = (sel.track === "body" ? curBody : curHead).find((seg) => seg.id === sel.id);
+      const picked = segmentsRef.current[sel.track].find((seg) => seg.id === sel.id);
       if (picked && straddles(picked)) targets.add(picked.id);
     }
     if (targets.size === 0) {
       for (const seg of curBody) if (straddles(seg)) targets.add(seg.id);
       for (const seg of curHead) if (straddles(seg)) targets.add(seg.id);
+      for (const seg of curAudio) if (straddles(seg)) targets.add(seg.id);
     }
     if (targets.size === 0) return;
 
@@ -1746,6 +1801,8 @@ export default function HeadRigModal({
     setBodySegments(splitter as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     setHeadSegments(splitter as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setAudioSegments(splitter as any);
 
     if (sel && targets.has(sel.id)) setSelectedSegment({ track: sel.track, id: newIds.get(sel.id) as string });
   }
@@ -1758,13 +1815,11 @@ export default function HeadRigModal({
     if (edge === "in") {
       if (scrubFrame < seg.start || scrubFrame >= end) return;
       const patch = trimPatch(seg, "in", scrubFrame - seg.start);
-      if (sel.track === "body") setBodySegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
-      else setHeadSegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
+      editTrack(sel.track, (list) => list.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
     } else {
       if (scrubFrame <= seg.start || scrubFrame > end) return;
       const patch = trimPatch(seg, "out", scrubFrame - end);
-      if (sel.track === "body") setBodySegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
-      else setHeadSegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
+      editTrack(sel.track, (list) => list.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
     }
   }
 
@@ -1778,16 +1833,14 @@ export default function HeadRigModal({
   function ctxDelete() {
     if (!ctxMenu) return;
     const { track, id } = ctxMenu;
-    if (track === "body") setBodySegments((prev) => prev.filter((s) => s.id !== id));
-    else setHeadSegments((prev) => prev.filter((s) => s.id !== id));
+    editTrack(track, (list) => list.filter((s) => s.id !== id));
     setSelectedSegment(null);
     setCtxMenu(null);
   }
   function ctxCopy() {
     if (!ctxMenu) return;
     const { track, id } = ctxMenu;
-    const list = track === "body" ? bodySegments : headSegments;
-    const seg = list.find((s) => s.id === id);
+    const seg = listOf(track).find((s) => s.id === id);
     if (seg) clipboardRef.current = { track, seg };
     setCtxMenu(null);
   }
@@ -1803,11 +1856,15 @@ export default function HeadRigModal({
     deleteSelected(true);
     setCtxMenu(null);
   }
+  function listOf(track: TrackName): Segment[] {
+    return track === "body" ? bodySegments : track === "head" ? headSegments : audioSegments;
+  }
+  function setterOf(track: TrackName) {
+    return track === "body" ? setBodySegments : track === "head" ? setHeadSegments : setAudioSegments;
+  }
   function editTrack(track: TrackName, fn: (list: Segment[]) => Segment[]) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (track === "body") setBodySegments(fn as any);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    else setHeadSegments(fn as any);
+    (setterOf(track) as any)(fn);
     setSaved(false);
   }
   function talkShotForSegment(track: TrackName, id: string): ShotInfo | null {
@@ -1836,7 +1893,7 @@ export default function HeadRigModal({
   function ctxCustomSpeed() {
     if (!ctxMenu) return;
     const { track, id } = ctxMenu;
-    const seg = (track === "body" ? bodySegments : headSegments).find((s) => s.id === id);
+    const seg = listOf(track).find((s) => s.id === id);
     const answer = window.prompt("Speed for this clip only (1 = normal, 2 = twice as fast, 0.5 = half speed)", String(seg?.speed ?? 1));
     setCtxMenu(null);
     if (answer == null) return;
@@ -1902,7 +1959,7 @@ export default function HeadRigModal({
     window.addEventListener("mousedown", onClickAnywhere);
     return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("mousedown", onClickAnywhere); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSegment, bodySegments, headSegments, scrubFrame, playing, maxFrames]);
+  }, [selectedSegment, bodySegments, headSegments, audioSegments, scrubFrame, playing, maxFrames]);
 
   const playheadPct = `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
 
@@ -1991,6 +2048,7 @@ export default function HeadRigModal({
       if (res.ok) {
         setBodySegments((prev) => prev.filter((s) => s.shotId !== shotId));
         setHeadSegments((prev) => prev.filter((s) => s.shotId !== shotId));
+        setAudioSegments((prev) => prev.filter((s) => s.shotId !== shotId));
         await reloadShots();
       } else {
         const body = await res.text();
@@ -2645,8 +2703,13 @@ export default function HeadRigModal({
                     mediaVersion={mediaVersion}
                     wavePeaks={wavePeaks}
                     auditionSeg={auditionSeg}
-                    selectedHeadId={selectedSegment?.track === "head" ? selectedSegment.id : null}
-                    onSelect={(id) => setSelectedSegment({ track: "head", id })}
+                    selectedId={selectedSegment?.track === "audio" ? selectedSegment.id : null}
+                    onSelect={(id) => setSelectedSegment({ track: "audio", id })}
+                    onSegMouseDown={(e, id, edge) => {
+                      const seg = audioSegments.find((x) => x.id === id);
+                      if (seg) onSegmentMouseDown(e, "audio", seg, edge);
+                    }}
+                    onContextMenu={(e, id) => handleCtxMenu(e, "audio", id)}
                     onAudition={toggleAudition}
                     playheadPct={playheadPct}
                   />
@@ -2747,7 +2810,7 @@ export default function HeadRigModal({
             );
           })() : null}
           {(() => {
-            const seg = (ctxMenu.track === "body" ? bodySegments : headSegments).find((s) => s.id === ctxMenu.id);
+            const seg = listOf(ctxMenu.track).find((s) => s.id === ctxMenu.id);
             const current = normalizeSpeed(seg?.speed);
             return (
               <>
@@ -2801,6 +2864,17 @@ export default function HeadRigModal({
                   title="See the prompt, audio range and start image this clip was made from.">
                   <span className="w-4 text-center">ⓘ</span> Details
                 </button>
+                {shotHasAudio(clip) ? (
+                  <button type="button" className={itemClass} data-testid="ctx-add-audio"
+                    onClick={() => {
+                      const at = headSegments.find((x) => x.id === ctxMenu.id)?.start ?? scrubFrame;
+                      setCtxMenu(null);
+                      addClipAudioToLane(clip.id, at);
+                    }}
+                    title="Put another copy of this clip's audio on the Dialogue lane, where this clip sits.">
+                    <span className="w-4 text-center">♪</span> Add its audio to Dialogue
+                  </button>
+                ) : null}
                 <button type="button" disabled={busy} className={itemClass} data-testid="ctx-redo-grok" onClick={() => ctxRedoClip("grok")}
                   title="Regenerate this clip with Grok (Grok credits). Every copy of it on the timeline updates.">
                   <span className="w-4 text-center">🅶</span> Redo with Grok
@@ -3358,7 +3432,7 @@ function ClipDetailsDialog({ shot, project, characterId, version, onClose }: {
 // ── Dialogue audio lane ─────────────────────────────────────────────
 
 function AudioLane({
-  items, maxFrames, shotsById, mediaVersion, wavePeaks, auditionSeg, selectedHeadId, onSelect, onAudition, playheadPct,
+  items, maxFrames, shotsById, mediaVersion, wavePeaks, auditionSeg, selectedId, onSelect, onSegMouseDown, onContextMenu, onAudition, playheadPct,
 }: {
   items: AudioLaneItem[];
   maxFrames: number;
@@ -3366,8 +3440,10 @@ function AudioLane({
   mediaVersion: Record<string, number>;
   wavePeaks: Record<string, { peaks: number[]; duration: number }>;
   auditionSeg: string | null;
-  selectedHeadId: string | null;
+  selectedId: string | null;
   onSelect: (id: string) => void;
+  onSegMouseDown: (e: React.MouseEvent, id: string, edge?: "in" | "out") => void;
+  onContextMenu: (e: React.MouseEvent, id: string) => void;
   onAudition: (item: AudioLaneItem) => void;
   playheadPct: string;
 }) {
@@ -3383,7 +3459,7 @@ function AudioLane({
       <div className="relative flex-1 overflow-hidden border-b border-[#222]" style={{ height: 52, background: "#1a1624" }}>
         {items.length === 0 ? (
           <div className="pointer-events-none flex h-full items-center px-3 text-[11px] text-neutral-600">
-            Talking-head clips (LTX / Grok) show their audio here.
+            Talking-head clips (LTX / Grok) put their audio here. It stays when you change the picture.
           </div>
         ) : null}
         {items.map((item) => {
@@ -3392,7 +3468,7 @@ function AudioLane({
           const width = `${(item.length / Math.max(maxFrames, 1)) * 100}%`;
           const wave = wavePeaks[`${item.shotId}#${mediaVersion[item.shotId] || 0}`];
           const slice = wave ? sliceAudioPeaks(wave.peaks, wave.duration, item.fromSec, item.toSec) : [];
-          const selected = selectedHeadId === item.segId;
+          const selected = selectedId === item.segId;
           const playingThis = auditionSeg === item.segId;
           const n = slice.length;
           const path = n
@@ -3408,7 +3484,19 @@ function AudioLane({
               style={{ left, width, background: "#2b2140", zIndex: selected ? 6 : 2 }}
               title={`${shot?.name || item.shotId} audio · ${item.fromSec.toFixed(1)}–${item.toSec.toFixed(1)} s${item.reverse ? " · reversed clip: silent" : ""}${item.speed !== 1 ? ` · ${item.speed}×` : ""}`}
               onClick={(e) => { e.stopPropagation(); onSelect(item.segId); }}
+              onMouseDown={(e) => onSegMouseDown(e, item.segId)}
+              onContextMenu={(e) => onContextMenu(e, item.segId)}
             >
+              <div
+                className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-white/20 hover:bg-[#e0a040]"
+                data-testid={`audio-trim-in-${item.segId}`}
+                onMouseDown={(e) => onSegMouseDown(e, item.segId, "in")}
+              />
+              <div
+                className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-white/20 hover:bg-[#e0a040]"
+                data-testid={`audio-trim-out-${item.segId}`}
+                onMouseDown={(e) => onSegMouseDown(e, item.segId, "out")}
+              />
               {n ? (
                 <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${Math.max(1, n - 1)} 100`} preserveAspectRatio="none">
                   <path d={path} fill="#b48cff" fillOpacity={item.reverse ? 0.25 : 0.85} />
@@ -3418,6 +3506,7 @@ function AudioLane({
                 type="button"
                 data-testid={`audio-play-${item.segId}`}
                 className="absolute left-1 top-1 z-10 rounded bg-black/70 px-1.5 text-[11px] text-neutral-100 hover:bg-black"
+                onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => { e.stopPropagation(); onAudition(item); }}
                 title={playingThis ? "Stop" : "Hear just this piece"}
               >
