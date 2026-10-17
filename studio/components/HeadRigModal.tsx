@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { WORKER_URL, deleteTalkingHead, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
 import { groupTalkShots, placeTalkWindows, type TalkGroup, type TalkMeta } from "@/lib/talkingHead";
 import {
@@ -17,12 +17,20 @@ import {
   type HeadStandard,
 } from "@/lib/headStandard";
 import {
+  applySpeed,
   clampTrim,
   collectSnapTargets,
+  normalizeSpeed,
   placeInFreeSlot,
+  repeatSegment,
   rippleDelete,
   snapClipStart,
   snapEdgeFrame,
+  sourceFrameAt,
+  splitSegment,
+  trackSegEnd,
+  trackSegLength,
+  trimPatch,
 } from "@/lib/headTimeline";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -52,6 +60,8 @@ interface Segment {
   inFrame: number;
   outFrame: number;
   start: number; // 1-based position on this timeline's own output
+  speed?: number; // this clip alone: 2 = twice as fast, 0.5 = half speed
+  reverse?: boolean;
 }
 
 interface HeadSegment extends Segment {
@@ -98,16 +108,16 @@ function genSegId() {
   return `seg_${Date.now().toString(36)}_${segCounter}`;
 }
 
-function segLength(seg: { inFrame: number; outFrame: number }): number {
-  return Math.max(1, seg.outFrame - seg.inFrame + 1);
+function segLength(seg: { inFrame: number; outFrame: number; speed?: number }): number {
+  return trackSegLength(seg);
 }
 
-function segEnd(seg: { start: number; inFrame: number; outFrame: number }): number {
+function segEnd(seg: { start: number; inFrame: number; outFrame: number; speed?: number }): number {
   return seg.start + segLength(seg) - 1;
 }
 
 /** Whichever segment on this track covers `frame`, or null for a gap. */
-function activeSegmentAt<T extends { start: number; inFrame: number; outFrame: number }>(
+function activeSegmentAt<T extends { start: number; inFrame: number; outFrame: number; speed?: number }>(
   segments: T[],
   frame: number
 ): T | null {
@@ -117,8 +127,11 @@ function activeSegmentAt<T extends { start: number; inFrame: number; outFrame: n
   return null;
 }
 
-function sourceFrameOf(seg: { inFrame: number; start: number }, frame: number): number {
-  return seg.inFrame + (frame - seg.start);
+function sourceFrameOf(
+  seg: { inFrame: number; outFrame: number; start: number; speed?: number; reverse?: boolean },
+  frame: number
+): number {
+  return sourceFrameAt(seg, frame);
 }
 
 function blobToBase64(blob: Blob): Promise<string> {
@@ -250,6 +263,18 @@ export default function HeadRigModal({
 
   // Right-click context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; track: TrackName; id: string } | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
+  const [ctxPos, setCtxPos] = useState({ x: 0, y: 0 });
+  useLayoutEffect(() => {
+    if (!ctxMenu) return;
+    const el = ctxMenuRef.current;
+    if (!el) { setCtxPos({ x: ctxMenu.x, y: ctxMenu.y }); return; }
+    const margin = 8;
+    const rect = el.getBoundingClientRect();
+    const maxX = window.innerWidth - rect.width - margin;
+    const maxY = window.innerHeight - rect.height - margin;
+    setCtxPos({ x: Math.max(margin, Math.min(ctxMenu.x, maxX)), y: Math.max(margin, Math.min(ctxMenu.y, maxY)) });
+  }, [ctxMenu]);
 
   // Canvas drag state (move/scale a head segment's anchor)
   const canvasDragRef = useRef<{
@@ -1174,7 +1199,7 @@ export default function HeadRigModal({
       let patch: Partial<Segment>;
       let snappedTo: number | null = null;
       if (drag.mode === "move") {
-        const length = orig.outFrame - orig.inFrame + 1;
+        const length = segLength(orig);
         const snapped = snapClipStart(drag.origStart + deltaFrames, length, targets, thresholdFrames);
         snappedTo = snapped.snappedTo;
         patch = { start: placeInFreeSlot(others, snapped.start, length) };
@@ -1186,17 +1211,17 @@ export default function HeadRigModal({
           snappedTo = snapped.snappedTo;
         }
         shift = clampTrim({ edge: "in", seg: orig, others, shift, sourceFrameCount: srcFrameCount });
-        patch = { start: drag.origStart + shift, inFrame: drag.origInFrame + shift };
+        patch = trimPatch(orig, "in", shift);
       } else {
         let shift = deltaFrames;
-        const origEnd = drag.origStart + (drag.origOutFrame - drag.origInFrame);
+        const origEnd = trackSegEnd(orig);
         const snapped = snapEdgeFrame(origEnd + 1 + shift, targets, thresholdFrames);
         if (snapped.snappedTo != null) {
           shift = snapped.frame - 1 - origEnd;
           snappedTo = snapped.snappedTo;
         }
         shift = clampTrim({ edge: "out", seg: orig, others, shift, sourceFrameCount: srcFrameCount });
-        patch = { outFrame: drag.origOutFrame + shift };
+        patch = trimPatch(orig, "out", shift);
       }
       setSnapGuide(snappedTo);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1315,10 +1340,7 @@ export default function HeadRigModal({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const splitter = (prev: any[]) => prev.flatMap((seg: any) => {
       if (!targets.has(seg.id)) return [seg];
-      const splitSrc = sourceFrameOf(seg, frame);
-      const first = { ...seg, outFrame: splitSrc - 1 };
-      const second = { ...seg, id: newIds.get(seg.id) as string, start: frame, inFrame: splitSrc };
-      return [first, second];
+      return splitSegment(seg, frame, newIds.get(seg.id) as string) ?? [seg];
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     setBodySegments(splitter as any);
@@ -1335,14 +1357,12 @@ export default function HeadRigModal({
     const end = segEnd(seg);
     if (edge === "in") {
       if (scrubFrame < seg.start || scrubFrame >= end) return;
-      const shift = scrubFrame - seg.start;
-      const patch = { start: seg.start + shift, inFrame: seg.inFrame + shift };
+      const patch = trimPatch(seg, "in", scrubFrame - seg.start);
       if (sel.track === "body") setBodySegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
       else setHeadSegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
     } else {
       if (scrubFrame <= seg.start || scrubFrame > end) return;
-      const newLen = scrubFrame - seg.start + 1;
-      const patch = { outFrame: seg.inFrame + newLen - 1 };
+      const patch = trimPatch(seg, "out", scrubFrame - end);
       if (sel.track === "body") setBodySegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
       else setHeadSegments((prev) => prev.map((s) => (s.id === seg.id ? { ...s, ...patch } : s)));
     }
@@ -1382,6 +1402,51 @@ export default function HeadRigModal({
   function ctxRipple() {
     deleteSelected(true);
     setCtxMenu(null);
+  }
+  function editTrack(track: TrackName, fn: (list: Segment[]) => Segment[]) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (track === "body") setBodySegments(fn as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    else setHeadSegments(fn as any);
+    setSaved(false);
+  }
+  function ctxSetSpeed(speed: number) {
+    if (!ctxMenu) return;
+    const { track, id } = ctxMenu;
+    editTrack(track, (list) => applySpeed(list, id, speed));
+    setCtxMenu(null);
+  }
+  function ctxCustomSpeed() {
+    if (!ctxMenu) return;
+    const { track, id } = ctxMenu;
+    const seg = (track === "body" ? bodySegments : headSegments).find((s) => s.id === id);
+    const answer = window.prompt("Speed for this clip only (1 = normal, 2 = twice as fast, 0.5 = half speed)", String(seg?.speed ?? 1));
+    setCtxMenu(null);
+    if (answer == null) return;
+    const value = Number(answer.replace(/x$/i, "").trim());
+    if (!Number.isFinite(value) || value <= 0) return;
+    editTrack(track, (list) => applySpeed(list, id, value));
+  }
+  function ctxReverse() {
+    if (!ctxMenu) return;
+    const { track, id } = ctxMenu;
+    editTrack(track, (list) => list.map((s) => (s.id === id ? { ...s, reverse: s.reverse ? undefined : true } : s)));
+    setCtxMenu(null);
+  }
+  function ctxRepeat(pingPong: boolean) {
+    if (!ctxMenu) return;
+    const { track, id } = ctxMenu;
+    const answer = window.prompt(
+      pingPong
+        ? "How many extra back-and-forth copies? (each one plays the clip the other way round)"
+        : "How many extra copies after this clip?",
+      "3"
+    );
+    setCtxMenu(null);
+    if (answer == null) return;
+    const times = Math.floor(Number(answer));
+    if (!Number.isFinite(times) || times < 1) return;
+    editTrack(track, (list) => repeatSegment(list, id, times, genSegId, pingPong).segments);
   }
   function ctxPaste() {
     pasteClipboard();
@@ -2065,8 +2130,10 @@ export default function HeadRigModal({
       {/* ── Right-click context menu ── */}
       {ctxMenu ? (
         <div
-          className="fixed z-50 min-w-[160px] rounded border border-[#333] bg-[#1a1a1a] py-1 shadow-xl"
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          ref={ctxMenuRef}
+          data-testid="segment-context-menu"
+          className="fixed z-50 min-w-[200px] overflow-y-auto rounded border border-[#333] bg-[#1a1a1a] py-1 shadow-xl"
+          style={{ left: ctxPos.x, top: ctxPos.y, maxHeight: "calc(100vh - 16px)" }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
@@ -2086,6 +2153,40 @@ export default function HeadRigModal({
             onClick={ctxSplit}>
             <span className="w-4 text-center">✂</span> Split at playhead <span className="ml-auto text-[12px] text-neutral-500">Ctrl+B</span>
           </button>
+          <div className="my-1 h-px bg-[#333]" />
+          {(() => {
+            const seg = (ctxMenu.track === "body" ? bodySegments : headSegments).find((s) => s.id === ctxMenu.id);
+            const current = normalizeSpeed(seg?.speed);
+            return (
+              <>
+                <div className="px-3 pt-1 text-[11px] uppercase tracking-wide text-neutral-500">
+                  Speed of this clip {current !== 1 ? `(${current}×)` : ""}
+                </div>
+                <div className="flex flex-wrap gap-1 px-3 py-1.5">
+                  {[0.25, 0.5, 1, 2, 4].map((v) => (
+                    <button key={v} type="button" data-testid={`ctx-speed-${v}`}
+                      className={`rounded border px-2 py-1 text-[12px] hover:bg-[#333] ${current === v ? "border-[#e0a040] text-[#e0a040]" : "border-[#333] text-neutral-200"}`}
+                      onClick={() => ctxSetSpeed(v)}>{v}×</button>
+                  ))}
+                  <button type="button" data-testid="ctx-speed-custom"
+                    className="rounded border border-[#333] px-2 py-1 text-[12px] text-neutral-200 hover:bg-[#333]"
+                    onClick={ctxCustomSpeed}>Custom…</button>
+                </div>
+                <button type="button" data-testid="ctx-reverse" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
+                  onClick={ctxReverse}>
+                  <span className="w-4 text-center">⇄</span> Reverse {seg?.reverse ? <span className="ml-auto text-[12px] text-[#e0a040]">on</span> : null}
+                </button>
+                <button type="button" data-testid="ctx-repeat" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
+                  onClick={() => ctxRepeat(false)}>
+                  <span className="w-4 text-center">⟳</span> Repeat this clip…
+                </button>
+                <button type="button" data-testid="ctx-pingpong" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
+                  onClick={() => ctxRepeat(true)}>
+                  <span className="w-4 text-center">↔</span> Ping-pong loop…
+                </button>
+              </>
+            );
+          })()}
           <div className="my-1 h-px bg-[#333]" />
           <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 hover:bg-[#333]"
             onClick={ctxRipple}>
@@ -2469,7 +2570,7 @@ function TrackRow({
               onDragStart={(e) => e.preventDefault()}
               onClick={(e) => { e.stopPropagation(); onSelect(seg.id); }}
               onContextMenu={(e) => { if (onContextMenu) onContextMenu(e, seg.id); }}
-              title={`${shot?.name || seg.shotId} · frames ${seg.inFrame}-${seg.outFrame}`}
+              title={`${shot?.name || seg.shotId} · frames ${seg.inFrame}-${seg.outFrame}${seg.speed && seg.speed !== 1 ? ` · ${seg.speed}×` : ""}${seg.reverse ? " · reversed" : ""}`}
             >
               <div className="flex h-full">
                 {(() => {
@@ -2480,7 +2581,7 @@ function TrackRow({
                   const len = segLength(seg);
                   const count = Math.max(1, Math.ceil(len / step));
                   return Array.from({ length: count }, (_, i) => {
-                    const srcFrame = seg.inFrame + Math.min(i * step, len - 1);
+                    const srcFrame = sourceFrameAt(seg, seg.start + Math.min(i * step, len - 1));
                     const pad = String(srcFrame).padStart(4, "0");
                     return (
                       <img key={i} src={shotMediaUrl(project, characterId, seg.shotId, `cut/f_${pad}.png`, mediaVersion[seg.shotId])} alt=""
@@ -2493,6 +2594,8 @@ function TrackRow({
               </div>
               <div className="pointer-events-none absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-1 py-0.5">
                 <span className="text-[11px] font-medium text-neutral-200">{shot?.name || seg.shotId}</span>
+                {seg.speed && seg.speed !== 1 ? <span className="ml-1 rounded bg-black/70 px-1 text-[10px] font-bold text-[#e0a040]">{seg.speed}×</span> : null}
+                {seg.reverse ? <span className="ml-1 rounded bg-black/70 px-1 text-[10px] font-bold text-[#e0a040]">⇄</span> : null}
               </div>
               {/* Trim handles */}
               <div className="absolute inset-y-0 left-0 flex w-2 cursor-ew-resize items-center justify-center bg-[#e0a040]/60 hover:bg-[#e0a040]"

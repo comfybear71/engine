@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -112,8 +113,21 @@ def load_bgra(path: Path) -> np.ndarray | None:
 
 # ── Segment lookup ────────────────────────────────────────────────────
 
-def segment_length(seg: dict) -> int:
+def segment_speed(seg: dict) -> float:
+    try:
+        speed = float(seg.get("speed") or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return min(8.0, max(0.1, speed)) if speed > 0 else 1.0
+
+
+def segment_source_span(seg: dict) -> int:
     return max(1, int(seg["outFrame"]) - int(seg["inFrame"]) + 1)
+
+
+def segment_length(seg: dict) -> int:
+    """Timeline frames the clip occupies: its source range divided by its speed."""
+    return max(1, int(math.floor(segment_source_span(seg) / segment_speed(seg) + 0.5)))
 
 
 def segment_end(seg: dict) -> int:
@@ -127,9 +141,18 @@ def active_segment(segments: list[dict], frame: int) -> dict | None:
     return None
 
 
+def source_frame_number(seg: dict, frame: int) -> int:
+    """Source frame shown at timeline `frame` (faster clips skip, slower hold, reverse walks back)."""
+    span = segment_source_span(seg)
+    k = max(0, frame - int(seg["start"]))
+    offset = min(span - 1, int(k * segment_speed(seg) + 1e-9))
+    if seg.get("reverse"):
+        return int(seg["outFrame"]) - offset
+    return int(seg["inFrame"]) + offset
+
+
 def source_frame_path(seg: dict, frame: int) -> Path:
-    source_frame = int(seg["inFrame"]) + (frame - int(seg["start"]))
-    pad = str(source_frame).zfill(4)
+    pad = str(source_frame_number(seg, frame)).zfill(4)
     return Path(seg["cutDir"]) / f"f_{pad}.png"
 
 
