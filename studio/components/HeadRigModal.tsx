@@ -67,6 +67,8 @@ interface Segment {
   bodyScale?: number; // body clips only: 1 = as drawn; the head stays attached at full size
   bodyPivotX?: number; // body clips only: point of the body (fractions of its frame) that stays put when resized
   bodyPivotY?: number;
+  bodyOffsetX?: number; // body clips only: shift right (+) / left (-) as a fraction of the body frame; the head moves with it
+  bodyOffsetY?: number; // body clips only: shift down (+) / up (-)
   bodyInFront?: boolean; // body clips only: draw the body over the head (hands in front of the face)
 }
 
@@ -122,15 +124,35 @@ function bodyPivot(seg: { bodyPivotX?: number; bodyPivotY?: number } | null | un
   return { x: Number.isFinite(x) ? clamp(x, 0, 1) : 0.5, y: Number.isFinite(y) ? clamp(y, 0, 1) : 1 };
 }
 
-/** Body rectangle after the user's size: it grows or shrinks about its pivot (the neck once the size has been set), so the head does not move. */
+const BODY_OFFSET_LIMIT = 1;
+
+function bodyOffset(seg: { bodyOffsetX?: number; bodyOffsetY?: number } | null | undefined): { x: number; y: number } {
+  const x = Number(seg?.bodyOffsetX);
+  const y = Number(seg?.bodyOffsetY);
+  return {
+    x: Number.isFinite(x) ? clamp(x, -BODY_OFFSET_LIMIT, BODY_OFFSET_LIMIT) : 0,
+    y: Number.isFinite(y) ? clamp(y, -BODY_OFFSET_LIMIT, BODY_OFFSET_LIMIT) : 0,
+  };
+}
+
+/** Body rectangle after the user's size and shift: it grows or shrinks about its pivot (the neck once the size has been set), so the head does not move; the shift then moves the whole figure. */
 function scaledBodyRect(
   base: { x: number; y: number; w: number; h: number },
-  seg: { bodyScale?: number; bodyPivotX?: number; bodyPivotY?: number } | null | undefined
+  seg: { bodyScale?: number; bodyPivotX?: number; bodyPivotY?: number; bodyOffsetX?: number; bodyOffsetY?: number } | null | undefined
 ): { x: number; y: number; w: number; h: number } {
   const s = bodyUserScale(seg);
   const pivot = bodyPivot(seg);
-  return { x: base.x + pivot.x * base.w * (1 - s), y: base.y + pivot.y * base.h * (1 - s), w: base.w * s, h: base.h * s };
+  const off = bodyOffset(seg);
+  return {
+    x: base.x + pivot.x * base.w * (1 - s) + off.x * base.w,
+    y: base.y + pivot.y * base.h * (1 - s) + off.y * base.h,
+    w: base.w * s,
+    h: base.h * s,
+  };
 }
+
+/** The unscaled body frame's bottom edge in the preview, as a fraction of the canvas height: the ground line. */
+const GROUND_FRACTION = 0.97;
 
 let segCounter = 0;
 function genSegId() {
@@ -309,7 +331,13 @@ export default function HeadRigModal({
 
   // Canvas drag state (move/scale a head segment's anchor)
   const canvasDragRef = useRef<{
-    kind: "move" | "scale";
+    kind: "move" | "scale" | "bodyMove";
+    bodyId?: string;
+    baseW?: number;
+    baseH?: number;
+    cssScale?: number;
+    origOffsetX?: number;
+    origOffsetY?: number;
     startX: number;
     startY: number;
     origAnchorX: number;
@@ -323,6 +351,10 @@ export default function HeadRigModal({
   useEffect(() => { segmentsRef.current = { body: bodySegments, head: headSegments }; }, [bodySegments, headSegments]);
   const selectedRef = useRef(selectedSegment);
   useEffect(() => { selectedRef.current = selectedSegment; }, [selectedSegment]);
+
+  const [showGround, setShowGround] = useState(true);
+  const showGroundRef = useRef(showGround);
+  useEffect(() => { showGroundRef.current = showGround; }, [showGround]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -551,6 +583,24 @@ export default function HeadRigModal({
           return rest;
         }
         return { ...s, bodyScale: next, bodyPivotX: pivot.x, bodyPivotY: pivot.y };
+      })
+    );
+    setSaved(false);
+  }
+
+  /** Shift a body clip (and the head riding on it). Values are fractions of the body frame; zero removes the shift. */
+  function setBodyOffset(id: string, x: number, y: number, all = false) {
+    const nx = Math.round(clamp(x, -BODY_OFFSET_LIMIT, BODY_OFFSET_LIMIT) * 1000) / 1000;
+    const ny = Math.round(clamp(y, -BODY_OFFSET_LIMIT, BODY_OFFSET_LIMIT) * 1000) / 1000;
+    setBodySegments((prev) =>
+      prev.map((s) => {
+        if (!all && s.id !== id) return s;
+        const { bodyOffsetX: _ox, bodyOffsetY: _oy, ...rest } = s;
+        void _ox; void _oy;
+        const next: Segment = { ...rest };
+        if (nx !== 0) next.bodyOffsetX = nx;
+        if (ny !== 0) next.bodyOffsetY = ny;
+        return next;
       })
     );
     setSaved(false);
@@ -809,6 +859,30 @@ export default function HeadRigModal({
 
     if (bodyImg && !bodyDrawn) ctx.drawImage(bodyImg, bx, by, bw, bh);
 
+    if (showGroundRef.current) {
+      const groundY = Math.round(ch * GROUND_FRACTION) + 0.5;
+      ctx.save();
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 5]);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.beginPath();
+      ctx.moveTo(0, groundY);
+      ctx.lineTo(cw, groundY);
+      ctx.stroke();
+      const feetY = body ? Math.round(by + bh) + 0.5 : null;
+      if (feetY != null && Math.abs(feetY - groundY) > 1.5) {
+        ctx.strokeStyle = "rgba(224, 160, 64, 0.9)";
+        ctx.beginPath();
+        ctx.moveTo(0, feetY);
+        ctx.lineTo(cw, feetY);
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+      ctx.font = "10px monospace";
+      ctx.fillText("ground", cw - 46, groundY - 4);
+    }
+
     ctx.fillStyle = "#e0a040";
     ctx.font = "11px monospace";
     const bodyLabel = body ? `${shotsById.get(body.shotId)?.name || body.shotId} f${sourceFrameOf(body, frame)}` : "— body gap —";
@@ -822,7 +896,7 @@ export default function HeadRigModal({
   useEffect(() => {
     if (playing) return;
     drawFrame(scrubFrame);
-  }, [playing, scrubFrame, bodySegments, headSegments, selectedSegment, shotDims, redrawTick, metricsTick, standard, rigKey, drawFrame]);
+  }, [playing, scrubFrame, bodySegments, headSegments, selectedSegment, shotDims, redrawTick, metricsTick, standard, rigKey, showGround, drawFrame]);
 
   // ── Playback loop ──
   function handlePlay() {
@@ -884,7 +958,6 @@ export default function HeadRigModal({
 
   function onCanvasMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
     const head = editingHead;
-    if (!head) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -893,6 +966,43 @@ export default function HeadRigModal({
     const mx = (e.clientX - rect.left) * cssScale;
     const my = (e.clientY - rect.top) * cssScale;
     const { scale, bw, bh, bx, by } = layoutBasis(scrubFrame);
+
+    // With a body clip selected, dragging the body (anywhere that is not the
+    // head) shifts it; the head rides along because it is anchored to the body.
+    const selectedBody = selectedSegment?.track === "body" ? editingBody : null;
+    if (selectedBody) {
+      let onHead = false;
+      const headDimsNow = head ? shotDims[head.shotId] : null;
+      if (head && headDimsNow && headDimsNow.w > 0) {
+        const geo = headGeometry(head, scrubFrame);
+        const hw = geo ? geo.rect.w * scale : headDimsNow.w * head.headScale * scale;
+        const hh = geo ? geo.rect.h * scale : headDimsNow.h * head.headScale * scale;
+        const hx = geo ? bx + geo.rect.x * scale : bx + head.anchorX * bw - hw / 2;
+        const hy = geo ? by + geo.rect.y * scale : by + head.anchorY * bh - hh / 2;
+        onHead = mx >= hx - 16 && mx <= hx + hw + 16 && my >= hy - 16 && my <= hy + hh + 16;
+      }
+      if (!onHead) {
+        const s = bodyUserScale(selectedBody);
+        const off = bodyOffset(selectedBody);
+        canvasDragRef.current = {
+          kind: "bodyMove",
+          bodyId: selectedBody.id,
+          startX: e.clientX,
+          startY: e.clientY,
+          baseW: bw / s,
+          baseH: bh / s,
+          cssScale,
+          origOffsetX: off.x,
+          origOffsetY: off.y,
+          origAnchorX: 0,
+          origAnchorY: 0,
+          origScale: 1,
+        };
+        e.preventDefault();
+        return;
+      }
+    }
+    if (!head) return;
 
     // Check corner handles for scale drag (only if dims known). The box is the
     // visible head once measured, otherwise the whole source frame.
@@ -1040,6 +1150,13 @@ export default function HeadRigModal({
 
   function onCanvasMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
     const drag = canvasDragRef.current;
+    if (drag?.kind === "bodyMove" && drag.bodyId) {
+      const css = drag.cssScale || 1;
+      const dx = ((e.clientX - drag.startX) * css) / (drag.baseW || 1);
+      const dy = ((e.clientY - drag.startY) * css) / (drag.baseH || 1);
+      setBodyOffset(drag.bodyId, (drag.origOffsetX || 0) + dx, (drag.origOffsetY || 0) + dy);
+      return;
+    }
     if (!drag || !editingHead) return;
     const { bw, bh } = layoutBasis(scrubFrame);
     if (drag.kind === "move") {
@@ -2060,7 +2177,7 @@ export default function HeadRigModal({
                 width={CANVAS_W}
                 height={CANVAS_H}
                 className="rounded-md border border-studio-border"
-                style={{ cursor: editingHead ? "crosshair" : "default", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+                style={{ cursor: selectedSegment?.track === "body" && editingBody ? "move" : editingHead ? "crosshair" : "default", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
                 onMouseDown={onCanvasMouseDown}
                 onMouseMove={onCanvasMouseMove}
                 onMouseUp={onCanvasMouseUp}
@@ -2070,7 +2187,7 @@ export default function HeadRigModal({
             </div>
             <p className="mt-1 shrink-0 text-[12px] text-studio-muted">
               {selectedSegment?.track === "body"
-                ? "Body clip selected · Scroll or use Body size to resize it (feet stay put)"
+                ? "Body clip selected · Drag = shift it (head goes with it) · Scroll or Body size = resize"
                 : editingHead
                   ? "Drag head = move · Corner handles = scale · Scroll = resize"
                   : "Select a head segment to reposition it"}
@@ -2131,6 +2248,67 @@ export default function HeadRigModal({
               >
                 Same for all
               </button>
+            </div>
+            <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="body-position-bar">
+              <span className="text-studio-muted">Body position</span>
+              {([
+                ["up", "\u25B2", 0, -1, "Shift the body up (the head goes with it). Shift-click = bigger step"],
+                ["down", "\u25BC", 0, 1, "Shift the body down"],
+                ["left", "\u25C0", -1, 0, "Shift the body left"],
+                ["right", "\u25B6", 1, 0, "Shift the body right"],
+              ] as const).map(([name, label, dx, dy, title]) => (
+                <button
+                  key={name}
+                  type="button"
+                  data-testid={`body-shift-${name}`}
+                  className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                  disabled={!editingBody}
+                  title={title}
+                  onClick={(e) => {
+                    if (!editingBody) return;
+                    const step = e.shiftKey ? 0.05 : 0.01;
+                    const off = bodyOffset(editingBody);
+                    setBodyOffset(editingBody.id, off.x + dx * step, off.y + dy * step);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="font-mono text-neutral-300" data-testid="body-shift-value">
+                {Math.round(bodyOffset(editingBody).x * 100)}% , {Math.round(bodyOffset(editingBody).y * 100)}%
+              </span>
+              <button
+                type="button"
+                data-testid="body-shift-reset"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingBody || (bodyOffset(editingBody).x === 0 && bodyOffset(editingBody).y === 0)}
+                onClick={() => editingBody && setBodyOffset(editingBody.id, 0, 0)}
+              >
+                Reset position
+              </button>
+              <button
+                type="button"
+                data-testid="body-shift-all"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingBody || bodySegments.length < 2}
+                onClick={() => {
+                  if (!editingBody) return;
+                  const off = bodyOffset(editingBody);
+                  setBodyOffset(editingBody.id, off.x, off.y, true);
+                }}
+                title="Give every body clip this position"
+              >
+                Same for all body clips
+              </button>
+              <label className="flex items-center gap-1 text-neutral-300" title="Dotted line along the bottom of the body frame (white). If the body is shifted or resized, a second amber line shows where its bottom edge now is.">
+                <input
+                  type="checkbox"
+                  data-testid="ground-line-toggle"
+                  checked={showGround}
+                  onChange={(e) => setShowGround(e.target.checked)}
+                />
+                Ground line
+              </label>
             </div>
             <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-standard-bar">
               <span

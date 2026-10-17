@@ -280,6 +280,14 @@ function normalizeStoredSegment(raw, isHead) {
       }
     }
   }
+  if (!isHead) {
+    for (const key of ["bodyOffsetX", "bodyOffsetY"]) {
+      if (raw[key] == null) continue;
+      const value = Number(raw[key]);
+      if (!Number.isFinite(value) || value < -1 || value > 1) throw localError(`segment.${key} must be -1 to 1`);
+      if (Math.abs(value) > 1e-6) seg[key] = Math.round(value * 1000) / 1000;
+    }
+  }
   if (isHead) {
     const anchorX = raw.anchorX == null ? 0.5 : Number(raw.anchorX);
     const anchorY = raw.anchorY == null ? 0.15 : Number(raw.anchorY);

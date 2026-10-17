@@ -97,4 +97,24 @@ describe("head rig segment speed and reverse", () => {
     assert.equal("bodyInFront" in rig.bodySegments[1], false);
     assert.equal("bodyInFront" in rig.headSegments[0], false);
   });
+
+  test("body shift is kept on body clips only, dropped at zero, and rejected when out of range", () => {
+    saveHeadRig(projectDir, null, "rodney", {
+      key: "front",
+      bodySegments: [
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 1, bodyOffsetX: 0.1, bodyOffsetY: -0.05 },
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 11, bodyOffsetX: 0, bodyOffsetY: 0 },
+      ],
+      headSegments: [{ shotId: "h", inFrame: 1, outFrame: 5, start: 1, bodyOffsetX: 0.2, anchorX: 0.5, anchorY: 0.2, headScale: 1 }],
+    });
+    const rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.equal(rig.bodySegments[0].bodyOffsetX, 0.1);
+    assert.equal(rig.bodySegments[0].bodyOffsetY, -0.05);
+    assert.equal("bodyOffsetX" in rig.bodySegments[1], false);
+    assert.equal("bodyOffsetX" in rig.headSegments[0], false);
+    assert.throws(
+      () => saveHeadRig(projectDir, null, "rodney", { key: "front", bodySegments: [{ shotId: "a", inFrame: 1, outFrame: 3, start: 1, bodyOffsetY: 3 }] }),
+      /bodyOffsetY/
+    );
+  });
 });

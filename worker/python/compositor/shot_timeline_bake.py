@@ -181,13 +181,35 @@ def body_pivot_of(seg: dict | None) -> tuple[float, float]:
     return (one("bodyPivotX", 0.5), one("bodyPivotY", 1.0))
 
 
+def body_offset_of(seg: dict | None) -> tuple[float, float]:
+    """How far a body clip is shifted (fractions of its frame; +x right, +y down). The head, being anchored to the body, moves with it."""
+    def one(key: str) -> float:
+        try:
+            value = float((seg or {}).get(key))
+        except (TypeError, ValueError):
+            return 0.0
+        if value != value:
+            return 0.0
+        return min(1.0, max(-1.0, value))
+    return (one("bodyOffsetX"), one("bodyOffsetY"))
+
+
 def body_rect(
-    canvas_w: int, canvas_h: int, scale: float, pivot: tuple[float, float] = (0.5, 1.0)
+    canvas_w: int,
+    canvas_h: int,
+    scale: float,
+    pivot: tuple[float, float] = (0.5, 1.0),
+    offset: tuple[float, float] = (0.0, 0.0),
 ) -> tuple[float, float, float, float]:
     """(left, top, width, height) of the body in the unscaled body frame's coordinates."""
     width = canvas_w * scale
     height = canvas_h * scale
-    return (pivot[0] * canvas_w * (1.0 - scale), pivot[1] * canvas_h * (1.0 - scale), width, height)
+    return (
+        pivot[0] * canvas_w * (1.0 - scale) + offset[0] * canvas_w,
+        pivot[1] * canvas_h * (1.0 - scale) + offset[1] * canvas_h,
+        width,
+        height,
+    )
 
 
 def first_available_frame(segments: list[dict]) -> np.ndarray | None:
@@ -213,7 +235,7 @@ def head_overshoot_padding(
     without padding that part would be cut off in every baked frame."""
     pad_l = pad_t = pad_r = pad_b = 0
     for body_seg in body_segments or []:
-        left, top, width, height = body_rect(canvas_w, canvas_h, body_scale_of(body_seg), body_pivot_of(body_seg))
+        left, top, width, height = body_rect(canvas_w, canvas_h, body_scale_of(body_seg), body_pivot_of(body_seg), body_offset_of(body_seg))
         pad_l = max(pad_l, -left)
         pad_t = max(pad_t, -top)
         pad_r = max(pad_r, left + width - canvas_w)
@@ -225,7 +247,9 @@ def head_overshoot_padding(
         for k in range(n):
             frame = int(seg["start"]) + (0 if n == 1 else round(k * (length - 1) / (n - 1)))
             active_body = active_segment(body_segments or [], frame)
-            b_left, b_top, b_w, b_h = body_rect(canvas_w, canvas_h, body_scale_of(active_body), body_pivot_of(active_body))
+            b_left, b_top, b_w, b_h = body_rect(
+                canvas_w, canvas_h, body_scale_of(active_body), body_pivot_of(active_body), body_offset_of(active_body)
+            )
             cx = b_left + float(seg.get("anchorX", 0.5)) * b_w
             cy = b_top + float(seg.get("anchorY", 0.15)) * b_h
             head_img = load_bgra(source_frame_path(seg, frame))
@@ -288,7 +312,7 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
 
         body_seg = active_segment(body_segments, frame)
         b_scale = body_scale_of(body_seg)
-        b_left, b_top, b_w, b_h = body_rect(canvas_w, canvas_h, b_scale, body_pivot_of(body_seg))
+        b_left, b_top, b_w, b_h = body_rect(canvas_w, canvas_h, b_scale, body_pivot_of(body_seg), body_offset_of(body_seg))
         body_layer = None
         if body_seg is not None:
             body_img = load_bgra(source_frame_path(body_seg, frame))
