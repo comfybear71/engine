@@ -115,4 +115,31 @@ describe("stage props add/remove", () => {
     });
     assert.match(next, /\[Prop: lamp show at=960,918 at_time=1s\]/);
   });
+
+  test("an edit lands in the scene the drawer is showing even when the playhead is already in the next scene", () => {
+    const twoScenes = [
+      { id: "intro", startFrame: 0, endFrame: 96 },
+      { id: "outro", startFrame: 96, endFrame: 192 },
+    ];
+    const lines = (next: string) => next.split("\n");
+    for (const scope of ["scene", "here"] as const) {
+      const next = applyPropEdit({
+        script,
+        propId: "plant",
+        action: "hide",
+        scope,
+        frame: 120,
+        fps: 24,
+        scenes: twoScenes,
+        sceneId: "intro",
+        playheadLine: lines(script).length,
+        placed: true,
+        defaultAt: { x: 960, y: 900 },
+      });
+      const out = lines(next);
+      const hide = out.findIndex((line) => line.startsWith("[Prop: plant hide"));
+      assert.ok(hide > 0 && hide < out.indexOf("[Scene: Outro]"), `${scope}: hide must stay in the Intro scene`);
+      if (scope === "here") assert.match(out[hide], /at_time=4s/, "clamped to the end of the intro scene (96 frames = 4s)");
+    }
+  });
 });

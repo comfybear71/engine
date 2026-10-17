@@ -838,6 +838,11 @@ describe("prop layers", () => {
 
     const wholeAdd = await parse(["[Prop: plant show at=450,900 at_time=0s]"]);
     assert.equal(wholeAdd.filter((l) => l.prop_id === "plant").length, 1);
+
+    const addedThenRemoved = await parse(["[Prop: plant show at=450,900 at_time=0s]", "[Prop: plant hide at_time=0s]"]);
+    assert.deepEqual(addedThenRemoved.filter((l) => l.prop_id === "plant"), [], "a later hide at the same time wins over an earlier show");
+    const removedThenAdded = await parse(["[Prop: plant hide at_time=0s]", "[Prop: plant show at=450,900 at_time=0s]"]);
+    assert.equal(removedThenAdded.filter((l) => l.prop_id === "plant").length, 1, "a later show at the same time wins over an earlier hide");
     isolated.cleanup();
   });
 

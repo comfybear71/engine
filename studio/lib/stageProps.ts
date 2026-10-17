@@ -72,13 +72,16 @@ export function applyPropEdit(opts: {
   frame: number;
   fps: number;
   scenes: { id: string; startFrame: number; endFrame: number }[];
+  /** The scene whose props the drawer is showing; the edit must land in this scene even if the playhead has moved on. */
+  sceneId?: string | null;
   playheadLine: number | null;
   placed: boolean;
   defaultAt: { x: number; y: number };
 }): string {
-  const scene = sceneAtFrame(opts.scenes, opts.frame);
+  const scene = (opts.sceneId && opts.scenes.find((item) => item.id === opts.sceneId)) || sceneAtFrame(opts.scenes, opts.frame);
+  const sceneLength = scene ? Math.max(0, scene.endFrame - scene.startFrame) : Infinity;
   const local =
-    opts.scope === "scene" ? 0 : Math.max(0, Math.round(opts.frame - (scene?.startFrame ?? 0)));
+    opts.scope === "scene" ? 0 : Math.min(sceneLength, Math.max(0, Math.round(opts.frame - (scene?.startFrame ?? 0))));
   const line = propTagLine({
     propId: opts.propId,
     action: opts.action,
