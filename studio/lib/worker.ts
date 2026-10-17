@@ -1749,6 +1749,8 @@ export type TalkStart = {
   fullBody?: boolean;
 };
 export type TalkingHeadPlan = TalkingHeadRange & {
+  requestedSec?: number;
+  limitSec?: number | null;
   characterId: string;
   hasWords: boolean;
   transcript: string;
@@ -1773,7 +1775,7 @@ function talkingHeadBase(name: string, characterId: string): string {
   return `/api/projects/${encodeURIComponent(name)}/characters/${encodeURIComponent(characterId)}/talking-head`;
 }
 
-export function planTalkingHead(name: string, characterId: string, range: TalkingHeadRange): Promise<TalkingHeadPlan> {
+export function planTalkingHead(name: string, characterId: string, range: TalkingHeadRange & { engine?: "grok" | "ltx" }): Promise<TalkingHeadPlan> {
   return talkingHeadPost<TalkingHeadPlan>(`${talkingHeadBase(name, characterId)}/plan`, range);
 }
 
