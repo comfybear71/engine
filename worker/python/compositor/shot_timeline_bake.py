@@ -158,8 +158,9 @@ def source_frame_path(seg: dict, frame: int) -> Path:
 
 def body_scale_of(seg: dict | None) -> float:
     """User size of a body clip (1 = as drawn). The body grows or shrinks about
-    the middle of its feet, and the head stays attached to the same spot on it
-    without changing size."""
+    its pivot (the neck, so the head does not move; the middle of the feet if no
+    pivot was saved), and the head stays attached to the same spot on it without
+    changing size."""
     if not seg:
         return 1.0
     try:
@@ -169,11 +170,24 @@ def body_scale_of(seg: dict | None) -> float:
     return min(2.5, max(0.3, scale)) if scale > 0 else 1.0
 
 
-def body_rect(canvas_w: int, canvas_h: int, scale: float) -> tuple[float, float, float, float]:
+def body_pivot_of(seg: dict | None) -> tuple[float, float]:
+    """Point of the body (fractions of its frame) that stays put when it is resized. Default: middle of the feet."""
+    def one(key: str, default: float) -> float:
+        try:
+            value = float((seg or {}).get(key))
+        except (TypeError, ValueError):
+            return default
+        return min(1.0, max(0.0, value))
+    return (one("bodyPivotX", 0.5), one("bodyPivotY", 1.0))
+
+
+def body_rect(
+    canvas_w: int, canvas_h: int, scale: float, pivot: tuple[float, float] = (0.5, 1.0)
+) -> tuple[float, float, float, float]:
     """(left, top, width, height) of the body in the unscaled body frame's coordinates."""
     width = canvas_w * scale
     height = canvas_h * scale
-    return ((canvas_w - width) / 2.0, canvas_h - height, width, height)
+    return (pivot[0] * canvas_w * (1.0 - scale), pivot[1] * canvas_h * (1.0 - scale), width, height)
 
 
 def first_available_frame(segments: list[dict]) -> np.ndarray | None:
@@ -199,19 +213,19 @@ def head_overshoot_padding(
     without padding that part would be cut off in every baked frame."""
     pad_l = pad_t = pad_r = pad_b = 0
     for body_seg in body_segments or []:
-        left, top, width, height = body_rect(canvas_w, canvas_h, body_scale_of(body_seg))
+        left, top, width, height = body_rect(canvas_w, canvas_h, body_scale_of(body_seg), body_pivot_of(body_seg))
         pad_l = max(pad_l, -left)
         pad_t = max(pad_t, -top)
         pad_r = max(pad_r, left + width - canvas_w)
+        pad_b = max(pad_b, top + height - canvas_h)
     for seg in head_segments:
         length = segment_length(seg)
         scale = float(seg.get("headScale", 1.0))
         n = min(samples_per_segment, length)
         for k in range(n):
             frame = int(seg["start"]) + (0 if n == 1 else round(k * (length - 1) / (n - 1)))
-            b_left, b_top, b_w, b_h = body_rect(
-                canvas_w, canvas_h, body_scale_of(active_segment(body_segments or [], frame))
-            )
+            active_body = active_segment(body_segments or [], frame)
+            b_left, b_top, b_w, b_h = body_rect(canvas_w, canvas_h, body_scale_of(active_body), body_pivot_of(active_body))
             cx = b_left + float(seg.get("anchorX", 0.5)) * b_w
             cy = b_top + float(seg.get("anchorY", 0.15)) * b_h
             head_img = load_bgra(source_frame_path(seg, frame))
@@ -274,7 +288,8 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
 
         body_seg = active_segment(body_segments, frame)
         b_scale = body_scale_of(body_seg)
-        b_left, b_top, b_w, b_h = body_rect(canvas_w, canvas_h, b_scale)
+        b_left, b_top, b_w, b_h = body_rect(canvas_w, canvas_h, b_scale, body_pivot_of(body_seg))
+        body_layer = None
         if body_seg is not None:
             body_img = load_bgra(source_frame_path(body_seg, frame))
             if body_img is not None:
@@ -285,7 +300,11 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
                     body_img = cv2.resize(body_img, (target_w, target_h), interpolation=interp)
                 x0 = pad_l + int(round(b_left))
                 y0 = pad_t + int(round(b_top))
-                canvas[y0:y0 + target_h, x0:x0 + target_w] = body_img
+                body_layer = (body_img, x0 + target_w // 2, y0 + target_h // 2)
+
+        body_in_front = bool(body_seg and body_seg.get("bodyInFront") is True)
+        if body_layer is not None and not body_in_front:
+            canvas = composite_over(canvas, *body_layer)
 
         head_seg = active_segment(head_segments, frame)
         if head_seg is not None:
@@ -304,6 +323,9 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
                 cx = pad_l + int(b_left + float(head_seg.get("anchorX", 0.5)) * b_w)
                 cy = pad_t + int(b_top + float(head_seg.get("anchorY", 0.15)) * b_h)
                 canvas = composite_over(canvas, head_img, cx, cy)
+
+        if body_layer is not None and body_in_front:
+            canvas = composite_over(canvas, *body_layer)
 
         cut_path = cut_dir / f"f_{frame:04d}.png"
         cv2.imwrite(str(cut_path), canvas)

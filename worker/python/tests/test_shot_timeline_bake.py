@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from compositor import shot_timeline_bake as bake
 
@@ -189,3 +190,57 @@ def test_bigger_body_grows_the_canvas_instead_of_being_clipped(tmp_path):
     assert canvas.shape[1] >= 150 and canvas.shape[0] >= 300
     # Feet stay on the same ground line: the body's bottom is the canvas bottom.
     assert y1 == canvas.shape[0] - bake.head_overshoot_padding([], 100, 200, body_segments=[{"bodyScale": 1.5}])[3]
+
+
+def test_body_pivot_keeps_that_point_of_the_body_fixed_so_the_head_does_not_move():
+    pivot = (0.5, 0.1)
+    for scale in (0.6, 1.0, 1.5):
+        left, top, width, height = bake.body_rect(100, 200, scale, pivot)
+        assert (left + pivot[0] * width, top + pivot[1] * height) == pytest.approx((50, 20))
+    # No pivot saved: the middle of the feet stays put (the earlier behaviour).
+    assert bake.body_pivot_of({"bodyScale": 1.5}) == (0.5, 1.0)
+    assert bake.body_pivot_of({"bodyPivotX": 2, "bodyPivotY": -1}) == (1.0, 0.0)
+
+
+def test_bigger_body_grown_from_the_neck_gets_padding_below_and_above(tmp_path):
+    body_cut = _write_shot(tmp_path, "body", [_body()])
+    head_cut = _write_shot(tmp_path, "head", [_head(20, 20, content_y=20, content_h=20)])
+    spec = json.loads(_body_spec(tmp_path, body_cut, head_cut, 1, (0.5, 0.1), 1.5).read_text())
+    spec["bodySegments"][0].update({"bodyPivotX": 0.5, "bodyPivotY": 0.1})
+    spec_path = tmp_path / "spec_pivot.json"
+    spec_path.write_text(json.dumps(spec))
+    out = tmp_path / "out"
+    bake.run(str(spec_path), str(out))
+    path = out / "cut" / "f_0001.png"
+    canvas = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    x0, y0, x1, y1 = _blue_box(path)
+    assert (x1 - x0, y1 - y0) == (150, 300)
+    assert canvas.shape[0] >= 300
+    # The neck point (0.5, 0.1) of the body is where it was in the unscaled frame, shifted only by the padding.
+    pad_l, pad_t, _, _ = bake.head_overshoot_padding([], 100, 200, body_segments=spec["bodySegments"])
+    assert (x0 + 0.5 * (x1 - x0), y0 + 0.1 * (y1 - y0)) == pytest.approx((pad_l + 50, pad_t + 20), abs=1.5)
+
+
+def _bake_with_front(tmp_path: Path, in_front: bool) -> np.ndarray:
+    body_cut = _write_shot(tmp_path, "body", [_body()])
+    head_cut = _write_shot(tmp_path, "head", [_head(0, 60, content_y=0, content_h=60)])
+    spec = json.loads(_spec(tmp_path, body_cut, head_cut, 1, (0.5, 0.5)).read_text())
+    if in_front:
+        spec["bodySegments"][0]["bodyInFront"] = True
+    spec_path = tmp_path / "spec_front.json"
+    spec_path.write_text(json.dumps(spec))
+    out = tmp_path / "out"
+    bake.run(str(spec_path), str(out))
+    return cv2.imread(str(out / "cut" / "f_0001.png"), cv2.IMREAD_UNCHANGED)
+
+
+def test_head_is_in_front_of_the_body_by_default(tmp_path):
+    canvas = _bake_with_front(tmp_path, False)
+    b, g, r, a = (int(v) for v in canvas[100, 50])
+    assert (r, b, a) == (255, 0, 255), "red head over the blue body"
+
+
+def test_body_in_front_draws_hands_over_the_face(tmp_path):
+    canvas = _bake_with_front(tmp_path, True)
+    b, g, r, a = (int(v) for v in canvas[100, 50])
+    assert (b, r, a) == (200, 0, 255), "the opaque blue body now covers the red head where they overlap"

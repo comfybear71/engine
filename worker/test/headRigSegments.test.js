@@ -64,4 +64,37 @@ describe("head rig segment speed and reverse", () => {
       /bodyScale/
     );
   });
+
+  test("the point the body grows around is kept with a body size, and dropped with the default size", () => {
+    saveHeadRig(projectDir, null, "rodney", {
+      key: "front",
+      bodySegments: [
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 1, bodyScale: 1.3, bodyPivotX: 0.5, bodyPivotY: 0.18 },
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 11, bodyScale: 1, bodyPivotX: 0.5, bodyPivotY: 0.18 },
+      ],
+    });
+    const rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.equal(rig.bodySegments[0].bodyPivotX, 0.5);
+    assert.equal(rig.bodySegments[0].bodyPivotY, 0.18);
+    assert.equal("bodyPivotY" in rig.bodySegments[1], false);
+    assert.throws(
+      () => saveHeadRig(projectDir, null, "rodney", { key: "front", bodySegments: [{ shotId: "a", inFrame: 1, outFrame: 3, start: 1, bodyScale: 1.2, bodyPivotY: 4 }] }),
+      /bodyPivotY/
+    );
+  });
+
+  test("body-in-front is kept on body clips only", () => {
+    saveHeadRig(projectDir, null, "rodney", {
+      key: "front",
+      bodySegments: [
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 1, bodyInFront: true },
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 11 },
+      ],
+      headSegments: [{ shotId: "h", inFrame: 1, outFrame: 5, start: 1, bodyInFront: true, anchorX: 0.5, anchorY: 0.2, headScale: 1 }],
+    });
+    const rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.equal(rig.bodySegments[0].bodyInFront, true);
+    assert.equal("bodyInFront" in rig.bodySegments[1], false);
+    assert.equal("bodyInFront" in rig.headSegments[0], false);
+  });
 });

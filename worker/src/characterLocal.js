@@ -266,10 +266,19 @@ function normalizeStoredSegment(raw, isHead) {
     if (Math.abs(speed - 1) > 1e-6) seg.speed = Math.round(speed * 1000) / 1000;
   }
   if (raw.reverse === true) seg.reverse = true;
+  if (!isHead && raw.bodyInFront === true) seg.bodyInFront = true;
   if (!isHead && raw.bodyScale != null) {
     const bodyScale = Number(raw.bodyScale);
     if (!Number.isFinite(bodyScale) || bodyScale < 0.3 || bodyScale > 2.5) throw localError("segment.bodyScale must be 0.3-2.5");
-    if (Math.abs(bodyScale - 1) > 1e-6) seg.bodyScale = Math.round(bodyScale * 1000) / 1000;
+    if (Math.abs(bodyScale - 1) > 1e-6) {
+      seg.bodyScale = Math.round(bodyScale * 1000) / 1000;
+      for (const key of ["bodyPivotX", "bodyPivotY"]) {
+        if (raw[key] == null) continue;
+        const value = Number(raw[key]);
+        if (!Number.isFinite(value) || value < 0 || value > 1) throw localError(`segment.${key} must be 0-1`);
+        seg[key] = Math.round(value * 1000) / 1000;
+      }
+    }
   }
   if (isHead) {
     const anchorX = raw.anchorX == null ? 0.5 : Number(raw.anchorX);

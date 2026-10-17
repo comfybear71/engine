@@ -65,6 +65,9 @@ interface Segment {
   speed?: number; // this clip alone: 2 = twice as fast, 0.5 = half speed
   reverse?: boolean;
   bodyScale?: number; // body clips only: 1 = as drawn; the head stays attached at full size
+  bodyPivotX?: number; // body clips only: point of the body (fractions of its frame) that stays put when resized
+  bodyPivotY?: number;
+  bodyInFront?: boolean; // body clips only: draw the body over the head (hands in front of the face)
 }
 
 interface HeadSegment extends Segment {
@@ -111,6 +114,22 @@ const BODY_SCALE_MAX = 1.5;
 function bodyUserScale(seg: { bodyScale?: number } | null | undefined): number {
   const n = Number(seg?.bodyScale);
   return Number.isFinite(n) && n > 0 ? clamp(n, BODY_SCALE_MIN, BODY_SCALE_MAX) : 1;
+}
+
+function bodyPivot(seg: { bodyPivotX?: number; bodyPivotY?: number } | null | undefined): { x: number; y: number } {
+  const x = Number(seg?.bodyPivotX);
+  const y = Number(seg?.bodyPivotY);
+  return { x: Number.isFinite(x) ? clamp(x, 0, 1) : 0.5, y: Number.isFinite(y) ? clamp(y, 0, 1) : 1 };
+}
+
+/** Body rectangle after the user's size: it grows or shrinks about its pivot (the neck once the size has been set), so the head does not move. */
+function scaledBodyRect(
+  base: { x: number; y: number; w: number; h: number },
+  seg: { bodyScale?: number; bodyPivotX?: number; bodyPivotY?: number } | null | undefined
+): { x: number; y: number; w: number; h: number } {
+  const s = bodyUserScale(seg);
+  const pivot = bodyPivot(seg);
+  return { x: base.x + pivot.x * base.w * (1 - s), y: base.y + pivot.y * base.h * (1 - s), w: base.w * s, h: base.h * s };
 }
 
 let segCounter = 0;
@@ -514,8 +533,38 @@ export default function HeadRigModal({
 
   function setBodyScale(id: string, value: number, all = false) {
     const next = Math.round(clamp(value, BODY_SCALE_MIN, BODY_SCALE_MAX) * 100) / 100;
+    const reset = Math.abs(next - 1) < 0.005;
+    const source = segmentsRef.current.body.find((s) => s.id === id);
+    // The first time a body is resized, remember where its head sits so the
+    // body grows around the neck and the head does not move.
+    let pivot = { x: source?.bodyPivotX, y: source?.bodyPivotY };
+    if (!reset && (pivot.x == null || pivot.y == null)) {
+      const head = activeSegmentAt(segmentsRef.current.head, scrubFrame);
+      pivot = head ? { x: clamp(head.anchorX, 0, 1), y: clamp(head.anchorY, 0, 1) } : { x: 0.5, y: 0.2 };
+    }
     setBodySegments((prev) =>
-      prev.map((s) => (all || s.id === id ? { ...s, bodyScale: Math.abs(next - 1) < 0.005 ? undefined : next } : s))
+      prev.map((s) => {
+        if (!all && s.id !== id) return s;
+        if (reset) {
+          const { bodyScale: _scale, bodyPivotX: _px, bodyPivotY: _py, ...rest } = s;
+          void _scale; void _px; void _py;
+          return rest;
+        }
+        return { ...s, bodyScale: next, bodyPivotX: pivot.x, bodyPivotY: pivot.y };
+      })
+    );
+    setSaved(false);
+  }
+
+  function setBodyInFront(id: string, value: boolean, all = false) {
+    setBodySegments((prev) =>
+      prev.map((s) => {
+        if (!all && s.id !== id) return s;
+        if (value) return { ...s, bodyInFront: true };
+        const { bodyInFront: _front, ...rest } = s;
+        void _front;
+        return rest;
+      })
     );
     setSaved(false);
   }
@@ -659,6 +708,8 @@ export default function HeadRigModal({
     let bh = ch * 0.6;
     let bx = (cw - bw) / 2;
     let by = ch - bh - ch * 0.03;
+    let bodyImg: HTMLImageElement | null = null;
+    let bodyDrawn = !body?.bodyInFront;
 
     if (body) {
       const img = getFrameImage(body.shotId, sourceFrameOf(body, frame));
@@ -666,12 +717,15 @@ export default function HeadRigModal({
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
-        const userScale = bodyUserScale(body);
-        bw = dims.w * scale * userScale;
-        bh = dims.h * scale * userScale;
-        bx = (cw - bw) / 2;
-        by = ch - bh - ch * 0.03;
-        if (img) ctx.drawImage(img, bx, by, bw, bh);
+        const baseW = dims.w * scale;
+        const baseH = dims.h * scale;
+        const rect = scaledBodyRect({ x: (cw - baseW) / 2, y: ch - baseH - ch * 0.03, w: baseW, h: baseH }, body);
+        bw = rect.w;
+        bh = rect.h;
+        bx = rect.x;
+        by = rect.y;
+        bodyImg = img || null;
+        if (img && !body.bodyInFront) ctx.drawImage(img, bx, by, bw, bh);
       }
     }
 
@@ -688,6 +742,10 @@ export default function HeadRigModal({
           // green-screen removal; a second pass makes them fully opaque.
           ctx.drawImage(img, hx, hy, hw, hh);
           ctx.drawImage(img, hx, hy, hw, hh);
+          if (bodyImg && !bodyDrawn) {
+            ctx.drawImage(bodyImg, bx, by, bw, bh);
+            bodyDrawn = true;
+          }
 
           const isEditing = selectedRef.current?.track === "head" && selectedRef.current.id === head.id;
           const geo = headGeometry(head, frame);
@@ -748,6 +806,8 @@ export default function HeadRigModal({
         }
       }
     }
+
+    if (bodyImg && !bodyDrawn) ctx.drawImage(bodyImg, bx, by, bw, bh);
 
     ctx.fillStyle = "#e0a040";
     ctx.font = "11px monospace";
@@ -811,10 +871,10 @@ export default function HeadRigModal({
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         const scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
-        const userScale = bodyUserScale(body);
-        const bw = dims.w * scale * userScale;
-        const bh = dims.h * scale * userScale;
-        return { scale, bw, bh, bx: (cw - bw) / 2, by: ch - bh - ch * 0.03 };
+        const baseW = dims.w * scale;
+        const baseH = dims.h * scale;
+        const rect = scaledBodyRect({ x: (cw - baseW) / 2, y: ch - baseH - ch * 0.03, w: baseW, h: baseH }, body);
+        return { scale, bw: rect.w, bh: rect.h, bx: rect.x, by: rect.y };
       }
     }
     const bw = cw * 0.6;
@@ -2027,7 +2087,7 @@ export default function HeadRigModal({
                 value={Math.round(bodyUserScale(editingBody) * 100)}
                 onChange={(e) => editingBody && setBodyScale(editingBody.id, Number(e.target.value) / 100)}
                 className="w-40"
-                title="Resize this body clip about its feet. The head stays attached at its own size."
+                title="Resize this body clip around its neck, so the head stays where it is and keeps its own size."
               />
               <span className="w-10 text-right font-mono text-neutral-300" data-testid="body-size-value">
                 {Math.round(bodyUserScale(editingBody) * 100)}%
@@ -2050,6 +2110,26 @@ export default function HeadRigModal({
                 title="Give every body clip on the timeline this size"
               >
                 Same for all body clips
+              </button>
+              <label className="flex items-center gap-1 text-neutral-300" title="Draw this body clip over the head, e.g. so hands pointing at the eyes are in front of the face">
+                <input
+                  type="checkbox"
+                  data-testid="body-front-toggle"
+                  disabled={!editingBody}
+                  checked={editingBody?.bodyInFront === true}
+                  onChange={(e) => editingBody && setBodyInFront(editingBody.id, e.target.checked)}
+                />
+                Body in front of head
+              </label>
+              <button
+                type="button"
+                data-testid="body-front-all"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingBody || bodySegments.length < 2}
+                onClick={() => editingBody && setBodyInFront(editingBody.id, editingBody.bodyInFront === true, true)}
+                title="Give every body clip the same front/back order as this one"
+              >
+                Same for all
               </button>
             </div>
             <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-standard-bar">
@@ -2274,6 +2354,19 @@ export default function HeadRigModal({
             <span className="w-4 text-center">✂</span> Split at playhead <span className="ml-auto text-[12px] text-neutral-500">Ctrl+B</span>
           </button>
           <div className="my-1 h-px bg-[#333]" />
+          {ctxMenu.track === "body" ? (() => {
+            const seg = bodySegments.find((s) => s.id === ctxMenu.id);
+            const front = seg?.bodyInFront === true;
+            return (
+              <>
+                <button type="button" data-testid="ctx-body-front" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
+                  onClick={() => { if (seg) setBodyInFront(seg.id, !front); setCtxMenu(null); }}>
+                  <span className="w-4 text-center">🧍</span> {front ? "Put head in front of body" : "Put body in front of head"}
+                </button>
+                <div className="my-1 h-px bg-[#333]" />
+              </>
+            );
+          })() : null}
           {(() => {
             const seg = (ctxMenu.track === "body" ? bodySegments : headSegments).find((s) => s.id === ctxMenu.id);
             const current = normalizeSpeed(seg?.speed);
