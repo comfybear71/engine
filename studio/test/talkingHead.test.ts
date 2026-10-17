@@ -3,6 +3,9 @@ import { describe, test } from "node:test";
 import {
   characterIdFromAudioRel,
   groupTalkShots,
+  ltxPartCount,
+  ltxPartRange,
+  orderLtxChains,
   placeTalkWindows,
   talkingHeadRangeForBlock,
   type TalkShot,
@@ -53,5 +56,33 @@ describe("talking head helpers", () => {
       { shotId: "talk_a_01", inFrame: 1, outFrame: 180, start: 25 },
       { shotId: "talk_a_03", inFrame: 1, outFrame: 100, start: 205 },
     ]);
+  });
+});
+
+describe("LTX 20 s runs", () => {
+  const range = { audioRel: "audio/a/001_rodney.wav", inSec: 5, durationSec: 47 };
+
+  test("audio longer than 20 s is split into 20 s parts", () => {
+    assert.equal(ltxPartCount(20), 1);
+    assert.equal(ltxPartCount(20.4), 1, "a sliver under half a second is not its own part");
+    assert.equal(ltxPartCount(33), 2);
+    assert.equal(ltxPartCount(47), 3);
+  });
+
+  test("each part keeps its place in the audio file", () => {
+    assert.deepEqual([0, 1, 2].map((i) => ltxPartRange(range, i)).map((r) => [r.inSec, r.durationSec]), [[5, 20], [25, 20], [45, 7]]);
+  });
+
+  test("chains are listed in the order the clips were numbered", () => {
+    const withNumber = (group: string, number: number, audioInSec: number): TalkShot => ({
+      id: `${group}_01`,
+      status: "ready",
+      frameCount: 240,
+      talk: { group, index: 0, total: 1, text: "", windowSec: 10, clipSec: 10, number, audioInSec, audioRel: "audio/take_one/001_rodney.wav" },
+    });
+    const groups = groupTalkShots([withNumber("talk_b", 3, 20), withNumber("talk_a", 1, 0), withNumber("talk_c", 5, 40)]);
+    const ordered = orderLtxChains(groups);
+    assert.deepEqual(ordered.map((c) => c.group.group), ["talk_a", "talk_b", "talk_c"]);
+    assert.equal(ordered[0].audioLabel, "take_one");
   });
 });

@@ -45,4 +45,23 @@ describe("head rig segment speed and reverse", () => {
       /speed/
     );
   });
+
+  test("body size is kept on body clips only, and the default is not stored", () => {
+    saveHeadRig(projectDir, null, "rodney", {
+      key: "front",
+      bodySegments: [
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 1, bodyScale: 0.8 },
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 11, bodyScale: 1 },
+      ],
+      headSegments: [{ shotId: "h", inFrame: 1, outFrame: 5, start: 1, bodyScale: 0.5, anchorX: 0.5, anchorY: 0.2, headScale: 1 }],
+    });
+    const rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.equal(rig.bodySegments[0].bodyScale, 0.8);
+    assert.equal("bodyScale" in rig.bodySegments[1], false);
+    assert.equal("bodyScale" in rig.headSegments[0], false);
+    assert.throws(
+      () => saveHeadRig(projectDir, null, "rodney", { key: "front", bodySegments: [{ shotId: "a", inFrame: 1, outFrame: 3, start: 1, bodyScale: 9 }] }),
+      /bodyScale/
+    );
+  });
 });

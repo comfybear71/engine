@@ -156,6 +156,26 @@ def source_frame_path(seg: dict, frame: int) -> Path:
     return Path(seg["cutDir"]) / f"f_{pad}.png"
 
 
+def body_scale_of(seg: dict | None) -> float:
+    """User size of a body clip (1 = as drawn). The body grows or shrinks about
+    the middle of its feet, and the head stays attached to the same spot on it
+    without changing size."""
+    if not seg:
+        return 1.0
+    try:
+        scale = float(seg.get("bodyScale") or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return min(2.5, max(0.3, scale)) if scale > 0 else 1.0
+
+
+def body_rect(canvas_w: int, canvas_h: int, scale: float) -> tuple[float, float, float, float]:
+    """(left, top, width, height) of the body in the unscaled body frame's coordinates."""
+    width = canvas_w * scale
+    height = canvas_h * scale
+    return ((canvas_w - width) / 2.0, canvas_h - height, width, height)
+
+
 def first_available_frame(segments: list[dict]) -> np.ndarray | None:
     for seg in segments:
         p = source_frame_path(seg, int(seg["start"]))
@@ -166,21 +186,34 @@ def first_available_frame(segments: list[dict]) -> np.ndarray | None:
 
 
 def head_overshoot_padding(
-    head_segments: list[dict], canvas_w: int, canvas_h: int, samples_per_segment: int = 12, margin: int = 12
+    head_segments: list[dict],
+    canvas_w: int,
+    canvas_h: int,
+    samples_per_segment: int = 12,
+    margin: int = 12,
+    body_segments: list[dict] | None = None,
 ) -> tuple[int, int, int, int]:
     """Transparent padding (left, top, right, bottom) needed so the head is
     never clipped by the body frame's edges. A head dragged up near the top
     of the body (hat brim, tall hair) can extend past the body image, and
     without padding that part would be cut off in every baked frame."""
     pad_l = pad_t = pad_r = pad_b = 0
+    for body_seg in body_segments or []:
+        left, top, width, height = body_rect(canvas_w, canvas_h, body_scale_of(body_seg))
+        pad_l = max(pad_l, -left)
+        pad_t = max(pad_t, -top)
+        pad_r = max(pad_r, left + width - canvas_w)
     for seg in head_segments:
         length = segment_length(seg)
         scale = float(seg.get("headScale", 1.0))
-        cx = float(seg.get("anchorX", 0.5)) * canvas_w
-        cy = float(seg.get("anchorY", 0.15)) * canvas_h
         n = min(samples_per_segment, length)
         for k in range(n):
             frame = int(seg["start"]) + (0 if n == 1 else round(k * (length - 1) / (n - 1)))
+            b_left, b_top, b_w, b_h = body_rect(
+                canvas_w, canvas_h, body_scale_of(active_segment(body_segments or [], frame))
+            )
+            cx = b_left + float(seg.get("anchorX", 0.5)) * b_w
+            cy = b_top + float(seg.get("anchorY", 0.15)) * b_h
             head_img = load_bgra(source_frame_path(seg, frame))
             if head_img is None:
                 continue
@@ -227,7 +260,9 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
         raise RuntimeError("Could not read any source frame for this timeline")
     canvas_h, canvas_w = reference.shape[:2]
 
-    pad_l, pad_t, pad_r, pad_b = head_overshoot_padding(head_segments, canvas_w, canvas_h)
+    pad_l, pad_t, pad_r, pad_b = head_overshoot_padding(
+        head_segments, canvas_w, canvas_h, body_segments=body_segments
+    )
     out_w = canvas_w + pad_l + pad_r
     out_h = canvas_h + pad_t + pad_b
 
@@ -238,12 +273,19 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
         canvas = np.zeros((out_h, out_w, 4), dtype=np.uint8)
 
         body_seg = active_segment(body_segments, frame)
+        b_scale = body_scale_of(body_seg)
+        b_left, b_top, b_w, b_h = body_rect(canvas_w, canvas_h, b_scale)
         if body_seg is not None:
             body_img = load_bgra(source_frame_path(body_seg, frame))
             if body_img is not None:
-                if body_img.shape[:2] != (canvas_h, canvas_w):
-                    body_img = cv2.resize(body_img, (canvas_w, canvas_h), interpolation=cv2.INTER_AREA)
-                canvas[pad_t:pad_t + canvas_h, pad_l:pad_l + canvas_w] = body_img
+                target_w = max(1, int(round(b_w)))
+                target_h = max(1, int(round(b_h)))
+                if body_img.shape[:2] != (target_h, target_w):
+                    interp = cv2.INTER_AREA if target_w * target_h <= body_img.shape[0] * body_img.shape[1] else cv2.INTER_LANCZOS4
+                    body_img = cv2.resize(body_img, (target_w, target_h), interpolation=interp)
+                x0 = pad_l + int(round(b_left))
+                y0 = pad_t + int(round(b_top))
+                canvas[y0:y0 + target_h, x0:x0 + target_w] = body_img
 
         head_seg = active_segment(head_segments, frame)
         if head_seg is not None:
@@ -259,8 +301,8 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
                 # Whole frame, centred on the anchor -- the same placement the
                 # Head Rig preview draws, and stable while the head turns or
                 # the mouth opens (the visible-pixel box changes every frame).
-                cx = pad_l + int(float(head_seg.get("anchorX", 0.5)) * canvas_w)
-                cy = pad_t + int(float(head_seg.get("anchorY", 0.15)) * canvas_h)
+                cx = pad_l + int(b_left + float(head_seg.get("anchorX", 0.5)) * b_w)
+                cy = pad_t + int(b_top + float(head_seg.get("anchorY", 0.15)) * b_h)
                 canvas = composite_over(canvas, head_img, cx, cy)
 
         cut_path = cut_dir / f"f_{frame:04d}.png"

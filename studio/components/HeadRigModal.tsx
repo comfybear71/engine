@@ -1,8 +1,8 @@
 "use client";
 
 import React, { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { WORKER_URL, deleteTalkingHead, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
-import { groupTalkShots, placeTalkWindows, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
+import { WORKER_URL, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
+import { groupTalkShots, orderLtxChains, placeTalkWindows, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
 import {
   alphaBox,
   fitToStandard,
@@ -64,6 +64,7 @@ interface Segment {
   start: number; // 1-based position on this timeline's own output
   speed?: number; // this clip alone: 2 = twice as fast, 0.5 = half speed
   reverse?: boolean;
+  bodyScale?: number; // body clips only: 1 = as drawn; the head stays attached at full size
 }
 
 interface HeadSegment extends Segment {
@@ -102,6 +103,14 @@ function shotMediaUrl(project: string, characterId: string, shotId: string, rel:
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+const BODY_SCALE_MIN = 0.5;
+const BODY_SCALE_MAX = 1.5;
+
+function bodyUserScale(seg: { bodyScale?: number } | null | undefined): number {
+  const n = Number(seg?.bodyScale);
+  return Number.isFinite(n) && n > 0 ? clamp(n, BODY_SCALE_MIN, BODY_SCALE_MAX) : 1;
 }
 
 let segCounter = 0;
@@ -451,8 +460,9 @@ export default function HeadRigModal({
     historyTick((n) => n + 1);
   }
 
-  // Remove segments whose shot was deleted
-  const shotIdsSet = useMemo(() => new Set(shots.map((s) => s.id)), [shots]);
+  // Remove segments whose shot was deleted. A talking-head clip that is being
+  // redone is not "ready" for a while but still exists, so its segments stay.
+  const shotIdsSet = useMemo(() => new Set([...shots, ...talkShots].map((s) => s.id)), [shots, talkShots]);
   useEffect(() => {
     setBodySegments((prev) => {
       const filtered = prev.filter((s) => shotIdsSet.has(s.shotId));
@@ -493,6 +503,22 @@ export default function HeadRigModal({
     }
     return activeHead;
   }, [selectedSegment, headSegments, activeHead]);
+
+  const editingBody = useMemo(() => {
+    if (selectedSegment?.track === "body") {
+      const sel = bodySegments.find((s) => s.id === selectedSegment.id);
+      if (sel) return sel;
+    }
+    return activeBody;
+  }, [selectedSegment, bodySegments, activeBody]);
+
+  function setBodyScale(id: string, value: number, all = false) {
+    const next = Math.round(clamp(value, BODY_SCALE_MIN, BODY_SCALE_MAX) * 100) / 100;
+    setBodySegments((prev) =>
+      prev.map((s) => (all || s.id === id ? { ...s, bodyScale: Math.abs(next - 1) < 0.005 ? undefined : next } : s))
+    );
+    setSaved(false);
+  }
 
   // ── Visible head size (alpha box per shot) for the head standard ──
   type HeadMetrics = { box: Box; frame: FrameSize };
@@ -567,7 +593,8 @@ export default function HeadRigModal({
   function bodyDimsFor(frame: number, fallbackToFirst = false): FrameSize | null {
     const active = activeSegmentAt(segmentsRef.current.body, frame) || (fallbackToFirst ? segmentsRef.current.body[0] : undefined);
     const dims = active ? shotDims[active.shotId] : null;
-    return dims && dims.w > 0 ? { w: dims.w, h: dims.h } : null;
+    const userScale = bodyUserScale(active);
+    return dims && dims.w > 0 ? { w: dims.w * userScale, h: dims.h * userScale } : null;
   }
 
   type HeadGeometry = {
@@ -639,8 +666,9 @@ export default function HeadRigModal({
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
-        bw = dims.w * scale;
-        bh = dims.h * scale;
+        const userScale = bodyUserScale(body);
+        bw = dims.w * scale * userScale;
+        bh = dims.h * scale * userScale;
         bx = (cw - bw) / 2;
         by = ch - bh - ch * 0.03;
         if (img) ctx.drawImage(img, bx, by, bw, bh);
@@ -783,8 +811,9 @@ export default function HeadRigModal({
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         const scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
-        const bw = dims.w * scale;
-        const bh = dims.h * scale;
+        const userScale = bodyUserScale(body);
+        const bw = dims.w * scale * userScale;
+        const bh = dims.h * scale * userScale;
         return { scale, bw, bh, bx: (cw - bw) / 2, by: ch - bh - ch * 0.03 };
       }
     }
@@ -975,6 +1004,11 @@ export default function HeadRigModal({
   }
 
   function onCanvasWheel(e: React.WheelEvent<HTMLCanvasElement>) {
+    if (selectedSegment?.track === "body" && editingBody) {
+      e.preventDefault();
+      setBodyScale(editingBody.id, bodyUserScale(editingBody) + (e.deltaY > 0 ? -0.02 : 0.02));
+      return;
+    }
     if (!editingHead) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.03 : 0.03;
@@ -1048,6 +1082,19 @@ export default function HeadRigModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [talkActive, project, characterId]);
 
+  const talkWasActive = useRef(false);
+  useEffect(() => {
+    if (talkWasActive.current && !talkActive) {
+      setMediaVersion((prev) => {
+        const next = { ...prev };
+        for (const s of talkShots) next[s.id] = (next[s.id] || 0) + 1;
+        return next;
+      });
+    }
+    talkWasActive.current = talkActive;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [talkActive]);
+
   function openTalkMenu(e: React.MouseEvent, shot: { talk?: TalkMeta; status: string; engine?: string; hasPrevious?: boolean }) {
     if (!shot.talk) return;
     e.preventDefault();
@@ -1075,11 +1122,14 @@ export default function HeadRigModal({
   }
 
   async function handleRedoTalkClip(group: string, index: number, engine?: "grok" | "ltx") {
+    const was = talkShots.find((s) => s.talk?.group === group && s.talk.index === index);
+    const wasEngine = was?.engine || was?.talk?.engine || "grok";
+    const n = was?.talk?.number ? `LTX ${String(was.talk.number).padStart(2, "0")}` : `clip ${index + 1}`;
     const message = engine === "grok"
-      ? `Send clip ${index + 1} to Grok?\n\nGrok makes the mouth move to the exact words (it cannot hear the audio, so the match is looser than LTX). This uses Grok credits for one clip. The other clips are kept, the clip keeps its black backdrop and head keying, and you can press Undo to get the old clip ${index + 1} back.`
+      ? `${wasEngine === "grok" ? "Redo" : "Send"} ${n} ${wasEngine === "grok" ? "with Grok" : "to Grok"}?\n\nGrok makes the mouth move to the exact words (it cannot hear the audio, so the match is looser than LTX). This uses Grok credits for one clip. The other clips are kept, the clip keeps its black backdrop and head keying, any copies of it on the timeline stay in place, and you can press Undo to get the old clip back.`
       : engine === "ltx"
-        ? `Send clip ${index + 1} back to LTX?\n\nThis uses Comfy Cloud credits for one clip. The other clips are kept, and you can press Undo to get the old clip ${index + 1} back.`
-        : `Regenerate clip ${index + 1} with a new seed?\n\nThis uses credits for one clip with the engine it was made with. The other clips are kept, and you can press Undo to get the old clip ${index + 1} back.`;
+        ? `${wasEngine === "ltx" ? "Redo" : "Send back to LTX:"} ${n}${wasEngine === "ltx" ? " with LTX" : ""}?\n\nThis uses Comfy Cloud credits for one clip. The other clips are kept, any copies of it on the timeline stay in place, and you can press Undo to get the old clip back.`
+        : `Regenerate ${n} with a new seed?\n\nThis uses credits for one clip with the engine it was made with. The other clips are kept, and you can press Undo to get the old clip back.`;
     if (!confirm(message)) return;
     setTalkBusy(group);
     try {
@@ -1091,23 +1141,14 @@ export default function HeadRigModal({
     setTalkBusy(null);
   }
 
-  async function handleRedoAllTalkClips(group: string, count: number) {
-    if (!confirm(`Regenerate all ${count} clips with new seeds?\n\nThis uses Comfy Cloud credits for ${count} clips. Clip 1 sets the head size and the other clips are held to it. Each clip keeps an Undo to get its old version back.`)) return;
-    setTalkBusy(group);
-    try {
-      await redoTalkingHeadClip(project, characterId, group, 0, true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not redo the clips");
-    }
-    await reloadShots();
-    setTalkBusy(null);
-  }
 
   async function handleUndoRedoClip(group: string, index: number) {
     if (!confirm(`Go back to the previous version of clip ${index + 1}?\n\nThe current version of clip ${index + 1} is discarded.`)) return;
     setTalkBusy(group);
     try {
       await undoTalkingHeadRedo(project, characterId, group, index);
+      const restored = talkShots.find((s) => s.talk?.group === group && s.talk.index === index);
+      if (restored) bumpMediaVersion(restored.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not restore the previous clip");
     }
@@ -1127,17 +1168,6 @@ export default function HeadRigModal({
     setTalkBusy(null);
   }
 
-  async function handleDeleteTalk(group: string) {
-    if (!confirm("Delete this talking head and all of its clips?")) return;
-    setTalkBusy(group);
-    try {
-      await deleteTalkingHead(project, characterId, group);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not delete the talking head");
-    }
-    await reloadShots();
-    setTalkBusy(null);
-  }
 
   function placeTalkGroup(group: TalkGroup) {
     const ready = group.shots.filter((s) => s.status === "ready");
@@ -1432,6 +1462,23 @@ export default function HeadRigModal({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     else setHeadSegments(fn as any);
     setSaved(false);
+  }
+  function talkShotForSegment(track: TrackName, id: string): ShotInfo | null {
+    if (track !== "head") return null;
+    const seg = headSegments.find((s) => s.id === id);
+    return (seg && talkShots.find((s) => s.id === seg.shotId && s.talk)) || null;
+  }
+  function ctxRedoClip(engine: "grok" | "ltx") {
+    if (!ctxMenu) return;
+    const talk = talkShotForSegment(ctxMenu.track, ctxMenu.id)?.talk;
+    setCtxMenu(null);
+    if (talk) void handleRedoTalkClip(talk.group, talk.index, engine);
+  }
+  function ctxUndoClipRedo() {
+    if (!ctxMenu) return;
+    const talk = talkShotForSegment(ctxMenu.track, ctxMenu.id)?.talk;
+    setCtxMenu(null);
+    if (talk) void handleUndoRedoClip(talk.group, talk.index);
   }
   function ctxSetSpeed(speed: number) {
     if (!ctxMenu) return;
@@ -1746,7 +1793,7 @@ export default function HeadRigModal({
   const bodyCats = new Set(["idle_stand", "walks", "mic"]);
   const headCats = new Set(["expressions", "head_moves", "mouth_tongue"]);
   const bodyShots = shots.filter((s) => s.shotType === "body" || (!s.shotType && bodyCats.has(s.category || "")));
-  const headShots = shots.filter((s) => s.shotType === "head" || (!s.shotType && headCats.has(s.category || "")));
+  const headShots = shots.filter((s) => !s.talk && (s.shotType === "head" || (!s.shotType && headCats.has(s.category || ""))));
   const combinedShots = shots.filter((s) => s.shotType === "combined");
   // Shots that don't match any category go into body by default
   const uncategorized = shots.filter((s) => !s.shotType && !bodyCats.has(s.category || "") && !headCats.has(s.category || "") && s.shotType !== "combined");
@@ -1831,19 +1878,17 @@ export default function HeadRigModal({
               onClipMenu={openTalkMenu}
             />
 
-            {talkGroups.length > 0 && (
-              <TalkingHeadSection
-                groups={talkGroups}
-                project={project} characterId={characterId}
+            {talkShots.length > 0 && (
+              <LtxSection
+                shots={talkShots}
+                project={project} characterId={characterId} mediaVersion={mediaVersion}
                 busyGroup={talkBusy}
+                onAdd={(s) => addToTrack("head", s)}
                 onPlace={placeTalkGroup}
                 onResume={(g) => void handleResumeTalk(g)}
-                onRedoClip={(g, i, engine) => void handleRedoTalkClip(g, i, engine)}
-                onClipMenu={openTalkMenu}
-                onUndoRedoClip={(g, i) => void handleUndoRedoClip(g, i)}
-                onRedoAll={(g, n) => void handleRedoAllTalkClips(g, n)}
                 onStop={(g) => void handleStopTalk(g)}
-                onDelete={(g) => void handleDeleteTalk(g)}
+                onClipMenu={openTalkMenu}
+                onDelete={handleDeleteShot}
               />
             )}
 
@@ -1964,10 +2009,49 @@ export default function HeadRigModal({
               />
             </div>
             <p className="mt-1 shrink-0 text-[12px] text-studio-muted">
-              {editingHead
-                ? "Drag head = move · Corner handles = scale · Scroll = resize"
-                : "Select a head segment to reposition it"}
+              {selectedSegment?.track === "body"
+                ? "Body clip selected · Scroll or use Body size to resize it (feet stay put)"
+                : editingHead
+                  ? "Drag head = move · Corner handles = scale · Scroll = resize"
+                  : "Select a head segment to reposition it"}
             </p>
+            <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="body-size-bar">
+              <span className="text-studio-muted">Body size</span>
+              <input
+                type="range"
+                data-testid="body-size-slider"
+                min={BODY_SCALE_MIN * 100}
+                max={BODY_SCALE_MAX * 100}
+                step={1}
+                disabled={!editingBody}
+                value={Math.round(bodyUserScale(editingBody) * 100)}
+                onChange={(e) => editingBody && setBodyScale(editingBody.id, Number(e.target.value) / 100)}
+                className="w-40"
+                title="Resize this body clip about its feet. The head stays attached at its own size."
+              />
+              <span className="w-10 text-right font-mono text-neutral-300" data-testid="body-size-value">
+                {Math.round(bodyUserScale(editingBody) * 100)}%
+              </span>
+              <button
+                type="button"
+                data-testid="body-size-reset"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingBody || bodyUserScale(editingBody) === 1}
+                onClick={() => editingBody && setBodyScale(editingBody.id, 1)}
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                data-testid="body-size-all"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingBody || bodySegments.length < 2}
+                onClick={() => editingBody && setBodyScale(editingBody.id, bodyUserScale(editingBody), true)}
+                title="Give every body clip on the timeline this size"
+              >
+                Same for all body clips
+              </button>
+            </div>
             <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-standard-bar">
               <span
                 data-testid="head-standard-status"
@@ -2223,6 +2307,35 @@ export default function HeadRigModal({
               </>
             );
           })()}
+          {(() => {
+            const clip = talkShotForSegment(ctxMenu.track, ctxMenu.id);
+            if (!clip?.talk) return null;
+            const engine = clip.engine || clip.talk.engine || "grok";
+            const label = clip.name || `Clip ${clip.talk.index + 1}`;
+            const busy = talkBusy !== null;
+            const itemClass = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333] disabled:opacity-40";
+            return (
+              <>
+                <div className="my-1 h-px bg-[#333]" />
+                <div className="px-3 pt-1 text-[11px] uppercase tracking-wide text-neutral-500" data-testid="ctx-talk-label">
+                  {label} · made with {engine === "ltx" ? "LTX" : "Grok"}
+                </div>
+                <button type="button" disabled={busy} className={itemClass} data-testid="ctx-redo-ltx" onClick={() => ctxRedoClip("ltx")}
+                  title="Regenerate this clip with LTX (Comfy Cloud credits). Every copy of it on the timeline updates.">
+                  <span className="w-4 text-center">🎙</span> Redo with LTX
+                </button>
+                <button type="button" disabled={busy} className={itemClass} data-testid="ctx-redo-grok" onClick={() => ctxRedoClip("grok")}
+                  title="Regenerate this clip with Grok (Grok credits). Every copy of it on the timeline updates.">
+                  <span className="w-4 text-center">🅶</span> Redo with Grok
+                </button>
+                {clip.hasPrevious ? (
+                  <button type="button" disabled={busy} className={itemClass} data-testid="ctx-undo-redo" onClick={ctxUndoClipRedo}>
+                    <span className="w-4 text-center">↩</span> Undo last redo
+                  </button>
+                ) : null}
+              </>
+            );
+          })()}
           <div className="my-1 h-px bg-[#333]" />
           <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 hover:bg-[#333]"
             onClick={ctxRipple}>
@@ -2329,161 +2442,114 @@ function TalkClipMenu({ menu, busy, onClose, onRedo, onUndo }: {
   );
 }
 
-// ── Talking head sidebar section ─────────────────────────────────────
-
-function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onRedoClip, onUndoRedoClip, onRedoAll, onStop, onDelete, onClipMenu }: {
-  groups: TalkGroup[];
-  project: string; characterId: string;
-  busyGroup: string | null;
-  onPlace: (group: TalkGroup) => void;
-  onResume: (group: string) => void;
-  onRedoClip: (group: string, index: number, engine?: "grok" | "ltx") => void;
-  onUndoRedoClip: (group: string, index: number) => void;
-  onRedoAll: (group: string, count: number) => void;
-  onClipMenu: (e: React.MouseEvent, shot: TalkShot) => void;
-  onStop: (group: string) => void;
-  onDelete: (group: string) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="border-b border-[#222]" data-testid="talking-head-section">
-      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-[#e0a040] hover:bg-[#222]"
-        onClick={() => setOpen(!open)}>
-        <span className="text-[11px] text-neutral-500">{open ? "▼" : "▶"}</span>
-        Talking heads
-        <span className="ml-auto text-[11px] font-normal text-neutral-500">{groups.length}</span>
-      </button>
-      {open && (
-        <div className="flex flex-col gap-2 px-3 pb-3">
-          {groups.map((group) => (
-            <TalkGroupCard key={group.group} group={group} project={project} characterId={characterId}
-              busy={busyGroup === group.group} onPlace={() => onPlace(group)} onResume={() => onResume(group.group)}
-              onRedoClip={(i, engine) => onRedoClip(group.group, i, engine)} onClipMenu={onClipMenu} onUndoRedoClip={(i) => onUndoRedoClip(group.group, i)}
-              onRedoAll={() => onRedoAll(group.group, group.shots.length)}
-              onStop={() => onStop(group.group)} onDelete={() => onDelete(group.group)} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+// ── LTX sidebar section ──────────────────────────────────────────────
 
 const TALK_STATE_LABEL: Record<string, string> = { queued: "Queued", making: "Generating", ready: "Ready", stopped: "Stopped", error: "Failed" };
 
-function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onRedoClip, onUndoRedoClip, onRedoAll, onStop, onDelete, onClipMenu }: {
-  group: TalkGroup; project: string; characterId: string; busy: boolean;
-  onPlace: () => void; onResume: () => void; onRedoClip: (index: number, engine?: "grok" | "ltx") => void; onClipMenu: (e: React.MouseEvent, shot: TalkShot) => void; onUndoRedoClip: (index: number) => void; onRedoAll: () => void; onStop: () => void; onDelete: () => void;
+/**
+ * Every talking-head clip, numbered and labelled with its place in the source
+ * audio. Clips are ordinary shots: nothing here deletes a whole batch, and a
+ * clip only goes if you delete that clip.
+ */
+function LtxSection({ shots, project, characterId, mediaVersion, busyGroup, onAdd, onPlace, onResume, onStop, onClipMenu, onDelete }: {
+  shots: ShotInfo[];
+  project: string; characterId: string;
+  mediaVersion: Record<string, number>;
+  busyGroup: string | null;
+  onAdd: (shot: ShotInfo) => void;
+  onPlace: (group: TalkGroup) => void;
+  onResume: (group: string) => void;
+  onStop: (group: string) => void;
+  onClipMenu: (e: React.MouseEvent, shot: ShotInfo) => void;
+  onDelete: (id: string) => void;
 }) {
-  const inProgress = group.state === "making" || group.state === "queued";
-  const [playing, setPlaying] = useState<number | null>(null);
-  const ready = group.shots.filter((s) => s.status === "ready");
-  const current = playing !== null ? ready[playing] : null;
-  const stateColor = group.state === "ready" ? "text-emerald-300" : group.state === "stopped" ? "text-red-400" : "text-amber-300";
+  const [open, setOpen] = useState(true);
+  const chains = useMemo(() => orderLtxChains(groupTalkShots(shots)), [shots]);
+  const byId = useMemo(() => new Map(shots.map((s) => [s.id, s])), [shots]);
   return (
-    <div className="rounded border border-[#333] bg-[#1a1a1a] p-2" data-testid={`talk-group-${group.group}`}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="truncate text-[12px] font-semibold text-neutral-200" title={group.group}>{group.group}</span>
-        <span className={`shrink-0 text-[11px] font-medium ${stateColor}`} data-testid="talk-group-state">
-          {TALK_STATE_LABEL[group.state]} {group.readyCount}/{group.shots.length}
-        </span>
-        <button type="button" disabled={busy} title="Delete this talking head and its clips"
-          className="shrink-0 text-[12px] text-neutral-500 hover:text-red-400 disabled:opacity-40"
-          data-testid="talk-group-delete" onClick={onDelete}>✕</button>
-      </div>
-      <ol className="mt-1.5 flex flex-col gap-1">
-        {group.shots.map((shot) => (
-          <li key={shot.id} className="flex items-start gap-1.5 text-[11px] leading-snug"
-            data-testid={`talk-clip-${(shot.talk?.index ?? 0) + 1}`}
-            onContextMenu={(e) => onClipMenu(e, shot)}>
-            <span className={`mt-px w-4 shrink-0 text-right ${shot.status === "ready" ? "text-emerald-300" : shot.status === "error" ? "text-red-400" : "text-neutral-500"}`}>
-              {(shot.talk?.index ?? 0) + 1}
-            </span>
-            <span className="min-w-0 flex-1 text-neutral-300">
-              <span className="line-clamp-2" title={shot.talk?.text}>{shot.talk?.text || "…"}</span>
-              <span className="text-neutral-500">
-                {shot.status === "ready" ? `${(shot.talk?.windowSec ?? 0).toFixed(1)}s` : TALK_STATE_LABEL[shot.status] || shot.status}
-              </span>
-            </span>
-            {shot.status === "ready" && !inProgress && (
-              <button type="button" disabled={busy}
-                className="shrink-0 rounded border border-studio-border px-1.5 py-0.5 text-[10px] text-neutral-300 hover:bg-[#333] disabled:opacity-40"
-                data-testid={`talk-redo-${(shot.talk?.index ?? 0) + 1}`}
-                title="Regenerate just this clip with a new seed (uses credits for one clip)"
-                onClick={() => onRedoClip(shot.talk?.index ?? 0)}>
-                Redo
-              </button>
-            )}
-            {(shot.status === "ready" || shot.status === "error") && !inProgress && (shot.engine || shot.talk?.engine) === "ltx" && (
-              <button type="button" disabled={busy}
-                className="shrink-0 rounded border border-studio-border px-1.5 py-0.5 text-[10px] text-neutral-300 hover:bg-[#333] disabled:opacity-40"
-                data-testid={`talk-grok-${(shot.talk?.index ?? 0) + 1}`}
-                title="LTX did not lip-sync this clip? Make just this clip with Grok instead (uses Grok credits)"
-                onClick={() => onRedoClip(shot.talk?.index ?? 0, "grok")}>
-                Grok
-              </button>
-            )}
-            {shot.hasPrevious && !inProgress && (
-              <button type="button" disabled={busy}
-                className="shrink-0 rounded border border-amber-500/60 px-1.5 py-0.5 text-[10px] text-amber-300 hover:bg-[#333] disabled:opacity-40"
-                data-testid={`talk-undo-${(shot.talk?.index ?? 0) + 1}`}
-                title="Go back to the version of this clip from before the last redo"
-                onClick={() => onUndoRedoClip(shot.talk?.index ?? 0)}>
-                Undo
-              </button>
-            )}
-          </li>
-        ))}
-      </ol>
-      {group.error && <p className="mt-1 text-[11px] text-red-400">{group.error}</p>}
-      {group.state === "ready" && group.shots.length > 1 && (
-        <button type="button" disabled={busy}
-          className="mt-2 w-full rounded border border-studio-border bg-studio-raised px-2 py-1 text-[11px] text-neutral-200 hover:bg-[#333] disabled:opacity-40"
-          data-testid="talk-group-redo-all"
-          title="Regenerate every clip so they share one head size (uses credits for all clips)"
-          onClick={onRedoAll}>
-          Redo all clips
-        </button>
-      )}
-      {current && (
-        <div className="mt-2 overflow-hidden rounded border border-[#333] bg-[#00b140]">
-          <video key={current.id} src={shotMediaUrl(project, characterId, current.id, "source.mp4")}
-            className="aspect-video w-full object-contain" autoPlay muted playsInline />
-          <audio key={`a-${current.id}`} src={shotMediaUrl(project, characterId, current.id, "audio.wav")} autoPlay
-            onEnded={() => setPlaying(playing !== null && playing + 1 < ready.length ? playing + 1 : null)} />
+    <div className="border-b border-[#222]" data-testid="ltx-section">
+      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-[#e0a040] hover:bg-[#222]"
+        onClick={() => setOpen(!open)}>
+        <span className="text-[11px] text-neutral-500">{open ? "▼" : "▶"}</span>
+        LTX
+        <span className="ml-auto text-[11px] font-normal text-neutral-500">{shots.length}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 px-2 pb-2">
+          {chains.map(({ key, audioLabel, group }) => {
+            const inProgress = group.state === "making" || group.state === "queued";
+            const busy = busyGroup === group.group;
+            return (
+              <div key={key} className="rounded border border-[#2a2a2a]" data-testid={`ltx-chain-${key}`}>
+                <div className="flex items-center gap-1.5 border-b border-[#2a2a2a] px-1.5 py-1 text-[10px] text-neutral-500">
+                  <span className="min-w-0 flex-1 truncate" title={audioLabel}>{audioLabel}</span>
+                  {inProgress ? (
+                    <span className="text-amber-300">Generating {group.readyCount}/{group.shots.length}</span>
+                  ) : group.state === "stopped" ? (
+                    <span className="text-red-400">Failed</span>
+                  ) : null}
+                  {inProgress ? (
+                    <button type="button" disabled={busy} data-testid="ltx-stop"
+                      className="rounded bg-red-500/80 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-red-500 disabled:opacity-40"
+                      title="Stop making the unfinished clips (finished clips are kept)"
+                      onClick={() => onStop(group.group)}>■ Stop</button>
+                  ) : null}
+                  {group.state === "stopped" ? (
+                    <button type="button" disabled={busy} data-testid="ltx-retry"
+                      className="rounded bg-red-500/80 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-red-500 disabled:opacity-40"
+                      title="Continue from the clip that failed"
+                      onClick={() => onResume(group.group)}>{busy ? "…" : "Retry"}</button>
+                  ) : null}
+                  {group.readyCount > 0 && !inProgress ? (
+                    <button type="button" disabled={busy} data-testid="ltx-place"
+                      className="rounded border border-studio-border px-1.5 py-0.5 text-[10px] text-neutral-300 hover:bg-[#333] disabled:opacity-40"
+                      title="Put this batch's clips on the head track, one after another"
+                      onClick={() => onPlace(group)}>Place</button>
+                  ) : null}
+                </div>
+                {group.shots.map((talkShot) => {
+                  const full = byId.get(talkShot.id);
+                  if (!full) return null;
+                  const engine = full.engine || full.talk?.engine || "grok";
+                  const ready = full.status === "ready";
+                  return (
+                    <div key={full.id} className="group relative" data-testid={`ltx-clip-${full.id}`}
+                      onContextMenu={(e) => onClipMenu(e, full)}>
+                      <button type="button" disabled={!ready}
+                        className="flex w-full items-center gap-2 rounded px-1 py-1 text-left hover:bg-[#1e1e1e] disabled:opacity-60"
+                        onClick={() => onAdd(full)}
+                        title={ready ? `Add "${full.name || full.id}" to the head track. Right-click to redo with LTX or Grok.` : full.error || TALK_STATE_LABEL[full.status] || full.status}>
+                        <div className="h-[36px] w-[64px] shrink-0 overflow-hidden rounded bg-[#0a0a0a]">
+                          <img src={shotMediaUrl(project, characterId, full.id, "poster.jpg", mediaVersion[full.id])} alt=""
+                            className="h-full w-full object-cover"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[12px] font-medium text-neutral-200" data-testid="ltx-clip-name">{full.name || full.id}</p>
+                          <p className={`text-[11px] ${full.status === "error" ? "text-red-400" : ready ? "text-neutral-500" : "text-amber-300"}`}>
+                            {ready ? `${(full.talk?.windowSec ?? 0).toFixed(1)}s` : TALK_STATE_LABEL[full.status] || full.status}
+                            {" · "}{engine === "ltx" ? "LTX" : "Grok"}
+                            {full.hasPrevious ? " · has undo" : ""}
+                          </p>
+                        </div>
+                      </button>
+                      <button type="button"
+                        className="absolute right-6 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded bg-neutral-700 text-[11px] text-neutral-200 hover:bg-neutral-500 group-hover:flex"
+                        title="Redo with LTX or Grok"
+                        data-testid={`ltx-menu-${full.id}`}
+                        onClick={(e) => { e.stopPropagation(); onClipMenu(e, full); }}>⋯</button>
+                      <button type="button"
+                        className="absolute right-0.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white hover:bg-red-500 group-hover:flex"
+                        title="Delete this clip"
+                        onClick={(e) => { e.stopPropagation(); onDelete(full.id); }}>✕</button>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       )}
-      {inProgress && (
-        <button type="button" disabled={busy}
-          className="mt-2 w-full rounded bg-red-500/80 px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-red-500 disabled:opacity-40"
-          data-testid="talk-group-stop"
-          title="Stop sending clips to Grok and remove the unfinished ones"
-          onClick={onStop}>
-          {busy ? "Stopping…" : "■ Stop generating"}
-        </button>
-      )}
-      <div className="mt-2 flex gap-1.5">
-        <button type="button" disabled={!ready.length}
-          className="flex-1 rounded border border-studio-border bg-studio-raised px-2 py-1 text-[11px] text-neutral-200 hover:bg-[#333] disabled:opacity-40"
-          title="Play each clip with its slice of the audio, to check the lip sync"
-          onClick={() => setPlaying(playing === null ? 0 : null)}>
-          {playing === null ? "▶ Play with audio" : "■ Stop"}
-        </button>
-        {group.state === "stopped" ? (
-          <button type="button" disabled={busy}
-            className="flex-1 rounded bg-red-500/80 px-2 py-1 text-[11px] font-semibold text-white hover:bg-red-500 disabled:opacity-40"
-            title="Continue the chain from the clip that failed"
-            onClick={onResume}>
-            {busy ? "Resuming…" : "Retry from failed clip"}
-          </button>
-        ) : (
-          <button type="button" disabled={group.state !== "ready"}
-            className="flex-1 rounded bg-studio-accent px-2 py-1 text-[11px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
-            title="Add every clip to the head track, back to back, trimmed to its audio"
-            onClick={onPlace}>
-            Place on head track
-          </button>
-        )}
-      </div>
     </div>
   );
 }

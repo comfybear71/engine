@@ -41,6 +41,10 @@ const {
 const CLIP_LENGTHS = [4, 6, 8, 10];
 const MAX_WINDOW_SEC = 10;
 const MIN_CUT_SEC = 3;
+/** LTX drifts and the keyer degrades on long chains, so one LTX run is two 10 s clips (20 s of audio). */
+const LTX_CLIP_SEC = 10;
+const LTX_CHAIN_MAX_SEC = 20;
+const LTX_MIN_TAIL_SEC = 0.5;
 const MIN_GAP_SEC = 0.12;
 const DEFAULT_TALK_PROMPT = "natural conversational delivery, subtle head movement, natural blinks";
 const HEAD_ONLY_SUFFIX =
@@ -162,6 +166,22 @@ function describeRanges(list, ranges) {
   });
 }
 
+/**
+ * LTX windows are fixed 10 s slices of the audio, silence included (a quiet
+ * stretch is a usable spacer), never more than 20 s per run.
+ */
+function planLtxWindows(words, durationSec) {
+  const duration = Math.min(LTX_CHAIN_MAX_SEC, Math.max(0, Number(durationSec) || 0));
+  if (duration <= 0) return [];
+  const ranges = [];
+  for (let t = 0; t < duration - 0.01; t += LTX_CLIP_SEC) {
+    const end = Math.min(duration, t + LTX_CLIP_SEC);
+    if (ranges.length && end - t < LTX_MIN_TAIL_SEC) break;
+    ranges.push({ start: t, end });
+  }
+  return describeRanges(cleanWords(words), ranges);
+}
+
 function validateAudioRel(rel) {
   const posix = String(rel || "").replace(/\\/g, "/");
   if (!posix.startsWith("audio/") || !/\.wav$/i.test(posix) || posix.includes("..")) {
@@ -176,15 +196,19 @@ function planTalkingHead(projectDir, body = {}) {
   const wavAbs = path.join(projectDir, audioRel);
   if (!fs.existsSync(wavAbs)) throw shotError(`Audio file not found: ${audioRel}`, "ENOENT");
   const inSec = Math.max(0, Number(body.inSec) || 0);
-  const durationSec = Math.max(0.2, Number(body.durationSec) || 0);
+  const requestedSec = Math.max(0.2, Number(body.durationSec) || 0);
+  const ltx = normalizeEngine(body.engine) === "ltx";
+  const durationSec = ltx ? Math.min(requestedSec, LTX_CHAIN_MAX_SEC) : requestedSec;
   const characterId = String(body.characterId || characterIdFromWavRel(audioRel) || "").trim();
   const words = sliceWords(readWords(path.join(projectDir, wordsPathForWav(audioRel))), inSec, inSec + durationSec);
-  const windows = planWindows(words, durationSec);
+  const windows = ltx ? planLtxWindows(words, durationSec) : planWindows(words, durationSec);
   const transcript = windows.map((w) => w.text).filter(Boolean).join(" ");
   return {
     audioRel,
     inSec,
     durationSec,
+    requestedSec,
+    limitSec: ltx ? LTX_CHAIN_MAX_SEC : null,
     characterId,
     hasWords: words.length > 0,
     transcript,
@@ -589,6 +613,29 @@ function uniqueGroupId(projectDir, characterId, base) {
   return `${base}_${Date.now()}`;
 }
 
+function clockLabel(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/** Next LTX clip number for this character: they are numbered in the order they were made and never reused. */
+function nextClipNumber(projectDir, characterId) {
+  const root = shotsDir(projectDir, characterId);
+  let max = 0;
+  if (!fs.existsSync(root)) return 1;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
+    try {
+      const info = readShotJson(path.join(root, entry.name));
+      const n = Number(info && info.talk && info.talk.number);
+      if (Number.isFinite(n) && n > max) max = n;
+    } catch {
+      /* unreadable shot folder: ignore */
+    }
+  }
+  return max + 1;
+}
+
 /**
  * Create one shot per window (queued) and start the chain in the background.
  * The returned object has a non-enumerable `completion` promise (tests await it).
@@ -619,16 +666,20 @@ async function makeTalkingHead(projectDir, characterId, body = {}, options = {})
   const extractAudio = options.extractWavSlice || extractWavSlice;
   const total = plan.windows.length;
   const shotIds = [];
+  const firstNumber = nextClipNumber(projectDir, char);
 
   for (const win of plan.windows) {
     const id = `${group}_${String(win.index + 1).padStart(2, "0")}`;
+    const number = firstNumber + win.index;
+    const audioStart = plan.inSec + win.start;
+    const audioEnd = plan.inSec + win.end;
     const dir = shotDir(projectDir, char, id);
     fs.mkdirSync(dir, { recursive: true });
     await extractAudio(wavAbs, path.join(dir, "audio.wav"), plan.inSec + win.start, win.duration);
     if (win.index === 0 && refB64) fs.writeFileSync(path.join(dir, "start_frame.png"), Buffer.from(refB64, "base64"));
     writeShotJson(dir, {
       id,
-      name: `${group} (${win.index + 1}/${total})`,
+      name: `${engine === "ltx" ? "LTX" : "Talk"} ${String(number).padStart(2, "0")} · ${clockLabel(audioStart)}–${clockLabel(audioEnd)}`,
       filename: "",
       prompt: buildWindowPrompt({ basePrompt, text: win.text, index: win.index, engine, subject, characterId: char }),
       refImage: refRel,
@@ -654,7 +705,9 @@ async function makeTalkingHead(projectDir, characterId, body = {}, options = {})
         windowSec: win.duration,
         clipSec: win.clipSec,
         audioRel: plan.audioRel,
-        audioInSec: plan.inSec + win.start,
+        audioInSec: audioStart,
+        audioOutSec: audioEnd,
+        number,
         audio: "audio.wav",
         engine,
         subject,
@@ -751,7 +804,10 @@ module.exports = {
   CLIP_LENGTHS,
   MAX_WINDOW_SEC,
   DEFAULT_TALK_PROMPT,
+  LTX_CLIP_SEC,
+  LTX_CHAIN_MAX_SEC,
   planWindows,
+  planLtxWindows,
   planTalkingHead,
   buildWindowPrompt,
   extractFrameAt,
