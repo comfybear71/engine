@@ -62,6 +62,7 @@ interface Segment {
   start: number; // 1-based position on this timeline's own output
   speed?: number; // this clip alone: 2 = twice as fast, 0.5 = half speed
   reverse?: boolean;
+  bodyScale?: number; // body clips only: 1 = as drawn; the head stays attached at full size
 }
 
 interface HeadSegment extends Segment {
@@ -100,6 +101,14 @@ function shotMediaUrl(project: string, characterId: string, shotId: string, rel:
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+const BODY_SCALE_MIN = 0.5;
+const BODY_SCALE_MAX = 1.5;
+
+function bodyUserScale(seg: { bodyScale?: number } | null | undefined): number {
+  const n = Number(seg?.bodyScale);
+  return Number.isFinite(n) && n > 0 ? clamp(n, BODY_SCALE_MIN, BODY_SCALE_MAX) : 1;
 }
 
 let segCounter = 0;
@@ -491,6 +500,22 @@ export default function HeadRigModal({
     return activeHead;
   }, [selectedSegment, headSegments, activeHead]);
 
+  const editingBody = useMemo(() => {
+    if (selectedSegment?.track === "body") {
+      const sel = bodySegments.find((s) => s.id === selectedSegment.id);
+      if (sel) return sel;
+    }
+    return activeBody;
+  }, [selectedSegment, bodySegments, activeBody]);
+
+  function setBodyScale(id: string, value: number, all = false) {
+    const next = Math.round(clamp(value, BODY_SCALE_MIN, BODY_SCALE_MAX) * 100) / 100;
+    setBodySegments((prev) =>
+      prev.map((s) => (all || s.id === id ? { ...s, bodyScale: Math.abs(next - 1) < 0.005 ? undefined : next } : s))
+    );
+    setSaved(false);
+  }
+
   // ── Visible head size (alpha box per shot) for the head standard ──
   type HeadMetrics = { box: Box; frame: FrameSize };
   const headMetricsRef = useRef<Map<string, HeadMetrics | null>>(new Map());
@@ -564,7 +589,8 @@ export default function HeadRigModal({
   function bodyDimsFor(frame: number, fallbackToFirst = false): FrameSize | null {
     const active = activeSegmentAt(segmentsRef.current.body, frame) || (fallbackToFirst ? segmentsRef.current.body[0] : undefined);
     const dims = active ? shotDims[active.shotId] : null;
-    return dims && dims.w > 0 ? { w: dims.w, h: dims.h } : null;
+    const userScale = bodyUserScale(active);
+    return dims && dims.w > 0 ? { w: dims.w * userScale, h: dims.h * userScale } : null;
   }
 
   type HeadGeometry = {
@@ -636,8 +662,9 @@ export default function HeadRigModal({
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
-        bw = dims.w * scale;
-        bh = dims.h * scale;
+        const userScale = bodyUserScale(body);
+        bw = dims.w * scale * userScale;
+        bh = dims.h * scale * userScale;
         bx = (cw - bw) / 2;
         by = ch - bh - ch * 0.03;
         if (img) ctx.drawImage(img, bx, by, bw, bh);
@@ -780,8 +807,9 @@ export default function HeadRigModal({
       if (dims && dims.w > 0) {
         const bodyZone = ch * 0.7;
         const scale = Math.min(cw / dims.w, bodyZone / dims.h) * 0.9;
-        const bw = dims.w * scale;
-        const bh = dims.h * scale;
+        const userScale = bodyUserScale(body);
+        const bw = dims.w * scale * userScale;
+        const bh = dims.h * scale * userScale;
         return { scale, bw, bh, bx: (cw - bw) / 2, by: ch - bh - ch * 0.03 };
       }
     }
@@ -972,6 +1000,11 @@ export default function HeadRigModal({
   }
 
   function onCanvasWheel(e: React.WheelEvent<HTMLCanvasElement>) {
+    if (selectedSegment?.track === "body" && editingBody) {
+      e.preventDefault();
+      setBodyScale(editingBody.id, bodyUserScale(editingBody) + (e.deltaY > 0 ? -0.02 : 0.02));
+      return;
+    }
     if (!editingHead) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.03 : 0.03;
@@ -1938,10 +1971,49 @@ export default function HeadRigModal({
               />
             </div>
             <p className="mt-1 shrink-0 text-[12px] text-studio-muted">
-              {editingHead
-                ? "Drag head = move · Corner handles = scale · Scroll = resize"
-                : "Select a head segment to reposition it"}
+              {selectedSegment?.track === "body"
+                ? "Body clip selected · Scroll or use Body size to resize it (feet stay put)"
+                : editingHead
+                  ? "Drag head = move · Corner handles = scale · Scroll = resize"
+                  : "Select a head segment to reposition it"}
             </p>
+            <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="body-size-bar">
+              <span className="text-studio-muted">Body size</span>
+              <input
+                type="range"
+                data-testid="body-size-slider"
+                min={BODY_SCALE_MIN * 100}
+                max={BODY_SCALE_MAX * 100}
+                step={1}
+                disabled={!editingBody}
+                value={Math.round(bodyUserScale(editingBody) * 100)}
+                onChange={(e) => editingBody && setBodyScale(editingBody.id, Number(e.target.value) / 100)}
+                className="w-40"
+                title="Resize this body clip about its feet. The head stays attached at its own size."
+              />
+              <span className="w-10 text-right font-mono text-neutral-300" data-testid="body-size-value">
+                {Math.round(bodyUserScale(editingBody) * 100)}%
+              </span>
+              <button
+                type="button"
+                data-testid="body-size-reset"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingBody || bodyUserScale(editingBody) === 1}
+                onClick={() => editingBody && setBodyScale(editingBody.id, 1)}
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                data-testid="body-size-all"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingBody || bodySegments.length < 2}
+                onClick={() => editingBody && setBodyScale(editingBody.id, bodyUserScale(editingBody), true)}
+                title="Give every body clip on the timeline this size"
+              >
+                Same for all body clips
+              </button>
+            </div>
             <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-standard-bar">
               <span
                 data-testid="head-standard-status"
