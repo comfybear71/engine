@@ -6,6 +6,7 @@ export type TalkMeta = {
   windowSec: number;
   clipSec: number;
   audio?: string;
+  engine?: string;
 };
 
 export type TalkShot = {
@@ -14,6 +15,7 @@ export type TalkShot = {
   error?: string;
   frameCount: number;
   hasPrevious?: boolean;
+  engine?: string;
   in?: number;
   out?: number;
   talk?: TalkMeta;

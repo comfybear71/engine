@@ -2,7 +2,7 @@
 
 import React, { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { WORKER_URL, deleteTalkingHead, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
-import { groupTalkShots, placeTalkWindows, type TalkGroup, type TalkMeta } from "@/lib/talkingHead";
+import { groupTalkShots, placeTalkWindows, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
 import {
   alphaBox,
   fitToStandard,
@@ -48,6 +48,8 @@ interface ShotInfo {
   in?: number;
   out?: number;
   error?: string;
+  engine?: string;
+  hasPrevious?: boolean;
   talk?: TalkMeta;
 }
 
@@ -221,6 +223,7 @@ export default function HeadRigModal({
   const [shots, setShots] = useState<ShotInfo[]>([]);
   const [talkShots, setTalkShots] = useState<ShotInfo[]>([]);
   const [talkBusy, setTalkBusy] = useState<string | null>(null);
+  const [talkMenu, setTalkMenu] = useState<TalkMenuState | null>(null);
   const [rigs, setRigs] = useState<Record<string, RigEntry>>({});
   const [rigKey, setRigKey] = useState("front");
   const [charRefRel, setCharRefRel] = useState("");
@@ -1078,6 +1081,21 @@ export default function HeadRigModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [talkActive, project, characterId]);
 
+  function openTalkMenu(e: React.MouseEvent, shot: { talk?: TalkMeta; status: string; engine?: string; hasPrevious?: boolean }) {
+    if (!shot.talk) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (shot.status === "queued" || shot.status === "making") return;
+    setTalkMenu({
+      x: e.clientX,
+      y: e.clientY,
+      group: shot.talk.group,
+      index: shot.talk.index,
+      engine: shot.engine || shot.talk.engine || "grok",
+      hasPrevious: shot.hasPrevious === true,
+    });
+  }
+
   async function handleResumeTalk(group: string) {
     setTalkBusy(group);
     try {
@@ -1089,11 +1107,16 @@ export default function HeadRigModal({
     setTalkBusy(null);
   }
 
-  async function handleRedoTalkClip(group: string, index: number) {
-    if (!confirm(`Regenerate clip ${index + 1} with a new seed?\n\nThis uses Comfy Cloud credits for one clip. The other clips are kept, and you can press Undo to get the old clip ${index + 1} back.`)) return;
+  async function handleRedoTalkClip(group: string, index: number, engine?: "grok" | "ltx") {
+    const message = engine === "grok"
+      ? `Send clip ${index + 1} to Grok?\n\nGrok makes the mouth move to the exact words (it cannot hear the audio, so the match is looser than LTX). This uses Grok credits for one clip. The other clips are kept, the clip keeps its black backdrop and head keying, and you can press Undo to get the old clip ${index + 1} back.`
+      : engine === "ltx"
+        ? `Send clip ${index + 1} back to LTX?\n\nThis uses Comfy Cloud credits for one clip. The other clips are kept, and you can press Undo to get the old clip ${index + 1} back.`
+        : `Regenerate clip ${index + 1} with a new seed?\n\nThis uses credits for one clip with the engine it was made with. The other clips are kept, and you can press Undo to get the old clip ${index + 1} back.`;
+    if (!confirm(message)) return;
     setTalkBusy(group);
     try {
-      await redoTalkingHeadClip(project, characterId, group, index);
+      await redoTalkingHeadClip(project, characterId, group, index, false, engine);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not redo the clip");
     }
@@ -1828,6 +1851,7 @@ export default function HeadRigModal({
               project={project} characterId={characterId} mediaVersion={mediaVersion}
               reprocessingShotId={reprocessingShotId}
               onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot}
+              onClipMenu={openTalkMenu}
             />
 
             {/* Head Shots bin */}
@@ -1837,6 +1861,7 @@ export default function HeadRigModal({
               project={project} characterId={characterId} mediaVersion={mediaVersion}
               reprocessingShotId={reprocessingShotId}
               onAdd={(s) => addToTrack("head", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot}
+              onClipMenu={openTalkMenu}
             />
 
             {talkGroups.length > 0 && (
@@ -1846,7 +1871,8 @@ export default function HeadRigModal({
                 busyGroup={talkBusy}
                 onPlace={placeTalkGroup}
                 onResume={(g) => void handleResumeTalk(g)}
-                onRedoClip={(g, i) => void handleRedoTalkClip(g, i)}
+                onRedoClip={(g, i, engine) => void handleRedoTalkClip(g, i, engine)}
+                onClipMenu={openTalkMenu}
                 onUndoRedoClip={(g, i) => void handleUndoRedoClip(g, i)}
                 onRedoAll={(g, n) => void handleRedoAllTalkClips(g, n)}
                 onStop={(g) => void handleStopTalk(g)}
@@ -2199,6 +2225,16 @@ export default function HeadRigModal({
         <span className="text-[11px] text-neutral-500">ENGINE</span>
       </div>
 
+      {talkMenu ? (
+        <TalkClipMenu
+          menu={talkMenu}
+          busy={talkBusy !== null}
+          onClose={() => setTalkMenu(null)}
+          onRedo={(engine) => { const m = talkMenu; setTalkMenu(null); void handleRedoTalkClip(m.group, m.index, engine); }}
+          onUndo={() => { const m = talkMenu; setTalkMenu(null); void handleUndoRedoClip(m.group, m.index); }}
+        />
+      ) : null}
+
       {/* ── Right-click context menu ── */}
       {ctxMenu ? (
         <div
@@ -2297,17 +2333,86 @@ export default function HeadRigModal({
   );
 }
 
+type TalkMenuState = { x: number; y: number; group: string; index: number; engine: string; hasPrevious: boolean };
+
+function TalkClipMenu({ menu, busy, onClose, onRedo, onUndo }: {
+  menu: TalkMenuState;
+  busy: boolean;
+  onClose: () => void;
+  onRedo: (engine: "grok" | "ltx") => void;
+  onUndo: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: menu.x, top: menu.y });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const margin = 8;
+    const left = Math.max(margin, Math.min(menu.x, window.innerWidth - el.offsetWidth - margin));
+    const top = Math.max(margin, Math.min(menu.y, window.innerHeight - el.offsetHeight - margin));
+    setPos({ left, top });
+  }, [menu.x, menu.y]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
+    function onAway() { onClose(); }
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("click", onAway);
+    window.addEventListener("blur", onAway);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("click", onAway);
+      window.removeEventListener("blur", onAway);
+    };
+  }, [onClose]);
+
+  const current = menu.engine === "ltx" ? "ltx" : "grok";
+  const itemClass = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333] disabled:opacity-40";
+  return (
+    <div
+      ref={ref}
+      className="fixed z-50 min-w-[240px] overflow-y-auto rounded border border-[#333] bg-[#1a1a1a] py-1 shadow-xl"
+      style={{ left: pos.left, top: pos.top, maxHeight: "calc(100vh - 16px)" }}
+      data-testid="talk-clip-menu"
+      onMouseDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <p className="px-3 py-1 text-[11px] uppercase tracking-wide text-neutral-500">
+        Clip {menu.index + 1} · made with {current === "ltx" ? "LTX" : "Grok"}
+      </p>
+      <button type="button" disabled={busy} className={itemClass} data-testid="talk-menu-grok" onClick={() => onRedo("grok")}
+        title="Grok moves the mouth to the exact words. It cannot hear the audio, so it is looser than LTX.">
+        <span className="w-4 text-center">🅶</span> {current === "grok" ? "Redo with Grok" : "Send to Grok instead"}
+      </button>
+      <button type="button" disabled={busy} className={itemClass} data-testid="talk-menu-ltx" onClick={() => onRedo("ltx")}
+        title="LTX lip-syncs to the audio (Comfy Cloud credits).">
+        <span className="w-4 text-center">🎙</span> {current === "ltx" ? "Redo with LTX" : "Send back to LTX"}
+      </button>
+      {menu.hasPrevious ? (
+        <>
+          <div className="my-1 h-px bg-[#333]" />
+          <button type="button" disabled={busy} className={itemClass} data-testid="talk-menu-undo" onClick={onUndo}>
+            <span className="w-4 text-center">↩</span> Undo last redo
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 // ── Talking head sidebar section ─────────────────────────────────────
 
-function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onRedoClip, onUndoRedoClip, onRedoAll, onStop, onDelete }: {
+function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, onResume, onRedoClip, onUndoRedoClip, onRedoAll, onStop, onDelete, onClipMenu }: {
   groups: TalkGroup[];
   project: string; characterId: string;
   busyGroup: string | null;
   onPlace: (group: TalkGroup) => void;
   onResume: (group: string) => void;
-  onRedoClip: (group: string, index: number) => void;
+  onRedoClip: (group: string, index: number, engine?: "grok" | "ltx") => void;
   onUndoRedoClip: (group: string, index: number) => void;
   onRedoAll: (group: string, count: number) => void;
+  onClipMenu: (e: React.MouseEvent, shot: TalkShot) => void;
   onStop: (group: string) => void;
   onDelete: (group: string) => void;
 }) {
@@ -2325,7 +2430,7 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
           {groups.map((group) => (
             <TalkGroupCard key={group.group} group={group} project={project} characterId={characterId}
               busy={busyGroup === group.group} onPlace={() => onPlace(group)} onResume={() => onResume(group.group)}
-              onRedoClip={(i) => onRedoClip(group.group, i)} onUndoRedoClip={(i) => onUndoRedoClip(group.group, i)}
+              onRedoClip={(i, engine) => onRedoClip(group.group, i, engine)} onClipMenu={onClipMenu} onUndoRedoClip={(i) => onUndoRedoClip(group.group, i)}
               onRedoAll={() => onRedoAll(group.group, group.shots.length)}
               onStop={() => onStop(group.group)} onDelete={() => onDelete(group.group)} />
           ))}
@@ -2337,9 +2442,9 @@ function TalkingHeadSection({ groups, project, characterId, busyGroup, onPlace, 
 
 const TALK_STATE_LABEL: Record<string, string> = { queued: "Queued", making: "Generating", ready: "Ready", stopped: "Stopped", error: "Failed" };
 
-function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onRedoClip, onUndoRedoClip, onRedoAll, onStop, onDelete }: {
+function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, onRedoClip, onUndoRedoClip, onRedoAll, onStop, onDelete, onClipMenu }: {
   group: TalkGroup; project: string; characterId: string; busy: boolean;
-  onPlace: () => void; onResume: () => void; onRedoClip: (index: number) => void; onUndoRedoClip: (index: number) => void; onRedoAll: () => void; onStop: () => void; onDelete: () => void;
+  onPlace: () => void; onResume: () => void; onRedoClip: (index: number, engine?: "grok" | "ltx") => void; onClipMenu: (e: React.MouseEvent, shot: TalkShot) => void; onUndoRedoClip: (index: number) => void; onRedoAll: () => void; onStop: () => void; onDelete: () => void;
 }) {
   const inProgress = group.state === "making" || group.state === "queued";
   const [playing, setPlaying] = useState<number | null>(null);
@@ -2359,7 +2464,9 @@ function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, o
       </div>
       <ol className="mt-1.5 flex flex-col gap-1">
         {group.shots.map((shot) => (
-          <li key={shot.id} className="flex items-start gap-1.5 text-[11px] leading-snug">
+          <li key={shot.id} className="flex items-start gap-1.5 text-[11px] leading-snug"
+            data-testid={`talk-clip-${(shot.talk?.index ?? 0) + 1}`}
+            onContextMenu={(e) => onClipMenu(e, shot)}>
             <span className={`mt-px w-4 shrink-0 text-right ${shot.status === "ready" ? "text-emerald-300" : shot.status === "error" ? "text-red-400" : "text-neutral-500"}`}>
               {(shot.talk?.index ?? 0) + 1}
             </span>
@@ -2376,6 +2483,15 @@ function TalkGroupCard({ group, project, characterId, busy, onPlace, onResume, o
                 title="Regenerate just this clip with a new seed (uses credits for one clip)"
                 onClick={() => onRedoClip(shot.talk?.index ?? 0)}>
                 Redo
+              </button>
+            )}
+            {(shot.status === "ready" || shot.status === "error") && !inProgress && (shot.engine || shot.talk?.engine) === "ltx" && (
+              <button type="button" disabled={busy}
+                className="shrink-0 rounded border border-studio-border px-1.5 py-0.5 text-[10px] text-neutral-300 hover:bg-[#333] disabled:opacity-40"
+                data-testid={`talk-grok-${(shot.talk?.index ?? 0) + 1}`}
+                title="LTX did not lip-sync this clip? Make just this clip with Grok instead (uses Grok credits)"
+                onClick={() => onRedoClip(shot.talk?.index ?? 0, "grok")}>
+                Grok
               </button>
             )}
             {shot.hasPrevious && !inProgress && (
@@ -2686,7 +2802,7 @@ function TrackRow({
 // ── Collapsible media bin with rectangular hover-preview thumbnails ──
 
 function MediaBin({
-  title, shots, project, characterId, mediaVersion, reprocessingShotId, onAdd, onDelete, onReprocess, defaultOpen = true,
+  title, shots, project, characterId, mediaVersion, reprocessingShotId, onAdd, onDelete, onReprocess, onClipMenu, defaultOpen = true,
 }: {
   title: string;
   shots: ShotInfo[];
@@ -2697,6 +2813,7 @@ function MediaBin({
   onAdd: (s: ShotInfo) => void;
   onDelete: (id: string) => void;
   onReprocess: (id: string) => void;
+  onClipMenu?: (e: React.MouseEvent, shot: ShotInfo) => void;
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -2735,7 +2852,7 @@ function MediaBin({
           {shots.length === 0 ? (
             <p className="px-1 text-[12px] text-neutral-600">No shots yet</p>
           ) : shots.map((s) => (
-            <div key={s.id} className="group relative">
+            <div key={s.id} className="group relative" onContextMenu={s.talk && onClipMenu ? (e) => onClipMenu(e, s) : undefined}>
               <button
                 type="button"
                 className="flex w-full items-center gap-2 rounded border border-transparent px-1 py-1 text-left hover:border-[#e0a040] hover:bg-[#1e1e1e]"
