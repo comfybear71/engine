@@ -260,6 +260,11 @@ function normalizeStoredSegment(raw, isHead) {
   if (!Number.isFinite(start) || start < 1) throw localError("segment.start must be >= 1");
 
   const seg = { shotId, inFrame, outFrame, start };
+  if (!isHead && raw.bodyScale != null) {
+    const bodyScale = Number(raw.bodyScale);
+    if (!Number.isFinite(bodyScale) || bodyScale < 0.3 || bodyScale > 2.5) throw localError("segment.bodyScale must be 0.3-2.5");
+    if (Math.abs(bodyScale - 1) > 1e-6) seg.bodyScale = Math.round(bodyScale * 1000) / 1000;
+  }
   if (isHead) {
     const anchorX = raw.anchorX == null ? 0.5 : Number(raw.anchorX);
     const anchorY = raw.anchorY == null ? 0.15 : Number(raw.anchorY);

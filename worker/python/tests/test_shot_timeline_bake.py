@@ -103,3 +103,49 @@ def test_head_does_not_move_while_its_visible_box_changes(tmp_path):
     a = _red_box(out / "cut" / "f_0001.png")
     b = _red_box(out / "cut" / "f_0002.png")
     assert a[0] == b[0]
+
+
+def _body_spec(tmp_path, body_cut, head_cut, frames, anchor, body_scale):
+    spec = json.loads(_spec(tmp_path, body_cut, head_cut, frames, anchor).read_text())
+    spec["bodySegments"][0]["bodyScale"] = body_scale
+    path = tmp_path / "spec_body.json"
+    path.write_text(json.dumps(spec))
+    return path
+
+
+def _blue_box(path: Path) -> tuple[int, int, int, int]:
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    mask = (img[:, :, 0] > 150) & (img[:, :, 2] < 50) & (img[:, :, 3] > 200)
+    ys, xs = np.where(mask)
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+
+def test_smaller_body_shrinks_about_its_feet_and_the_head_stays_attached_at_full_size(tmp_path):
+    body_cut = _write_shot(tmp_path, "body", [_body()])
+    head_cut = _write_shot(tmp_path, "head", [_head(0, 60, content_y=0, content_h=60)])
+    out = tmp_path / "out"
+    bake.run(str(_body_spec(tmp_path, body_cut, head_cut, 1, (0.5, 0.5), 0.5)), str(out))
+    path = out / "cut" / "f_0001.png"
+    canvas = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    assert canvas.shape[:2] == (200, 100)
+    # Half-size body: 50x100, bottom-centred -> x 25..75, y 100..200.
+    x0, y0, x1, y1 = _blue_box(path)
+    assert (x0, y0, x1, y1) == (25, 100, 75, 200)
+    # Head anchor (0.5, 0.5) of the *smaller* body is (50, 150); head keeps its 60x60 size.
+    hx0, hy0, hx1, hy1 = _red_box(path)
+    assert (hx1 - hx0, hy1 - hy0) == (60, 60)
+    assert ((hx0 + hx1) // 2, (hy0 + hy1) // 2) == (50, 150)
+
+
+def test_bigger_body_grows_the_canvas_instead_of_being_clipped(tmp_path):
+    body_cut = _write_shot(tmp_path, "body", [_body()])
+    head_cut = _write_shot(tmp_path, "head", [_head(20, 20, content_y=20, content_h=20)])
+    out = tmp_path / "out"
+    bake.run(str(_body_spec(tmp_path, body_cut, head_cut, 1, (0.5, 0.1), 1.5)), str(out))
+    path = out / "cut" / "f_0001.png"
+    canvas = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    x0, y0, x1, y1 = _blue_box(path)
+    assert (x1 - x0, y1 - y0) == (150, 300)
+    assert canvas.shape[1] >= 150 and canvas.shape[0] >= 300
+    # Feet stay on the same ground line: the body's bottom is the canvas bottom.
+    assert y1 == canvas.shape[0] - bake.head_overshoot_padding([], 100, 200, body_segments=[{"bodyScale": 1.5}])[3]
