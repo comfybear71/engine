@@ -6,6 +6,11 @@ export type TalkMeta = {
   windowSec: number;
   clipSec: number;
   audio?: string;
+  engine?: string;
+  number?: number;
+  audioRel?: string;
+  audioInSec?: number;
+  audioOutSec?: number;
 };
 
 export type TalkShot = {
@@ -14,6 +19,7 @@ export type TalkShot = {
   error?: string;
   frameCount: number;
   hasPrevious?: boolean;
+  engine?: string;
   in?: number;
   out?: number;
   talk?: TalkMeta;
@@ -106,4 +112,43 @@ export function placeTalkWindows(shots: TalkShot[], startFrame: number): TalkPla
 export function formatSeconds(seconds: number): string {
   const s = Math.max(0, seconds);
   return s >= 60 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : `${s.toFixed(1)}s`;
+}
+
+/** LTX makes at most this much audio per run (two 10 s clips); longer audio is made one part at a time. */
+export const LTX_RUN_SEC = 20;
+
+export function ltxPartCount(durationSec: number): number {
+  return Math.max(1, Math.ceil((Math.max(0, durationSec) - 0.5) / LTX_RUN_SEC));
+}
+
+export function ltxPartRange<T extends { audioRel: string; inSec: number; durationSec: number }>(range: T, part: number): T {
+  const offset = Math.max(0, part) * LTX_RUN_SEC;
+  return { ...range, inSec: range.inSec + offset, durationSec: Math.min(LTX_RUN_SEC, Math.max(0, range.durationSec - offset)) };
+}
+
+export type LtxChain = { key: string; audioLabel: string; group: TalkGroup };
+
+/**
+ * The LTX section lists chains in the order they were made (clip numbers), with
+ * older chains that predate numbering sorted by their audio position.
+ */
+export function orderLtxChains(groups: TalkGroup[]): LtxChain[] {
+  const rank = (group: TalkGroup) => {
+    const first = group.shots[0]?.talk;
+    return first?.number ?? Number.POSITIVE_INFINITY;
+  };
+  return [...groups]
+    .sort((a, b) => {
+      const ra = rank(a);
+      const rb = rank(b);
+      if (ra !== rb) return ra - rb;
+      const ta = a.shots[0]?.talk?.audioInSec ?? 0;
+      const tb = b.shots[0]?.talk?.audioInSec ?? 0;
+      return ta - tb || a.group.localeCompare(b.group);
+    })
+    .map((group) => {
+      const rel = group.shots[0]?.talk?.audioRel || "";
+      const base = rel.split("/").slice(-2, -1)[0] || group.group;
+      return { key: group.group, audioLabel: base, group };
+    });
 }

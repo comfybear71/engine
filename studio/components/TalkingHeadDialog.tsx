@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { formatSeconds } from "@/lib/talkingHead";
+import { formatSeconds, ltxPartCount, ltxPartRange } from "@/lib/talkingHead";
 import {
   WORKER_URL,
   loadEngineSettings,
@@ -66,13 +66,23 @@ export default function TalkingHeadDialog({
   const [engine, setEngine] = useState<TalkEngine>("grok");
   const [subject, setSubject] = useState("");
   const [comfyConfigured, setComfyConfigured] = useState<boolean | null>(null);
+  const [part, setPart] = useState(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const ltxEngine = engine === "ltx";
+  const parts = ltxEngine ? ltxPartCount(range.durationSec) : 1;
+  const activePart = Math.min(part, parts - 1);
+  const activeRange: TalkingHeadRange = ltxEngine ? ltxPartRange(range, activePart) : range;
+
+  useEffect(() => {
+    setPart(0);
+  }, [range.audioRel, range.inSec, range.durationSec]);
 
   useEffect(() => {
     let cancelled = false;
     setPlan(null);
     setError(null);
-    planTalkingHead(project, characterId, range)
+    planTalkingHead(project, characterId, { ...activeRange, engine })
       .then((next) => {
         if (cancelled) return;
         setPlan(next);
@@ -99,7 +109,7 @@ export default function TalkingHeadDialog({
     return () => {
       cancelled = true;
     };
-  }, [project, characterId, range.audioRel, range.inSec, range.durationSec]);
+  }, [project, characterId, activeRange.audioRel, activeRange.inSec, activeRange.durationSec, engine]);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,7 +188,7 @@ export default function TalkingHeadDialog({
       } catch {
         /* optional */
       }
-      await startTalkingHead(project, characterId, { ...range, prompt: prompt.trim(), refRel: startRel, engine, subject: subject.trim() });
+      await startTalkingHead(project, characterId, { ...activeRange, prompt: prompt.trim(), refRel: startRel, engine, subject: subject.trim() });
       onStarted(characterId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start the talking head");
@@ -304,6 +314,33 @@ export default function TalkingHeadDialog({
                   </p>
                 ) : null}
               </div>
+
+              {ltx && parts > 1 ? (
+                <div data-testid="talking-head-parts">
+                  <p className="mb-1 text-[11px] text-studio-muted">
+                    LTX stays consistent in 20 s runs (two 10 s clips, chained). This audio is {formatSeconds(range.durationSec)} long, so pick which 20 s to make:
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Array.from({ length: parts }, (_, i) => {
+                      const partRange = ltxPartRange(range, i);
+                      const from = partRange.inSec;
+                      return (
+                        <button
+                          key={i}
+                          type="button"
+                          data-testid={`talking-head-part-${i + 1}`}
+                          onClick={() => setPart(i)}
+                          className={`rounded border px-2 py-1 text-[11px] ${
+                            i === activePart ? "border-studio-accent bg-studio-accent/10 text-white" : "border-studio-border text-studio-muted hover:bg-studio-raised"
+                          }`}
+                        >
+                          Part {i + 1} · {formatSeconds(from)}–{formatSeconds(from + partRange.durationSec)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
               <ol className="space-y-1.5" data-testid="talking-head-windows">
                 {windows.map((win) => (

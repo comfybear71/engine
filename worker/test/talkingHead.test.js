@@ -8,6 +8,7 @@ const path = require("path");
 
 const {
   planWindows,
+  planLtxWindows,
   planTalkingHead,
   buildWindowPrompt,
   extractFrameAt,
@@ -33,6 +34,35 @@ function speech(durationSec, { pauseEvery = 3.2, pauseLen = 0.5 } = {}) {
   }
   return words;
 }
+
+describe("planLtxWindows", () => {
+  test("20 s of audio is two fixed 10 s clips, cut at 10 s even mid-word", () => {
+    const windows = planLtxWindows(speech(20), 20);
+    assert.deepEqual(windows.map((w) => [w.start, w.end, w.duration]), [[0, 10, 10], [10, 20, 10]]);
+    assert.ok(windows.every((w) => w.clipSec === 10));
+  });
+
+  test("silence is kept as a clip, not skipped (usable as a spacer)", () => {
+    const words = speech(8);
+    const windows = planLtxWindows(words, 20);
+    assert.equal(windows.length, 2);
+    assert.equal(windows[1].text, "");
+    assert.equal(windows[1].duration, 10);
+  });
+
+  test("never plans more than 20 s, and a short audio is one shorter clip", () => {
+    const windows = planLtxWindows(speech(40), 40);
+    assert.equal(windows.length, 2);
+    assert.equal(windows[1].end, 20);
+    const short = planLtxWindows(speech(7), 7);
+    assert.deepEqual(short.map((w) => [w.start, w.end]), [[0, 7]]);
+  });
+
+  test("a sliver after 10 s is dropped instead of becoming its own LTX job", () => {
+    assert.equal(planLtxWindows([], 10.3).length, 1);
+    assert.equal(planLtxWindows([], 10.8).length, 2);
+  });
+});
 
 describe("planWindows", () => {
   test("keeps dialogue of 10 s or less as one window", () => {
@@ -303,6 +333,11 @@ describe("talking head chain", () => {
       };
     }
 
+    function makeMixedFetch(comfyFetch) {
+      const grok = makeFetch();
+      return (url, init) => (/\/videos\/|cdn\.test/.test(String(url)) ? grok(url, init) : comfyFetch(url, init));
+    }
+
     beforeEach(() => {
       uploads = [];
       submitted = [];
@@ -361,7 +396,7 @@ describe("talking head chain", () => {
     });
 
     test("clip 1 sets the head size and every later clip is held to it, including its start frame", async () => {
-      writeAudio(24);
+      writeAudio(20);
       const captures = [];
       const normalized = [];
       const options = {
@@ -378,11 +413,11 @@ describe("talking head chain", () => {
       const started = await makeTalkingHead(
         projectDir,
         "rodney",
-        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 24, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 20, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
         options
       );
       await started.completion;
-      assert.ok(captures.length >= 3);
+      assert.equal(captures.length, 2, "20 s of LTX is two chained 10 s clips");
       assert.equal(captures[0].keyMode, "head-black");
       assert.equal(captures[0].lockHeadSize, true, "the first clip measures its own opening size");
       assert.equal(captures[0].headSizeTarget, 0);
@@ -397,7 +432,7 @@ describe("talking head chain", () => {
     });
 
     test("redoing a later clip of a chain made before the size lock holds it to clip 1's size", async () => {
-      writeAudio(24);
+      writeAudio(20);
       const captures = [];
       const normalized = [];
       const options = {
@@ -415,7 +450,7 @@ describe("talking head chain", () => {
       const started = await makeTalkingHead(
         projectDir,
         "rodney",
-        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 24, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 20, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
         options
       );
       await started.completion;
@@ -506,6 +541,127 @@ describe("talking head chain", () => {
         /COMFY_CLOUD_API_KEY/
       );
       assert.equal(listShots(projectDir, "rodney").length, 0);
+    });
+
+    test("a 33 s range makes only the first 20 s, as two numbered, time-labelled clips; the next run continues the numbering", async () => {
+      writeAudio(33);
+      const options = {
+        ...chainOptions(),
+        fetchFn: makeComfyFetch(),
+        padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out),
+        captureFn: async () => ({ fps: 24, frameCount: 240 }),
+      };
+      const body = { audioRel: "audio/take_one/001_rodney.wav", durationSec: 33, engine: "ltx", refRel: "characters/rodney/front_head.jpg" };
+      const plan = planTalkingHead(projectDir, { ...body, inSec: 0 });
+      assert.equal(plan.durationSec, 20);
+      assert.equal(plan.requestedSec, 33);
+      assert.equal(plan.limitSec, 20);
+      assert.equal(plan.windows.length, 2);
+
+      const first = await makeTalkingHead(projectDir, "rodney", { ...body, inSec: 0 }, options);
+      await first.completion;
+      const second = await makeTalkingHead(projectDir, "rodney", { ...body, inSec: 20, durationSec: 13 }, options);
+      await second.completion;
+
+      const shots = listShots(projectDir, "rodney").sort((a, b) => a.talk.number - b.talk.number);
+      assert.deepEqual(shots.map((s) => s.name), ["LTX 01 · 0:00–0:10", "LTX 02 · 0:10–0:20", "LTX 03 · 0:20–0:30", "LTX 04 · 0:30–0:33"]);
+      assert.deepEqual(shots.map((s) => s.talk.number), [1, 2, 3, 4]);
+      assert.equal(shots[2].talk.audioInSec, 20);
+      assert.equal(shots[2].talk.audioOutSec, 30);
+    });
+
+    test("one clip can be sent to Grok instead of LTX, keeping the head-on-black keying, and undone", async () => {
+      writeAudio(20);
+      const captures = [];
+      const normalized = [];
+      const options = {
+        ...chainOptions(),
+        fetchFn: makeMixedFetch(makeComfyFetch()),
+        padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out),
+        normalizeStart: async (_png, target) => normalized.push(target),
+        captureFn: async (_v, _d, meta) => {
+          captures.push(meta);
+          return { fps: 24, frameCount: 240, headSize: 300 };
+        },
+      };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 20, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+      const ltxJobs = submitted.length;
+      const sorted = () => listShots(projectDir, "rodney").sort((a, b) => a.talk.index - b.talk.index);
+      fs.writeFileSync(path.join(projectDir, "characters", "rodney", "shots", sorted()[1].id, "source.mp4"), "LTX-SOURCE");
+      captures.length = 0;
+      normalized.length = 0;
+
+      await assert.rejects(redoTalkingHeadClip(projectDir, "rodney", started.group, 1, { ...options, engine: "sora" }), /Unknown engine/);
+
+      const redo = await redoTalkingHeadClip(projectDir, "rodney", started.group, 1, { ...options, engine: "grok" });
+      await redo.completion;
+      assert.equal(submitted.length, ltxJobs, "Comfy is not called for the Grok clip");
+      assert.equal(requests.length, 1, "exactly one Grok request");
+      assert.equal(requests[0].body.duration, started.windows[1].clipSec);
+      assert.match(requests[0].body.prompt, new RegExp(started.windows[1].text.split(" ")[0]));
+      assert.match(requests[0].body.prompt, /mouth moving naturally/);
+      assert.match(requests[0].body.prompt, /matte black/);
+      assert.equal(captures.length, 1);
+      assert.equal(captures[0].keyMode, "head-black");
+      assert.equal(captures[0].background, "black");
+      assert.deepEqual(normalized, [300], "its start frame is held to the chain's head size");
+
+      let shots = sorted();
+      assert.equal(shots[1].engine, "grok");
+      assert.equal(shots[1].talk.engine, "grok");
+      assert.equal(shots[1].status, "ready");
+      assert.equal(shots[0].engine, "ltx", "other clips stay on LTX");
+
+
+      await undoTalkingHeadRedo(projectDir, "rodney", started.group, 1);
+      shots = sorted();
+      assert.equal(shots[1].engine, "ltx");
+      assert.equal(shots[1].talk.engine, "ltx");
+      assert.equal(
+        fs.readFileSync(path.join(projectDir, "characters", "rodney", "shots", shots[1].id, "source.mp4"), "utf8"),
+        "LTX-SOURCE"
+      );
+    });
+
+    test("a clip that stays on Grok after a failed LTX attempt can be sent back to LTX", async () => {
+      writeAudio(7);
+      let fail = true;
+      const base = makeComfyFetch();
+      const options = {
+        ...chainOptions(),
+        padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out),
+        fetchFn: makeMixedFetch(async (url, init) => (fail && String(url).endsWith("/api/upload/image") ? { ok: false, status: 402 } : base(url, init))),
+      };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 7, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+      assert.equal(listShots(projectDir, "rodney")[0].status, "error");
+
+      const viaGrok = await redoTalkingHeadClip(projectDir, "rodney", started.group, 0, { ...options, engine: "grok" });
+      await viaGrok.completion;
+      assert.equal(listShots(projectDir, "rodney")[0].status, "ready");
+      assert.equal(listShots(projectDir, "rodney")[0].engine, "grok");
+
+      fail = false;
+      const viaLtx = await redoTalkingHeadClip(projectDir, "rodney", started.group, 0, { ...options, engine: "ltx" });
+      await viaLtx.completion;
+      const [shot] = listShots(projectDir, "rodney");
+      assert.equal(shot.engine, "ltx");
+      assert.equal(shot.keyMode, "head-black");
+      assert.equal(shot.status, "ready");
     });
 
     test("a Comfy Cloud failure is recorded on the window with its reason", async () => {
