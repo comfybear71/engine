@@ -1433,9 +1433,16 @@ export default function HeadRigModal({
       );
       if (res.ok) {
         const data = await res.json();
-        setRigs(data.rigs || {});
+        const remaining: Record<string, unknown> = data.rigs || {};
+        setRigs(remaining as Record<string, RigEntry>);
+        if (key === rigKey) setRigKey(Object.keys(remaining)[0] || "front");
+      } else {
+        const data = await res.json().catch(() => ({ error: "Delete failed" }));
+        alert(`Could not delete "${key}": ${data.error || res.status}`);
       }
-    } catch { /* best effort */ }
+    } catch (err) {
+      alert(`Could not delete "${key}": ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // ── Reload shots list ──
@@ -2387,14 +2394,28 @@ export default function HeadRigModal({
               {error ? <span className="text-[12px] text-red-400">{error}</span> : null}
               {saved ? <span className="text-[12px] text-green-400">Saved!</span> : null}
               {rigKeys.length > 0 && rigKeys.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={`rounded px-2 py-1 text-[11px] ${rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-400 hover:text-white"}`}
-                  onClick={() => setRigKey(key)}
-                >
-                  {key}
-                </button>
+                <span key={key} className="relative inline-flex">
+                  <button
+                    type="button"
+                    data-testid={`rig-key-${key}`}
+                    className={`rounded px-2 py-1 text-[11px] ${rigKey === key ? "bg-[#e0a040] text-black font-semibold" : "bg-studio-raised text-neutral-400 hover:text-white"}`}
+                    onClick={() => setRigKey(key)}
+                  >
+                    {key}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid={`rig-delete-${key}`}
+                    className="absolute -right-1.5 -top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[9px] font-bold leading-none text-white shadow hover:bg-red-500"
+                    title={`Delete the saved "${key}" timeline`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm(`Delete the saved "${key}" timeline? This removes that saved layout from this character and cannot be undone. Your clips and shots are not deleted.`)) void handleDeleteRig(key);
+                    }}
+                  >
+                    ✕
+                  </button>
+                </span>
               ))}
             </div>
           </div>
