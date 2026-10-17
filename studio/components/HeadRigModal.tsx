@@ -976,7 +976,7 @@ export default function HeadRigModal({
       return;
     }
     el.playbackRate = at.rate;
-    if (Math.abs(el.currentTime - at.timeSec) > 0.25) el.currentTime = at.timeSec;
+    if (Math.abs(el.currentTime - at.timeSec) > 0.4) el.currentTime = at.timeSec;
     if (el.paused && !el.ended) void el.play().catch(() => undefined);
   }
 
@@ -1066,15 +1066,20 @@ export default function HeadRigModal({
 
   useEffect(() => {
     if (!playing) return;
-    let frame = scrubFrame >= maxFrames ? 1 : scrubFrame;
-    let lastTime = performance.now();
+    const startFrame = scrubFrame >= maxFrames ? 1 : scrubFrame;
+    const startTime = performance.now();
+    let frame = startFrame;
     syncAudio(frame);
 
+    // The playhead follows the real clock (a busy preview drops pictures
+    // instead of running slow), so the dialogue never has to be rewound to
+    // catch up, which sounded like an echo.
     function tick(now: number) {
       const interval = 1000 / Math.max(1, fps);
-      if (now - lastTime >= interval) {
-        lastTime = now;
-        frame = frame >= maxFrames ? 1 : frame + 1;
+      const steps = Math.floor((now - startTime) / interval);
+      const next = ((startFrame - 1 + steps) % Math.max(1, maxFrames)) + 1;
+      if (next !== frame) {
+        frame = next;
         setScrubFrame(frame);
         drawFrame(frame);
         syncAudio(frame);
