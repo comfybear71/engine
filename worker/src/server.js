@@ -1465,6 +1465,7 @@ function createApp(options = {}) {
         fetchFn,
         pythonBin: options.pythonBin,
         cascade: body.cascade === true,
+        engine: typeof body.engine === "string" ? body.engine : "",
       });
       res.json(result);
     } catch (err) {

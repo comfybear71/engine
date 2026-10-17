@@ -303,6 +303,11 @@ describe("talking head chain", () => {
       };
     }
 
+    function makeMixedFetch(comfyFetch) {
+      const grok = makeFetch();
+      return (url, init) => (/\/videos\/|cdn\.test/.test(String(url)) ? grok(url, init) : comfyFetch(url, init));
+    }
+
     beforeEach(() => {
       uploads = [];
       submitted = [];
@@ -506,6 +511,99 @@ describe("talking head chain", () => {
         /COMFY_CLOUD_API_KEY/
       );
       assert.equal(listShots(projectDir, "rodney").length, 0);
+    });
+
+    test("one clip can be sent to Grok instead of LTX, keeping the head-on-black keying, and undone", async () => {
+      writeAudio(24);
+      const captures = [];
+      const normalized = [];
+      const options = {
+        ...chainOptions(),
+        fetchFn: makeMixedFetch(makeComfyFetch()),
+        padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out),
+        normalizeStart: async (_png, target) => normalized.push(target),
+        captureFn: async (_v, _d, meta) => {
+          captures.push(meta);
+          return { fps: 24, frameCount: 240, headSize: 300 };
+        },
+      };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 24, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+      const ltxJobs = submitted.length;
+      const sorted = () => listShots(projectDir, "rodney").sort((a, b) => a.talk.index - b.talk.index);
+      fs.writeFileSync(path.join(projectDir, "characters", "rodney", "shots", sorted()[1].id, "source.mp4"), "LTX-SOURCE");
+      captures.length = 0;
+      normalized.length = 0;
+
+      await assert.rejects(redoTalkingHeadClip(projectDir, "rodney", started.group, 1, { ...options, engine: "sora" }), /Unknown engine/);
+
+      const redo = await redoTalkingHeadClip(projectDir, "rodney", started.group, 1, { ...options, engine: "grok" });
+      await redo.completion;
+      assert.equal(submitted.length, ltxJobs, "Comfy is not called for the Grok clip");
+      assert.equal(requests.length, 1, "exactly one Grok request");
+      assert.equal(requests[0].body.duration, started.windows[1].clipSec);
+      assert.match(requests[0].body.prompt, new RegExp(started.windows[1].text.split(" ")[0]));
+      assert.match(requests[0].body.prompt, /mouth moving naturally/);
+      assert.match(requests[0].body.prompt, /matte black/);
+      assert.equal(captures.length, 1);
+      assert.equal(captures[0].keyMode, "head-black");
+      assert.equal(captures[0].background, "black");
+      assert.deepEqual(normalized, [300], "its start frame is held to the chain's head size");
+
+      let shots = sorted();
+      assert.equal(shots[1].engine, "grok");
+      assert.equal(shots[1].talk.engine, "grok");
+      assert.equal(shots[1].status, "ready");
+      assert.equal(shots[0].engine, "ltx", "other clips stay on LTX");
+      assert.equal(shots[2].engine, "ltx");
+
+      await undoTalkingHeadRedo(projectDir, "rodney", started.group, 1);
+      shots = sorted();
+      assert.equal(shots[1].engine, "ltx");
+      assert.equal(shots[1].talk.engine, "ltx");
+      assert.equal(
+        fs.readFileSync(path.join(projectDir, "characters", "rodney", "shots", shots[1].id, "source.mp4"), "utf8"),
+        "LTX-SOURCE"
+      );
+    });
+
+    test("a clip that stays on Grok after a failed LTX attempt can be sent back to LTX", async () => {
+      writeAudio(7);
+      let fail = true;
+      const base = makeComfyFetch();
+      const options = {
+        ...chainOptions(),
+        padImage: async (input, out) => fs.copyFileSync(input, out),
+        encodeAudio: async (input, out) => fs.copyFileSync(input, out),
+        fetchFn: makeMixedFetch(async (url, init) => (fail && String(url).endsWith("/api/upload/image") ? { ok: false, status: 402 } : base(url, init))),
+      };
+      const started = await makeTalkingHead(
+        projectDir,
+        "rodney",
+        { audioRel: "audio/take_one/001_rodney.wav", inSec: 0, durationSec: 7, engine: "ltx", refRel: "characters/rodney/front_head.jpg" },
+        options
+      );
+      await started.completion;
+      assert.equal(listShots(projectDir, "rodney")[0].status, "error");
+
+      const viaGrok = await redoTalkingHeadClip(projectDir, "rodney", started.group, 0, { ...options, engine: "grok" });
+      await viaGrok.completion;
+      assert.equal(listShots(projectDir, "rodney")[0].status, "ready");
+      assert.equal(listShots(projectDir, "rodney")[0].engine, "grok");
+
+      fail = false;
+      const viaLtx = await redoTalkingHeadClip(projectDir, "rodney", started.group, 0, { ...options, engine: "ltx" });
+      await viaLtx.completion;
+      const [shot] = listShots(projectDir, "rodney");
+      assert.equal(shot.engine, "ltx");
+      assert.equal(shot.keyMode, "head-black");
+      assert.equal(shot.status, "ready");
     });
 
     test("a Comfy Cloud failure is recorded on the window with its reason", async () => {

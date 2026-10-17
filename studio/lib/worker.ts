@@ -1817,9 +1817,14 @@ export function redoTalkingHeadClip(
   characterId: string,
   group: string,
   index: number,
-  cascade = false
+  cascade = false,
+  engine?: "grok" | "ltx"
 ): Promise<{ ok: boolean; group: string; redone: number; cascade: boolean }> {
-  return talkingHeadPost(`${talkingHeadBase(name, characterId)}/${encodeURIComponent(group)}/redo`, { index, cascade });
+  return talkingHeadPost(`${talkingHeadBase(name, characterId)}/${encodeURIComponent(group)}/redo`, {
+    index,
+    cascade,
+    ...(engine ? { engine } : {}),
+  });
 }
 
 export function undoTalkingHeadRedo(

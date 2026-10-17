@@ -389,9 +389,10 @@ async function runChain(projectDir, characterId, group, startIndex, options = {}
         const startPng = path.join(dir, "start_frame.png");
         try {
           await extract(prevSource, startPng, prev.info.talk.windowSec);
-          if (normalizeEngine(info.engine) === "ltx") await ensureChainHeadSize(shots, options);
+          const headOnBlack = normalizeEngine(info.engine) === "ltx" || info.keyMode === HEAD_BLACK_KEY;
+          if (headOnBlack) await ensureChainHeadSize(shots, options);
           const chainTarget = Number(shots[0].info.headSizeTarget) || 0;
-          if (normalizeEngine(info.engine) === "ltx" && chainTarget > 0) {
+          if (headOnBlack && chainTarget > 0) {
             await (options.normalizeStart || normalizeHeadFrame)(startPng, chainTarget, options);
           }
           imageBase64 = fs.readFileSync(startPng).toString("base64");
@@ -689,6 +690,21 @@ async function resumeTalkingHead(projectDir, characterId, group, options = {}) {
 }
 
 /**
+ * Re-point one clip at another engine, e.g. Grok when LTX failed to lip-sync.
+ * Clips in a head-on-black chain keep the black backdrop and head keying so the
+ * new clip still composites with its neighbours.
+ */
+function switchClipEngine(info, engine) {
+  info.engine = engine;
+  info.talk = { ...info.talk, engine };
+  if (engine === "ltx") {
+    info.keyMode = HEAD_BLACK_KEY;
+    info.background = "black";
+  }
+  info.prompt = buildWindowPrompt(info.talk);
+}
+
+/**
  * Regenerate one clip with a new seed. By default only that clip is redone and
  * the later clips are kept; with cascade the later clips are redone too so
  * each still starts from the previous clip's last frame.
@@ -700,9 +716,15 @@ async function redoTalkingHeadClip(projectDir, characterId, group, index, option
   const target = Number(index);
   if (!Number.isInteger(target) || target < 0 || target >= shots.length) throw shotError("That clip does not exist");
   const last = options.cascade === true ? shots.length - 1 : target;
+  const engineOverride = options.engine ? normalizeEngine(options.engine) : "";
+  if (options.engine && String(options.engine).toLowerCase() !== engineOverride) throw shotError("Unknown engine");
+  if (engineOverride === "ltx" && !comfyCloud.resolveCredentials()) {
+    throw shotError("COMFY_CLOUD_API_KEY is not configured. Add it to the engine .env file, then restart the engine.", "ENOKEY");
+  }
   for (let i = target; i <= last; i++) {
     const { dir, info } = shots[i];
     if (info.status === "ready") stashClip(dir, info);
+    if (engineOverride && i === target) switchClipEngine(info, engineOverride);
     info.status = "queued";
     delete info.error;
     delete info.requestId;
