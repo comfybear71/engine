@@ -67,6 +67,7 @@ interface Segment {
   bodyScale?: number; // body clips only: 1 = as drawn; the head stays attached at full size
   bodyPivotX?: number; // body clips only: point of the body (fractions of its frame) that stays put when resized
   bodyPivotY?: number;
+  bodyInFront?: boolean; // body clips only: draw the body over the head (hands in front of the face)
 }
 
 interface HeadSegment extends Segment {
@@ -555,6 +556,19 @@ export default function HeadRigModal({
     setSaved(false);
   }
 
+  function setBodyInFront(id: string, value: boolean, all = false) {
+    setBodySegments((prev) =>
+      prev.map((s) => {
+        if (!all && s.id !== id) return s;
+        if (value) return { ...s, bodyInFront: true };
+        const { bodyInFront: _front, ...rest } = s;
+        void _front;
+        return rest;
+      })
+    );
+    setSaved(false);
+  }
+
   // ── Visible head size (alpha box per shot) for the head standard ──
   type HeadMetrics = { box: Box; frame: FrameSize };
   const headMetricsRef = useRef<Map<string, HeadMetrics | null>>(new Map());
@@ -694,6 +708,8 @@ export default function HeadRigModal({
     let bh = ch * 0.6;
     let bx = (cw - bw) / 2;
     let by = ch - bh - ch * 0.03;
+    let bodyImg: HTMLImageElement | null = null;
+    let bodyDrawn = !body?.bodyInFront;
 
     if (body) {
       const img = getFrameImage(body.shotId, sourceFrameOf(body, frame));
@@ -708,7 +724,8 @@ export default function HeadRigModal({
         bh = rect.h;
         bx = rect.x;
         by = rect.y;
-        if (img) ctx.drawImage(img, bx, by, bw, bh);
+        bodyImg = img || null;
+        if (img && !body.bodyInFront) ctx.drawImage(img, bx, by, bw, bh);
       }
     }
 
@@ -725,6 +742,10 @@ export default function HeadRigModal({
           // green-screen removal; a second pass makes them fully opaque.
           ctx.drawImage(img, hx, hy, hw, hh);
           ctx.drawImage(img, hx, hy, hw, hh);
+          if (bodyImg && !bodyDrawn) {
+            ctx.drawImage(bodyImg, bx, by, bw, bh);
+            bodyDrawn = true;
+          }
 
           const isEditing = selectedRef.current?.track === "head" && selectedRef.current.id === head.id;
           const geo = headGeometry(head, frame);
@@ -785,6 +806,8 @@ export default function HeadRigModal({
         }
       }
     }
+
+    if (bodyImg && !bodyDrawn) ctx.drawImage(bodyImg, bx, by, bw, bh);
 
     ctx.fillStyle = "#e0a040";
     ctx.font = "11px monospace";
@@ -2064,7 +2087,7 @@ export default function HeadRigModal({
                 value={Math.round(bodyUserScale(editingBody) * 100)}
                 onChange={(e) => editingBody && setBodyScale(editingBody.id, Number(e.target.value) / 100)}
                 className="w-40"
-                title="Resize this body clip about its feet. The head stays attached at its own size."
+                title="Resize this body clip around its neck, so the head stays where it is and keeps its own size."
               />
               <span className="w-10 text-right font-mono text-neutral-300" data-testid="body-size-value">
                 {Math.round(bodyUserScale(editingBody) * 100)}%
@@ -2087,6 +2110,26 @@ export default function HeadRigModal({
                 title="Give every body clip on the timeline this size"
               >
                 Same for all body clips
+              </button>
+              <label className="flex items-center gap-1 text-neutral-300" title="Draw this body clip over the head, e.g. so hands pointing at the eyes are in front of the face">
+                <input
+                  type="checkbox"
+                  data-testid="body-front-toggle"
+                  disabled={!editingBody}
+                  checked={editingBody?.bodyInFront === true}
+                  onChange={(e) => editingBody && setBodyInFront(editingBody.id, e.target.checked)}
+                />
+                Body in front of head
+              </label>
+              <button
+                type="button"
+                data-testid="body-front-all"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingBody || bodySegments.length < 2}
+                onClick={() => editingBody && setBodyInFront(editingBody.id, editingBody.bodyInFront === true, true)}
+                title="Give every body clip the same front/back order as this one"
+              >
+                Same for all
               </button>
             </div>
             <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-standard-bar">
@@ -2311,6 +2354,19 @@ export default function HeadRigModal({
             <span className="w-4 text-center">✂</span> Split at playhead <span className="ml-auto text-[12px] text-neutral-500">Ctrl+B</span>
           </button>
           <div className="my-1 h-px bg-[#333]" />
+          {ctxMenu.track === "body" ? (() => {
+            const seg = bodySegments.find((s) => s.id === ctxMenu.id);
+            const front = seg?.bodyInFront === true;
+            return (
+              <>
+                <button type="button" data-testid="ctx-body-front" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
+                  onClick={() => { if (seg) setBodyInFront(seg.id, !front); setCtxMenu(null); }}>
+                  <span className="w-4 text-center">🧍</span> {front ? "Put head in front of body" : "Put body in front of head"}
+                </button>
+                <div className="my-1 h-px bg-[#333]" />
+              </>
+            );
+          })() : null}
           {(() => {
             const seg = (ctxMenu.track === "body" ? bodySegments : headSegments).find((s) => s.id === ctxMenu.id);
             const current = normalizeSpeed(seg?.speed);

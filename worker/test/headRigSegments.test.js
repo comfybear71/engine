@@ -82,4 +82,19 @@ describe("head rig segment speed and reverse", () => {
       /bodyPivotY/
     );
   });
+
+  test("body-in-front is kept on body clips only", () => {
+    saveHeadRig(projectDir, null, "rodney", {
+      key: "front",
+      bodySegments: [
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 1, bodyInFront: true },
+        { shotId: "a", inFrame: 1, outFrame: 10, start: 11 },
+      ],
+      headSegments: [{ shotId: "h", inFrame: 1, outFrame: 5, start: 1, bodyInFront: true, anchorX: 0.5, anchorY: 0.2, headScale: 1 }],
+    });
+    const rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.equal(rig.bodySegments[0].bodyInFront, true);
+    assert.equal("bodyInFront" in rig.bodySegments[1], false);
+    assert.equal("bodyInFront" in rig.headSegments[0], false);
+  });
 });

@@ -289,6 +289,7 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
         body_seg = active_segment(body_segments, frame)
         b_scale = body_scale_of(body_seg)
         b_left, b_top, b_w, b_h = body_rect(canvas_w, canvas_h, b_scale, body_pivot_of(body_seg))
+        body_layer = None
         if body_seg is not None:
             body_img = load_bgra(source_frame_path(body_seg, frame))
             if body_img is not None:
@@ -299,7 +300,11 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
                     body_img = cv2.resize(body_img, (target_w, target_h), interpolation=interp)
                 x0 = pad_l + int(round(b_left))
                 y0 = pad_t + int(round(b_top))
-                canvas[y0:y0 + target_h, x0:x0 + target_w] = body_img
+                body_layer = (body_img, x0 + target_w // 2, y0 + target_h // 2)
+
+        body_in_front = bool(body_seg and body_seg.get("bodyInFront") is True)
+        if body_layer is not None and not body_in_front:
+            canvas = composite_over(canvas, *body_layer)
 
         head_seg = active_segment(head_segments, frame)
         if head_seg is not None:
@@ -318,6 +323,9 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
                 cx = pad_l + int(b_left + float(head_seg.get("anchorX", 0.5)) * b_w)
                 cy = pad_t + int(b_top + float(head_seg.get("anchorY", 0.15)) * b_h)
                 canvas = composite_over(canvas, head_img, cx, cy)
+
+        if body_layer is not None and body_in_front:
+            canvas = composite_over(canvas, *body_layer)
 
         cut_path = cut_dir / f"f_{frame:04d}.png"
         cv2.imwrite(str(cut_path), canvas)

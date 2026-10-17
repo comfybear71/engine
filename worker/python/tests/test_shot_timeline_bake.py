@@ -219,3 +219,28 @@ def test_bigger_body_grown_from_the_neck_gets_padding_below_and_above(tmp_path):
     # The neck point (0.5, 0.1) of the body is where it was in the unscaled frame, shifted only by the padding.
     pad_l, pad_t, _, _ = bake.head_overshoot_padding([], 100, 200, body_segments=spec["bodySegments"])
     assert (x0 + 0.5 * (x1 - x0), y0 + 0.1 * (y1 - y0)) == pytest.approx((pad_l + 50, pad_t + 20), abs=1.5)
+
+
+def _bake_with_front(tmp_path: Path, in_front: bool) -> np.ndarray:
+    body_cut = _write_shot(tmp_path, "body", [_body()])
+    head_cut = _write_shot(tmp_path, "head", [_head(0, 60, content_y=0, content_h=60)])
+    spec = json.loads(_spec(tmp_path, body_cut, head_cut, 1, (0.5, 0.5)).read_text())
+    if in_front:
+        spec["bodySegments"][0]["bodyInFront"] = True
+    spec_path = tmp_path / "spec_front.json"
+    spec_path.write_text(json.dumps(spec))
+    out = tmp_path / "out"
+    bake.run(str(spec_path), str(out))
+    return cv2.imread(str(out / "cut" / "f_0001.png"), cv2.IMREAD_UNCHANGED)
+
+
+def test_head_is_in_front_of_the_body_by_default(tmp_path):
+    canvas = _bake_with_front(tmp_path, False)
+    b, g, r, a = (int(v) for v in canvas[100, 50])
+    assert (r, b, a) == (255, 0, 255), "red head over the blue body"
+
+
+def test_body_in_front_draws_hands_over_the_face(tmp_path):
+    canvas = _bake_with_front(tmp_path, True)
+    b, g, r, a = (int(v) for v in canvas[100, 50])
+    assert (b, r, a) == (200, 0, 255), "the opaque blue body now covers the red head where they overlap"
