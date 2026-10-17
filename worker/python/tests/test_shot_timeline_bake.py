@@ -244,3 +244,28 @@ def test_body_in_front_draws_hands_over_the_face(tmp_path):
     canvas = _bake_with_front(tmp_path, True)
     b, g, r, a = (int(v) for v in canvas[100, 50])
     assert (b, r, a) == (200, 0, 255), "the opaque blue body now covers the red head where they overlap"
+
+
+def test_shifting_the_body_moves_it_and_the_head_with_it_and_pads_the_canvas(tmp_path):
+    body_cut = _write_shot(tmp_path, "body", [_body()])
+    head_cut = _write_shot(tmp_path, "head", [_head(0, 60, content_y=0, content_h=60)])
+    spec = json.loads(_spec(tmp_path, body_cut, head_cut, 1, (0.5, 0.5)).read_text())
+    spec["bodySegments"][0].update({"bodyOffsetX": 0.1, "bodyOffsetY": -0.05})
+    spec_path = tmp_path / "spec_shift.json"
+    spec_path.write_text(json.dumps(spec))
+    out = tmp_path / "out"
+    bake.run(str(spec_path), str(out))
+    path = out / "cut" / "f_0001.png"
+    pad_l, pad_t, _, _ = bake.head_overshoot_padding([], 100, 200, body_segments=spec["bodySegments"])
+    assert pad_t > 0
+    x0, y0, x1, y1 = _blue_box(path)
+    assert (x1 - x0, y1 - y0) == (100, 200)
+    assert (x0, y0) == (pad_l + 10, pad_t - 10)
+    hx0, hy0, hx1, hy1 = _red_box(path)
+    assert ((hx0 + hx1) // 2, (hy0 + hy1) // 2) == (pad_l + 10 + 50, pad_t - 10 + 100)
+
+
+def test_body_offset_is_clamped_and_defaults_to_none():
+    assert bake.body_offset_of(None) == (0.0, 0.0)
+    assert bake.body_offset_of({"bodyOffsetX": "nope", "bodyOffsetY": 9}) == (0.0, 1.0)
+    assert bake.body_rect(100, 200, 1.0, (0.5, 1.0), (0.1, -0.05)) == pytest.approx((10, -10, 100, 200))
