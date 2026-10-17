@@ -1274,6 +1274,7 @@ export default function StagePanel({
       frame,
       fps,
       scenes: lanes?.scenes || [],
+      sceneId: currentScene?.id ?? sceneId,
       playheadLine: playheadLine ?? selectedLine,
       placed: state?.placed ?? true,
       defaultAt: { x: Math.round(canvas.width / 2), y: Math.round(canvas.height * 0.85) },
