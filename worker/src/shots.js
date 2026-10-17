@@ -789,6 +789,83 @@ async function reprocessAllShots(projectDir, characterId, options = {}) {
 /**
  * Serve media files (mp4/jpg/png) with Range support.
  */
+const ERASE_MASK_MAX_BYTES = 12 * 1024 * 1024;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function listErasedFrames(projectDir, characterId, shotId) {
+  const dir = shotDir(projectDir, characterId, shotId);
+  if (!fs.existsSync(dir)) throw shotError("Shot not found", "ENOENT");
+  const eraseDir = path.join(dir, "erase");
+  if (!fs.existsSync(eraseDir)) return [];
+  const frames = [];
+  for (const name of fs.readdirSync(eraseDir)) {
+    const m = /^f_(\d+)\.png$/.exec(name);
+    if (m) frames.push(Number(m[1]));
+  }
+  return frames.sort((a, b) => a - b);
+}
+
+function eraseFrameNumbers(raw, dir) {
+  if (!Array.isArray(raw) || raw.length === 0) throw shotError("frames must be a list of frame numbers");
+  if (raw.length > 2000) throw shotError("Too many frames at once");
+  const out = [...new Set(raw.map((n) => Number(n)))].sort((a, b) => a - b);
+  for (const n of out) {
+    if (!Number.isInteger(n) || n < 1) throw shotError("Frame numbers must be whole numbers from 1");
+    if (!fs.existsSync(path.join(dir, "cut", `f_${String(n).padStart(4, "0")}.png`))) {
+      throw shotError(`Frame ${n} does not exist in this shot`);
+    }
+  }
+  return out;
+}
+
+async function runEraseTool(dir, command, frames, options = {}) {
+  const pythonBin = options.pythonBin || resolvePythonBin();
+  const args = ["-m", "compositor.shot_erase", command, "--out-dir", dir];
+  if (frames && frames.length) args.push("--frames", frames.join(","));
+  const { code, stdout, stderr } = await spawnCmd(pythonBin, args, { cwd: PYTHON_DIR });
+  let parsed = null;
+  const last = stdout.trim().split("\n").pop();
+  try { parsed = JSON.parse(last); } catch { /* reported below */ }
+  if (code !== 0 || !parsed || parsed.error) {
+    throw shotError((parsed && parsed.error) || stderr.trim().split("\n").pop() || "Erase failed");
+  }
+  return parsed;
+}
+
+/**
+ * Save the same erase mask (PNG, white = erase) for each listed frame and apply it
+ * to that frame's keyed picture. A mask with nothing painted puts the frame back.
+ */
+async function eraseShotFrames(projectDir, characterId, shotId, body, options = {}) {
+  const dir = shotDir(projectDir, characterId, shotId);
+  const info = readShotJson(dir);
+  if (!info) throw shotError("Shot not found", "ENOENT");
+  const frames = eraseFrameNumbers(body && body.frames, dir);
+  const b64 = String((body && body.mask) || "").replace(/^data:image\/png;base64,/, "");
+  const png = Buffer.from(b64, "base64");
+  if (png.length < 16 || png.length > ERASE_MASK_MAX_BYTES || !png.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    throw shotError("mask must be a PNG image");
+  }
+  const eraseDir = path.join(dir, "erase");
+  fs.mkdirSync(eraseDir, { recursive: true });
+  for (const n of frames) fs.writeFileSync(path.join(eraseDir, `f_${String(n).padStart(4, "0")}.png`), png);
+  await runEraseTool(dir, "apply", frames, options);
+  return { ok: true, frames: listErasedFrames(projectDir, characterId, shotId) };
+}
+
+/** Undo erases: the listed frames, or every erased frame when none are listed. */
+async function restoreShotFrames(projectDir, characterId, shotId, body, options = {}) {
+  const dir = shotDir(projectDir, characterId, shotId);
+  const info = readShotJson(dir);
+  if (!info) throw shotError("Shot not found", "ENOENT");
+  const wanted = body && Array.isArray(body.frames) && body.frames.length ? eraseFrameNumbers(body.frames, dir) : null;
+  if (!wanted && listErasedFrames(projectDir, characterId, shotId).length === 0 && !fs.existsSync(path.join(dir, "cut_orig"))) {
+    return { ok: true, frames: [] };
+  }
+  await runEraseTool(dir, "restore", wanted, options);
+  return { ok: true, frames: listErasedFrames(projectDir, characterId, shotId) };
+}
+
 function serveMedia(projectDir, characterId, req, res) {
   const rel = String(req.query.rel || "");
   if (!rel || rel.includes("..") || rel.startsWith("/")) {
@@ -1118,6 +1195,9 @@ module.exports = {
   reprocessShot,
   reprocessAllShots,
   serveMedia,
+  listErasedFrames,
+  eraseShotFrames,
+  restoreShotFrames,
   combineShots,
   resizeHead,
   bakeTimeline,

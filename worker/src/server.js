@@ -137,6 +137,9 @@ const {
   retryShot,
   reprocessShot,
   reprocessAllShots,
+  listErasedFrames,
+  eraseShotFrames,
+  restoreShotFrames,
   serveMedia: serveShotMedia,
   combineShots,
   resizeHead,
@@ -1556,6 +1559,41 @@ function createApp(options = {}) {
         pythonBin: options.pythonBin,
       });
       res.json(result);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  // Hand-erased parts of a shot's frames (white = erased in the PNG mask).
+  app.get("/api/projects/:name/characters/:characterId/shots/:shotId/erase", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json({ ok: true, frames: listErasedFrames(projectDir, req.params.characterId, req.params.shotId) });
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.put("/api/projects/:name/characters/:characterId/shots/:shotId/erase", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(await eraseShotFrames(projectDir, req.params.characterId, req.params.shotId, req.body || {}, { pythonBin: options.pythonBin }));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.post("/api/projects/:name/characters/:characterId/shots/:shotId/erase/restore", async (req, res) => {
+    req.setTimeout(5 * 60 * 1000);
+    res.setTimeout(5 * 60 * 1000);
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(await restoreShotFrames(projectDir, req.params.characterId, req.params.shotId, req.body || {}, { pythonBin: options.pythonBin }));
     } catch (err) {
       sendFactoryError(res, err);
     }

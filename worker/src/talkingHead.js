@@ -295,7 +295,7 @@ async function ensureChainHeadSize(shots, options = {}) {
 }
 
 const STASH_DIR = "_previous";
-const STASH_ITEMS = ["source.mp4", "raw", "cut", "thumb", "poster.jpg", "preview.mp4"];
+const STASH_ITEMS = ["source.mp4", "raw", "cut", "thumb", "poster.jpg", "preview.mp4", "erase", "cut_orig"];
 
 /** Move a finished clip's media aside so a redo can be undone. One level only. */
 function stashClip(dir, info) {

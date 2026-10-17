@@ -4,6 +4,7 @@ import React, { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useR
 import { WORKER_URL, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
 import { groupTalkShots, orderLtxChains, placeTalkWindows, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
 import { clipDetailsText, promptSaysMouthClosed } from "@/lib/clipDetails";
+import FrameEraseDialog from "@/components/FrameEraseDialog";
 import { audioAtFrame, audioLaneHasShot, audioLaneItems, audioPeaks, deriveAudioPieces, shotHasAudio, sliceAudioPeaks, SHOT_AUDIO_REL, type AudioLaneItem } from "@/lib/headRigAudio";
 import {
   alphaBox,
@@ -276,6 +277,7 @@ export default function HeadRigModal({
   const [talkBusy, setTalkBusy] = useState<string | null>(null);
   const [talkMenu, setTalkMenu] = useState<TalkMenuState | null>(null);
   const [detailsShotId, setDetailsShotId] = useState<string | null>(null);
+  const [eraseTarget, setEraseTarget] = useState<{ shotId: string; frame: number } | null>(null);
   const [rigs, setRigs] = useState<Record<string, RigEntry>>({});
   const [rigKey, setRigKey] = useState("front");
   const [charRefRel, setCharRefRel] = useState("");
@@ -2753,6 +2755,7 @@ export default function HeadRigModal({
           onRedo={(engine) => { const m = talkMenu; setTalkMenu(null); void handleRedoTalkClip(m.group, m.index, engine); }}
           onUndo={() => { const m = talkMenu; setTalkMenu(null); void handleUndoRedoClip(m.group, m.index); }}
           onDetails={() => { const m = talkMenu; setTalkMenu(null); setDetailsShotId(m.shotId); }}
+          onErase={() => { const m = talkMenu; setTalkMenu(null); setEraseTarget({ shotId: m.shotId, frame: 1 }); }}
         />
       ) : null}
 
@@ -2765,6 +2768,24 @@ export default function HeadRigModal({
             characterId={characterId}
             version={mediaVersion[detailsShot.id]}
             onClose={() => setDetailsShotId(null)}
+          />
+        ) : null;
+      })()}
+
+      {(() => {
+        const eraseShot = eraseTarget ? shots.find((s) => s.id === eraseTarget.shotId) || null : null;
+        return eraseTarget && eraseShot ? (
+          <FrameEraseDialog
+            key={eraseTarget.shotId}
+            shotId={eraseShot.id}
+            shotName={eraseShot.name || eraseShot.id}
+            frameCount={Math.max(1, eraseShot.frameCount || 1)}
+            initialFrame={eraseTarget.frame}
+            project={project}
+            characterId={characterId}
+            mediaUrl={(rel, v) => shotMediaUrl(project, characterId, eraseShot.id, rel, v)}
+            onChanged={(id) => { bumpMediaVersion(id); void reloadShots(); }}
+            onClose={() => setEraseTarget(null)}
           />
         ) : null;
       })()}
@@ -2842,6 +2863,21 @@ export default function HeadRigModal({
               </>
             );
           })()}
+          {ctxMenu.track !== "audio" ? (() => {
+            const seg = listOf(ctxMenu.track).find((s) => s.id === ctxMenu.id);
+            if (!seg) return null;
+            const frame = scrubFrame >= seg.start && scrubFrame <= segEnd(seg) ? sourceFrameAt(seg, scrubFrame) : seg.inFrame;
+            return (
+              <>
+                <div className="my-1 h-px bg-[#333]" />
+                <button type="button" data-testid="ctx-erase-frames" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-[#333]"
+                  onClick={() => { setCtxMenu(null); setEraseTarget({ shotId: seg.shotId, frame }); }}
+                  title="Paint away part of a frame, such as a stray hand. The picture is only hidden and can be put back.">
+                  <span className="w-4 text-center">✎</span> Erase parts of frames…
+                </button>
+              </>
+            );
+          })() : null}
           {(() => {
             const clip = talkShotForSegment(ctxMenu.track, ctxMenu.id);
             if (!clip?.talk) return null;
@@ -2927,11 +2963,12 @@ export default function HeadRigModal({
 
 type TalkMenuState = { x: number; y: number; shotId: string; group: string; index: number; engine: string; hasPrevious: boolean };
 
-function TalkClipMenu({ menu, busy, onClose, onRedo, onUndo, onDetails }: {
+function TalkClipMenu({ menu, busy, onClose, onRedo, onUndo, onDetails, onErase }: {
   menu: TalkMenuState;
   busy: boolean;
   onClose: () => void;
   onDetails: () => void;
+  onErase: () => void;
   onRedo: (engine: "grok" | "ltx") => void;
   onUndo: () => void;
 }) {
@@ -2985,6 +3022,10 @@ function TalkClipMenu({ menu, busy, onClose, onRedo, onUndo, onDetails }: {
       <button type="button" className={itemClass} data-testid="talk-menu-details" onClick={onDetails}
         title="See the prompt, audio range and start image this clip was made from.">
         <span className="w-4 text-center">ⓘ</span> Details
+      </button>
+      <button type="button" className={itemClass} data-testid="talk-menu-erase" onClick={onErase}
+        title="Paint away part of a frame, such as a stray hand. The picture is only hidden and can be put back.">
+        <span className="w-4 text-center">✎</span> Erase parts of frames…
       </button>
       {menu.hasPrevious ? (
         <>

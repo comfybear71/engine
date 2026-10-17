@@ -325,6 +325,9 @@ def _process_and_write_frame(bgr: np.ndarray, idx: int, cut_dir: Path, thumb_dir
                               thumb_h: int = 160, bg_hint: str = "", key_mode: str = "") -> None:
     """Key one raw frame and write its cut/ PNG + thumb/ JPG."""
     keyed = process_frame(bgr, bg_hint=bg_hint, key_mode=key_mode)
+    from compositor.shot_erase import apply_to_fresh
+
+    keyed = apply_to_fresh(keyed, cut_dir.parent, idx)
 
     cut_path = cut_dir / f"f_{idx:04d}.png"
     cv2.imwrite(str(cut_path), keyed)
