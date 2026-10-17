@@ -103,3 +103,28 @@ export function sliceAudioPeaks(peaks: number[], durationSec: number, fromSec: n
   const b = Math.max(a + 1, Math.min(peaks.length, Math.ceil((toSec / durationSec) * peaks.length)));
   return peaks.slice(a, b);
 }
+
+type DerivableSeg = { shotId: string; start: number; inFrame: number; outFrame: number; speed?: number; reverse?: boolean };
+export type AudioPiece = { id: string; shotId: string; start: number; inFrame: number; outFrame: number; speed?: number; reverse?: boolean };
+
+/** Older rigs have no audio lane of their own: build it once from the head clips that carry audio, same place and cut. */
+export function deriveAudioPieces(
+  headSegments: DerivableSeg[],
+  shotsById: Map<string, AudioShot>,
+  newId: () => string
+): AudioPiece[] {
+  const out: AudioPiece[] = [];
+  for (const seg of headSegments) {
+    if (!shotHasAudio(shotsById.get(seg.shotId))) continue;
+    const piece: AudioPiece = { id: newId(), shotId: seg.shotId, start: seg.start, inFrame: seg.inFrame, outFrame: seg.outFrame };
+    if (seg.speed != null) piece.speed = seg.speed;
+    if (seg.reverse) piece.reverse = true;
+    out.push(piece);
+  }
+  return out;
+}
+
+/** True when the lane already holds a piece of this clip's audio (so placing the clip again does not stack a second copy). */
+export function audioLaneHasShot(pieces: { shotId: string }[], shotId: string): boolean {
+  return pieces.some((p) => p.shotId === shotId);
+}

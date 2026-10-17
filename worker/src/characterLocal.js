@@ -303,6 +303,19 @@ function normalizeStoredSegment(raw, isHead) {
 }
 
 /**
+ * An audio-lane piece: which clip's audio.wav, which frames of it, and where it
+ * sits on the timeline. It carries no picture fields, so it can be moved, cut
+ * or deleted without touching the head or body clips.
+ */
+function normalizeStoredAudioSegment(raw) {
+  const full = normalizeStoredSegment(raw, true);
+  const seg = { shotId: full.shotId, inFrame: full.inFrame, outFrame: full.outFrame, start: full.start };
+  if (full.speed != null) seg.speed = full.speed;
+  if (full.reverse) seg.reverse = true;
+  return seg;
+}
+
+/**
  * Save a head-rig entry for a character.
  *
  * Legacy single-pair body: { key, anchorX, anchorY, headScale, keyframes? }
@@ -318,7 +331,7 @@ function saveHeadRig(projectDir, globalAssetsDir, characterId, body) {
   const key = String(patch.key || "").trim();
   if (!key) throw localError("key is required (e.g. 'front', 'left_34')");
 
-  const hasSegments = Array.isArray(patch.bodySegments) || Array.isArray(patch.headSegments);
+  const hasSegments = Array.isArray(patch.bodySegments) || Array.isArray(patch.headSegments) || Array.isArray(patch.audioSegments);
 
   const anchorXRaw = patch.anchorX;
   const anchorYRaw = patch.anchorY;
@@ -359,16 +372,24 @@ function saveHeadRig(projectDir, globalAssetsDir, characterId, body) {
     headSegments = patch.headSegments.map((s) => normalizeStoredSegment(s, true));
   }
 
+  // An empty list is kept on purpose: it means "no dialogue on the audio lane",
+  // which is different from "never set" (older saves, where the lane follows the head clips).
+  let audioSegments;
+  if (Array.isArray(patch.audioSegments)) {
+    audioSegments = patch.audioSegments.map((s) => normalizeStoredAudioSegment(s));
+  }
+
   const character = readWritableCharacter(projectDir, globalAssetsDir, characterId);
   if (!character.headRig) character.headRig = {};
   const entry = { anchorX, anchorY, headScale };
   if (keyframes) entry.keyframes = keyframes;
   if (bodySegments) entry.bodySegments = bodySegments;
   if (headSegments) entry.headSegments = headSegments;
+  if (audioSegments) entry.audioSegments = audioSegments;
   character.headRig[key] = entry;
 
   writeCharacterJson(projectDir, characterId, character, null);
-  return { ok: true, key, anchorX, anchorY, headScale, keyframes, bodySegments, headSegments, rigs: character.headRig };
+  return { ok: true, key, anchorX, anchorY, headScale, keyframes, bodySegments, headSegments, audioSegments, rigs: character.headRig };
 }
 
 /**

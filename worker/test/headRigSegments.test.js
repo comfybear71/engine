@@ -117,4 +117,32 @@ describe("head rig segment speed and reverse", () => {
       /bodyOffsetY/
     );
   });
+
+  test("audio lane pieces are saved apart from the head clips, without picture fields, and an empty lane is kept", () => {
+    saveHeadRig(projectDir, null, "rodney", {
+      key: "front",
+      headSegments: [{ shotId: "h", inFrame: 1, outFrame: 5, start: 1, anchorX: 0.5, anchorY: 0.2, headScale: 1 }],
+      audioSegments: [
+        { shotId: "talk_1", inFrame: 3, outFrame: 40, start: 7, speed: 2, reverse: true, anchorX: 0.9, bodyInFront: true },
+        { shotId: "talk_2", inFrame: 1, outFrame: 10, start: 50, speed: 1 },
+      ],
+    });
+    let rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.deepEqual(rig.audioSegments[0], { shotId: "talk_1", inFrame: 3, outFrame: 40, start: 7, speed: 2, reverse: true });
+    assert.deepEqual(rig.audioSegments[1], { shotId: "talk_2", inFrame: 1, outFrame: 10, start: 50 });
+    assert.equal(rig.headSegments.length, 1);
+
+    saveHeadRig(projectDir, null, "rodney", { key: "front", headSegments: rig.headSegments, audioSegments: [] });
+    rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.deepEqual(rig.audioSegments, []);
+
+    saveHeadRig(projectDir, null, "rodney", { key: "front", headSegments: rig.headSegments });
+    rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.equal("audioSegments" in rig, false);
+
+    assert.throws(
+      () => saveHeadRig(projectDir, null, "rodney", { key: "front", audioSegments: [{ shotId: "x", inFrame: 5, outFrame: 2, start: 1 }] }),
+      /outFrame/
+    );
+  });
 });
