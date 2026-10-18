@@ -325,8 +325,8 @@ export default function StudioApp({
         onChanged={() => setAssetEpoch((n) => n + 1)}
       />
 
-      {/* Hide Factory dock on assets tab — character page has its own Grok creator */}
-      {tab !== "assets" ? (
+      {/* On Assets the dock stays hidden (the character page has its own Grok creator) until a "+" tile opens it */}
+      {tab !== "assets" || imagineOpen ? (
         <ImagineDock
           project={project}
           workerUp={workerUp === true}
