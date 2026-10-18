@@ -1746,7 +1746,15 @@ export type TalkWindow = {
   clipSec: number;
   text: string;
 };
-export type TalkingHeadRange = { audioRel: string; inSec: number; durationSec: number };
+export type TalkingHeadRange = {
+  audioRel: string;
+  inSec: number;
+  durationSec: number;
+  /** Words typed by hand for this range, used when the audio has no transcript. textInSec/textDurationSec say which stretch of the audio they cover. */
+  text?: string;
+  textInSec?: number;
+  textDurationSec?: number;
+};
 export type TalkStart = {
   kind: "uploaded" | "head-shot" | "reference";
   label: string;

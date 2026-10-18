@@ -190,6 +190,26 @@ function validateAudioRel(rel) {
   return posix;
 }
 
+/**
+ * Words typed by hand (no speech-to-text): spread across [startSec, startSec + durationSec]
+ * of the audio, longer words taking longer, so windows can still be cut between words.
+ */
+function wordsFromText(text, startSec, durationSec) {
+  const tokens = String(text || "").split(/\s+/).filter(Boolean);
+  const duration = Math.max(0, Number(durationSec) || 0);
+  if (!tokens.length || duration <= 0) return [];
+  const weights = tokens.map((token) => token.length + 1);
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  const words = [];
+  let cursor = Number(startSec) || 0;
+  tokens.forEach((token, i) => {
+    const length = (weights[i] / total) * duration;
+    words.push({ word: token, start: round3(cursor), end: round3(cursor + length * 0.9) });
+    cursor += length;
+  });
+  return words;
+}
+
 /** Read the transcript for an audio range and plan its windows. */
 function planTalkingHead(projectDir, body = {}) {
   const audioRel = validateAudioRel(body.audioRel);
@@ -200,7 +220,15 @@ function planTalkingHead(projectDir, body = {}) {
   const ltx = normalizeEngine(body.engine) === "ltx";
   const durationSec = ltx ? Math.min(requestedSec, LTX_CHAIN_MAX_SEC) : requestedSec;
   const characterId = String(body.characterId || characterIdFromWavRel(audioRel) || "").trim();
-  const words = sliceWords(readWords(path.join(projectDir, wordsPathForWav(audioRel))), inSec, inSec + durationSec);
+  const typed = String(body.text || "").trim();
+  const sourceWords = typed
+    ? wordsFromText(
+        typed,
+        body.textInSec != null ? Math.max(0, Number(body.textInSec) || 0) : inSec,
+        body.textDurationSec != null ? Number(body.textDurationSec) : requestedSec
+      )
+    : readWords(path.join(projectDir, wordsPathForWav(audioRel)));
+  const words = sliceWords(sourceWords, inSec, inSec + durationSec);
   const windows = ltx ? planLtxWindows(words, durationSec) : planWindows(words, durationSec);
   const transcript = windows.map((w) => w.text).filter(Boolean).join(" ");
   return {
@@ -809,6 +837,7 @@ module.exports = {
   planWindows,
   planLtxWindows,
   planTalkingHead,
+  wordsFromText,
   buildWindowPrompt,
   extractFrameAt,
   makeTalkingHead,
