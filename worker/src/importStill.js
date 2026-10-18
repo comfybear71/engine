@@ -9,8 +9,9 @@ const fs = require("fs");
 const path = require("path");
 
 const { decodeImageBuffer, posixJoin } = require("./assetIngest");
-const { listKnownLocations, loadStaging } = require("./parser/assetLibrary");
-const { isSafeFolderName } = require("./studioProjects");
+const { listKnownCharacterIds, listKnownLocations, loadStaging } = require("./parser/assetLibrary");
+const { isSafeFolderName, readLibrary, writeLibrary } = require("./studioProjects");
+const { REFERENCE_DIR, characterDir, writeCharacterJson, imageExtension } = require("./characterLocal");
 
 function stillError(message, code) {
   const err = new Error(message);
@@ -40,9 +41,38 @@ function writePng(abs, buf) {
   fs.writeFileSync(abs, buf);
 }
 
+function importCharacter(projectDir, globalAssetsDir, body, buf) {
+  const display = String((body && body.name) || "").trim().replace(/\.[^.]+$/, "");
+  if (!display) throw stillError("Give the character a name");
+  const ids = new Set(listKnownCharacterIds(projectDir, globalAssetsDir));
+  const id = uniqueId(ids, slugName(display, "character"));
+  if (!isSafeFolderName(id)) throw stillError("Invalid character name");
+  const filename = `full${imageExtension(buf)}`;
+  const reference = posixJoin(REFERENCE_DIR, filename);
+  const dir = characterDir(projectDir, id);
+  fs.mkdirSync(path.join(dir, REFERENCE_DIR), { recursive: true });
+  fs.writeFileSync(path.join(dir, REFERENCE_DIR, filename), buf);
+  writeCharacterJson(projectDir, id, {
+    id,
+    display_name: display,
+    aliases: [display],
+    z: 10,
+    asset: reference,
+    reference,
+    slots: {},
+  });
+  const library = readLibrary(projectDir);
+  if (!library.characters.includes(id)) {
+    library.characters.push(id);
+    writeLibrary(projectDir, library);
+  }
+  return { ok: true, kind: "character", id, rel: posixJoin("characters", id, reference) };
+}
+
 function importStill(projectDir, globalAssetsDir, body) {
   const kind = body && body.kind;
   const buf = decodeImageBuffer(body);
+  if (kind === "character") return importCharacter(projectDir, globalAssetsDir, body, buf);
   if (kind === "background") {
     const locations = new Set(listKnownLocations(projectDir, globalAssetsDir));
     const id = uniqueId(locations, slugName(body.name, "background"));

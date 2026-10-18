@@ -609,6 +609,20 @@ export function fileToImageBase64(file: File): Promise<string> {
   });
 }
 
+export async function fileToPngBase64(file: File): Promise<string> {
+  if (file.type === "image/png") return fileToImageBase64(file);
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) throw new Error("Could not read the image");
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not convert the image");
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return canvas.toDataURL("image/png");
+}
+
 export function imageFileFromClipboard(event: ClipboardEvent): File | null {
   const items = event.clipboardData?.items;
   if (!items) return null;
