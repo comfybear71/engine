@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { addSceneToScript, nextSceneName, sceneCastNames, type NewSceneResult } from "@/lib/newScene";
+import { addSceneToScript, nextSceneName, type NewSceneResult } from "@/lib/newScene";
 import { loadCharacters, loadStaging, type Character, type Staging } from "@/lib/worker";
 
 export default function NewSceneDialog({
@@ -24,7 +24,7 @@ export default function NewSceneDialog({
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState(() => nextSceneName(scriptText));
   const [location, setLocation] = useState(currentLocation || "");
-  const [cast, setCast] = useState<string[]>(() => sceneCastNames(scriptText, currentSceneId));
+  const [cast, setCast] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {

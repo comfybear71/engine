@@ -164,6 +164,7 @@ const {
   saveTalkingHeadStart,
   DEFAULT_TALK_PROMPT,
 } = require("./talkingHead");
+const { bakedClipFrames } = require("./clipFrames");
 const {
   isSafeShowId,
   resolveEpisodeDir,
@@ -1601,6 +1602,18 @@ function createApp(options = {}) {
     if (!projectDir) return;
     try {
       res.json(await restoreShotFrames(projectDir, req.params.characterId, req.params.shotId, req.body || {}, { pythonBin: options.pythonBin }));
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/actions/:characterId/:actionId/clip-frames", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      const found = bakedClipFrames(projectDir, resolveGlobalAssetsDir(projectDir), req.params.characterId, req.params.actionId);
+      if (!found) return res.status(404).json({ error: "Action Shot not found" });
+      res.json(found);
     } catch (err) {
       sendFactoryError(res, err);
     }
