@@ -1,5 +1,5 @@
 import { opaqueHeight } from "./clipFit";
-import { assetUrl, loadActionFrames } from "./worker";
+import { assetUrl, loadClipFrames } from "./worker";
 
 const cache = new Map<string, Promise<number | null>>();
 const SAMPLE_MAX_PX = 720;
@@ -43,13 +43,12 @@ export function measureActionContentHeight(project: string, characterId: string,
   if (hit) return hit;
   const job = (async () => {
     try {
-      const detail = await loadActionFrames(project, characterId, actionId);
-      const rels = detail.drawings.map((d) => d.rel).filter((rel): rel is string => Boolean(rel));
+      const { frames: rels } = await loadClipFrames(project, characterId, actionId);
       if (!rels.length) return null;
       const picks = [...new Set([0, Math.floor((rels.length - 1) / 2), rels.length - 1])].map((i) => rels[i]);
       const heights = await Promise.all(
         picks.map((rel) => {
-          const url = assetUrl(project, rel);
+          const url = assetUrl(project, rel, { library: true });
           return url ? contentHeightOf(url) : Promise.resolve(0);
         })
       );

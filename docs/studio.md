@@ -58,6 +58,16 @@ head track** lays them back to back, trimmed to their audio. The chain is
 sequential; if a clip fails, **Retry from failed clip** continues from it.
 The audio needs a transcript (`words.json`), so import it with transcription on.
 
+**Action Shot size on a new scene.** Baked Action Shots keep the pixel size of
+the video they came from, and a `[Clip:]` with no `scale=` uses the mark's
+scale, so on a fresh background (mark scale 1) a tall clip could come in as a
+giant. When you drop an Action Shot on the Stage preview or the Action Shots
+lane, Studio measures the character in the clip's frames and, only if the scene
+would draw it taller than the picture, writes a `scale=` that makes it 90% of
+the picture height. Clips that already fit get no `scale=`, so existing scenes
+and hand-typed `[Clip:]` lines are unchanged. **New scene** starts with nobody
+ticked in its cast.
+
 **Dialogue audio in the Head Rig.** In a character's Head Rig, **Dialogue audio…**
 (left sidebar) does the same job without going to the Stage. Import the real
 recording (mp3/wav; nothing is generated), or pick one already imported for
