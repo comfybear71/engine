@@ -21,6 +21,7 @@ const VIDEO_MODEL = "grok-imagine-video-1.5";
 const VIDEO_GENERATIONS_URL = "https://api.x.ai/v1/videos/generations";
 const POLL_INTERVAL = 5000;
 const POLL_TIMEOUT = 10 * 60 * 1000;
+const IMPORT_SHOT_TYPES = new Set(["body", "head", "full"]);
 const BG_PROMPT_SUFFIX = {
   green: "the background is pure solid flat chroma-key green (#00FF00), evenly lit studio lighting with no shadows, no gradient, no vignette, no dark corners, no other colors in the background; character stays fully in frame, same character, no text, no watermark, no logo",
   black: "the background is pure solid flat matte black, evenly lit with no shadows, no gradient, no vignette, no dark-grey or brown tint, no other colors in the background; character stays fully in frame, same character, no text, no watermark, no logo",
@@ -513,6 +514,7 @@ async function importShot(projectDir, characterId, req, options = {}) {
   const ctype = String(req.headers["content-type"] || "");
   let videoBuffer = null;
   let filename = "import.mp4";
+  let shotType = "";
 
   if (ctype.includes("multipart/form-data")) {
     const buffer = await collectRawBody(req, 250 * 1024 * 1024);
@@ -521,6 +523,9 @@ async function importShot(projectDir, characterId, req, options = {}) {
       if (part.filename) {
         videoBuffer = part.data;
         filename = part.filename;
+      } else if (part.name === "shotType") {
+        const wanted = part.data.toString("utf8").trim();
+        if (IMPORT_SHOT_TYPES.has(wanted)) shotType = wanted;
       }
     }
   }
@@ -546,6 +551,10 @@ async function importShot(projectDir, characterId, req, options = {}) {
   }, options);
 
   const info = readShotJson(dir);
+  if (info && shotType) {
+    info.shotType = shotType;
+    writeShotJson(dir, info);
+  }
   return { shotId, ...info };
 }
 
