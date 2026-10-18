@@ -114,6 +114,17 @@ export function placeTalkWindows(shots: TalkShot[], startFrame: number): TalkPla
   return placements;
 }
 
+/**
+ * Back-to-back head-track segments for a chain, starting where the first clip's audio sits in the
+ * recording it was cut from (frame = seconds x fps), so lines taken from one recording keep their gaps.
+ */
+export function placeTalkWindowsAtAudio(shots: TalkShot[], fps: number): TalkPlacement[] {
+  const first = shots.find((s) => s.status === "ready" && s.frameCount);
+  const at = Number(first?.talk?.audioInSec);
+  const start = Number.isFinite(at) && fps > 0 ? Math.round(at * fps) + 1 : 1;
+  return placeTalkWindows(shots, start);
+}
+
 export function formatSeconds(seconds: number): string {
   const s = Math.max(0, seconds);
   return s >= 60 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : `${s.toFixed(1)}s`;

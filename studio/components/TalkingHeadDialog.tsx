@@ -151,7 +151,7 @@ export default function TalkingHeadDialog({
       : ltx && !hasLook(subject)
         ? "Finish \"Who is on screen\" below: after the name, add a short look, e.g. a man with a red felt hat and dark beard."
       : !plan.hasWords
-      ? "No transcript for this audio. Re-import it with transcription on so the words are known."
+      ? "No words for this audio. Type the words of the line, or re-import the audio with transcription on."
       : !chosen
         ? "Choose the head image to start from, or upload one. It should be a head with no neck or collar."
         : chosen.fullBody

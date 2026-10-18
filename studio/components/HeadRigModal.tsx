@@ -2,8 +2,11 @@
 
 import React, { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { WORKER_URL, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
-import { groupTalkShots, orderLtxChains, placeTalkWindows, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
+import { groupTalkShots, orderLtxChains, placeTalkWindows, placeTalkWindowsAtAudio, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
 import { clipDetailsText, promptSaysMouthClosed } from "@/lib/clipDetails";
+import DialogueAudioDialog from "@/components/DialogueAudioDialog";
+import TalkingHeadDialog from "@/components/TalkingHeadDialog";
+import type { TalkingHeadRange } from "@/lib/worker";
 import FrameEraseDialog from "@/components/FrameEraseDialog";
 import { audioAtFrame, audioLaneHasShot, audioLaneItems, audioPeaks, deriveAudioPieces, shotHasAudio, sliceAudioPeaks, SHOT_AUDIO_REL, type AudioLaneItem } from "@/lib/headRigAudio";
 import {
@@ -275,6 +278,8 @@ export default function HeadRigModal({
   const [shots, setShots] = useState<ShotInfo[]>([]);
   const [talkShots, setTalkShots] = useState<ShotInfo[]>([]);
   const [talkBusy, setTalkBusy] = useState<string | null>(null);
+  const [dialogueOpen, setDialogueOpen] = useState(false);
+  const [dialogueRange, setDialogueRange] = useState<TalkingHeadRange | null>(null);
   const [talkMenu, setTalkMenu] = useState<TalkMenuState | null>(null);
   const [detailsShotId, setDetailsShotId] = useState<string | null>(null);
   const [eraseTarget, setEraseTarget] = useState<{ shotId: string; frame: number } | null>(null);
@@ -1555,12 +1560,20 @@ export default function HeadRigModal({
   }
 
 
-  function placeTalkGroup(group: TalkGroup) {
+  /** `atAudioTime`: start where the audio sits in its recording (so separate lines keep their gaps) instead of after the last head clip. */
+  function placeTalkGroup(group: TalkGroup, atAudioTime = false) {
     const ready = group.shots.filter((s) => s.status === "ready");
     if (!ready.length) return;
     const ids = ready.map(() => genSegId());
     const headNow = segmentsRef.current.head;
-    const placed = placeTalkWindows(group.shots, headNow.length ? Math.max(...headNow.map(segEnd)) + 1 : 1);
+    let placed = atAudioTime
+      ? placeTalkWindowsAtAudio(group.shots, fps)
+      : placeTalkWindows(group.shots, headNow.length ? Math.max(...headNow.map(segEnd)) + 1 : 1);
+    if (atAudioTime && placed.length) {
+      const length = placed.reduce((sum, p) => sum + (p.outFrame - p.inFrame + 1), 0);
+      const start = placeInFreeSlot(headNow, placed[0].start, length);
+      if (start !== placed[0].start) placed = placeTalkWindows(group.shots, start);
+    }
     setHeadSegments((prev) => [
       ...prev,
       ...placed.map((p, i) => ({
@@ -1569,7 +1582,7 @@ export default function HeadRigModal({
     ]);
     addDialogueFor(placed);
     if (standardRef.current) {
-      placeTalkWindows(group.shots, 1).forEach((p, i) => {
+      placed.forEach((p, i) => {
         void fitPatchFor({ id: ids[i], ...p, anchorX: 0.5, anchorY: 0.15, headScale: 1 }, standardRef.current).then((patch) => {
           if (patch) setHeadSegments((prev) => prev.map((seg) => (seg.id === ids[i] ? { ...seg, ...patch } : seg)));
         });
@@ -2268,6 +2281,15 @@ export default function HeadRigModal({
                 {reprocessAllBusy ? "Fixing…" : "🩹 Fix All Backgrounds"}
               </button>
             </div>
+            <div className="flex items-center gap-2 border-b border-[#222] px-3 py-2">
+              <button type="button"
+                className="rounded bg-neutral-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-neutral-600"
+                data-testid="dialogue-audio-open"
+                title="Import the real recording of this character's lines, pick the parts he speaks, and make talking heads for them"
+                onClick={() => setDialogueOpen(true)}>
+                🎙 Dialogue audio…
+              </button>
+            </div>
             {reprocessMsg ? (
               <p className={`border-b border-[#222] px-3 py-1 text-[11px] font-medium ${/fail/i.test(reprocessMsg) ? "text-red-400" : "text-emerald-300"}`}>{reprocessMsg}</p>
             ) : null}
@@ -2308,7 +2330,8 @@ export default function HeadRigModal({
                 project={project} characterId={characterId} mediaVersion={mediaVersion}
                 busyGroup={talkBusy}
                 onAdd={(s) => addToTrack("head", s)}
-                onPlace={placeTalkGroup}
+                onPlace={(g) => placeTalkGroup(g)}
+                onPlaceAtAudio={(g) => placeTalkGroup(g, true)}
                 onResume={(g) => void handleResumeTalk(g)}
                 onStop={(g) => void handleStopTalk(g)}
                 onClipMenu={openTalkMenu}
@@ -2790,6 +2813,25 @@ export default function HeadRigModal({
         />
       ) : null}
 
+      {dialogueOpen ? (
+        <DialogueAudioDialog
+          project={project}
+          characterId={characterId}
+          made={talkShots.map((s) => ({ audioRel: s.talk?.audioRel, audioInSec: s.talk?.audioInSec }))}
+          onClose={() => setDialogueOpen(false)}
+          onMake={setDialogueRange}
+        />
+      ) : null}
+      {dialogueRange ? (
+        <TalkingHeadDialog
+          project={project}
+          characterId={characterId}
+          range={dialogueRange}
+          onClose={() => setDialogueRange(null)}
+          onStarted={() => { setDialogueRange(null); void reloadShots(); }}
+        />
+      ) : null}
+
       {(() => {
         const detailsShot = detailsShotId ? talkShots.find((s) => s.id === detailsShotId) || null : null;
         return detailsShot ? (
@@ -3079,13 +3121,14 @@ const TALK_STATE_LABEL: Record<string, string> = { queued: "Queued", making: "Ge
  * audio. Clips are ordinary shots: nothing here deletes a whole batch, and a
  * clip only goes if you delete that clip.
  */
-function LtxSection({ shots, project, characterId, mediaVersion, busyGroup, onAdd, onPlace, onResume, onStop, onClipMenu, onDelete }: {
+function LtxSection({ shots, project, characterId, mediaVersion, busyGroup, onAdd, onPlace, onPlaceAtAudio, onResume, onStop, onClipMenu, onDelete }: {
   shots: ShotInfo[];
   project: string; characterId: string;
   mediaVersion: Record<string, number>;
   busyGroup: string | null;
   onAdd: (shot: ShotInfo) => void;
   onPlace: (group: TalkGroup) => void;
+  onPlaceAtAudio: (group: TalkGroup) => void;
   onResume: (group: string) => void;
   onStop: (group: string) => void;
   onClipMenu: (e: React.MouseEvent, shot: ShotInfo) => void;
@@ -3133,6 +3176,12 @@ function LtxSection({ shots, project, characterId, mediaVersion, busyGroup, onAd
                       className="rounded border border-studio-border px-1.5 py-0.5 text-[10px] text-neutral-300 hover:bg-[#333] disabled:opacity-40"
                       title="Put this batch's clips on the head track, one after another"
                       onClick={() => onPlace(group)}>Place</button>
+                  ) : null}
+                  {group.readyCount > 0 && !inProgress && group.shots[0]?.talk?.audioInSec != null ? (
+                    <button type="button" disabled={busy} data-testid="ltx-place-at-audio"
+                      className="rounded border border-studio-border px-1.5 py-0.5 text-[10px] text-neutral-300 hover:bg-[#333] disabled:opacity-40"
+                      title="Put this batch on the head track at the time its audio sits in the recording, so separate lines keep the gaps between them"
+                      onClick={() => onPlaceAtAudio(group)}>At audio time</button>
                   ) : null}
                 </div>
                 {group.shots.map((talkShot) => {

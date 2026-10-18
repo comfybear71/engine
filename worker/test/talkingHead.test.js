@@ -10,6 +10,7 @@ const {
   planWindows,
   planLtxWindows,
   planTalkingHead,
+  wordsFromText,
   buildWindowPrompt,
   extractFrameAt,
   makeTalkingHead,
@@ -245,6 +246,45 @@ describe("talking head chain", () => {
     assert.ok(plan.windows.length >= 2);
     assert.ok(plan.windows.every((w) => w.duration <= 10.01));
     assert.equal(plan.windows[plan.windows.length - 1].end, 20);
+  });
+
+  test("typed words stand in for a transcript, so audio imported without speech-to-text still plans", () => {
+    const dir = path.join(projectDir, "audio", "no_stt");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "001_rodney.wav"), Buffer.from("RIFF"));
+    const none = planTalkingHead(projectDir, { audioRel: "audio/no_stt/001_rodney.wav", inSec: 12, durationSec: 4 });
+    assert.equal(none.hasWords, false);
+    const plan = planTalkingHead(projectDir, {
+      audioRel: "audio/no_stt/001_rodney.wav",
+      inSec: 12,
+      durationSec: 4,
+      text: "Aloha, my friends. Welcome to Hawaii.",
+    });
+    assert.equal(plan.hasWords, true);
+    assert.equal(plan.transcript, "Aloha, my friends. Welcome to Hawaii.");
+    assert.equal(plan.windows.length, 1);
+    assert.equal(plan.windows[0].duration, 4);
+  });
+
+  test("typed words are cut along with the audio when a long line is made in parts", () => {
+    const dir = path.join(projectDir, "audio", "no_stt");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "001_rodney.wav"), Buffer.from("RIFF"));
+    const base = { audioRel: "audio/no_stt/001_rodney.wav", text: "one two three four five six seven eight", textInSec: 5, textDurationSec: 40, engine: "ltx" };
+    const first = planTalkingHead(projectDir, { ...base, inSec: 5, durationSec: 20 });
+    const second = planTalkingHead(projectDir, { ...base, inSec: 25, durationSec: 20 });
+    const joined = [...first.windows, ...second.windows].map((w) => w.text).join(" ").split(" ").filter(Boolean);
+    assert.deepEqual(joined, ["one", "two", "three", "four", "five", "six", "seven", "eight"]);
+    assert.ok(first.transcript.startsWith("one"));
+    assert.ok(second.transcript.endsWith("eight"));
+  });
+
+  test("wordsFromText spreads words across the range in order", () => {
+    const words = wordsFromText("a bb ccc", 10, 6);
+    assert.deepEqual(words.map((w) => w.word), ["a", "bb", "ccc"]);
+    assert.equal(words[0].start, 10);
+    assert.ok(words[2].end <= 16 && words[2].end > words[1].end);
+    assert.deepEqual(wordsFromText("", 0, 5), []);
   });
 
   test("chains windows: first from the reference, then from the previous clip's frame", async () => {

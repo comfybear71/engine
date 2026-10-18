@@ -7,6 +7,7 @@ import {
   ltxPartRange,
   orderLtxChains,
   placeTalkWindows,
+  placeTalkWindowsAtAudio,
   talkingHeadRangeForBlock,
   type TalkShot,
 } from "../lib/talkingHead.ts";
@@ -84,5 +85,14 @@ describe("LTX 20 s runs", () => {
     const ordered = orderLtxChains(groups);
     assert.deepEqual(ordered.map((c) => c.group.group), ["talk_a", "talk_b", "talk_c"]);
     assert.equal(ordered[0].audioLabel, "take_one");
+  });
+
+  test("a chain placed at audio time starts where its audio sits in the recording", () => {
+    const at = (sec: number) => ({ talk: { group: "talk_a", index: 0, total: 1, text: "hi", windowSec: 7.5, clipSec: 8, audioInSec: sec } });
+    assert.equal(placeTalkWindowsAtAudio([shot(0, "ready", at(12.5))], 24)[0].start, 301);
+    assert.equal(placeTalkWindowsAtAudio([shot(0, "ready", at(0))], 24)[0].start, 1);
+    assert.equal(placeTalkWindowsAtAudio([shot(0, "ready", { talk: undefined })], 24)[0].start, 1);
+    const later = placeTalkWindowsAtAudio([shot(0, "making", at(2)), shot(1, "ready", at(30))], 24);
+    assert.equal(later[0].start, 721);
   });
 });
