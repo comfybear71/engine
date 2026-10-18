@@ -222,6 +222,30 @@ describe("stage asset drops", () => {
       marks,
     });
     assert.match(character, /\[Action: Alice at=right at_time=0s\]/);
+    const clip = applyStagePlacement({
+      script,
+      asset: { kind: "clip", characterId: "klink", characterName: "Klink", actionId: "walk_towards" },
+      x: 1580,
+      y: 1010,
+      frame: 24,
+      fps: 24,
+      scenes,
+      playheadLine: 3,
+      marks,
+    });
+    assert.match(clip, /\[Clip: Klink walk_towards mark=right at_time=1s\]/);
+    const noMarks = applyStagePlacement({
+      script,
+      asset: { kind: "clip", characterId: "klink", characterName: "Klink", actionId: "walk_towards" },
+      x: 10,
+      y: 10,
+      frame: 0,
+      fps: 24,
+      scenes,
+      playheadLine: 3,
+      marks: [],
+    });
+    assert.match(noMarks, /\[Clip: Klink walk_towards at_time=0s\]/);
     const none = applyStagePlacement({
       script,
       asset: { kind: "character", characterId: "alice", characterName: "Alice" },

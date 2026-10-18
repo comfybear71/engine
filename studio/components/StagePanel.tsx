@@ -5,6 +5,7 @@ import AssetEditorOverlay from "@/components/AssetEditorOverlay";
 import CameraDrawer from "@/components/CameraDrawer";
 import StageAssetsPanel from "@/components/StageAssetsPanel";
 import ImportAudioDialog from "@/components/ImportAudioDialog";
+import NewSceneDialog from "@/components/NewSceneDialog";
 import TalkingHeadDialog from "@/components/TalkingHeadDialog";
 import PreviewCanvas from "@/components/PreviewCanvas";
 import PanelSplitter from "@/components/PanelSplitter";
@@ -15,6 +16,7 @@ import ScriptIdentity from "@/components/ScriptIdentity";
 import TransportBar from "@/components/TransportBar";
 import type { AssetFocus } from "@/lib/assetEditor";
 import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
+import type { NewSceneResult } from "@/lib/newScene";
 import { ASSET_DRAG_MIME, applyStagePlacement, parseAssetDrag } from "@/lib/stageAssets";
 import { applyPropEdit, scenePropStates, type PropScope } from "@/lib/stageProps";
 import { fileToImageBase64 } from "@/lib/assetEditor";
@@ -176,6 +178,8 @@ export default function StagePanel({
   const [stagingProps, setStagingProps] = useState<PropAsset[]>([]);
   const [propsBusy, setPropsBusy] = useState(false);
   const [propsMessage, setPropsMessage] = useState<string | null>(null);
+  const [newSceneOpen, setNewSceneOpen] = useState(false);
+  const [pendingSceneSeek, setPendingSceneSeek] = useState<string | null>(null);
   const [selectionRange, setSelectionRange] = useState<{
     start: number;
     end: number;
@@ -470,6 +474,20 @@ export default function StagePanel({
     },
     [fps, videoSrc, playOriginFrame, fullVideoSrc, lanes, totalFrames, onSelectLine]
   );
+
+  useEffect(() => {
+    if (!pendingSceneSeek) return;
+    const scene = lanes?.scenes.find((item) => item.id === pendingSceneSeek);
+    if (!scene) return;
+    setPendingSceneSeek(null);
+    seekTo(scene.startFrame, null);
+  }, [pendingSceneSeek, lanes, seekTo]);
+
+  function addNewScene(result: NewSceneResult) {
+    setNewSceneOpen(false);
+    setPendingSceneSeek(result.sceneId);
+    onEditScript(result.script);
+  }
 
   function onScrubbing(next: boolean) {
     const was = scrubbingRef.current;
@@ -1398,7 +1416,33 @@ export default function StagePanel({
                   ))}
                 </select>
               ) : null}
+              {project ? (
+                <button
+                  type="button"
+                  className="ml-auto rounded border border-studio-border bg-studio-raised px-2 py-0.5 text-[11px] text-neutral-200 hover:text-white disabled:opacity-40"
+                  disabled={!scriptText.trim()}
+                  title={
+                    scriptText.trim()
+                      ? "Add a scene with its own background and cast after the one you are on"
+                      : "The script has not loaded (or is empty), so there is nothing to add a scene to"
+                  }
+                  data-testid="stage-new-scene"
+                  onClick={() => setNewSceneOpen(true)}
+                >
+                  + New scene
+                </button>
+              ) : null}
             </div>
+            {newSceneOpen && project ? (
+              <NewSceneDialog
+                project={project}
+                scriptText={scriptText}
+                currentSceneId={currentScene?.id ?? sceneId}
+                currentLocation={currentScene?.location ?? null}
+                onCreate={addNewScene}
+                onClose={() => setNewSceneOpen(false)}
+              />
+            ) : null}
             <div className="relative flex min-h-0 flex-1 items-center justify-center p-3">
             {assetFocus && project ? (
               <AssetEditorOverlay
