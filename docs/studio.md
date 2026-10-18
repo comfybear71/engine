@@ -58,6 +58,21 @@ head track** lays them back to back, trimmed to their audio. The chain is
 sequential; if a clip fails, **Retry from failed clip** continues from it.
 The audio needs a transcript (`words.json`), so import it with transcription on.
 
+**Dialogue audio in the Head Rig.** In a character's Head Rig, **Dialogue audio…**
+(left sidebar) does the same job without going to the Stage. Import the real
+recording (mp3/wav; nothing is generated), or pick one already imported for
+that character. Drag across the waveform to pick each line (drag a line's edge
+or type its times to adjust; lines never overlap), type the words said in it
+(or tick the ElevenLabs box to have them read for you; that is the only thing
+that uses ElevenLabs), then **Make talking head…** opens the usual Grok / LTX
+dialog for just that stretch. Pick as many separate lines as you need. When a
+batch is ready, **At audio time** (next to **Place**) puts it on the head track
+at the time its audio sits in the recording (frame = seconds x fps, moved to
+the nearest free slot), so two lines taken from one recording keep the gap
+between them, and their audio lands on the Dialogue lane at the same place.
+Typed words are spread evenly over the line, so they stand in for a transcript
+(`text`, `textInSec`, `textDurationSec` on the talking-head `plan` / `start` bodies).
+
 ## Starting Engine Studio
 
 You do not need a terminal. After the computer has been set up once
