@@ -57,7 +57,14 @@ const {
 } = require("./studioProjects");
 const { cachedBackgroundThumb, cachedPreviewTexture, isBackgroundAssetPath } = require("./studioThumbs");
 const { streamProjectZip } = require("./studioZip");
-const { previewIngest, confirmIngest, cancelIngest, DRAWING_NAME } = require("./assetIngest");
+const {
+  previewIngest,
+  confirmIngest,
+  cancelIngest,
+  removeImageBackground,
+  decodeImageBuffer,
+  DRAWING_NAME,
+} = require("./assetIngest");
 const { saveCharacterStyle, saveCharacterReference, saveSlotAlignment, loadHeadRig, saveHeadRig, deleteHeadRig, saveHeadStandard, clearHeadStandard, SLOT_NAME } = require("./characterLocal");
 const {
   describeSlot,
@@ -1758,12 +1765,17 @@ function createApp(options = {}) {
     }
   });
 
-  app.post("/api/projects/:name/assets/import-still", (req, res) => {
+  app.post("/api/projects/:name/assets/import-still", async (req, res) => {
     const projectDir = projectFromRequest(req, res);
     if (!projectDir) return;
     const globalAssetsDir = resolveGlobalAssetsDir(projectDir);
     try {
-      res.json(importStill(projectDir, globalAssetsDir, req.body || {}));
+      const body = req.body || {};
+      if (body.removeBackground === true && (body.kind === "character" || body.kind === "prop")) {
+        const cut = await removeImageBackground(decodeImageBuffer(body), options.pythonBin ? { pythonBin: options.pythonBin } : {});
+        body.imageBase64 = `data:image/png;base64,${cut.toString("base64")}`;
+      }
+      res.json(importStill(projectDir, globalAssetsDir, body));
     } catch (err) {
       sendIngestError(res, err);
     }

@@ -15,6 +15,7 @@ from compositor.cutout import (
     key_green,
     normalize_cells,
     process_image,
+    remove_background_image,
     remove_stray_islands,
     split_grid_robust,
 )
@@ -371,3 +372,26 @@ def test_remove_stray_islands_drops_cape_sliver_and_boot_crumb(tmp_path: Path):
     assert cli_img is not None
     assert _sliver_pixels(cli_img) == 0
     assert _toe_pixels(cli_img) == 0
+
+
+def test_remove_background_keeps_dark_shoes_and_drops_corner_watermark() -> None:
+    img = np.zeros((200, 100, 3), dtype=np.uint8)
+    img[20:150, 30:70] = (60, 90, 120)  # body
+    img[150:175, 30:70] = (8, 8, 8)  # black shoes touching the body, on a black backdrop
+    img[178:190, 75:95] = (170, 170, 170)  # light "Grok" mark in the corner
+    out = remove_background_image(img)
+    assert out.shape[2] == 4
+    alpha = out[:, :, 3]
+    assert int(alpha[0, 0]) == 0
+    ys, xs = np.where(alpha > 0)
+    assert xs.min() >= 0 and xs.max() - xs.min() < 50  # watermark gone, trimmed to the figure
+    assert int(alpha[-6:, :].max()) == 255  # shoes survive
+    assert out.shape[0] < 200
+
+
+def test_remove_background_leaves_existing_transparency_alone() -> None:
+    bgra = np.zeros((40, 40, 4), dtype=np.uint8)
+    bgra[10:30, 10:30] = (10, 20, 30, 255)
+    out = remove_background_image(bgra)
+    assert out.shape == bgra.shape
+    assert int(out[0, 0, 3]) == 0 and int(out[20, 20, 3]) == 255

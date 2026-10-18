@@ -63,6 +63,7 @@ export default function FactoryPanel({
   const fileRef = useRef<HTMLInputElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [removeBg, setRemoveBg] = useState(true);
 
   const uploadMode = mode === "new-character" || mode === "prop" || mode === "background" ? mode : null;
   const showFrames = factoryUsesFrames(mode);
@@ -128,6 +129,7 @@ export default function FactoryPanel({
         kind: UPLOAD_KIND[uploadMode],
         name: name.trim() || file.name,
         imageBase64,
+        removeBackground: uploadMode !== "background" && removeBg,
       });
       setUploadMessage(`Added ${result.id} to ${UPLOAD_PAGE[uploadMode]}.`);
       if (uploadMode === "new-character") setName("");
@@ -345,6 +347,21 @@ export default function FactoryPanel({
               ? " It becomes the new character's reference picture. Type a name first, or the file name is used."
               : ""}
           </p>
+          {uploadMode !== "background" ? (
+            <label className="mb-2 flex items-start gap-2 text-xs text-neutral-200">
+              <input
+                type="checkbox"
+                checked={removeBg}
+                onChange={(event) => setRemoveBg(event.target.checked)}
+                className="mt-0.5"
+                data-testid="factory-upload-remove-bg"
+              />
+              <span>
+                Make the background transparent and remove the Grok watermark. Works on a plain black, white or
+                single-colour backdrop; skipped if the PNG is already transparent.
+              </span>
+            </label>
+          ) : null}
           <input
             ref={uploadRef}
             type="file"

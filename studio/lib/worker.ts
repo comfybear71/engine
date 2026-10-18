@@ -960,7 +960,7 @@ export async function redoFactoryJob(
 
 export type TrashUsage = { script: string; line: number; text?: string };
 export type TrashAssetBody = {
-  kind: "sound" | "background" | "prop" | "action";
+  kind: "sound" | "background" | "prop" | "action" | "character";
   id?: string;
   label?: string;
   characterId?: string | null;
@@ -972,7 +972,13 @@ export type TrashAssetBody = {
 
 export async function importStillAsset(
   name: string,
-  body: { kind: "prop" | "background" | "character"; name?: string; location?: string; imageBase64: string }
+  body: {
+    kind: "prop" | "background" | "character";
+    name?: string;
+    location?: string;
+    imageBase64: string;
+    removeBackground?: boolean;
+  }
 ): Promise<{ ok: boolean; id: string; rel: string; location?: string }> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/assets/import-still`, {
     method: "POST",

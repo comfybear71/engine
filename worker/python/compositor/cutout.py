@@ -657,6 +657,77 @@ def clean_islands_image(img: np.ndarray) -> np.ndarray:
     return remove_stray_islands(bgra)
 
 
+BG_BORDER = 4
+BG_TOL_MIN = 4.0
+BG_TOL_MAX = 14.0
+BG_SOFT = 20.0
+BG_EDGE_BAND = 3
+
+
+def key_flat_background(
+    bgr: np.ndarray,
+    *,
+    tol: float | None = None,
+    soft: float = BG_SOFT,
+    band: int = BG_EDGE_BAND,
+) -> np.ndarray:
+    """Make a flat studio backdrop (black, white, grey...) transparent.
+
+    The backdrop colour is the median of the image border and the tolerance
+    follows how noisy that border is (kept tight so black shoes on a black
+    backdrop survive). Only pixels close to it *and* connected to the border
+    are removed, so dark clothing or shoes inside the figure survive. A thin band along the cut
+    edge gets a soft alpha ramp instead of a hard staircase.
+    """
+    img = bgr[:, :, :3]
+    h, w = img.shape[:2]
+    edge = np.concatenate(
+        [
+            img[:BG_BORDER].reshape(-1, 3),
+            img[-BG_BORDER:].reshape(-1, 3),
+            img[:, :BG_BORDER].reshape(-1, 3),
+            img[:, -BG_BORDER:].reshape(-1, 3),
+        ]
+    )
+    backdrop = np.median(edge, axis=0).astype(np.float32)
+    dist = np.abs(img.astype(np.float32) - backdrop).max(axis=2)
+    if tol is None:
+        noise = float(np.percentile(np.abs(edge.astype(np.float32) - backdrop).max(axis=1), 99.5))
+        tol = min(max(noise + 2.0, BG_TOL_MIN), BG_TOL_MAX)
+    candidate = (dist <= float(tol)).astype(np.uint8)
+    num, labels = cv2.connectedComponents(candidate, connectivity=4)
+    touching = set(np.unique(labels[0, :])) | set(np.unique(labels[-1, :]))
+    touching |= set(np.unique(labels[:, 0])) | set(np.unique(labels[:, -1]))
+    touching.discard(0)
+    cleared = np.isin(labels, list(touching)) if touching else np.zeros((h, w), dtype=bool)
+
+    alpha = np.full((h, w), 255, dtype=np.uint8)
+    alpha[cleared] = 0
+    if band > 0 and cleared.any():
+        k = band * 2 + 1
+        near = cv2.dilate(cleared.astype(np.uint8), np.ones((k, k), np.uint8)).astype(bool) & ~cleared
+        ramp = np.clip((dist - float(tol)) / max(float(soft), 1.0), 0.0, 1.0)
+        alpha[near] = (ramp[near] * 255.0).astype(np.uint8)
+
+    out = bgr_to_bgra(img)
+    out[:, :, 3] = alpha
+    return out
+
+
+def remove_background_image(img: np.ndarray) -> np.ndarray:
+    """Cut a single figure off its flat backdrop; drop Grok watermark and crumbs."""
+    if has_alpha_channel(img):
+        return bgr_to_bgra(img)
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    keyed = key_flat_background(img)
+    keyed = remove_specks(keyed)
+    keyed = remove_watermark(keyed)
+    keyed = keep_main_figure(keyed)
+    keyed = remove_stray_islands(keyed)
+    return trim_alpha(keyed)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Key #00FF00, trim, and split a sheet into cells.")
     parser.add_argument("--input", type=Path, required=True)
@@ -685,10 +756,34 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Keep the main body and drop small disconnected islands (boot/cape crumbs)",
     )
+    parser.add_argument(
+        "--remove-bg",
+        action="store_true",
+        help="Make a flat backdrop transparent and drop the Grok watermark (needs --out)",
+    )
     parser.add_argument("--out", type=Path, dest="out_file", help="Single output PNG (with --clean-islands)")
     args = parser.parse_args(argv)
 
     image = load_image(args.input)
+
+    if args.remove_bg:
+        if args.out_file is None:
+            print("error: --remove-bg needs --out", file=sys.stderr)
+            return 2
+        cut = remove_background_image(image)
+        write_png(args.out_file, cut)
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "out": str(args.out_file),
+                    "width": int(cut.shape[1]),
+                    "height": int(cut.shape[0]),
+                    "empty": is_empty(cut),
+                }
+            )
+        )
+        return 0
 
     if args.clean_islands and not args.grid:
         jobs: list[tuple[Path, Path]] = []

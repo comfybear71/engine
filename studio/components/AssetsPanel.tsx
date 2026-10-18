@@ -1463,6 +1463,10 @@ export default function AssetsPanel({
                   fit="contain"
                   onClick={() => selectCharacter(character.id)}
                 />
+                <TrashButton
+                  testId={`assets-trash-character-${character.id}`}
+                  onClick={() => void onTrash({ kind: "character", id: character.id, confirm: true }, character.display_name)}
+                />
               </div>
             ))}
             <AddTile testId="assets-new-characters" onClick={() => onNew("characters")} />

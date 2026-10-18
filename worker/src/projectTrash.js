@@ -8,7 +8,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const { listScriptFiles } = require("./studioProjects");
+const { listScriptFiles, isSafeFolderName, readLibrary, writeLibrary } = require("./studioProjects");
 const { tokenize } = require("./parser/tokenizer");
 const { parseActionTag } = require("./parser/actionTag");
 const { resolveAsset } = require("./parser/assetLibrary");
@@ -154,6 +154,31 @@ function findActionUsages(projectDir, actionId) {
   });
 }
 
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function characterNames(projectDir, characterId) {
+  const names = new Set([characterId]);
+  try {
+    const json = JSON.parse(
+      fs.readFileSync(path.join(projectDir, "characters", characterId, "character.json"), "utf8")
+    );
+    if (json.display_name) names.add(String(json.display_name));
+    for (const alias of json.aliases || []) names.add(String(alias));
+  } catch {
+    /* id alone is enough to match */
+  }
+  return [...names].map((name) => name.trim()).filter(Boolean);
+}
+
+function findCharacterUsages(projectDir, characterId) {
+  const names = characterNames(projectDir, characterId);
+  if (!names.length) return [];
+  const pattern = new RegExp(`(^|[^A-Za-z0-9_])(${names.map(escapeRegExp).join("|")})([^A-Za-z0-9_]|$)`, "i");
+  return scriptUsages(projectDir, (token) => pattern.test(String(token.raw || "")));
+}
+
 function usedMessage(usages) {
   const scripts = [...new Set(usages.map((item) => item.script))];
   if (!scripts.length) return "";
@@ -226,6 +251,36 @@ function trashAction(projectDir, characterId, actionId, body) {
   return { ...moveToProjectTrash(projectDir, [rel]), usages };
 }
 
+function trashCharacter(projectDir, characterId, body) {
+  if (!isSafeFolderName(characterId)) {
+    const err = new Error("Invalid character id");
+    err.code = "EBADPATH";
+    throw err;
+  }
+  const rel = `characters/${characterId}`;
+  const local = fs.existsSync(absInProject(projectDir, rel));
+  const library = readLibrary(projectDir);
+  const listed = library.characters.includes(characterId);
+  if (!local && !listed) {
+    const err = new Error("This character is from the shared library and can't be deleted from this project.");
+    err.code = "ELOCKED";
+    throw err;
+  }
+  const usages = findCharacterUsages(projectDir, characterId);
+  if (usages.length && !(body && body.force === true)) {
+    const err = new Error(usedMessage(usages));
+    err.code = "EUSED";
+    err.usages = usages;
+    throw err;
+  }
+  const moved = local ? moveToProjectTrash(projectDir, [rel]) : { trash: null, moved: [] };
+  if (listed) {
+    library.characters = library.characters.filter((id) => id !== characterId);
+    writeLibrary(projectDir, library);
+  }
+  return { ...moved, usages };
+}
+
 function trashAsset(projectDir, globalAssetsDir, body) {
   if (!(body && body.confirm === true)) {
     const err = new Error("Delete needs confirm: true");
@@ -237,6 +292,7 @@ function trashAsset(projectDir, globalAssetsDir, body) {
   if (kind === "background") return trashBackground(projectDir, globalAssetsDir, body.id, body);
   if (kind === "prop") return trashProp(projectDir, globalAssetsDir, body.location, body.id, body.rel, body);
   if (kind === "action") return trashAction(projectDir, body.characterId, body.id, body);
+  if (kind === "character") return trashCharacter(projectDir, body.id, body);
   const err = new Error(`Unknown asset kind: ${kind}`);
   err.code = "EBADKIND";
   throw err;
@@ -248,6 +304,7 @@ module.exports = {
   findLocationUsages,
   findPropUsages,
   findActionUsages,
+  findCharacterUsages,
   moveToProjectTrash,
   trashAsset,
   usedMessage,
