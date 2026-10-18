@@ -259,4 +259,19 @@ describe("stage asset drops", () => {
     });
     assert.equal(none, script);
   });
+
+  test("a dropped Action Shot carries the fit scale when one is given", () => {
+    const clip = { kind: "clip" as const, characterId: "rodney", characterName: "Rodney", actionId: "walk_away" };
+    const script = "[Scene: A]\n[Location: barracks]\n";
+    const scenes = [{ id: "a", startFrame: 0, endFrame: 240 }];
+    const marks = [{ name: "centre", mark: { x: 960, y: 1080 } }];
+    const base = { script, asset: clip, x: 960, y: 1000, frame: 0, fps: 24, scenes, playheadLine: null, marks };
+    assert.match(applyStagePlacement({ ...base, clipScale: 0.4 }), /\[Clip: Rodney walk_away mark=centre at_time=0s scale=0.4\]/);
+    assert.match(applyStagePlacement({ ...base, clipScale: null }), /\[Clip: Rodney walk_away mark=centre at_time=0s\]/);
+    assert.match(
+      applyAssetDropToScript({ script, asset: clip, lane: "action", frame: 0, fps: 24, scenes, playheadLine: null, clipScale: 0.55 }),
+      /\[Clip: Rodney walk_away at_time=0s scale=0.55\]/
+    );
+  });
 });
+

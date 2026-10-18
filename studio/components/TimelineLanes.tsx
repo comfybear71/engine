@@ -7,6 +7,7 @@ import {
   ASSET_DRAG_MIME,
   applyAssetDropToScript,
   parseAssetDrag,
+  type AssetDrag,
 } from "@/lib/stageAssets";
 import {
   clipboardFromBlocks,
@@ -149,6 +150,7 @@ export default function TimelineLanes({
   playing = false,
   scriptText = "",
   onEditScript,
+  clipScaleFor,
   canUndo = false,
   canRedo = false,
   onUndo,
@@ -177,6 +179,8 @@ export default function TimelineLanes({
   playing?: boolean;
   scriptText?: string;
   onEditScript?: (next: string, meta?: ScriptEditMeta) => void;
+  /** scale= to write on a dropped Action Shot so it fits the scene (null: none). */
+  clipScaleFor?: (asset: AssetDrag) => Promise<number | null>;
   canUndo?: boolean;
   canRedo?: boolean;
   onUndo?: () => void;
@@ -252,6 +256,8 @@ export default function TimelineLanes({
   const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const laneHRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<HTMLDivElement | null>(null);
+  const scriptTextRef = useRef(scriptText);
+  scriptTextRef.current = scriptText;
   const wheelRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const zoomRef = useRef(zoom);
@@ -808,7 +814,7 @@ export default function TimelineLanes({
     setDropLane(lane);
   }
 
-  function onAssetDrop(event: React.DragEvent<HTMLDivElement>, lane: LaneId) {
+  async function onAssetDrop(event: React.DragEvent<HTMLDivElement>, lane: LaneId) {
     event.preventDefault();
     event.stopPropagation();
     setDropLane(null);
@@ -818,16 +824,19 @@ export default function TimelineLanes({
     const rect = viewRef.current?.getBoundingClientRect();
     const x = rect ? scrollLeft + (event.clientX - rect.left) : 0;
     const dropFrame = Math.max(0, Math.min(maxFrame, Math.round(x / Math.max(ppf, 1e-6))));
+    const clipScale = asset.kind === "clip" && clipScaleFor ? await clipScaleFor(asset) : null;
+    const current = scriptTextRef.current;
     const next = applyAssetDropToScript({
-      script: scriptText,
+      script: current,
       asset,
       lane,
       frame: dropFrame,
       fps,
       scenes,
       playheadLine: selectedLine,
+      clipScale,
     });
-    if (next !== scriptText) onEditScript(next);
+    if (next !== current) onEditScript(next);
   }
 
   function onTrimPointerDown(event: React.PointerEvent<HTMLElement>, block: LaneBlock, edge: "in" | "out") {

@@ -17,7 +17,9 @@ import TransportBar from "@/components/TransportBar";
 import type { AssetFocus } from "@/lib/assetEditor";
 import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import type { NewSceneResult } from "@/lib/newScene";
-import { ASSET_DRAG_MIME, applyStagePlacement, parseAssetDrag } from "@/lib/stageAssets";
+import { ASSET_DRAG_MIME, applyStagePlacement, nearestMark, parseAssetDrag, type AssetDrag } from "@/lib/stageAssets";
+import { fitClipScale } from "@/lib/clipFit";
+import { measureActionContentHeight } from "@/lib/clipMeasure";
 import { applyPropEdit, scenePropStates, type PropScope } from "@/lib/stageProps";
 import { fileToImageBase64 } from "@/lib/assetEditor";
 import {
@@ -159,6 +161,8 @@ export default function StagePanel({
   const [previewGraph, setPreviewGraph] = useState<PreviewGraph | null>(null);
   const [leftPool, setLeftPool] = useState<LeftPoolId | null>(null);
   const previewBoxRef = useRef<HTMLDivElement | null>(null);
+  const scriptTextRef = useRef(scriptText);
+  scriptTextRef.current = scriptText;
   const [rightDrawer, setRightDrawer] = useState<RightDrawerId | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [segment, setSegment] = useState<{
@@ -1257,7 +1261,15 @@ export default function StagePanel({
     event.dataTransfer.dropEffect = "copy";
   }
 
-  function onPreviewDrop(event: React.DragEvent<HTMLDivElement>) {
+  /** A dropped Action Shot is sized to fit when the scene would draw it taller than the picture (null: leave it as it is). */
+  async function clipScaleFor(asset: AssetDrag, markScale: number | null | undefined): Promise<number | null> {
+    if (asset.kind !== "clip" || !project) return null;
+    const contentHeightPx = await measureActionContentHeight(project, asset.characterId, asset.actionId);
+    if (contentHeightPx == null) return null;
+    return fitClipScale({ contentHeightPx, canvasHeight: canvas.height, markScale });
+  }
+
+  async function onPreviewDrop(event: React.DragEvent<HTMLDivElement>) {
     event.preventDefault();
     const asset = parseAssetDrag(event.dataTransfer.getData(ASSET_DRAG_MIME) || event.dataTransfer.getData("text/plain"));
     if (!asset) return;
@@ -1268,8 +1280,11 @@ export default function StagePanel({
     const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
     const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
     const marks = locationMarks.map((item) => ({ name: item.name, mark: { x: item.mark.x, y: item.mark.y } }));
+    const hit = asset.kind === "clip" ? nearestMark(marks, x, y) : null;
+    const clipScale = await clipScaleFor(asset, locationMarks.find((item) => item.name === hit?.name)?.mark.scale);
+    const current = scriptTextRef.current;
     const next = applyStagePlacement({
-      script: scriptText,
+      script: current,
       asset,
       x,
       y,
@@ -1278,8 +1293,9 @@ export default function StagePanel({
       scenes: lanes?.scenes || [],
       playheadLine: playheadLine ?? selectedLine,
       marks,
+      clipScale,
     });
-    if (next !== scriptText) onEditScript(next);
+    if (next !== current) onEditScript(next);
   }
 
   function changeProp(propId: string, action: "hide" | "show", scope: PropScope) {
@@ -1683,6 +1699,7 @@ export default function StagePanel({
             playing={playing}
             scriptText={scriptText}
             onEditScript={onEditScript}
+            clipScaleFor={(asset) => clipScaleFor(asset, locationMarks[0]?.mark.scale)}
             canUndo={canUndo}
             canRedo={canRedo}
             onUndo={undoTimeline}

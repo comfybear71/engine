@@ -98,12 +98,17 @@ export function encodeAssetDrag(asset: AssetDrag): string {
   return JSON.stringify(asset);
 }
 
+function clipScaleTag(scale: number | null | undefined): string {
+  return scale != null && scale > 0 ? ` scale=${scale}` : "";
+}
+
 export function scriptLineForAssetDrop(
   asset: AssetDrag,
   fps: number,
   sceneLocalFrame: number,
   lane?: LaneId | null,
-  durationFrames = 11
+  durationFrames = 11,
+  clipScale?: number | null
 ): string | null {
   const local = Math.max(0, Math.round(sceneLocalFrame));
   if (lane === "inserts") {
@@ -138,7 +143,7 @@ export function scriptLineForAssetDrop(
     return `[Prop: ${asset.propId} show at_time=${at}]`;
   }
   if (asset.kind === "clip") {
-    return `[Clip: ${asset.characterName} ${asset.actionId} at_time=${at}]`;
+    return `[Clip: ${asset.characterName} ${asset.actionId} at_time=${at}${clipScaleTag(clipScale)}]`;
   }
   if (asset.kind === "audio") {
     if (asset.audioKind !== "imported") return null;
@@ -195,6 +200,8 @@ export function applyAssetDropToScript(opts: {
   fps: number;
   scenes: { id: string; startFrame: number; endFrame: number }[];
   playheadLine: number | null;
+  /** scale= to write on a dropped Action Shot (null/undefined: none). */
+  clipScale?: number | null;
 }): string {
   const scene = sceneAtFrame(opts.scenes, opts.frame);
   if (opts.asset.kind === "background") {
@@ -203,7 +210,7 @@ export function applyAssetDropToScript(opts: {
   }
   if (!assetFitsLane(opts.asset, opts.lane)) return opts.script;
   const local = Math.max(0, Math.round(opts.frame - (scene?.startFrame ?? 0)));
-  const line = scriptLineForAssetDrop(opts.asset, opts.fps, local, opts.lane);
+  const line = scriptLineForAssetDrop(opts.asset, opts.fps, local, opts.lane, undefined, opts.clipScale);
   if (!line) return opts.script;
   const after = findInsertAfterLine(opts.script, opts.playheadLine, scene?.id ?? null);
   return insertLineAfter(opts.script, after, line);
@@ -230,6 +237,7 @@ export function applyStagePlacement(opts: {
   scenes: { id: string; startFrame: number; endFrame: number }[];
   playheadLine: number | null;
   marks: StageMark[];
+  clipScale?: number | null;
 }): string {
   const scene = sceneAtFrame(opts.scenes, opts.frame);
   const local = Math.max(0, Math.round(opts.frame - (scene?.startFrame ?? 0)));
@@ -248,7 +256,7 @@ export function applyStagePlacement(opts: {
   } else if (opts.asset.kind === "clip") {
     const hit = nearestMark(opts.marks, opts.x, opts.y);
     const mark = hit ? ` mark=${hit.name}` : "";
-    line = `[Clip: ${opts.asset.characterName} ${opts.asset.actionId}${mark} at_time=${at}]`;
+    line = `[Clip: ${opts.asset.characterName} ${opts.asset.actionId}${mark} at_time=${at}${clipScaleTag(opts.clipScale)}]`;
   }
   if (!line) return opts.script;
   const after = findInsertAfterLine(opts.script, opts.playheadLine, scene?.id ?? null);
