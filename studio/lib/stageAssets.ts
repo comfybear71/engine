@@ -245,6 +245,10 @@ export function applyStagePlacement(opts: {
     const hit = nearestMark(opts.marks, opts.x, opts.y);
     if (!hit) return opts.script;
     line = `[Action: ${opts.asset.characterName} at=${hit.name} at_time=${at}]`;
+  } else if (opts.asset.kind === "clip") {
+    const hit = nearestMark(opts.marks, opts.x, opts.y);
+    const mark = hit ? ` mark=${hit.name}` : "";
+    line = `[Clip: ${opts.asset.characterName} ${opts.asset.actionId}${mark} at_time=${at}]`;
   }
   if (!line) return opts.script;
   const after = findInsertAfterLine(opts.script, opts.playheadLine, scene?.id ?? null);
