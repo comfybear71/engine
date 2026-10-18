@@ -972,7 +972,7 @@ export type TrashAssetBody = {
 
 export async function importStillAsset(
   name: string,
-  body: { kind: "prop" | "background"; name?: string; location?: string; imageBase64: string }
+  body: { kind: "prop" | "background" | "character"; name?: string; location?: string; imageBase64: string }
 ): Promise<{ ok: boolean; id: string; rel: string; location?: string }> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/assets/import-still`, {
     method: "POST",

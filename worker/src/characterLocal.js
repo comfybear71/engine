@@ -426,4 +426,5 @@ module.exports = {
   clearHeadStandard,
   normalizeHeadStandard,
   decodeImageBuffer,
+  imageExtension,
 };

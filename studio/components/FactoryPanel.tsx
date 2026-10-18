@@ -17,12 +17,18 @@ import {
   factoryPreviewUrl,
   factoryStripUrl,
   importFactoryMp4,
+  importStillAsset,
   redoFactoryJob,
   startFactoryJob,
   tickFactoryJob,
   type Character,
   type FactoryJob,
 } from "@/lib/worker";
+import { fileToPngBase64 } from "@/lib/assetEditor";
+
+const UPLOAD_KIND = { "new-character": "character", prop: "prop", background: "background" } as const;
+const UPLOAD_LABEL = { "new-character": "character", prop: "prop", background: "background" } as const;
+const UPLOAD_PAGE = { "new-character": "Characters", prop: "Props", background: "Backgrounds" } as const;
 
 export default function FactoryPanel({
   project,
@@ -55,7 +61,10 @@ export default function FactoryPanel({
   const [walkJobs, setWalkJobs] = useState<FactoryJob[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<number[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
+  const uploadMode = mode === "new-character" || mode === "prop" || mode === "background" ? mode : null;
   const showFrames = factoryUsesFrames(mode);
   const hint = factoryHint(mode, { character, slot, label });
   const placeholder = factoryPlaceholder(mode, { character, slot, label });
@@ -101,6 +110,33 @@ export default function FactoryPanel({
       useRigWalk: walkIntent && useRigWalk && !useGrok,
       useGrok: walkIntent && useGrok,
     };
+  }
+
+  async function onUploadFile(file: File | undefined) {
+    if (uploadRef.current) uploadRef.current.value = "";
+    if (!file || !uploadMode) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Pick a PNG or JPEG image.");
+      return;
+    }
+    setBusy("Uploading…");
+    setError(null);
+    setUploadMessage(null);
+    try {
+      const imageBase64 = await fileToPngBase64(file);
+      const result = await importStillAsset(project, {
+        kind: UPLOAD_KIND[uploadMode],
+        name: name.trim() || file.name,
+        imageBase64,
+      });
+      setUploadMessage(`Added ${result.id} to ${UPLOAD_PAGE[uploadMode]}.`);
+      if (uploadMode === "new-character") setName("");
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function onGenerate() {
@@ -297,6 +333,41 @@ export default function FactoryPanel({
             data-testid="factory-name"
           />
         </label>
+      ) : null}
+      {uploadMode ? (
+        <div
+          className="mb-3 rounded-md border border-studio-border bg-studio-raised/40 px-3 py-2"
+          data-testid="factory-upload"
+        >
+          <p className="mb-2 text-[11px] text-studio-muted">
+            Already have the image? Upload it instead of generating (JPEGs are converted to PNG).
+            {uploadMode === "new-character"
+              ? " It becomes the new character's reference picture. Type a name first, or the file name is used."
+              : ""}
+          </p>
+          <input
+            ref={uploadRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            data-testid="factory-upload-file"
+            onChange={(event) => void onUploadFile(event.target.files?.[0])}
+          />
+          <button
+            type="button"
+            onClick={() => uploadRef.current?.click()}
+            disabled={busy != null}
+            className="rounded-md border border-studio-border px-3 py-1.5 text-xs font-semibold text-neutral-100 hover:text-white disabled:opacity-40"
+            data-testid="factory-upload-button"
+          >
+            {busy === "Uploading…" ? "Uploading…" : `Upload ${UPLOAD_LABEL[uploadMode]} image`}
+          </button>
+          {uploadMessage ? (
+            <p className="mt-2 text-xs text-emerald-400" data-testid="factory-upload-message">
+              {uploadMessage}
+            </p>
+          ) : null}
+        </div>
       ) : null}
       <label className="mb-3 block">
         <span className="sr-only">Prompt</span>
