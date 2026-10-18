@@ -35,4 +35,43 @@ describe("project asset trash", () => {
     assert.equal(fs.existsSync(path.join(root, result.moved[0].to)), true);
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  test("characters move to .trash, leave the library, and warn when a script names them", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "engine-trash-"));
+    try {
+      write(path.join(root, "script_act1.txt"), "[Scene: One]\nColonel Klink: Hogan!\n");
+      write(path.join(root, "library.json"), JSON.stringify({ characters: ["colonel_klink", "spare"], backgrounds: [] }));
+      write(
+        path.join(root, "characters", "colonel_klink", "character.json"),
+        JSON.stringify({ id: "colonel_klink", display_name: "Colonel Klink", aliases: ["Colonel Klink"], slots: {} })
+      );
+      write(path.join(root, "characters", "colonel_klink", "_reference", "full.png"), "png");
+      write(
+        path.join(root, "characters", "spare", "character.json"),
+        JSON.stringify({ id: "spare", display_name: "Spare", slots: {} })
+      );
+
+      assert.throws(
+        () => trashAsset(root, null, { kind: "character", id: "colonel_klink", confirm: true }),
+        (err) => err.code === "EUSED" && /script_act1\.txt/.test(err.message)
+      );
+      assert.equal(fs.existsSync(path.join(root, "characters", "colonel_klink")), true);
+
+      const spare = trashAsset(root, null, { kind: "character", id: "spare", confirm: true });
+      assert.equal(fs.existsSync(path.join(root, "characters", "spare")), false);
+      assert.equal(fs.existsSync(path.join(root, spare.moved[0].to, "character.json")), true);
+
+      trashAsset(root, null, { kind: "character", id: "colonel_klink", confirm: true, force: true });
+      assert.equal(fs.existsSync(path.join(root, "characters", "colonel_klink")), false);
+      const library = JSON.parse(fs.readFileSync(path.join(root, "library.json"), "utf8"));
+      assert.deepEqual(library.characters, []);
+
+      assert.throws(
+        () => trashAsset(root, null, { kind: "character", id: "nobody", confirm: true }),
+        (err) => err.code === "ELOCKED"
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

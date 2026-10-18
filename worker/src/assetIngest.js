@@ -11,6 +11,7 @@
  */
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 
@@ -310,6 +311,23 @@ function runCleanIslands(args, options = {}) {
       resolve(parsed);
     });
   });
+}
+
+async function removeImageBackground(buf, options = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-rmbg-"));
+  const input = path.join(dir, "in.png");
+  const output = path.join(dir, "out.png");
+  try {
+    fs.writeFileSync(input, buf);
+    try {
+      await runCleanIslands(["--input", input, "--remove-bg", "--out", output], options);
+    } catch (err) {
+      throw ingestError(String(err.message || err).replace(/^Island cleanup failed/, "Background removal failed"));
+    }
+    return fs.readFileSync(output);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function previewDir(projectDir, characterId, sid) {
@@ -681,6 +699,7 @@ module.exports = {
   SAFE_SESSION,
   runCutout,
   runCleanIslands,
+  removeImageBackground,
   decodeImageBuffer,
   previewDir,
   sessionId,
