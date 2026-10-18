@@ -1973,7 +1973,7 @@ export default function HeadRigModal({
   const playheadPct = `${((scrubFrame - 1) / Math.max(maxFrames - 1, 1)) * 100}%`;
 
   // ── Grok shot creator ──
-  const [grokType, setGrokType] = useState<"body" | "head">("body");
+  const [grokType, setGrokType] = useState<GrokShotType>("body");
   const [grokPrompt, setGrokPrompt] = useState("");
   const [grokDuration, setGrokDuration] = useState(6);
   const [grokBusy, setGrokBusy] = useState(false);
@@ -2003,9 +2003,7 @@ export default function HeadRigModal({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            prompt: grokType === "body"
-              ? `${grokPrompt.trim()}, body only from neck down, show full neck and shoulders, no head, no face, cut off at the neck, the head is a separate layer`
-              : `${grokPrompt.trim()}, head only from jawline up, no neck, no shoulders, no body, close-up head and face only, cut off cleanly at the jaw`,
+            prompt: grokShotPrompt(grokType, grokPrompt),
             shotType: grokType,
             background: "green",
             duration: grokDuration,
@@ -2020,7 +2018,7 @@ export default function HeadRigModal({
         setGrokMsg(data.error || "Failed to create shot");
       } else {
         const data = await res.json();
-        setGrokMsg(`Creating ${grokType} shot "${data.shotId}"${continueFrom ? ` from the last frame of "${continueFrom}"` : ""} — will appear when ready`);
+        setGrokMsg(`Creating ${grokType === "full" ? "full body" : grokType} shot "${data.shotId}"${continueFrom ? ` from the last frame of "${continueFrom}"` : ""} — will appear when ready`);
         setGrokPrompt("");
         const poll = setInterval(async () => {
           await reloadShots();
@@ -2129,9 +2127,9 @@ export default function HeadRigModal({
 
   const importRef = useRef<HTMLInputElement>(null);
   const [importBusy, setImportBusy] = useState(false);
-  const [importType, setImportType] = useState<"body" | "head">("body");
+  const [importType, setImportType] = useState<GrokShotType>("body");
 
-  async function handleImportFile(file: File, shotType: "body" | "head") {
+  async function handleImportFile(file: File, shotType: GrokShotType) {
     setImportBusy(true);
     try {
       const formData = new FormData();
@@ -2208,6 +2206,7 @@ export default function HeadRigModal({
   const headCats = new Set(["expressions", "head_moves", "mouth_tongue"]);
   const bodyShots = shots.filter((s) => s.shotType === "body" || (!s.shotType && bodyCats.has(s.category || "")));
   const headShots = shots.filter((s) => !s.talk && (s.shotType === "head" || (!s.shotType && headCats.has(s.category || ""))));
+  const fullShots = shots.filter((s) => s.shotType === "full");
   const combinedShots = shots.filter((s) => s.shotType === "combined");
   // Shots that don't match any category go into body by default
   const uncategorized = shots.filter((s) => !s.shotType && !bodyCats.has(s.category || "") && !headCats.has(s.category || "") && s.shotType !== "combined");
@@ -2250,9 +2249,10 @@ export default function HeadRigModal({
               <input ref={importRef} type="file" accept="video/*,.mp4,.mov,.webm" className="hidden"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFile(f, importType); }} />
               <select className="rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
-                value={importType} onChange={(e) => setImportType(e.target.value as "body" | "head")}>
+                value={importType} onChange={(e) => setImportType(e.target.value as GrokShotType)}>
                 <option value="body">Body clip</option>
                 <option value="head">Head clip</option>
+                <option value="full">Full body clip</option>
               </select>
               <button type="button"
                 className="rounded bg-blue-600 px-3 py-1 text-[12px] font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
@@ -2271,6 +2271,16 @@ export default function HeadRigModal({
             {reprocessMsg ? (
               <p className={`border-b border-[#222] px-3 py-1 text-[11px] font-medium ${/fail/i.test(reprocessMsg) ? "text-red-400" : "text-emerald-300"}`}>{reprocessMsg}</p>
             ) : null}
+
+            {/* Full Body Shots bin: head and body together, no head rig needed */}
+            <MediaBin
+              title="Full Body Shots"
+              shots={fullShots}
+              project={project} characterId={characterId} mediaVersion={mediaVersion}
+              reprocessingShotId={reprocessingShotId}
+              onAdd={(s) => addToTrack("body", s)} onDelete={handleDeleteShot} onReprocess={handleReprocessShot}
+              onClipMenu={openTalkMenu}
+            />
 
             {/* Body Shots bin */}
             <MediaBin
@@ -3174,8 +3184,21 @@ function LtxSection({ shots, project, characterId, mediaVersion, busyGroup, onAd
 
 // ── Grok sidebar section ─────────────────────────────────────────────
 
+type GrokShotType = "body" | "head" | "full";
+
+function grokShotPrompt(type: GrokShotType, text: string): string {
+  const prompt = text.trim();
+  if (type === "full") {
+    return `${prompt}, the whole character in frame from head to feet, head and face fully visible, same character as the reference, nothing cut off`;
+  }
+  if (type === "body") {
+    return `${prompt}, body only from neck down, show full neck and shoulders, no head, no face, cut off at the neck, the head is a separate layer`;
+  }
+  return `${prompt}, head only from jawline up, no neck, no shoulders, no body, close-up head and face only, cut off cleanly at the jaw`;
+}
+
 function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, grokRefShotId, setGrokRefShotId, grokRefFile, setGrokRefFile, grokContinue, setGrokContinue, grokPrompt, setGrokPrompt, grokBusy, grokMsg, allShots, onCreate, project, characterId }: {
-  grokType: "body" | "head"; setGrokType: (v: "body" | "head") => void;
+  grokType: GrokShotType; setGrokType: (v: GrokShotType) => void;
   grokDuration: number; setGrokDuration: (v: number) => void;
   grokRefShotId: string; setGrokRefShotId: (v: string) => void;
   grokRefFile: File | null; setGrokRefFile: (v: File | null) => void;
@@ -3202,9 +3225,10 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
         <div className="flex flex-col gap-2 px-3 pb-3">
           <div className="flex gap-2">
             <select className="flex-1 rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
-              value={grokType} onChange={(e) => setGrokType(e.target.value as "body" | "head")}>
+              value={grokType} onChange={(e) => setGrokType(e.target.value as GrokShotType)}>
               <option value="body">Body</option>
               <option value="head">Head</option>
+              <option value="full">Full body</option>
             </select>
             <select className="rounded border border-studio-border bg-studio-raised px-1.5 py-1 text-[12px] text-neutral-200"
               value={grokDuration} onChange={(e) => setGrokDuration(Number(e.target.value))}>
@@ -3253,13 +3277,13 @@ function GrokSection({ grokType, setGrokType, grokDuration, setGrokDuration, gro
             </div>
           )}
           <input type="text" className="w-full rounded border border-studio-border bg-studio-raised px-2 py-1.5 text-[12px] text-neutral-200"
-            placeholder={grokContinue && grokRefShotId && !grokRefFile ? "what happens next…" : grokType === "body" ? "body prompt…" : "head prompt…"}
+            placeholder={grokContinue && grokRefShotId && !grokRefFile ? "what happens next…" : grokType === "body" ? "body prompt…" : grokType === "full" ? "full body prompt…" : "head prompt…"}
             value={grokPrompt} onChange={(e) => setGrokPrompt(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") onCreate(); }} />
           <button type="button"
             className="w-full rounded bg-studio-accent px-2 py-1.5 text-[12px] font-semibold text-black hover:bg-studio-accent-hover disabled:opacity-40"
             disabled={grokBusy || !grokPrompt.trim()} onClick={onCreate}>
-            {grokBusy ? "Creating…" : `Create ${grokType} shot`}
+            {grokBusy ? "Creating…" : `Create ${grokType === "full" ? "full body" : grokType} shot`}
           </button>
           {grokMsg && <p className={`text-[12px] font-medium ${/error|fail/i.test(grokMsg) ? "text-red-400" : "text-emerald-300"}`}>{grokMsg}</p>}
         </div>
