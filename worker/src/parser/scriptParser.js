@@ -94,7 +94,7 @@ const HOLD_KEYS = new Set(["over", "hold"]);
 const TRIM_KEYS = new Set(["trim_in", "trim_out"]);
 const AUDIO_KEYS = new Set(["file", "lines", "view", "at_time", "start", "trim_in", "trim_out"]);
 const DO_KEYS = new Set(["action", "for", "wait", "at_time", "start", "prop"]);
-const CLIP_KEYS = new Set(["at_time", "start", "trim_in", "trim_out", "x", "y", "scale", "z", "flip", "mark", "to", "over", "ease"]);
+const CLIP_KEYS = new Set(["at_time", "start", "trim_in", "trim_out", "x", "y", "scale", "z", "flip", "mark", "to", "over", "ease", "speed"]);
 const INSERT_KEYS = new Set(["image", "file", "src", "at_time", "start", "for", "over", "to", "z", "x", "y", "scale", "anchor"]);
 const BUILTIN_REST_ACTION = "rest";
 const PROP_PLACEHOLDER = "{prop}";
@@ -2317,7 +2317,7 @@ class ScriptParser {
     if (extra.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[Clip: ...] unknown key "${extra[0]}". Allowed: at_time/start, trim_in, trim_out, x, y, scale, z, flip, mark, to, over, ease.`
+        `[Clip: ...] unknown key "${extra[0]}". Allowed: at_time/start, trim_in, trim_out, x, y, scale, z, flip, mark, to, over, ease, speed.`
       );
     }
     const actionId = (positional && positional[0]) || "";
@@ -2351,7 +2351,15 @@ class ScriptParser {
     const window = this._audioWindow(kv, frames.length / clipFps, this.fps, token.lineNumber);
     const hasExplicitStart = kv.at_time !== undefined || kv.start !== undefined;
     const startFrame = this._eventStartFrame(kv, scene, token.lineNumber);
-    const endFrame = startFrame + window.durationFrames;
+    let speed = 1;
+    if (kv.speed !== undefined) {
+      speed = parseNumberValue(kv.speed, token.lineNumber, "speed");
+      if (!(speed >= 0.1 && speed <= 8)) {
+        throw new ScriptError(token.lineNumber, `Invalid speed "${kv.speed}" -- use a number from 0.1 to 8 (2 = twice as fast).`);
+      }
+    }
+    const playFrames = speed === 1 ? window.durationFrames : Math.max(1, framesFromSeconds(window.durationSec / speed, this.fps));
+    const endFrame = startFrame + playFrames;
 
     const config = this.characterLibrary.get(characterId) || {};
     let mark = null;
@@ -2393,16 +2401,16 @@ class ScriptParser {
       const overFrames =
         kv.over !== undefined
           ? framesFromSeconds(parseSecondsSpec(kv.over, token.lineNumber, "over"), this.fps)
-          : window.durationFrames;
+          : playFrames;
       if (overFrames <= 0) {
         throw new ScriptError(
           token.lineNumber,
           `Invalid over "${kv.over}" -- duration rounds to 0 frames at ${this.fps} fps.`
         );
       }
-      if (overFrames > window.durationFrames) {
+      if (overFrames > playFrames) {
         this.warnings.push(
-          `Line ${token.lineNumber}: [Clip: ...] over=${kv.over} is longer than the clip plays (${(window.durationFrames / this.fps).toFixed(2)}s), so the clip ends before it reaches ${kv.to}.`
+          `Line ${token.lineNumber}: [Clip: ...] over=${kv.over} is longer than the clip plays (${(playFrames / this.fps).toFixed(2)}s), so the clip ends before it reaches ${kv.to}.`
         );
       }
       const ease = parseEaseValue(kv.ease, token.lineNumber);
@@ -2423,8 +2431,8 @@ class ScriptParser {
       characterId,
       asset: frames[0],
       frames,
-      fps: clipFps,
-      trimIn: Math.round(window.inSec * 1000) / 1000,
+      fps: clipFps * speed,
+      trimIn: speed === 1 ? Math.round(window.inSec * 1000) / 1000 : Math.round((window.inSec / speed) * 1e6) / 1e6,
       startFrame,
       endFrame,
       z,
