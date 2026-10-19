@@ -241,7 +241,7 @@ the Insert Action **Insert still** button.
 [Insert: image=inserts/tongue_closeup.png at_time=942 to=952]
 ```
 
-### `[Clip: <Name> <action_id> at_time=<t> trim_in=<t> trim_out=<t>]`
+### `[Clip: <Name> <action_id> at_time=<t> trim_in=<t> trim_out=<t> to=<mark|x,y> over=<secs>s ease=linear|inout]`
 
 Plays a **baked Action Shot** (made in Action Shots â†’ *Use as Action Shot*,
 stored as `characters/<id>/actions/<action_id>/f_NNNN.png`) as a flipbook.
@@ -256,10 +256,18 @@ character's rig layer (a `[Cast:]` line or `[Audio:]` for them stays harmless â€
   `[Audio:]`. Playback rate is the Action Shot's own `fps`.
 * Position comes from the scene's mark (`mark=` to choose one, or `x=`, `y=`,
   `scale=`, `flip`, `z=`); the frame's bottom-centre sits on the mark.
+* `to=<mark>` or `to=<x,y>` makes the clip **travel** while the flipbook plays:
+  it starts at its normal position (`x=`/`y=` or its mark) and slides to the
+  target over `over=<secs>s` (default: the whole clip). `ease=linear` (default)
+  or `inout`. The size stays the same unless the target mark has its own
+  `scale`. `over=` / `ease=` only work together with `to=`. If `over=` is longer
+  than the clip plays, the clip ends first and a warning says so. `[Move:]` still
+  does not move clips; use `to=` on the `[Clip:]` line.
 
 ```text
 [Clip: Rodney grab_mic at_time=1s]
 [Clip: Rodney grab_mic at_time=4s trim_in=0.5s trim_out=2s]
+[Clip: Rodney side_profile_walking at_time=0s x=-200 to=centre over=4s]
 ```
 
 In Studio, drag an Action Shot from the **Action Shots** group in the assets
