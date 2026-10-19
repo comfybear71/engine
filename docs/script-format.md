@@ -241,7 +241,7 @@ the Insert Action **Insert still** button.
 [Insert: image=inserts/tongue_closeup.png at_time=942 to=952]
 ```
 
-### `[Clip: <Name> <action_id> at_time=<t> trim_in=<t> trim_out=<t> to=<mark|x,y> over=<secs>s ease=linear|inout]`
+### `[Clip: <Name> <action_id> at_time=<t> trim_in=<t> trim_out=<t> speed=<n> to=<mark|x,y> over=<secs>s ease=linear|inout]`
 
 Plays a **baked Action Shot** (made in Action Shots â†’ *Use as Action Shot*,
 stored as `characters/<id>/actions/<action_id>/f_NNNN.png`) as a flipbook.
@@ -254,6 +254,12 @@ character's rig layer (a `[Cast:]` line or `[Audio:]` for them stays harmless â€
   the clip starts at the shared cursor and advances the cursor by its length.
 * `trim_in=` / `trim_out=` pick a window of the baked frames, same grammar as
   `[Audio:]`. Playback rate is the Action Shot's own `fps`.
+* `speed=<n>` (0.1 to 8, default 1) plays the clip faster or slower: `speed=2`
+  is twice as fast and the block is half as long, `speed=0.5` is half speed and
+  twice as long. `trim_in=` / `trim_out=` stay in the Action Shot's own time.
+  `over=` for `to=` defaults to the sped-up length. Studio's drag-to-trim and
+  split handles on the lane assume 1x, so for a sped-up clip edit `trim_in=` /
+  `trim_out=` in the script text.
 * Position comes from the scene's mark (`mark=` to choose one, or `x=`, `y=`,
   `scale=`, `flip`, `z=`); the frame's bottom-centre sits on the mark.
 * `to=<mark>` or `to=<x,y>` makes the clip **travel** while the flipbook plays:

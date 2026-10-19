@@ -169,6 +169,52 @@ describe("[Clip:] baked Action Shot flipbook", () => {
     );
   });
 
+  test("speed= plays the clip faster and shortens the block", async () => {
+    const { sequenceFrameIndex } = await import("../../shared/placement.js");
+    const parsed = await parseScript([
+      "[Scene: Bar]",
+      "[Location: studio]",
+      "[Clip: Rodney grab_mic at_time=1s speed=2]",
+      "[Clip: Rodney grab_mic at_time=3s trim_in=0.5s trim_out=1s speed=2]",
+      "[Clip: Rodney grab_mic at_time=5s speed=0.5]",
+    ]);
+    assert.equal(parsed.validation.ok, true, parsed.validation.message);
+    const clips = parsed.timeline.scenes[0].layers.filter((layer) => layer.sequence);
+    const fast = clips[0];
+    assert.equal(fast.timing.start_frame, 24);
+    assert.equal(fast.timing.end_frame, 24 + FRAME_COUNT / 2);
+    const seq = { files: fast.sequence.frames, fps: fast.sequence.fps, trimIn: fast.sequence.trim_in };
+    const shown = [];
+    for (let local = 0; local < FRAME_COUNT / 2; local += 1) shown.push(sequenceFrameIndex(seq, local, 24));
+    assert.deepEqual(shown, [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]);
+
+    const trimmed = clips[1];
+    assert.equal(trimmed.timing.end_frame - trimmed.timing.start_frame, 6);
+    const tseq = { files: trimmed.sequence.frames, fps: trimmed.sequence.fps, trimIn: trimmed.sequence.trim_in };
+    assert.equal(sequenceFrameIndex(tseq, 0, 24), 12);
+    assert.equal(sequenceFrameIndex(tseq, 5, 24), 22);
+
+    const slow = clips[2];
+    assert.equal(slow.timing.end_frame - slow.timing.start_frame, FRAME_COUNT * 2);
+  });
+
+  test("speed= must be a sensible number", async () => {
+    await assert.rejects(
+      parseScript(["[Scene: Bar]", "[Location: studio]", "[Clip: Rodney grab_mic speed=0]"]),
+      /Invalid speed/
+    );
+  });
+
+  test("walk-on over= default follows the sped-up clip length", async () => {
+    const parsed = await parseScript([
+      "[Scene: Bar]",
+      "[Location: studio]",
+      "[Clip: Rodney grab_mic speed=2 x=0 to=centre]",
+    ]);
+    const clip = parsed.timeline.scenes[0].layers.find((layer) => layer.sequence);
+    assert.equal(clip.transform_keyframes[1].frame, FRAME_COUNT / 2);
+  });
+
   test("unknown Action Shot is a clear script error", async () => {
     await assert.rejects(
       parseScript(["[Scene: Bar]", "[Location: studio]", "[Clip: Rodney nope]"]),
