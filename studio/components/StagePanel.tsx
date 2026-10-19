@@ -19,7 +19,7 @@ import { findInsertAfterLine, insertLineAfter } from "@/lib/cameraTag";
 import type { NewSceneResult } from "@/lib/newScene";
 import { ASSET_DRAG_MIME, applyStagePlacement, nearestMark, parseAssetDrag, type AssetDrag } from "@/lib/stageAssets";
 import { fitClipScale } from "@/lib/clipFit";
-import { measureActionContentHeight } from "@/lib/clipMeasure";
+import { measureActionReach } from "@/lib/clipMeasure";
 import { applyPropEdit, scenePropStates, type PropScope } from "@/lib/stageProps";
 import { fileToImageBase64 } from "@/lib/assetEditor";
 import {
@@ -1261,12 +1261,12 @@ export default function StagePanel({
     event.dataTransfer.dropEffect = "copy";
   }
 
-  /** A dropped Action Shot is sized to fit when the scene would draw it taller than the picture (null: leave it as it is). */
+  /** A dropped Action Shot is sized so its highest frame stays inside the picture (null: it already fits, leave it as it is). */
   async function clipScaleFor(asset: AssetDrag, markScale: number | null | undefined): Promise<number | null> {
     if (asset.kind !== "clip" || !project) return null;
-    const contentHeightPx = await measureActionContentHeight(project, asset.characterId, asset.actionId);
-    if (contentHeightPx == null) return null;
-    return fitClipScale({ contentHeightPx, canvasHeight: canvas.height, markScale });
+    const reachPx = await measureActionReach(project, asset.characterId, asset.actionId);
+    if (reachPx == null) return null;
+    return fitClipScale({ reachPx, canvasHeight: canvas.height, markScale });
   }
 
   async function onPreviewDrop(event: React.DragEvent<HTMLDivElement>) {
