@@ -73,6 +73,23 @@ get no `scale=`, so existing scenes and hand-typed `[Clip:]` lines are unchanged
 **New scene** starts with nobody
 ticked in its cast.
 
+**Head follows body.** A head clip normally sits at one fixed spot, so on a
+walking body the head floats while the body rises and falls. Select a head clip
+and set **Head follows body** (0 to 150%; 0 = off). The worker measures how the
+body clip moves up and down (the highest visible row in a narrow strip around the
+neck, per frame, lightly smoothed, relative to the middle of the clip) and moves
+the head by that amount times the strength, in the Head Rig preview and in the
+bake, from the same numbers (`worker/python/compositor/body_motion.py`, saved
+beside the body clip as `body_motion.json`). Set the head's height at a moment
+when the body is in the middle of its bob; **Same for all heads** copies the
+amount to every head clip. It follows up and down only (not sideways), and the
+neck strip is measured at the head's horizontal position in steps of 5%. If the
+body clip has other things moving in that strip (an arm across the neck) the
+measurement can wobble; lower the amount or turn it off for that clip.
+`GET /api/projects/:name/characters/:characterId/shots/:shotId/body-motion?x=0.5`
+returns `{ "offsets": [...] }` (fractions of the body frame's height per source
+frame); head segments store `followBody`.
+
 **Dialogue audio in the Head Rig.** In a character's Head Rig, **Dialogue audio…**
 (left sidebar) does the same job without going to the Stage. Import the real
 recording (mp3/wav; nothing is generated), or pick one already imported for

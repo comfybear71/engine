@@ -1099,8 +1099,37 @@ function normalizeSegment(projectDir, characterId, raw, isHead) {
     seg.anchorX = Math.max(0, Math.min(1, Number(raw.anchorX) ?? 0.5));
     seg.anchorY = Math.max(0, Math.min(1, Number(raw.anchorY) ?? 0.15));
     seg.headScale = Math.max(0.1, Math.min(3.0, Number(raw.headScale) || 1.0));
+    const followBody = Number(raw.followBody);
+    if (Number.isFinite(followBody) && followBody > 0) seg.followBody = Math.min(1.5, Math.round(followBody * 1000) / 1000);
   }
   return seg;
+}
+
+/**
+ * How a body clip moves up and down (fractions of its frame height, around the
+ * clip's middle), measured around the neck at `centerX`. The Head Rig preview
+ * uses it to move a head that follows the body; the bake reads the same numbers.
+ */
+async function bodyMotion(projectDir, characterId, shotId, centerX, options = {}) {
+  const dir = shotDir(projectDir, characterId, shotId);
+  const info = readShotJson(dir);
+  if (!info) throw shotError(`Unknown shot "${shotId}"`, "ENOENT");
+  const cutDir = path.join(dir, "cut");
+  if (!fs.existsSync(cutDir)) throw shotError(`Shot "${shotId}" has no frames`);
+  const x = Number.isFinite(Number(centerX)) ? Math.max(0, Math.min(1, Number(centerX))) : 0.5;
+  const pythonBin = options.pythonBin || resolvePythonBin();
+  const { code, stdout, stderr } = await spawnCmd(
+    pythonBin,
+    ["-m", "compositor.body_motion", "--cut-dir", cutDir, "--center-x", String(x)],
+    { cwd: PYTHON_DIR }
+  );
+  const lastLine = stdout.trim().split("\n").pop() || "";
+  let parsed = null;
+  try { parsed = JSON.parse(lastLine); } catch {}
+  if (code !== 0 || !parsed || !Array.isArray(parsed.offsets)) {
+    throw shotError((stderr || "").trim().split("\n").pop() || "Could not measure the body's motion");
+  }
+  return { offsets: parsed.offsets };
 }
 
 /**
@@ -1128,7 +1157,7 @@ async function bakeTimeline(projectDir, characterId, opts = {}) {
   const specPath = path.join(outDir, "_bake_spec.json");
   fs.writeFileSync(specPath, JSON.stringify({
     bodySegments: bodySegments.map((s) => ({ cutDir: s.cutDir, inFrame: s.inFrame, outFrame: s.outFrame, start: s.start, speed: s.speed, reverse: s.reverse, bodyScale: s.bodyScale, bodyPivotX: s.bodyPivotX, bodyPivotY: s.bodyPivotY, bodyOffsetX: s.bodyOffsetX, bodyOffsetY: s.bodyOffsetY, bodyInFront: s.bodyInFront })),
-    headSegments: headSegments.map((s) => ({ cutDir: s.cutDir, inFrame: s.inFrame, outFrame: s.outFrame, start: s.start, speed: s.speed, reverse: s.reverse, anchorX: s.anchorX, anchorY: s.anchorY, headScale: s.headScale })),
+    headSegments: headSegments.map((s) => ({ cutDir: s.cutDir, inFrame: s.inFrame, outFrame: s.outFrame, start: s.start, speed: s.speed, reverse: s.reverse, anchorX: s.anchorX, anchorY: s.anchorY, headScale: s.headScale, followBody: s.followBody })),
     fps,
   }));
 
@@ -1191,6 +1220,7 @@ async function bakeTimeline(projectDir, characterId, opts = {}) {
 }
 
 module.exports = {
+  bodyMotion,
   listShots,
   getShot,
   makeShot,

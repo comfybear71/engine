@@ -118,6 +118,25 @@ describe("head rig segment speed and reverse", () => {
     );
   });
 
+  test("follow-body is kept on head clips only, dropped at zero, and rejected when out of range", () => {
+    saveHeadRig(projectDir, null, "rodney", {
+      key: "front",
+      bodySegments: [{ shotId: "a", inFrame: 1, outFrame: 10, start: 1, followBody: 1 }],
+      headSegments: [
+        { shotId: "h", inFrame: 1, outFrame: 5, start: 1, anchorX: 0.5, anchorY: 0.2, headScale: 1, followBody: 0.75 },
+        { shotId: "h", inFrame: 1, outFrame: 5, start: 6, anchorX: 0.5, anchorY: 0.2, headScale: 1, followBody: 0 },
+      ],
+    });
+    const rig = loadHeadRig(projectDir, null, "rodney").rigs.front;
+    assert.equal(rig.headSegments[0].followBody, 0.75);
+    assert.equal("followBody" in rig.headSegments[1], false);
+    assert.equal("followBody" in rig.bodySegments[0], false);
+    assert.throws(
+      () => saveHeadRig(projectDir, null, "rodney", { key: "front", headSegments: [{ shotId: "h", inFrame: 1, outFrame: 3, start: 1, anchorX: 0.5, anchorY: 0.2, headScale: 1, followBody: 4 }] }),
+      /followBody/
+    );
+  });
+
   test("audio lane pieces are saved apart from the head clips, without picture fields, and an empty lane is kept", () => {
     saveHeadRig(projectDir, null, "rodney", {
       key: "front",

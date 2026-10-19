@@ -39,6 +39,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .body_motion import offset_at, offsets_for
+
 
 # ── Compositing helpers (mirrors shot_combine.py) ────────────────────
 
@@ -212,6 +214,37 @@ def body_rect(
     )
 
 
+def follow_body_of(seg: dict | None) -> float:
+    """How much a head clip follows the body's up-and-down motion (0 = fixed, 1 = moves exactly with it)."""
+    try:
+        value = float((seg or {}).get("followBody") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if value != value or value <= 0:
+        return 0.0
+    return min(1.5, value)
+
+
+def head_follow_dy(head_seg: dict, body_seg: dict | None, frame: int, body_height: float) -> float:
+    """Pixels to move the head down (+) or up (-) at `frame` so it rides the body clip's motion."""
+    follow = follow_body_of(head_seg)
+    if follow <= 0 or body_seg is None:
+        return 0.0
+    offsets = offsets_for(body_seg["cutDir"], min(1.0, max(0.0, float(head_seg.get("anchorX", 0.5)))))
+    return follow * offset_at(offsets, source_frame_number(body_seg, frame)) * body_height
+
+
+def head_follow_reach(head_seg: dict, body_seg: dict | None, body_height: float) -> float:
+    """The most the head can move either way while following this body clip, in pixels."""
+    follow = follow_body_of(head_seg)
+    if follow <= 0 or body_seg is None:
+        return 0.0
+    offsets = offsets_for(body_seg["cutDir"], min(1.0, max(0.0, float(head_seg.get("anchorX", 0.5)))))
+    lo, hi = sorted((int(body_seg["inFrame"]), int(body_seg["outFrame"])))
+    span = [abs(offset_at(offsets, f)) for f in range(lo, hi + 1)]
+    return follow * (max(span) if span else 0.0) * body_height
+
+
 def first_available_frame(segments: list[dict]) -> np.ndarray | None:
     for seg in segments:
         p = source_frame_path(seg, int(seg["start"]))
@@ -257,12 +290,14 @@ def head_overshoot_padding(
                 continue
             frame_h, frame_w = head_img.shape[:2]
             bx, by, bw, bh = find_content_bbox(head_img)
+            # A head following the body can sit this far higher or lower on other frames.
+            reach = head_follow_reach(seg, active_body, b_h)
             # The whole frame is centred on the anchor, so the visible pixels
             # sit at their source offset from the frame centre, scaled.
             left = cx + (bx - frame_w / 2) * scale
             right = cx + (bx + bw - frame_w / 2) * scale
-            top = cy + (by - frame_h / 2) * scale
-            bottom = cy + (by + bh - frame_h / 2) * scale
+            top = cy + (by - frame_h / 2) * scale - reach
+            bottom = cy + (by + bh - frame_h / 2) * scale + reach
             pad_l = max(pad_l, -left)
             pad_r = max(pad_r, right - canvas_w)
             pad_t = max(pad_t, -top)
@@ -345,7 +380,7 @@ def run(spec_path: str, out_dir: str, fps: float = 24.0) -> dict:
                 # Head Rig preview draws, and stable while the head turns or
                 # the mouth opens (the visible-pixel box changes every frame).
                 cx = pad_l + int(b_left + float(head_seg.get("anchorX", 0.5)) * b_w)
-                cy = pad_t + int(b_top + float(head_seg.get("anchorY", 0.15)) * b_h)
+                cy = pad_t + int(b_top + float(head_seg.get("anchorY", 0.15)) * b_h + head_follow_dy(head_seg, body_seg, frame, b_h))
                 canvas = composite_over(canvas, head_img, cx, cy)
 
         if body_layer is not None and body_in_front:

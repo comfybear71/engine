@@ -269,3 +269,101 @@ def test_body_offset_is_clamped_and_defaults_to_none():
     assert bake.body_offset_of(None) == (0.0, 0.0)
     assert bake.body_offset_of({"bodyOffsetX": "nope", "bodyOffsetY": 9}) == (0.0, 1.0)
     assert bake.body_rect(100, 200, 1.0, (0.5, 1.0), (0.1, -0.05)) == pytest.approx((10, -10, 100, 200))
+
+
+# ── Head following the body's up-and-down motion ─────────────────────
+
+def _bobbing_body(frames: int, period: int = 24, amp: int = 8, w=100, h=200) -> list[np.ndarray]:
+    out = []
+    for i in range(frames):
+        top = 40 + int(round(amp * np.sin(2 * np.pi * i / period)))
+        img = np.zeros((h, w, 4), dtype=np.uint8)
+        img[top:, :, 0] = 200
+        img[top:, :, 3] = 255
+        out.append(img)
+    return out
+
+
+def _body_tops(frames: int, period: int = 24, amp: int = 8) -> list[int]:
+    return [40 + int(round(amp * np.sin(2 * np.pi * i / period))) for i in range(frames)]
+
+
+def _follow_spec(tmp_path: Path, body_cut: Path, head_cut: Path, frames: int, follow: float | None) -> Path:
+    head = {"cutDir": str(head_cut), "inFrame": 1, "outFrame": frames, "start": 1, "anchorX": 0.5, "anchorY": 0.5, "headScale": 1.0}
+    if follow is not None:
+        head["followBody"] = follow
+    spec = {
+        "fps": 24,
+        "bodySegments": [{"cutDir": str(body_cut), "inFrame": 1, "outFrame": frames, "start": 1}],
+        "headSegments": [head],
+    }
+    path = tmp_path / f"spec_{follow}.json"
+    path.write_text(json.dumps(spec))
+    return path
+
+
+def _head_tops(out: Path, frames: int) -> list[int]:
+    return [_red_box(out / "cut" / f"f_{i:04d}.png")[1] for i in range(1, frames + 1)]
+
+
+def test_body_offsets_are_centred_and_follow_the_motion(tmp_path):
+    from compositor import body_motion
+
+    cut = _write_shot(tmp_path, "body", _bobbing_body(48))
+    offsets = body_motion.offsets_for(cut, 0.5)
+    assert len(offsets) == 48
+    tops = _body_tops(48)
+    middle = float(np.median(tops))
+    for i in (0, 6, 12, 18, 30):
+        assert offsets[i] * 200 == pytest.approx(tops[i] - middle, abs=1.5)
+    assert abs(float(np.median(offsets))) < 0.01
+    # A second call reads the saved track instead of the pictures.
+    assert (cut.parent / "body_motion.json").exists()
+    body_motion._memo.clear()
+    assert body_motion.offsets_for(cut, 0.5) == offsets
+
+
+def test_head_follows_the_body_by_the_chosen_amount(tmp_path):
+    frames = 48
+    body_cut = _write_shot(tmp_path, "body", _bobbing_body(frames))
+    head_cut = _write_shot(tmp_path, "head", [_head(20, 20)] * frames)
+    tops = _body_tops(frames)
+
+    results = {}
+    for follow in (None, 1.0, 0.5):
+        out = tmp_path / f"out_{follow}"
+        bake.run(str(_follow_spec(tmp_path, body_cut, head_cut, frames, follow)), str(out))
+        results[follow] = _head_tops(out, frames)
+
+    # Not following: the head never moves.
+    assert len(set(results[None])) == 1
+    # Following fully: the head moves up and down exactly with the body.
+    swing = [h - t for h, t in zip(results[1.0], tops)]
+    assert max(swing) - min(swing) <= 3
+    assert max(results[1.0]) - min(results[1.0]) >= 12
+    # Half way: half the movement.
+    half = max(results[0.5]) - min(results[0.5])
+    full = max(results[1.0]) - min(results[1.0])
+    assert half == pytest.approx(full / 2, abs=3)
+
+
+def test_head_following_the_body_is_not_clipped_at_the_top(tmp_path):
+    frames = 48
+    body_cut = _write_shot(tmp_path, "body", _bobbing_body(frames))
+    head_cut = _write_shot(tmp_path, "head", [_head(20, 20)] * frames)
+    spec = json.loads(_follow_spec(tmp_path, body_cut, head_cut, frames, 1.0).read_text())
+    spec["headSegments"][0]["anchorY"] = 0.0
+    path = tmp_path / "spec_top.json"
+    path.write_text(json.dumps(spec))
+    out = tmp_path / "out_top"
+    bake.run(str(path), str(out))
+    for i in range(1, frames + 1):
+        frame = cv2.imread(str(out / "cut" / f"f_{i:04d}.png"), cv2.IMREAD_UNCHANGED)
+        mask = (frame[:, :, 2] > 200) & (frame[:, :, 0] < 50) & (frame[:, :, 3] > 200)
+        assert int(mask.sum()) == 20 * 30
+
+
+def test_neck_position_is_bucketed_in_five_percent_steps():
+    from compositor.body_motion import neck_percent
+
+    assert [neck_percent(x) for x in (0.0, 0.02, 0.03, 0.5, 0.514, 0.53, 0.525, 1.0, 2.0)] == [0, 0, 5, 50, 50, 55, 55, 100, 100]
