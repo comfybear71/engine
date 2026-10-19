@@ -2194,7 +2194,9 @@ input[type="range"].studio-zoom-slider::-moz-range-thumb {
   padding: 8px;
   background: #111;
   color: #ddd;
-  min-height: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .shots-topbar {
