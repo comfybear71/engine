@@ -62,10 +62,15 @@ The audio needs a transcript (`words.json`), so import it with transcription on.
 the video they came from, and a `[Clip:]` with no `scale=` uses the mark's
 scale, so on a fresh background (mark scale 1) a tall clip could come in as a
 giant. When you drop an Action Shot on the Stage preview or the Action Shots
-lane, Studio measures the character in the clip's frames and, only if the scene
-would draw it taller than the picture, writes a `scale=` that makes it 90% of
-the picture height. Clips that already fit get no `scale=`, so existing scenes
-and hand-typed `[Clip:]` lines are unchanged. **New scene** starts with nobody
+lane, Studio measures how high the character reaches above the bottom edge of
+the clip's frames (the edge that stands on the mark, so empty space under the
+boots counts), taking the highest of 24 frames spread over the whole clip so a
+hat that rises on some frames counts. Only if the scene would draw that taller
+than the picture, it writes a `scale=` that puts the highest point at 90% of the
+picture height. It is a sample of frames, not every frame, so check the Stage
+and adjust `scale=` if a few frames still touch the top. Clips that already fit
+get no `scale=`, so existing scenes and hand-typed `[Clip:]` lines are unchanged.
+**New scene** starts with nobody
 ticked in its cast.
 
 **Dialogue audio in the Head Rig.** In a character's Head Rig, **Dialogue audio…**
