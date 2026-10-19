@@ -94,7 +94,7 @@ const HOLD_KEYS = new Set(["over", "hold"]);
 const TRIM_KEYS = new Set(["trim_in", "trim_out"]);
 const AUDIO_KEYS = new Set(["file", "lines", "view", "at_time", "start", "trim_in", "trim_out"]);
 const DO_KEYS = new Set(["action", "for", "wait", "at_time", "start", "prop"]);
-const CLIP_KEYS = new Set(["at_time", "start", "trim_in", "trim_out", "x", "y", "scale", "z", "flip", "mark"]);
+const CLIP_KEYS = new Set(["at_time", "start", "trim_in", "trim_out", "x", "y", "scale", "z", "flip", "mark", "to", "over", "ease"]);
 const INSERT_KEYS = new Set(["image", "file", "src", "at_time", "start", "for", "over", "to", "z", "x", "y", "scale", "anchor"]);
 const BUILTIN_REST_ACTION = "rest";
 const PROP_PLACEHOLDER = "{prop}";
@@ -2317,7 +2317,7 @@ class ScriptParser {
     if (extra.length > 0) {
       throw new ScriptError(
         token.lineNumber,
-        `[Clip: ...] unknown key "${extra[0]}". Allowed: at_time/start, trim_in, trim_out, x, y, scale, z, flip, mark.`
+        `[Clip: ...] unknown key "${extra[0]}". Allowed: at_time/start, trim_in, trim_out, x, y, scale, z, flip, mark, to, over, ease.`
       );
     }
     const actionId = (positional && positional[0]) || "";
@@ -2375,6 +2375,45 @@ class ScriptParser {
     const flipX = kv.flip !== undefined ? kv.flip === "true" || kv.flip === "1" : mark && mark.flip_x ? !!mark.flip_x : !!config.default_flip_x;
     const z = kv.z !== undefined ? Math.round(parseNumberValue(kv.z, token.lineNumber, "z")) : config.z !== undefined ? config.z : 0;
 
+    let transformKeyframes = null;
+    if (kv.to !== undefined) {
+      const xy = parseXyPair(kv.to);
+      let toX;
+      let toY;
+      let toScale = scale;
+      if (xy) {
+        toX = xy.x;
+        toY = xy.y;
+      } else {
+        const target = this._resolveMark(scene, kv.to, token.lineNumber);
+        toX = target.x;
+        toY = target.y;
+        if (kv.scale === undefined && target.scale !== undefined) toScale = target.scale;
+      }
+      const overFrames =
+        kv.over !== undefined
+          ? framesFromSeconds(parseSecondsSpec(kv.over, token.lineNumber, "over"), this.fps)
+          : window.durationFrames;
+      if (overFrames <= 0) {
+        throw new ScriptError(
+          token.lineNumber,
+          `Invalid over "${kv.over}" -- duration rounds to 0 frames at ${this.fps} fps.`
+        );
+      }
+      if (overFrames > window.durationFrames) {
+        this.warnings.push(
+          `Line ${token.lineNumber}: [Clip: ...] over=${kv.over} is longer than the clip plays (${(window.durationFrames / this.fps).toFixed(2)}s), so the clip ends before it reaches ${kv.to}.`
+        );
+      }
+      const ease = parseEaseValue(kv.ease, token.lineNumber);
+      transformKeyframes = [
+        { frame: 0, x, y, scale, ease },
+        { frame: overFrames, x: toX, y: toY, scale: toScale, ease },
+      ];
+    } else if (kv.over !== undefined || kv.ease !== undefined) {
+      throw new ScriptError(token.lineNumber, `[Clip: ...] over= / ease= only work together with to=<mark or x,y>.`);
+    }
+
     const baseId = `clip_${characterId}_${slugInsertId(String(actionId))}`;
     let id = baseId;
     let n = 2;
@@ -2390,6 +2429,7 @@ class ScriptParser {
       endFrame,
       z,
       transform: { x, y, scale, anchor: "bottom-center", flip_x: flipX },
+      transformKeyframes,
       lineNumber: token.lineNumber,
     });
     scene.clipCharacters.add(characterId);
@@ -3316,7 +3356,7 @@ class ScriptParser {
   }
 
   _buildClipLayerJson(clip) {
-    return {
+    const layer = {
       id: clip.id,
       character_id: clip.characterId,
       asset: clip.asset,
@@ -3325,6 +3365,10 @@ class ScriptParser {
       timing: { start_frame: clip.startFrame, end_frame: clip.endFrame },
       sequence: { frames: clip.frames, fps: clip.fps, trim_in: clip.trimIn },
     };
+    if (clip.transformKeyframes && clip.transformKeyframes.length > 0) {
+      layer.transform_keyframes = clip.transformKeyframes;
+    }
+    return layer;
   }
 
   _buildPropLayerJson(state, segment) {

@@ -118,6 +118,57 @@ describe("[Clip:] baked Action Shot flipbook", () => {
     assert.notEqual(clips[0].id, clips[1].id);
   });
 
+  test("to= / over= walk the clip from x to a mark with transform keyframes", async () => {
+    const parsed = await parseScript([
+      "[Scene: Bar]",
+      "[Location: studio]",
+      "[Cast: Rodney]",
+      "[Clip: Rodney grab_mic at_time=0s x=-200 to=centre over=1s]",
+    ]);
+    assert.equal(parsed.validation.ok, true, parsed.validation.message);
+    const clip = parsed.timeline.scenes[0].layers.find((layer) => layer.sequence);
+    assert.equal(clip.transform.x, -200);
+    assert.equal(clip.transform.y, 1000);
+    assert.deepEqual(clip.transform_keyframes, [
+      { frame: 0, x: -200, y: 1000, scale: 0.5, ease: "linear" },
+      { frame: 24, x: 960, y: 1000, scale: 0.5, ease: "linear" },
+    ]);
+  });
+
+  test("to= accepts x,y, defaults over to the clip length and honours ease", async () => {
+    const parsed = await parseScript([
+      "[Scene: Bar]",
+      "[Location: studio]",
+      "[Cast: Rodney]",
+      "[Clip: Rodney grab_mic x=100 y=900 scale=0.4 to=500,800 ease=inout]",
+    ]);
+    assert.equal(parsed.validation.ok, true, parsed.validation.message);
+    const clip = parsed.timeline.scenes[0].layers.find((layer) => layer.sequence);
+    assert.deepEqual(clip.transform_keyframes, [
+      { frame: 0, x: 100, y: 900, scale: 0.4, ease: "inout" },
+      { frame: FRAME_COUNT, x: 500, y: 800, scale: 0.4, ease: "inout" },
+    ]);
+  });
+
+  test("clips without to= carry no transform keyframes", async () => {
+    const parsed = await parseScript(["[Scene: Bar]", "[Location: studio]", "[Clip: Rodney grab_mic]"]);
+    const clip = parsed.timeline.scenes[0].layers.find((layer) => layer.sequence);
+    assert.equal(clip.transform_keyframes, undefined);
+  });
+
+  test("over= longer than the clip warns; over= without to= is an error", async () => {
+    const parsed = await parseScript([
+      "[Scene: Bar]",
+      "[Location: studio]",
+      "[Clip: Rodney grab_mic to=centre over=4s]",
+    ]);
+    assert.ok(parsed.warnings.some((w) => /longer than the clip plays/.test(w)), JSON.stringify(parsed.warnings));
+    await assert.rejects(
+      parseScript(["[Scene: Bar]", "[Location: studio]", "[Clip: Rodney grab_mic over=2s]"]),
+      /only work together with to=/
+    );
+  });
+
   test("unknown Action Shot is a clear script error", async () => {
     await assert.rejects(
       parseScript(["[Scene: Bar]", "[Location: studio]", "[Clip: Rodney nope]"]),

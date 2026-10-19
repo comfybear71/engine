@@ -11,7 +11,7 @@ from compositor.asset_cache import AssetCache
 from compositor.compositor import compose_frame
 from compositor.preview_graph import dump_preview_graph, evaluate_draw_ops
 from compositor.sequence import FrameSequence, sequence_frame_index
-from compositor.timeline_loader import Background, Canvas, Layer, Scene, Timeline, Transform
+from compositor.timeline_loader import Background, Canvas, Layer, Scene, Timeline, Transform, TransformKeyframe
 
 from .test_preview_graph import _round_cmd, js_evaluate
 
@@ -87,3 +87,48 @@ def test_draw_ops_match_js_for_sequence_layers(tmp_path):
         ]
     inside = evaluate_draw_ops(timeline, 4)["commands"][1]
     assert inside["rel"] == "f_0004.png"
+
+
+def test_flipbook_layer_travels_with_transform_keyframes(tmp_path):
+    """[Clip: ... x=-20 to=centre over=...] emits keyframes on the flipbook layer."""
+
+    timeline = _timeline(tmp_path)
+    layer = timeline.scenes[0].layers[0]
+    layer = Layer(
+        id=layer.id,
+        asset=layer.asset,
+        z=layer.z,
+        transform=Transform(x=-20, y=30, scale=1.0, anchor="bottom-center"),
+        start_frame=layer.start_frame,
+        end_frame=layer.end_frame,
+        sequence=layer.sequence,
+        transform_keyframes=[
+            TransformKeyframe(frame=0, x=-20, y=30, scale=1.0),
+            TransformKeyframe(frame=12, x=20, y=30, scale=1.0),
+        ],
+    )
+    timeline = Timeline(
+        series=timeline.series,
+        episode=timeline.episode,
+        fps=timeline.fps,
+        canvas=timeline.canvas,
+        scenes=[Scene(id="s1", total_frames=24, background=timeline.scenes[0].background, layers=[layer])],
+        project_dir=tmp_path,
+    )
+
+    def red_columns(frame_index):
+        drawn = compose_frame(timeline, frame_index)
+        return np.where((drawn[:, :, 2] > 30).any(axis=0))[0]
+
+    assert red_columns(layer.start_frame).size == 0
+    mid = red_columns(layer.start_frame + 6)
+    assert mid.size > 0 and mid.max() < 20
+    end = red_columns(layer.start_frame + 12)
+    assert end.min() == 16 and end.max() == 23
+
+    graph = dump_preview_graph(timeline)
+    frames = [4, 6, 10, 16, 19]
+    js_frames = js_evaluate(graph, frames)
+    for index, frame in enumerate(frames):
+        py = evaluate_draw_ops(timeline, frame)
+        assert [_round_cmd(c) for c in js_frames[index]["commands"]] == [_round_cmd(c) for c in py["commands"]]
