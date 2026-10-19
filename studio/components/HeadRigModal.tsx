@@ -1,7 +1,8 @@
 "use client";
 
 import React, { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { WORKER_URL, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
+import { WORKER_URL, loadBodyMotion, redoTalkingHeadClip, resumeTalkingHead, stopTalkingHead, undoTalkingHeadRedo, workerFetch } from "@/lib/worker";
+import { clampFollow, followDy, followKey, neckPosition } from "@/lib/headFollow";
 import { groupTalkShots, orderLtxChains, placeTalkWindows, placeTalkWindowsAtAudio, type TalkGroup, type TalkMeta, type TalkShot } from "@/lib/talkingHead";
 import { clipDetailsText, promptSaysMouthClosed } from "@/lib/clipDetails";
 import DialogueAudioDialog from "@/components/DialogueAudioDialog";
@@ -89,6 +90,7 @@ interface HeadSegment extends Segment {
   anchorX: number;
   anchorY: number;
   headScale: number;
+  followBody?: number; // head clips only: 0/absent = fixed; 1 = moves up and down exactly with the body
 }
 
 type StoredSegment = Omit<Segment, "id">;
@@ -420,6 +422,28 @@ export default function HeadRigModal({
     img.onerror = () => { /* prevent infinite retry — frame image missing */ };
     img.src = shotMediaUrl(project, characterId, shotId, `cut/f_${pad}.png`, v);
     return null;
+  }
+
+  // How each body clip moves up and down (measured by the worker, same numbers as the bake),
+  // for head clips set to follow the body. Keyed by body clip and neck position.
+  const bodyMotionRef = useRef<Map<string, number[] | "loading" | "failed">>(new Map());
+  /** Pixels the head sits lower (+) or higher (-) than its anchor at `frame` because it follows the body. */
+  function headFollowShift(head: HeadSegment, frame: number, bodyHeight: number): number {
+    const follow = clampFollow(head.followBody);
+    if (follow <= 0) return 0;
+    const body = activeSegmentAt(segmentsRef.current.body, frame);
+    if (!body) return 0;
+    const key = followKey(body.shotId, head.anchorX);
+    const known = bodyMotionRef.current.get(key);
+    if (known === undefined) {
+      bodyMotionRef.current.set(key, "loading");
+      loadBodyMotion(project, characterId, body.shotId, neckPosition(head.anchorX))
+        .then((offsets) => bodyMotionRef.current.set(key, offsets))
+        .catch(() => bodyMotionRef.current.set(key, "failed"))
+        .finally(() => setRedrawTick((t) => t + 1));
+      return 0;
+    }
+    return Array.isArray(known) ? followDy(known, sourceFrameOf(body, frame), follow, bodyHeight) : 0;
   }
 
   // Preload frame images for all segments so playback doesn't blink
@@ -857,7 +881,8 @@ export default function HeadRigModal({
           const hw = dims.w * head.headScale * scale;
           const hh = dims.h * head.headScale * scale;
           const hx = bx + head.anchorX * bw - hw / 2;
-          const hy = by + head.anchorY * bh - hh / 2;
+          const followDyPx = headFollowShift(head, frame, bh);
+          const hy = by + head.anchorY * bh - hh / 2 + followDyPx;
           // Draw twice -- keyed PNGs can have semi-transparent pixels from
           // green-screen removal; a second pass makes them fully opaque.
           ctx.drawImage(img, hx, hy, hw, hh);
@@ -874,7 +899,7 @@ export default function HeadRigModal({
           // Visible-head box (what is compared with the standard); the whole
           // source frame is only the fallback until it has been measured.
           const box = geo
-            ? { x: bx + geo.rect.x * scale, y: by + geo.rect.y * scale, w: geo.rect.w * scale, h: geo.rect.h * scale }
+            ? { x: bx + geo.rect.x * scale, y: by + geo.rect.y * scale + followDyPx, w: geo.rect.w * scale, h: geo.rect.h * scale }
             : { x: hx, y: hy, w: hw, h: hh };
 
           let matched = false;
@@ -1183,7 +1208,7 @@ export default function HeadRigModal({
         const hw = geo ? geo.rect.w * scale : headDimsNow.w * head.headScale * scale;
         const hh = geo ? geo.rect.h * scale : headDimsNow.h * head.headScale * scale;
         const hx = geo ? bx + geo.rect.x * scale : bx + head.anchorX * bw - hw / 2;
-        const hy = geo ? by + geo.rect.y * scale : by + head.anchorY * bh - hh / 2;
+        const hy = (geo ? by + geo.rect.y * scale : by + head.anchorY * bh - hh / 2) + headFollowShift(head, scrubFrame, bh);
         onHead = mx >= hx - 16 && mx <= hx + hw + 16 && my >= hy - 16 && my <= hy + hh + 16;
       }
       if (!onHead) {
@@ -1230,6 +1255,7 @@ export default function HeadRigModal({
         hx = bx + head.anchorX * bw - hw / 2;
         hy = by + head.anchorY * bh - hh / 2;
       }
+      hy += headFollowShift(head, scrubFrame, bh);
       const corners = [[hx, hy], [hx + hw, hy], [hx, hy + hh], [hx + hw, hy + hh]];
       for (const [cx, cy] of corners) {
         if (Math.abs(mx - cx) < 14 && Math.abs(my - cy) < 14) {
@@ -1280,6 +1306,20 @@ export default function HeadRigModal({
 
   function updateHeadSegment(id: string, patch: Partial<HeadSegment>) {
     setHeadSegments((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }
+
+  /** How much a head clip follows the body's up-and-down motion; zero removes it. */
+  function setHeadFollow(id: string, value: number, all = false) {
+    const next = clampFollow(value);
+    setHeadSegments((prev) =>
+      prev.map((s) => {
+        if (!all && s.id !== id) return s;
+        const { followBody: _follow, ...rest } = s;
+        void _follow;
+        return next > 0 ? { ...rest, followBody: next } : rest;
+      })
+    );
+    setSaved(false);
   }
 
   // ── Head standard actions ──
@@ -2593,6 +2633,34 @@ export default function HeadRigModal({
                 />
                 Ground line
               </label>
+            </div>
+            <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-follow-bar">
+              <span className="text-studio-muted">Head follows body</span>
+              <input
+                type="range"
+                data-testid="head-follow-slider"
+                min={0}
+                max={150}
+                step={5}
+                disabled={!editingHead}
+                value={Math.round(clampFollow(editingHead?.followBody) * 100)}
+                onChange={(e) => editingHead && setHeadFollow(editingHead.id, Number(e.target.value) / 100)}
+                className="w-40"
+                title="Make this head clip rise and fall with the body as it walks. 0 = the head stays put. 100 = it moves exactly as much as the body. Set the head's height first, at a moment when the body is in the middle of its bob."
+              />
+              <span className="w-12 text-right font-mono text-neutral-300" data-testid="head-follow-value">
+                {clampFollow(editingHead?.followBody) > 0 ? `${Math.round(clampFollow(editingHead?.followBody) * 100)}%` : "Off"}
+              </span>
+              <button
+                type="button"
+                data-testid="head-follow-all"
+                className="rounded bg-studio-raised px-2 py-0.5 text-neutral-200 hover:text-white disabled:opacity-40"
+                disabled={!editingHead || headSegments.length < 2}
+                onClick={() => editingHead && setHeadFollow(editingHead.id, clampFollow(editingHead.followBody), true)}
+                title="Give every head clip on the timeline this follow amount"
+              >
+                Same for all heads
+              </button>
             </div>
             <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-2 text-[12px]" data-testid="head-standard-bar">
               <span

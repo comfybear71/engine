@@ -698,6 +698,16 @@ export async function loadClipFrames(project: string, characterId: string, actio
   return res.json() as Promise<{ fps: number | null; frames: string[] }>;
 }
 
+/** How a body clip moves up and down (fractions of its frame height, around its middle), measured at the neck position `centerX`. */
+export async function loadBodyMotion(project: string, characterId: string, shotId: string, centerX: number): Promise<number[]> {
+  const res = await workerFetch(
+    `/api/projects/${encodeURIComponent(project)}/characters/${encodeURIComponent(characterId)}/shots/${encodeURIComponent(shotId)}/body-motion?x=${encodeURIComponent(String(centerX))}`
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  const data = (await res.json()) as { offsets?: number[] };
+  return Array.isArray(data.offsets) ? data.offsets : [];
+}
+
 export async function loadActionFrames(project: string, characterId: string, actionId: string): Promise<ActionFrameDetail> {
   const res = await workerFetch(
     `/api/projects/${encodeURIComponent(project)}/actions/${encodeURIComponent(characterId)}/${encodeURIComponent(actionId)}/frames`

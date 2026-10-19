@@ -151,6 +151,7 @@ const {
   combineShots,
   resizeHead,
   bakeTimeline,
+  bodyMotion,
 } = require("./shots");
 const {
   planTalkingHead,
@@ -1297,6 +1298,16 @@ function createApp(options = {}) {
     if (!projectDir) return;
     try {
       serveShotMedia(projectDir, req.params.characterId, req, res);
+    } catch (err) {
+      sendFactoryError(res, err);
+    }
+  });
+
+  app.get("/api/projects/:name/characters/:characterId/shots/:shotId/body-motion", async (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    try {
+      res.json(await bodyMotion(projectDir, req.params.characterId, req.params.shotId, req.query.x, { pythonBin: options.pythonBin }));
     } catch (err) {
       sendFactoryError(res, err);
     }

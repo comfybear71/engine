@@ -298,6 +298,11 @@ function normalizeStoredSegment(raw, isHead) {
     seg.anchorX = anchorX;
     seg.anchorY = anchorY;
     seg.headScale = headScale;
+    if (raw.followBody != null) {
+      const followBody = Number(raw.followBody);
+      if (!Number.isFinite(followBody) || followBody < 0 || followBody > 1.5) throw localError("segment.followBody must be 0-1.5");
+      if (followBody > 1e-6) seg.followBody = Math.round(followBody * 1000) / 1000;
+    }
   }
   return seg;
 }
