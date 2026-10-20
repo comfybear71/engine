@@ -1,6 +1,6 @@
 # Blender in our pipeline (plan and notes)
 
-Status: planning. Nothing here has been built or tested yet. Update as we
+Status: first smoke tests done (see Experiments). Update as we
 learn, and log results in [lessons-learned.md](lessons-learned.md).
 
 ## Why
@@ -34,6 +34,29 @@ Reasons for caution:
 
 Working guess: AI can build the blockout and the camera move, and you steer
 by looking at test renders. Do not expect it to replace learning a few basics.
+
+## Version
+
+Use **Blender 5.2.2 LTS** (Long-Term Support, September 2026). A 5.3 beta
+exists but is not a stable base for scripts. Scripts in `tools/blender/` are
+tested on 5.2.2 only. 4.5 LTS is the fallback.
+
+## Two ways to work
+
+1. **Scripts from the assistant** (done first). The assistant writes a
+   script, runs it headless in the same Blender version, looks at the render,
+   fixes it, then the user runs it on their PC. Scripts live in
+   `tools/blender/`.
+2. **Live Blender MCP on the user's PC** (not tried yet). From others
+   (YouTube, "Cursor AI + Blender MCP Tutorial", MrWonderHow, May 2026): the
+   community add-on `github.com/ahujasid/blender-mcp` is installed in Blender,
+   an MCP server entry is added to Cursor's `mcp.json`, and Python plus the
+   `uv` package manager are needed. The author asks for a scene in plain
+   English, then reports problems in plain words and the AI fixes them. His
+   first results had glassy water, a fast animation and thick foam, and took
+   several rounds. The add-on lets the AI run code inside Blender: save work
+   first, use the original repository only, read its instructions.
+   The video mentions an official Blender MCP tutorial too (not checked).
 
 ## Staged plan
 
@@ -69,4 +92,5 @@ by looking at test renders. Do not expect it to replace learning a few basics.
 
 | Date | Experiment | Result | Next |
 |---|---|---|---|
-| | | | |
+| 2026-10-20 | `smoke_room.py` on Blender 5.2.2 LTS (Linux, headless, Workbench engine) | Confirmed: rendered a box room still in about 4 s. Framing and lighting were rough. | Run on the user's PC. |
+| 2026-10-20 | `house_flythrough.py`: three rooms, camera through two doorways, 72 frames | Confirmed (assistant's machine): 72 frames rendered in about 7 s. Contact sheet shows bedroom, doorway, hall, living room. Colours were washed out until the view transform was set to Standard. Outlines are faint. Flat blocks only. | Run on the user's PC. Try a stronger outline and a toon look. |

@@ -19,6 +19,18 @@ Copy this block to the top of the Lessons section:
 
 ## Lessons
 
+### 2026-10-20  Blender default colour look washes out flat colours
+- Area: Blender
+- Status: Confirmed (compared two renders of the same scene)
+- What happened: a flat-colour render came out pale and low contrast.
+- What to do next time: set the scene's view transform to `Standard` for cartoon colours.
+- Evidence: `tools/blender/house_flythrough.py`.
+
+### 2026-10-20  Blender 5.x scripts: avoid the old action curve API
+- Area: Blender
+- Status: Diagnosed (I left out a loop that used `action.fcurves`, which I believe changed in 5.x; not tested on 5.2.2)
+- What to do next time: use `keyframe_insert` and let Blender's default interpolation apply. Test any animation-curve code on the installed version first.
+
 ### 2026-10-20  Camera tags run in file order, each from the previous pose
 - Area: camera
 - Status: Diagnosed (explained from how `[Camera:]` is processed, user then reordered the script; the reordered result was not re-checked by us)
@@ -61,6 +73,7 @@ Each one should become a lesson once answered.
 - Can flipbook clips hold each drawing for 2 frames ("on twos")?
 - Does a black start-image backdrop key cleanly in our head keyer?
 - Can our LTX setup take a video as a motion guide?
+- Does the live Blender MCP route work smoothly with Blender 5.2.2 on the user's PC?
 - Which colours and lighting read best on each of our backgrounds? (Needs a test sheet.)
 - What keeps a character from jumping when it turns or anchors between clips? (Needs side-by-side tests.)
 
