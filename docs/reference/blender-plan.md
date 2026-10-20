@@ -57,6 +57,12 @@ tested on 5.2.2 only. 4.5 LTS is the fallback.
    several rounds. The add-on lets the AI run code inside Blender: save work
    first, use the original repository only, read its instructions.
    The video mentions an official Blender MCP tutorial too (not checked).
+   Update 2026-10-20, from the project README (read, not run): the package was
+   renamed `mcp-for-blender` (old `uvx blender-mcp` still works), it needs Blender
+   3.0 or newer, it exposes tools to run Python, look at the viewport, fetch
+   Poly Haven/Sketchfab assets and generate 3D models, usage statistics are on by
+   default (set `DISABLE_TELEMETRY=true`), and it can only reach Blender on the
+   machine where it runs, so a cloud agent cannot use it. See pc-control-options.md.
 
 ## Staged plan
 
@@ -104,3 +110,4 @@ tested on 5.2.2 only. 4.5 LTS is the fallback.
 | 2026-10-20 | Cutaway used as an Engine background (assistant's machine): 15.5 s room-to-room camera tour, sources of 1920, 3840 and 7680 wide | Confirmed: the Engine rendered the tour with no characters and no code changes. 1920 source soft, 3840 crisp to about 3x, 7680 slightly sharper at 4x. Render times 14 s, 63 s, 189 s. Outlines were far too thick at 7680 until the width scaling was fixed. See lessons-learned.md. | User runs the tour on the PC. Test 2: no-outline warm-glow room. |
 | 2026-10-20 | `glow_room.py`: one room with real lights, no outlines, bloom and vignette (evening, day, outlined hybrid) | Confirmed by looking (assistant's machine). Close to both favourite references. Cycles takes 1.5 to 2 min a still at 1280x720. See lessons-learned.md. | User runs it. Test 3: AI restyle of one render (needs permission). |
 | 2026-10-20 | Test 3: Grok image edit of the glow rooms (user's PC, about $0.07 each) | Confirmed: layout and glow kept, painted look added; windows got an invented view and the blown-out lamp shades were fixed. See lessons-learned.md. | Restyle a second room and check style match and zoom sharpness. |
+| 2026-10-20 | `capability_lab.py`: ten facets in one run (assistant's machine) | Confirmed by looking: PBR materials, Geometry Nodes scatter, 3D text, rigid body, hair, depth of field, Eevee work. Boolean cuts, brick texture and the armature test need work. See blender-capabilities.md. | Run on the PC; fix the three weak tests; add more facets. |
