@@ -35,6 +35,7 @@ export default function ScriptPanel({
   onSaved,
   onOpenScript,
   onCreateScript,
+  onDeleteScript,
 }: {
   project: string | null;
   script: string;
@@ -46,6 +47,7 @@ export default function ScriptPanel({
   onSaved: () => void;
   onOpenScript?: (name: string) => void;
   onCreateScript?: (name: string) => Promise<void> | void;
+  onDeleteScript?: (name: string) => Promise<void> | void;
 }) {
   const [text, setText] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -263,6 +265,13 @@ export default function ScriptPanel({
           if (!onCreateScript) return;
           await onCreateScript(name);
         }}
+        onDelete={
+          onDeleteScript
+            ? async (name) => {
+                await onDeleteScript(name);
+              }
+            : undefined
+        }
       />
       {!script ? (
         <div className="flex flex-1 items-center justify-center text-sm text-studio-muted">

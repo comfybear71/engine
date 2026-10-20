@@ -528,6 +528,25 @@ describe("studio worker API", () => {
       body: JSON.stringify({ name: "../secret.txt" }),
     });
     assert.equal(unsafe.status, 400);
+
+    const post = (name) =>
+      fetch(`${ctx.url}/api/projects/project/scripts/trash`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+    const trashed = await post("script_walk.txt");
+    const trashedBody = await trashed.json();
+    assert.equal(trashed.status, 200, JSON.stringify(trashedBody));
+    assert.ok(!trashedBody.scripts.includes("script_walk.txt"));
+    assert.ok(!fs.existsSync(path.join(fixture.projectDir, "script_walk.txt")));
+    assert.ok(fs.existsSync(path.join(fixture.projectDir, trashedBody.trashedTo)));
+    assert.equal((await post("script_walk.txt")).status, 404);
+    assert.equal((await post("../secret.txt")).status, 400);
+    assert.equal((await post("script_mcd.txt")).status, 200);
+    const lastOne = await post("script.txt");
+    assert.equal(lastOne.status, 409);
+    assert.ok(fs.existsSync(path.join(fixture.projectDir, "script.txt")));
   });
 
   test("PUT /script then GET /script and GET /lanes reparse that exact file", async () => {

@@ -9,12 +9,14 @@ export default function ScriptFileList({
   disabled,
   onOpen,
   onCreate,
+  onDelete,
 }: {
   scripts: string[];
   selected: string;
   disabled?: boolean;
   onOpen: (name: string) => void;
   onCreate: (name: string) => Promise<void> | void;
+  onDelete?: (name: string) => Promise<void> | void;
 }) {
   const groups = useMemo(() => groupScripts(scripts), [scripts]);
   const [testsOpen, setTestsOpen] = useState(false);
@@ -23,6 +25,21 @@ export default function ScriptFileList({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const suggested = nextNewScriptName(scripts);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function requestDelete(name: string) {
+    if (!onDelete) return;
+    const ok = window.confirm(
+      `Delete ${name}?\n\nIt is moved to the _trash/scripts folder inside this project, not erased.`
+    );
+    if (!ok) return;
+    setDeleteError(null);
+    try {
+      await onDelete(name);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Could not delete script");
+    }
+  }
 
   function startNew() {
     setCreating(true);
@@ -105,10 +122,15 @@ export default function ScriptFileList({
           </div>
         </form>
       ) : null}
+      {deleteError ? (
+        <p className="border-b border-studio-border px-2 py-1 text-[11px] text-amber-300" data-testid="script-delete-error">
+          {deleteError}
+        </p>
+      ) : null}
       <div className="min-h-0 flex-1 overflow-auto px-1 py-1">
         <ul className="space-y-0.5">
           {groups.pinned.map((name) => (
-            <ScriptRow key={name} name={name} selected={name === selected} onOpen={onOpen} disabled={disabled} />
+            <ScriptRow key={name} name={name} selected={name === selected} onOpen={onOpen} onDelete={onDelete ? requestDelete : undefined} disabled={disabled} />
           ))}
         </ul>
         {groups.tests.length ? (
@@ -125,7 +147,7 @@ export default function ScriptFileList({
             {testsOpen ? (
               <ul className="space-y-0.5" data-testid="script-tests">
                 {groups.tests.map((name) => (
-                  <ScriptRow key={name} name={name} selected={name === selected} onOpen={onOpen} disabled={disabled} />
+                  <ScriptRow key={name} name={name} selected={name === selected} onOpen={onOpen} onDelete={onDelete ? requestDelete : undefined} disabled={disabled} />
                 ))}
               </ul>
             ) : null}
@@ -141,26 +163,42 @@ function ScriptRow({
   selected,
   disabled,
   onOpen,
+  onDelete,
 }: {
   name: string;
   selected: boolean;
   disabled?: boolean;
   onOpen: (name: string) => void;
+  onDelete?: (name: string) => void;
 }) {
   return (
-    <li>
+    <li className="group flex items-center">
       <button
         type="button"
         data-testid="script-file"
         data-name={name}
         onClick={() => onOpen(name)}
         disabled={disabled}
-        className={`w-full truncate rounded-md px-2 py-1 text-left font-mono text-[11px] ${
+        className={`min-w-0 flex-1 truncate rounded-md px-2 py-1 text-left font-mono text-[11px] ${
           selected ? "bg-studio-accent/20 text-white" : "text-neutral-300 hover:bg-studio-raised hover:text-white"
         }`}
       >
         {name}
       </button>
+      {onDelete ? (
+        <button
+          type="button"
+          data-testid="script-delete"
+          data-name={name}
+          title={`Delete ${name}`}
+          aria-label={`Delete ${name}`}
+          onClick={() => onDelete(name)}
+          disabled={disabled}
+          className="ml-0.5 shrink-0 rounded px-1.5 py-0.5 text-[11px] text-studio-muted hover:bg-red-500/20 hover:text-red-300 disabled:opacity-40"
+        >
+          ✕
+        </button>
+      ) : null}
     </li>
   );
 }

@@ -77,6 +77,41 @@ function createScriptFile(projectDir, requested) {
   return name;
 }
 
+const SCRIPT_TRASH_DIR = path.join(TRASH_DIR_NAME, "scripts");
+
+/**
+ * Moves one script*.txt into <project>/_trash/scripts/<timestamp>__<name>.
+ * Never a hard delete, and never the project's last script (the editor needs
+ * one open). Its .history snapshots stay where they are.
+ */
+function trashScriptFile(projectDir, requested) {
+  const name = typeof requested === "string" && isSafeScriptName(requested) ? requested : null;
+  if (!name) {
+    const err = new Error("Not a script file name");
+    err.code = "INVALID_SCRIPT";
+    throw err;
+  }
+  const existing = listScriptFiles(projectDir);
+  if (!existing.includes(name)) {
+    const err = new Error(`${name} does not exist`);
+    err.code = "SCRIPT_MISSING";
+    throw err;
+  }
+  if (existing.length <= 1) {
+    const err = new Error("This is the only script in the project. Create another one first.");
+    err.code = "LAST_SCRIPT";
+    throw err;
+  }
+  const destDir = path.join(projectDir, SCRIPT_TRASH_DIR);
+  fs.mkdirSync(destDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  let dest = path.join(destDir, `${stamp}__${name}`);
+  let n = 2;
+  while (fs.existsSync(dest)) dest = path.join(destDir, `${stamp}_${n++}__${name}`);
+  fs.renameSync(path.join(projectDir, name), dest);
+  return { name, trashedTo: path.posix.join(TRASH_DIR_NAME, "scripts", path.basename(dest)) };
+}
+
 function scriptStem(scriptName) {
   const base = path.basename(String(scriptName || DEFAULT_SCRIPT));
   return base.replace(/\.txt$/i, "") || "script";
@@ -913,6 +948,7 @@ module.exports = {
   normalizeNewScriptName,
   nextNewScriptName,
   createScriptFile,
+  trashScriptFile,
   listScriptFiles,
   listScriptRecords,
   newestScriptName,

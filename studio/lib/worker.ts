@@ -301,6 +301,24 @@ export async function loadScriptCatalog(name: string): Promise<ScriptCatalog> {
   };
 }
 
+export async function trashScript(name: string, scriptName: string): Promise<ScriptCatalog> {
+  const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/scripts/trash`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: scriptName }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    scripts?: string[];
+    files?: ScriptFileInfo[];
+    default?: string;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `Delete script failed (${res.status})`);
+  const scripts = Array.isArray(body.scripts) ? body.scripts : [];
+  const files = Array.isArray(body.files) ? body.files : scripts.map((item) => ({ name: item, mtime: 0 }));
+  return { scripts, files, newest: body.default || files[0]?.name || "script.txt" };
+}
+
 export async function createScript(name: string, scriptName?: string | null): Promise<{ script: string; catalog: ScriptCatalog }> {
   const res = await workerFetch(`/api/projects/${encodeURIComponent(name)}/scripts`, {
     method: "POST",
