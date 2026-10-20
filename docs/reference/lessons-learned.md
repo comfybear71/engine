@@ -1,0 +1,73 @@
+# Lessons learned (running log)
+
+Newest first inside each section. Use the status words from the
+[README](README.md): Confirmed, Diagnosed, Suspected, From others.
+
+## How to add a lesson
+
+Copy this block to the top of the Lessons section:
+
+```
+### YYYY-MM-DD  Short title
+- Area: script | camera | keying | LTX | audio | assets | staging | Blender | other
+- Status: Confirmed | Diagnosed | Suspected | From others
+- What happened:
+- Why (only if known):
+- What to do next time:
+- Evidence: (script text, clip name, PR, URL)
+```
+
+## Lessons
+
+### 2026-10-20  Camera tags run in file order, each from the previous pose
+- Area: camera
+- Status: Diagnosed (explained from how `[Camera:]` is processed, user then reordered the script; the reordered result was not re-checked by us)
+- What happened: a shot started fully zoomed in because a later-in-time camera tag sat earlier in the file.
+- What to do next time: write camera and clip lines in time order. Use `wait=false` for a camera move that runs alongside a clip. Put a `[Camera: reset]` where the shot should start from the normal view.
+- Evidence: `docs/script-format.md` camera section.
+
+### 2026-10-20  Character tags read only the first word of a name
+- Area: script
+- Status: Confirmed (the parser error `Unknown character "Colnel"` showed it)
+- What happened: `[Clip: Colnel Klink ...]` failed because only the first word is read as the character.
+- What to do next time: use the single-word id or the slug form, for example `colnel_klink`, in tag position.
+- Evidence: error text above; `parseActionTag`.
+
+### 2026-10-20  A light start image leaves a box around a keyed head
+- Area: keying, LTX
+- Status: Diagnosed (from `key_head_on_black` in `worker/python/compositor/shot_capture.py`; not tested against the actual image)
+- What happened: Ish's LTX head had a white rectangle behind it.
+- Why: the keyer removes dark pixels connected to the border, so a white background survives.
+- What to do next time: make start images with a plain black backdrop before LTX. Try this on a few images and record the result here.
+- Evidence: head rig screenshot, `docs/ltx-talking-head.md`.
+
+### 2026-10-20  Overlapping marks and equal z give a warning
+- Area: staging
+- Status: Confirmed (warning shown: two characters on mark `centre` with the same z)
+- What to do next time: give characters different marks or different `z=`.
+
+### From others  Higgsfield "Passport Rush" lessons
+- Area: assets, lighting, prompts
+- Status: From others
+- See the 14 lessons in [higgsfield-passport-rush.md](higgsfield-passport-rush.md). Move any we confirm for ourselves into this log with our own evidence.
+
+## Open questions
+
+Each one should become a lesson once answered.
+
+- How sharp is a high-resolution background at 3x to 4x camera zoom?
+- Is there any scene transition beyond a hard cut?
+- Can a background be a video, or only an image?
+- Can flipbook clips hold each drawing for 2 frames ("on twos")?
+- Does a black start-image backdrop key cleanly in our head keyer?
+- Can our LTX setup take a video as a motion guide?
+- Which colours and lighting read best on each of our backgrounds? (Needs a test sheet.)
+- What keeps a character from jumping when it turns or anchors between clips? (Needs side-by-side tests.)
+
+## Experiments log
+
+Record each test, even failures.
+
+| Date | Experiment | Result | Next |
+|---|---|---|---|
+| | | | |

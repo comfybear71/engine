@@ -120,3 +120,5 @@ Characters in a flythrough:
 - Whether a background can be a video, or only an image.
 - Whether the flipbook can hold frames on twos.
 - Whether our LTX setup can take a video guide (for Option D, route 2).
+
+See also: [lessons-learned.md](lessons-learned.md), [blender-plan.md](blender-plan.md).
