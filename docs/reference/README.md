@@ -10,6 +10,7 @@ it. Nothing here is a spec unless a file says so.
 | [shot-recipe-drone-house.md](shot-recipe-drone-house.md) | How a drone fly-through of a house could work in a 2D cartoon. |
 | [blender-plan.md](blender-plan.md) | Notes and experiments for bringing Blender into the pipeline. |
 | [shot-library.md](shot-library.md) | Camera moves and mood shifts we want (dolly zoom, push-in, Dutch angle, normal to ominous): what the Engine can do now and what needs Blender. |
+| [showcase.md](showcase.md) | Picture gallery of what Blender can make from scripts: storm, rainforest, ocean, clouds, planet, sci-fi base, city, psychedelic, cloth physics, caravan park draft. First drafts, with honest notes. |
 | [blender-capabilities.md](blender-capabilities.md) | Checklist of what Blender can do for us and what we have proved, with a capability lab that tests one facet per picture. |
 | [pc-control-options.md](pc-control-options.md) | How an AI agent could work on the user's own PC (local Cursor, self-hosted worker, MCP, computer use). From Cursor docs, not yet tried. |
 | [sunny-banks-ep06-plan.md](sunny-banks-ep06-plan.md) | Plan to use Sunny Banks EP06 as the real project: caravan park in Blender, depth options, characters, stages and questions. |

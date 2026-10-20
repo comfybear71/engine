@@ -31,6 +31,32 @@ and [blender-capabilities.md](blender-capabilities.md). Change it as we learn.
 - Not known: how good 3D character models from pictures would look, how much work
   rigging them is, and how a 3D scene and the 2D Engine would be joined.
 
+## Answers from the user (2026-10-20)
+
+1. **Characters:** the characters exist on the user's PC as 2D cut-outs and are also
+   in the user's copy of the deck app (deck.aiglitch.app). The repo
+   `comfybear71/deck` was read by the assistant: it is a Next.js app (cost "Tab",
+   the Skidmarks and Sunnybank clip routes such as `generate-speak-beat` with a
+   multi-cast variant, a character roster and character LoRA panels, QA
+   screenshots). It holds code, not the character art, so the art itself must come
+   from the user's PC or the app's own storage. Which characters are in EP06 is
+   still to be listed.
+2. **Where things are:** the user says everything is in the deck repo. We did not
+   find character images or episode scripts there, so we need the exact file names
+   or an export.
+3. **Look:** "go with free for now", which the assistant reads as the glow look
+   (no Grok credits). Later the user wants "more of a realistic cartoon".
+4. **What the user wants to change:** multiple characters interacting in the same
+   shot. Today it is one character at a time because of how LTX lip sync works.
+5. **Length:** episodes are 8 to 10 minutes. A small proof-of-concept scene is
+   fine.
+
+What that changes: if characters live in the Blender scene (options B or C below),
+each one's mouth can be driven from its own cues, so two or more characters can
+share a shot and the camera can move around them. That is the main reason to
+make the jump, and it is a **hypothesis, not tested**. LTX talking-head clips would
+remain a way to get close-up performances.
+
 ## Three ways to get depth, from least to most work
 
 These are the real choices. We should test each on one character before choosing.
@@ -106,16 +132,17 @@ Tick these off as we go. Each stage ends with the user looking at a result.
 8. **Direct by description.** The user describes a scene, the assistant proposes a
    shot list and script, builds it, and the user approves each stage.
 
-## Questions for the user
+## Still open for the user
 
-- Which characters are in EP06, and are all of them already drawn as 2D cut-outs?
-- What happens in the caravan park, in a few lines, so we know which locations
-  and angles matter first?
-- Which look from the tests so far is closest: outlined, glow, or Grok-painted?
+- Which characters are in EP06 (names), and where are their cut-out files, so the
+  assistant can use them? Easiest: put the character folders in a project on the PC,
+  or tell the assistant the folder name in `projects/_global_assets/characters`.
+- What happens in the caravan park, in a few lines, and which locations (shop,
+  caravan, amenity block, entrance) matter first?
+- "Realistic cartoon" in one sentence or with two reference pictures: closer to the
+  glow room, to the Grok-painted version, or to something else?
 - Is the show mostly dialogue with the camera on faces, or lots of walking and
   wide shots? That decides how much depth we need.
-- How long is the episode, and is a first test scene of 10 to 20 seconds a good
-  starting size?
 - Any characters that must stay exactly as drawn?
 
 ## Risks to keep in view

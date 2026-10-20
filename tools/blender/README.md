@@ -19,6 +19,7 @@ scripting interface changes between versions). Record the version used in
 | `glow_room.py` | One living room with no outlines: warm lamp glow, striped wallpaper, curtains, wall lamps, soft shadows, bloom and vignette. Moods `evening` and `day`; `--outline` adds thin dark lines (hybrid look). Slower than the others (Cycles). |
 | `dolly_zoom.py` | Dolly zoom (Vertigo effect) test: camera moves while the lens changes so the subject keeps its size and the background stretches. Contains `setup_dolly_zoom()` for your own scenes. Renders three stills and a sheet. Options: `--start 12 --end 4` (metres), `--frames 48`. |
 | `capability_lab.py` | One small test per Blender feature (modifiers, materials, textures, Geometry Nodes, 3D text, armature, physics, hair, depth of field, Eevee), one picture each plus a sheet and a report. Options: `--list`, `--only a,b`, `--samples 24`. See `docs/reference/blender-capabilities.md`. |
+| `showcase.py` | Eleven bigger demo scenes: rain and lightning, rainforest, ocean, clouds, ringed planet, sci-fi base, night city, psychedelic tunnel, cloth physics, and a caravan park draft (two views). Cycles, about 8 minutes in all on four cores. Options: `--list`, `--only a,b`, `--width`, `--height`, `--samples`. Gallery: `docs/reference/showcase.md`. |
 
 ## Use the cutaway as an Engine background
 

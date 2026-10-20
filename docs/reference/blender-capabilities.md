@@ -48,6 +48,8 @@ text, armature pose, rigid body, hair, depth of field, Eevee).
 | Depth of field on a perspective camera | Confirmed | Sharp front cube, blurred cones behind it. |
 | Eevee (the fast real-time engine) | Confirmed | Rendered on a machine with no graphics card in about 14 seconds. The sphere was faceted because smooth shading was not switched on. |
 
+Bigger demo scenes (storm with lightning, rainforest with fog shafts, ocean modifier, volumetric clouds, planet with rings and atmosphere, sci-fi base, procedural night city, rainbow tunnel, cloth simulation, caravan park draft) are in [showcase.md](showcase.md). Those are first drafts; clouds and ocean need the most work.
+
 Earlier confirmed work, from the other scripts in `tools/blender/`:
 flat emission materials and outlines (Freestyle), Workbench render, Cycles with
 denoising, orthographic camera, lights with real shadows and glow, camera
