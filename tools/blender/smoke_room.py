@@ -7,6 +7,7 @@ Tested with Blender 5.2.2 LTS. Needs no GPU (uses the Workbench engine).
 """
 
 import argparse
+import os
 import sys
 
 import bpy
@@ -18,7 +19,12 @@ def parse_args():
     p.add_argument("--out", default="smoke_room.png")
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=720)
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    # Blender resolves relative paths oddly without a .blend file (on Windows
+    # it used the drive root), so always work from the current folder.
+    args.out = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    return args
 
 
 def reset_scene():
