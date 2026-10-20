@@ -19,6 +19,14 @@ Copy this block to the top of the Lessons section:
 
 ## Lessons
 
+### 2026-10-20  What makes a 3D room read as a 2D cartoon (from two reference sets)
+- Area: Blender, style
+- Status: Confirmed for our test (compared our box house with the cartoon house render); the list of qualities is from looking at Simpsons living room and Rick and Morty house search thumbnails, so it is a reading of small images
+- What we saw in the references: bold limited colours that contrast (wall, floor, furniture each different); dark outline around everything; rounded furniture; painted surface detail (floor planks, wallpaper stripes, rug rings, picture frames, curtains); trim around doors, windows and the floor; almost no cast shadows.
+- What worked: flat emission colours with Freestyle outlines in Cycles, painted patterns built from simple maths nodes using world position, bevelled furniture, baseboards and door frames. Adding detail changed the picture far more than changing the lighting.
+- What to do next time: build detail and trim first, then judge lighting. Keep colours flat so the palette is exact.
+- Evidence: `tools/blender/cartoon_house.py`, `docs/reference/images/cartoon-house-v1-sheet.png`.
+
 ### 2026-10-20  Outlines carry the cartoon look in Blender renders
 - Area: Blender
 - Status: Confirmed on the assistant's machine (looked at a four-style comparison sheet)

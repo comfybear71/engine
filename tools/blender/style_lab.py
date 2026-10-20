@@ -173,4 +173,5 @@ def main():
     print("WROTE", os.path.join(args.out, "style_sheet.png"))
 
 
-main()
+if __name__ == "__main__":
+    main()
