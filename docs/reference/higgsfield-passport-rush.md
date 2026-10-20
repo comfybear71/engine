@@ -1,6 +1,6 @@
 # Reference: Higgsfield "Passport Rush" breakdown
 
-Saved for reference while we develop the Engine. This is **not** a spec and
+Part of the [reference notes](README.md). Saved for reference while we develop the Engine. This is **not** a spec and
 nothing here is scheduled work. It records what another team does, what we
 can learn from it, and how it maps to our software.
 
@@ -161,3 +161,5 @@ Candidate ideas (none scheduled, all need a decision first):
    backgrounds.
 8. Parallax or 2.5D depth for layers. See
    [docs/reference/shot-recipe-drone-house.md](shot-recipe-drone-house.md).
+
+See also: [lessons-learned.md](lessons-learned.md), [blender-plan.md](blender-plan.md).
