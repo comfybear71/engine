@@ -19,6 +19,16 @@ Copy this block to the top of the Lessons section:
 
 ## Lessons
 
+### 2026-10-20  Grok image edit restyles a Blender room and keeps the layout
+- Area: Blender, style, AI tools
+- Status: Confirmed. Both edits ran on the user's PC (key "Skidmarks", team not blocked, `tools/grok/restyle_room.js`, about $0.07 each). Judged by the assistant from the full-size pictures the user sent, compared with the matching Blender renders. Sheet: `docs/reference/images/glow-room-grok-restyle.png` (left Blender, right Grok; top evening, bottom day).
+- Kept: every object stayed in place and the same size: back wall stripes, both windows, clock, both wall lamps, both table lamps, sofa and cushions, side tables with bottle and vase, coffee table with candles and plate, rug with border, floor planks. Colours stayed close. Lamp glow stayed.
+- Added: painted texture on the sofa, wood grain, brushy wall, warmer light on the ceiling and sofa tops. It reads as a polished animated-film background, closer to the user's reference rooms than the plain Blender render.
+- Changed or invented: the day windows now show sky, clouds and trees (the render had plain blue). The two glasses on the coffee table already read as candles in our render, and Grok kept them as candles, so the glasses idea did not survive either way. Lamp shades are no longer blown out to white. The curtains are still flat yellow or orange blocks (Grok did not turn them into cloth). No new furniture or people appeared.
+- Limits: one try each, no repeats. Not tested: whether two restyled rooms from the same house match each other in style, whether the layout holds at a different camera angle, or how sharp it is at the Engine's 3x zoom (output is about 1280 wide, so use it at 1x or small zooms, or upscale first). It cannot be a moving camera: each picture is a separate still.
+- What to do next time: build the layout and camera in Blender, restyle each room still with the same prompt, then use the stills as Engine backgrounds. Check small props, they can change meaning. Put anything that must stay exact (a clock time, a logo) in the prompt.
+- Evidence: `tools/grok/restyle_room.js`, image above.
+
 ### 2026-10-20  A no-outline "warm glow" room is possible in Blender, but it costs render time
 - Area: Blender, style
 - Status: Confirmed on the assistant's machine (rendered and looked at; not yet run on the user's PC). Judged against the user's two favourite room references, not copied from them.
@@ -135,7 +145,7 @@ Each one should become a lesson once answered.
 - Does a black start-image backdrop key cleanly in our head keyer?
 - Can our LTX setup take a video as a motion guide?
 - Does the live Blender MCP route work smoothly with Blender 5.2.2 on the user's PC?
-- Can an AI image tool restyle our Blender room renders (more painterly, warm glow) and keep the layout intact? Not tried. Costs credits, needs permission.
+- Can an AI image tool restyle our Blender room renders and keep the layout? Yes for one room, one try each (see the 2026-10-20 lesson). Still open: do restyled rooms from the same house match each other, and how sharp is the output when zoomed?
 - Which colours and lighting read best on each of our backgrounds? (Needs a test sheet.)
 - What keeps a character from jumping when it turns or anchors between clips? (Needs side-by-side tests.)
 
@@ -145,4 +155,5 @@ Record each test, even failures.
 
 | Date | Experiment | Result | Next |
 |---|---|---|---|
+| 2026-10-20 | Test 3: Grok image edit on the evening and day glow rooms (user's PC) | Confirmed: layout kept, painted texture added, window views invented. About $0.14. See lesson above. | Try the same prompt on a second room and on the cutaway house; check zoom sharpness. |
 | 2026-10-20 | `glow_room.py`: warm-glow room, evening, day and outlined hybrid (assistant's machine) | Confirmed by looking: see lesson above. 1.5 to 2 min a picture. | User runs it on the PC and says which of the three looks is closest. Then decide on test 3 (AI restyle, needs permission and credits). |
