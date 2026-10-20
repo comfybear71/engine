@@ -29,7 +29,7 @@ A flat 2D background and a camera that only slides and zooms cannot do that
 by itself. There are four honest ways to get the feeling, from cheapest to
 heaviest.
 
-## Option A: cutaway house, one big picture (cheapest)
+## Option A: cutaway house, one big picture (cheapest) - TESTED, see lessons-learned.md
 
 Draw (or generate) one large cross-section of the house, like a dolls house
 or a Simpsons-style cutaway: bedroom, hall, living room, kitchen side by
@@ -37,9 +37,9 @@ side, stairs up to a second floor. Put it in as one 16:9 background at high
 resolution. The camera zooms in to about 3x and travels room to room with
 `[Camera: to=x,y zoom= over= ease=inout]`, tilting up the stairs.
 
-- Works with current camera moves. The docs say the camera resamples the
-  background from the source at zoom, so a high-resolution source should stay
-  sharp. Unknown until tested: how sharp it is at 3x to 4x.
+- Works with current camera moves. Tested on 2026-10-20 (assistant's machine):
+  a 3840-wide source stays crisp to about 3x zoom, 7680 is a little better at
+  4x. See [lessons-learned.md](lessons-learned.md).
 - It does not need to be a very wide image. A wide panorama would be cropped
   by `cover`, so keep the house in a 16:9 frame and zoom in.
 - Limits: it is a flat side view, not "flying inside". It reads as a classic

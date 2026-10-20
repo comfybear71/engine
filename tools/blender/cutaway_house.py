@@ -42,7 +42,7 @@ def parse_args():
     p.add_argument("--width", type=int, default=1920)
     p.add_argument("--height", type=int, default=1080)
     p.add_argument("--thickness", type=float, default=3.0,
-                   help="outline width in pixels at 1920 wide (scales with width)")
+                   help="outline setting at 1920 wide (3 is about 9 px); scales with width")
     args = p.parse_args(argv)
     args.out = os.path.abspath(args.out)
     os.makedirs(args.out, exist_ok=True)
@@ -235,7 +235,10 @@ def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     build(ch.PALETTES[args.palette])
     setup_camera(args.width, args.height)
-    thickness = args.thickness * args.width / 1920
+    # Freestyle applies the width twice (scene and line style), so the drawn
+    # width grows with the square of this value. Scale by sqrt to keep the
+    # outline the same fraction of the picture at any size.
+    thickness = args.thickness * math.sqrt(args.width / 1920)
     ch.setup_render(args.width, args.height, thickness)
     path = os.path.join(args.out, "cutaway_%s.png" % args.palette)
     bpy.context.scene.render.filepath = path

@@ -19,6 +19,22 @@ Copy this block to the top of the Lessons section:
 
 ## Lessons
 
+### 2026-10-20  A Blender cutaway house works as an Engine background for a room-to-room camera tour
+- Area: Blender, camera, backgrounds
+- Status: Confirmed on the assistant's machine (rendered with the Engine's own render command; frames inspected). Not yet run on the user's PC.
+- What we did: rendered `tools/blender/cutaway_house.py` as one 16:9 picture, put it in a test project as `backgrounds/cutaway/bg.png` with a one-mark `staging.json`, and wrote a script with only `[Scene:]`, `[Location:]`, `[Camera:]` and `[Pause:]` lines (no characters needed). The tour went full house, living room, hall and stairs, kitchen, up to the bathroom, landing, bedroom, then pulled out.
+- Sharpness (zoom 2.8, canvas 1920x1080): a 1920-wide source looks soft; a 3840-wide source looks crisp; at zoom 4 the 7680-wide source is slightly sharper than 3840 but the difference is small. Pictures: `docs/reference/images/cutaway-zoom4-4k-vs-8k.png`, `cutaway-tour-sheet.png`.
+- Render time for the 15.5 s tour (372 frames) on the assistant's 4-core machine: about 14 s with a 1920 source, 63 s with 3840, 189 s with 7680. Big sources cost time because every frame resamples the whole picture.
+- What to do next time: use a 3840-wide source for zooms up to about 3; use 7680 only for tighter zooms. Canvas coordinates for a camera target follow the picture: with this render, canvas x = 960 + 101 * X and canvas y = 540 - 101 * (Z - 3.7) for house coordinates X, Z.
+- Limits: this is a flat straight-on view, not a flight through space. Framing of the first tour was a little low in some rooms. No characters were tested in it yet.
+- Evidence: `tools/blender/cutaway_house.py`, images above.
+
+### 2026-10-20  Blender Freestyle outline width grows with the square of the setting
+- Area: Blender
+- Status: Confirmed (at 7680 wide, outlines came out about 5 times too thick until the setting was scaled by the square root of the width ratio)
+- What to do next time: the line width is applied twice (scene and line style). Treat the value as a square: 3 gives about 9 px. Scale by sqrt of the size change, not the size change.
+- Evidence: `tools/blender/cutaway_house.py`.
+
 ### 2026-10-20  Reference sets the user chose for house interiors
 - Area: style
 - Status: From others (images are small thumbnails, many are licensed stock, so they are style direction only, not to be traced or used as direct inputs for published work without checking the licence)
@@ -103,7 +119,6 @@ Copy this block to the top of the Lessons section:
 
 Each one should become a lesson once answered.
 
-- How sharp is a high-resolution background at 3x to 4x camera zoom?
 - Is there any scene transition beyond a hard cut?
 - Can a background be a video, or only an image?
 - Can flipbook clips hold each drawing for 2 frames ("on twos")?
