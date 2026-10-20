@@ -19,6 +19,16 @@ Copy this block to the top of the Lessons section:
 
 ## Lessons
 
+### 2026-10-20  A no-outline "warm glow" room is possible in Blender, but it costs render time
+- Area: Blender, style
+- Status: Confirmed on the assistant's machine (rendered and looked at; not yet run on the user's PC). Judged against the user's two favourite room references, not copied from them.
+- What we did: `tools/blender/glow_room.py`. Same flat-colour shapes as the cartoon house, but materials react to light (diffuse), lamps and wall lights are real point lights with glowing shades, windows are glowing panels with an area light, then a small bloom, vignette and colour boost are added with numpy. Sheet: `docs/reference/images/glow-room-sheet.png` (evening, evening with thin outlines, day).
+- Result: evening reads as the lamp-lit room reference (glow around lamps, warm wall washes, soft shadows). Day with pink wallpaper reads as the bright room reference. The thin-outline version keeps the glow and adds the cartoon edge, so the hybrid is easy to get.
+- Cost: Cycles at 1280x720 and 96 samples took about 1.5 to 2 minutes a picture (4 cores), against about 5 seconds for the flat outlined look. Fine for a background used for a whole scene, too slow to render a moving camera frame by frame.
+- Things that went wrong: window and curtain areas burnt out to pure white (sun strength 7 and a strong window light on pale curtains; fixed by dropping both). Outlines turned pale after post processing until the image was loaded as plain RGB (alpha mode set to channel packed).
+- What to do next time: keep light strengths low on pale surfaces; check a day render for white-out first. Use glow rooms as still backgrounds and let the Engine camera do the moving.
+- Evidence: `tools/blender/glow_room.py`, image above.
+
 ### 2026-10-20  A Blender cutaway house works as an Engine background for a room-to-room camera tour
 - Area: Blender, camera, backgrounds
 - Status: Confirmed on the assistant's machine (rendered with the Engine's own render command; frames inspected). Not yet run on the user's PC.
@@ -135,4 +145,4 @@ Record each test, even failures.
 
 | Date | Experiment | Result | Next |
 |---|---|---|---|
-| | | | |
+| 2026-10-20 | `glow_room.py`: warm-glow room, evening, day and outlined hybrid (assistant's machine) | Confirmed by looking: see lesson above. 1.5 to 2 min a picture. | User runs it on the PC and says which of the three looks is closest. Then decide on test 3 (AI restyle, needs permission and credits). |

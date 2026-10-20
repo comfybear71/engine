@@ -16,6 +16,7 @@ scripting interface changes between versions). Record the version used in
 | `style_lab.py` | Renders the same house at three camera positions in four looks (flat, ink, shaded, toon) and tiles them into `style_sheet.png`. One row per style, columns are bedroom, hall, living room. |
 | `cartoon_house.py` | A more cartoon house: bold flat colours, painted floor planks and wallpaper stripes, rug rings, trim, rounded furniture, curtains, pictures, thick ink outlines. Renders two palettes (`bold`, `wood`) at three camera positions into `cartoon_sheet.png`. |
 | `cutaway_house.py` | Two-storey cutaway dolls house (six rooms, stairs, roof) seen straight on, as one picture for use as an Engine background. Options: `--palette bold|wood`, `--width 3840 --height 2160`. |
+| `glow_room.py` | One living room with no outlines: warm lamp glow, striped wallpaper, curtains, wall lamps, soft shadows, bloom and vignette. Moods `evening` and `day`; `--outline` adds thin dark lines (hybrid look). Slower than the others (Cycles). |
 
 ## Use the cutaway as an Engine background
 
@@ -67,6 +68,12 @@ The style lab takes about a minute on a 4-core machine because of the toon row. 
 ```
 
 The cartoon house takes a few seconds. Open `renders\cartoon\cartoon_sheet.png`: top row is the `bold` palette, bottom row is `wood`. Options: `--palettes bold`, `--thickness 3.5` (outline setting; the drawn width grows with the square of it), `--width 1280 --height 720`.
+
+```
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b -P tools\blender\glow_room.py -- --out renders\glow --mood evening
+```
+
+The glow room uses Cycles with denoising. At 1280x720 and 96 samples it took about 1.5 to 2 minutes a picture on a 4-core machine; add `--samples 48 --width 960 --height 540` for a 30 second preview. Options: `--mood day`, `--outline`.
 
 `-b` means no window. Everything after `--` goes to the script. The renders
 folder is created by Blender if it is missing. Do not commit renders.
