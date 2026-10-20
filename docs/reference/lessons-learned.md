@@ -19,6 +19,14 @@ Copy this block to the top of the Lessons section:
 
 ## Lessons
 
+### 2026-10-20  Reference sets the user chose for house interiors
+- Area: style
+- Status: From others (images are small thumbnails, many are licensed stock, so they are style direction only, not to be traced or used as direct inputs for published work without checking the licence)
+- Simpsons living room and Rick and Morty house: thick outlines, flat colour, painted pattern detail, trim.
+- Stock "cartoon house interior" grid: mostly no outlines; clean shapes with soft gradients, warm lamp and window glow, wood floors, patterned rugs, striped wallpaper, curtains; several cutaway dolls houses with stairs.
+- Two images the user liked best: (1) a bright pink room with large windows, city view, sunlit wooden floor, patchwork rug, blue sofa, painterly look and no black outlines; (2) a symmetrical front view with striped wallpaper, wall lamps glowing warm, curtains, wooden floor, a rug, leather sofa. Both are single rooms viewed straight on, in a game-background style.
+- What to do next time: try a no-outline, soft-glow version of our rooms. Build warm glow in Blender first (costs nothing) before deciding whether AI restyling is worth credits.
+
 ### 2026-10-20  What makes a 3D room read as a 2D cartoon (from two reference sets)
 - Area: Blender, style
 - Status: Confirmed for our test (compared our box house with the cartoon house render); the list of qualities is from looking at Simpsons living room and Rick and Morty house search thumbnails, so it is a reading of small images
@@ -102,6 +110,7 @@ Each one should become a lesson once answered.
 - Does a black start-image backdrop key cleanly in our head keyer?
 - Can our LTX setup take a video as a motion guide?
 - Does the live Blender MCP route work smoothly with Blender 5.2.2 on the user's PC?
+- Can an AI image tool restyle our Blender room renders (more painterly, warm glow) and keep the layout intact? Not tried. Costs credits, needs permission.
 - Which colours and lighting read best on each of our backgrounds? (Needs a test sheet.)
 - What keeps a character from jumping when it turns or anchors between clips? (Needs side-by-side tests.)
 
