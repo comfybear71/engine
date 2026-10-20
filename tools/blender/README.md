@@ -13,6 +13,7 @@ scripting interface changes between versions). Record the version used in
 |---|---|
 | `smoke_room.py` | Box room, bed, table, one camera. Renders one still. Use it to check the install works. |
 | `house_flythrough.py` | Bedroom, hall and living room blockout. A camera flies through both doorways. Renders a PNG sequence with flat colours and thin outlines. |
+| `style_lab.py` | Renders the same house at three camera positions in four looks (flat, ink, shaded, toon) and tiles them into `style_sheet.png`. One row per style, columns are bedroom, hall, living room. |
 
 ## Run on Windows
 
@@ -23,6 +24,14 @@ unzipped it.
 "C:\Blender\blender-5.2.2-windows-x64\blender.exe" -b -P tools\blender\smoke_room.py -- --out renders\smoke_room.png
 "C:\Blender\blender-5.2.2-windows-x64\blender.exe" -b -P tools\blender\house_flythrough.py -- --out renders\house --frames 72
 ```
+
+```
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b -P tools\blender\style_lab.py -- --out renders\style_lab
+```
+
+(In PowerShell start each command with `&`. In Command Prompt leave it off.)
+
+The style lab takes about a minute on a 4-core machine because of the toon row. Use `--styles flat,ink` to render only some looks.
 
 `-b` means no window. Everything after `--` goes to the script. The renders
 folder is created by Blender if it is missing. Do not commit renders.
