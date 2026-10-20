@@ -216,7 +216,11 @@ Inside an episode (or a flat experiment) the default tab is **Stage**
 the project name, and the **active script as plain read-only text**.
 Pick and edit scripts only on the **Script** page: a left-hand list
 (current scripts at the top, older files under a collapsed **tests**
-group, and **+ New**). Stage, Edit, and Render always use the script
+group, and **+ New**). The **✕** beside a script asks first, then moves the file
+to `<project>/_trash/scripts/<timestamp>__<name>` (drag it back to restore; never
+the project's last script). The **Cheat sheet** button above the Insert Action
+buttons opens one example of every script tag; click an example to drop it at the
+cursor. Stage, Edit, and Render always use the script
 last opened on that page. That choice is remembered per project across
 refreshes (`localStorage` and `studio.json` `activeScript`). **Edit**
 and **Deliver** open a slim **Lip sync** settings popover (smoothing,
@@ -601,6 +605,7 @@ other media durations are cached by path + mtime + size.
 | `POST` | `/api/trash/empty` | Permanently delete everything in `_trash`. JSON `{ "confirm": "empty" }`. |
 | `GET` | `/api/projects/:name/scripts` | `script*.txt` files in that folder. |
 | `POST` | `/api/projects/:name/scripts` | Create a new `script_*.txt` (`{ "name": "walk" }` → `script_walk.txt`). 409 if it exists. |
+| `POST` | `/api/projects/:name/scripts/trash` | Move `{ "name": "script_walk.txt" }` to `_trash/scripts/<timestamp>__<name>` and return the new list. 404 if missing, 400 for an unsafe name, 409 for the project's only script. |
 | `GET` | `/api/projects/:name/characters` | Characters **this project uses** (script cast + local + `library.json`), with slots (including `offset` / `scale` / `rotation`, `drawingsDir`, per-view `views[]`, and optional `canvas`), **project-local** drawings, cycles, thumbnail paths, `style`, `reference` / `referenceRel`, `default_scale`, `groups`, and `children` (rig pieces). |
 | `GET` | `/api/projects/:name/characters/:id/status` | Factory Assets payload for one character. Query `?view=` (`front`, `left_34`, `right_34`, `left_side`, `right_side`, `back`) and optional `?key=` for the inspector. Rows are `character.json` slots + children, padded with standard-rig drawings. Each drawing has `key` (`<slot>/<drawing>`, usually the drawings folder + name), `rel` when a file exists, and `badge` `ticked` / `locked` / `draft` / `missing`. `missing` is computed (expected by the standard, no file) and is never stored. Also returns `status`, `redos`, `counts`, `canvas`, and `inspector` (pivot, anchor, path). |
 | `PUT` | `/api/projects/:name/characters/:id/status` | Writes project-local `characters/<id>/status.json`. JSON `{ "key": "eyes_front/surprised", "state": "ticked" }` (Approve) or `{ "key", "redo": "wider lids" }` (stores the note under `_redos` and sets `draft`). Values on the file are only `ticked` / `locked` / `draft`. Never writes `_global_assets`. Returns the same factory payload as GET. |
