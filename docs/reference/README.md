@@ -9,6 +9,7 @@ it. Nothing here is a spec unless a file says so.
 | [higgsfield-passport-rush.md](higgsfield-passport-rush.md) | Study of another team's hybrid Blender + AI pipeline. |
 | [shot-recipe-drone-house.md](shot-recipe-drone-house.md) | How a drone fly-through of a house could work in a 2D cartoon. |
 | [blender-plan.md](blender-plan.md) | Notes and experiments for bringing Blender into the pipeline. |
+| [shot-library.md](shot-library.md) | Camera moves and mood shifts we want (dolly zoom, push-in, Dutch angle, normal to ominous): what the Engine can do now and what needs Blender. |
 
 ## Rules for keeping these useful
 
