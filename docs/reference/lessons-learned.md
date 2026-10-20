@@ -155,5 +155,6 @@ Record each test, even failures.
 
 | Date | Experiment | Result | Next |
 |---|---|---|---|
+| 2026-10-20 | `dolly_zoom.py`: dolly zoom maths in Blender (assistant's machine) | Confirmed: subject stayed 426.7 px tall from first to last frame while lens went 72 mm to 24 mm and the camera 12 m to 4 m; background changed. See shot-library.md. | Try with a character plate; decide whether the Engine needs camera roll or a timed grade. |
 | 2026-10-20 | Test 3: Grok image edit on the evening and day glow rooms (user's PC) | Confirmed: layout kept, painted texture added, window views invented. About $0.14. See lesson above. | Try the same prompt on a second room and on the cutaway house; check zoom sharpness. |
 | 2026-10-20 | `glow_room.py`: warm-glow room, evening, day and outlined hybrid (assistant's machine) | Confirmed by looking: see lesson above. 1.5 to 2 min a picture. | User runs it on the PC and says which of the three looks is closest. Then decide on test 3 (AI restyle, needs permission and credits). |

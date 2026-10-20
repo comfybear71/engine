@@ -17,6 +17,7 @@ scripting interface changes between versions). Record the version used in
 | `cartoon_house.py` | A more cartoon house: bold flat colours, painted floor planks and wallpaper stripes, rug rings, trim, rounded furniture, curtains, pictures, thick ink outlines. Renders two palettes (`bold`, `wood`) at three camera positions into `cartoon_sheet.png`. |
 | `cutaway_house.py` | Two-storey cutaway dolls house (six rooms, stairs, roof) seen straight on, as one picture for use as an Engine background. Options: `--palette bold|wood`, `--width 3840 --height 2160`. |
 | `glow_room.py` | One living room with no outlines: warm lamp glow, striped wallpaper, curtains, wall lamps, soft shadows, bloom and vignette. Moods `evening` and `day`; `--outline` adds thin dark lines (hybrid look). Slower than the others (Cycles). |
+| `dolly_zoom.py` | Dolly zoom (Vertigo effect) test: camera moves while the lens changes so the subject keeps its size and the background stretches. Contains `setup_dolly_zoom()` for your own scenes. Renders three stills and a sheet. Options: `--start 12 --end 4` (metres), `--frames 48`. |
 
 ## Use the cutaway as an Engine background
 
