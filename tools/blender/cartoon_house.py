@@ -97,9 +97,17 @@ def _tree(name):
     return mat, tree
 
 
+SHADER = "emission"  # "diffuse" makes materials react to lights
+
+
 def _finish(tree, color_socket):
-    emit = tree.nodes.new("ShaderNodeEmission")
     out = tree.nodes.new("ShaderNodeOutputMaterial")
+    if SHADER == "diffuse":
+        bsdf = tree.nodes.new("ShaderNodeBsdfDiffuse")
+        tree.links.new(color_socket, bsdf.inputs["Color"])
+        tree.links.new(bsdf.outputs[0], out.inputs["Surface"])
+        return
+    emit = tree.nodes.new("ShaderNodeEmission")
     tree.links.new(color_socket, emit.inputs["Color"])
     tree.links.new(emit.outputs[0], out.inputs["Surface"])
 
