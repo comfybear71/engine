@@ -57,6 +57,12 @@ tested on 5.2.2 only. 4.5 LTS is the fallback.
    several rounds. The add-on lets the AI run code inside Blender: save work
    first, use the original repository only, read its instructions.
    The video mentions an official Blender MCP tutorial too (not checked).
+   Update 2026-10-20, from the project README (read, not run): the package was
+   renamed `mcp-for-blender` (old `uvx blender-mcp` still works), it needs Blender
+   3.0 or newer, it exposes tools to run Python, look at the viewport, fetch
+   Poly Haven/Sketchfab assets and generate 3D models, usage statistics are on by
+   default (set `DISABLE_TELEMETRY=true`), and it can only reach Blender on the
+   machine where it runs, so a cloud agent cannot use it. See pc-control-options.md.
 
 ## Staged plan
 
