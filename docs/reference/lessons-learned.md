@@ -19,10 +19,18 @@ Copy this block to the top of the Lessons section:
 
 ## Lessons
 
+### 2026-10-20  Outlines carry the cartoon look in Blender renders
+- Area: Blender
+- Status: Confirmed on the assistant's machine (looked at a four-style comparison sheet)
+- What happened: flat colour with Workbench's built-in outline looked like cardboard. Freestyle outlines (thick dark lines) made the same scene read as a cartoon right away. Workbench studio lighting looked dark and muddy. A Cycles render with a warm sun gave hard shadows and depth, but was noisy until denoising was turned on.
+- What to do next time: start from outlines, then add warm light. In scripts, a Freestyle line style may need to be created with `bpy.data.linestyles.new`. Freestyle slowed Workbench renders to about 10 s a frame.
+- Evidence: `tools/blender/style_lab.py`.
+
 ### 2026-10-20  Blender relative output paths landed in `C:\renders` on Windows
 - Area: Blender
 - Status: Confirmed (terminal output showed `Saved: 'C:\renders\smoke_room.png'` after `--out renders\smoke_room.png`)
 - What happened: with no .blend file, Blender resolved a relative path against the drive root. The assistant had only tested with full paths on Linux, so it was missed.
+- Fix status: confirmed on Windows (user's folder screenshot shows frames in `engine\renders\house`).
 - What to do next time: scripts turn `--out` into a full path with `os.path.abspath` before rendering. Test on the user's OS with a relative path. Delete the stray `C:\renders` folder.
 - Evidence: `tools/blender/smoke_room.py`, `tools/blender/house_flythrough.py`.
 

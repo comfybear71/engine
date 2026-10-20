@@ -157,4 +157,5 @@ def main():
     print("WROTE", args.out)
 
 
-main()
+if __name__ == "__main__":
+    main()
