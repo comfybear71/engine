@@ -50,6 +50,7 @@ const {
   duplicateProject,
   createEmptyProject,
   createScriptFile,
+  trashScriptFile,
   addLibraryCharacter,
   makeProjectIndependent,
   readLibrary,
@@ -1035,6 +1036,30 @@ function createApp(options = {}) {
       if (err && err.code === "SCRIPT_EXISTS") return res.status(409).json({ error: err.message });
       if (err && err.code === "INVALID_SCRIPT") return res.status(400).json({ error: err.message });
       res.status(400).json({ error: err.message || "Could not create script" });
+    }
+  });
+
+  app.post("/api/projects/:name/scripts/trash", (req, res) => {
+    const projectDir = projectFromRequest(req, res);
+    if (!projectDir) return;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    try {
+      const moved = trashScriptFile(projectDir, body.name);
+      const files = listScriptRecords(projectDir);
+      res.json({
+        ok: true,
+        script: moved.name,
+        trashedTo: moved.trashedTo,
+        scripts: files.map((item) => item.name),
+        files,
+        default: newestScriptName(files),
+      });
+    } catch (err) {
+      if (err && err.code === "SCRIPT_MISSING") return res.status(404).json({ error: err.message });
+      if (err && (err.code === "LAST_SCRIPT" || err.code === "INVALID_SCRIPT")) {
+        return res.status(err.code === "LAST_SCRIPT" ? 409 : 400).json({ error: err.message });
+      }
+      res.status(500).json({ error: err.message || "Could not delete script" });
     }
   });
 

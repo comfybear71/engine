@@ -23,6 +23,7 @@ import {
   saveStudioSettings,
   setActiveShowId,
   startRender,
+  trashScript,
   type RenderResponse,
 } from "@/lib/worker";
 
@@ -148,6 +149,16 @@ export default function StudioApp({
     setScripts(created.catalog.scripts);
     setNewestScript(created.catalog.newest);
     openScript(created.script);
+  }
+
+  async function onDeleteScript(name: string) {
+    const catalog = await trashScript(project, name);
+    setScripts(catalog.scripts);
+    setNewestScript(catalog.newest);
+    if (name === script) {
+      const next = pickActiveScript(catalog.files, null, null);
+      if (next) openScript(next);
+    }
   }
 
   const active = TABS.find((item) => item.id === tab)!;
@@ -308,6 +319,7 @@ export default function StudioApp({
             onSaved={() => setScriptEpoch((n) => n + 1)}
             onOpenScript={openScript}
             onCreateScript={onCreateScript}
+            onDeleteScript={onDeleteScript}
           />
         ) : null}
         {tab === "stage" && !script ? (
