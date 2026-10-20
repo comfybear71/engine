@@ -11,6 +11,7 @@ Needs no GPU (Workbench engine). This is a blockout, not final art.
 
 import argparse
 import math
+import os
 import sys
 
 import bpy
@@ -28,7 +29,12 @@ def parse_args():
     p.add_argument("--frames", type=int, default=72)
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=360)
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    # Blender resolves relative paths oddly without a .blend file (on Windows
+    # it used the drive root), so always work from the current folder.
+    args.out = os.path.abspath(args.out)
+    os.makedirs(args.out, exist_ok=True)
+    return args
 
 
 def material(name, color):
@@ -132,7 +138,7 @@ def setup_render(out, width, height):
     scene.render.resolution_x = width
     scene.render.resolution_y = height
     scene.render.fps = 24
-    scene.render.filepath = out.rstrip("/\\") + "/frame_"
+    scene.render.filepath = os.path.join(out, "frame_")
     scene.render.image_settings.file_format = "PNG"
     scene.render.film_transparent = False
     scene.view_settings.view_transform = "Standard"

@@ -19,6 +19,18 @@ Copy this block to the top of the Lessons section:
 
 ## Lessons
 
+### 2026-10-20  Blender relative output paths landed in `C:\renders` on Windows
+- Area: Blender
+- Status: Confirmed (terminal output showed `Saved: 'C:\renders\smoke_room.png'` after `--out renders\smoke_room.png`)
+- What happened: with no .blend file, Blender resolved a relative path against the drive root. The assistant had only tested with full paths on Linux, so it was missed.
+- What to do next time: scripts turn `--out` into a full path with `os.path.abspath` before rendering. Test on the user's OS with a relative path. Delete the stray `C:\renders` folder.
+- Evidence: `tools/blender/smoke_room.py`, `tools/blender/house_flythrough.py`.
+
+### 2026-10-20  PowerShell needs `&` to run a quoted program path
+- Area: other
+- Status: Confirmed (PowerShell parser error when `&` was missing)
+- What to do next time: give Windows commands as `& "C:\path\program.exe" args` for PowerShell.
+
 ### 2026-10-20  Blender default colour look washes out flat colours
 - Area: Blender
 - Status: Confirmed (compared two renders of the same scene)
