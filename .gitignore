@@ -43,6 +43,3 @@ Thumbs.db
 studio/.next/
 studio/node_modules/
 *.tsbuildinfo
-
-# Blender renders
-renders/
