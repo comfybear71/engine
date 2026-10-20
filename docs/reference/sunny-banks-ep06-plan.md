@@ -25,6 +25,7 @@ and [blender-capabilities.md](blender-capabilities.md). Change it as we learn.
   (Confirmed). They are stills, so the Engine's zoom is the only camera motion.
 - A Grok restyle can give a Blender render a painted look and keep the layout
   (Confirmed, one room, one try each).
+- (The real cast, locations and conflicts between sources are in [sunny-banks-bible.md](sunny-banks-bible.md). `dana` and `hicks` below are only the repo's test characters.)
 - Existing characters are 2D cut-outs (for example `dana` and `hicks` in
   `projects/_global_assets/characters`), with mouth shapes from Rhubarb cues and
   LTX talking-head clips for close-ups.
