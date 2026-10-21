@@ -218,4 +218,5 @@ def main():
     print("done", args.out)
 
 
-main()
+if __name__ == "__main__":
+    main()
