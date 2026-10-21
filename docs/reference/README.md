@@ -16,6 +16,7 @@ it. Nothing here is a spec unless a file says so.
 | [sunny-banks-ep06-plan.md](sunny-banks-ep06-plan.md) | Plan to use Sunny Banks EP06 as the real project: caravan park in Blender, depth options, characters, stages and questions. |
 | [sunny-banks-bible.md](sunny-banks-bible.md) | What we know about Sunny Banks (cast, locations, EP list, pipeline), what can be pulled from the deck app, and conflicts between sources. |
 | [setup-my-machine-worker.md](setup-my-machine-worker.md) | Step-by-step: make the user's PC a My Machine so the cloud assistant can run Blender there. Tried and working on the user's PC (tool paths and timings inside; test videos in `pc-test/`). |
+| [dialogue-scene.md](dialogue-scene.md) | Dazza and Nan talking in one shot: Nan's mouth set, the two-speaker scene script, how to run it. Not yet rendered. |
 
 ## Rules for keeping these useful
 
