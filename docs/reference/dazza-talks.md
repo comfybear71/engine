@@ -16,11 +16,15 @@ The audio is from the deck's own render of that line (Act I, beat 19).
    The line used 7 of the 9 shapes. The list is `dazza_pants_cues.json`.
 2. **Dazza without his grin.** His approved picture has a big open grin, so
    `tools/blender/make_dazza_mouths.py` paints it out (`dazza-nomouth.png`).
-3. **Nine mouths from his own grin.** (Version 3.) The same script cuts his
+3. **Nine mouths from his own grin.** (Version 4.) The same script cuts his
    real grin out of the picture. D and H are it squeezed; the small and
    medium mouths keep his full-size upper teeth and raise a lower lip; the
    "oh" and "oo" are drawn, so the teeth, gap, tongue and
-   shading are his own art. The closed shapes are a line along his top lip.
+   shading are his own art. The closed shapes are a line along his top lip;
+   A (lips pressed, for M, B, P) also has a pink band of lip around the
+   line, X (rest) is a thin line. The lower lip on B, C and G is a smooth
+   curve with lip skin under it, and "oh" and "oo" are tilted to match his
+   head.
    They go in a 3x3 sheet (`dazza-mouths.png`, shown below). Version 1 had
    mouths drawn with code; they looked flat and did not match him.
 4. **Swap on cue.** `tools/blender/talk_scene.py` puts the mouth sheet on a
@@ -82,7 +86,7 @@ pass `--audio` and `--cues`.
 
 - The open mouths are one grin squashed, so teeth look a bit thin when the
   mouth is nearly shut and "oo" is just a narrow grin, not pursed lips.
-- A and X (closed) look almost the same, and the closed mouth is only a line.
+- A and X (closed) are now different (A has pink lips pressed together), but both are still only a line on his face, and the face has no cheek creases when the grin is gone, so E and F can still look a bit stuck on.
 - His head does not move, tilt or nod while talking, and his eyes do not blink.
   Talking looks stiff.
 - Only one angle: the mouths fit his face as drawn (slightly turned). A big

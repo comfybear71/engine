@@ -134,7 +134,25 @@ def squashed(orig, mask, extents, k, xscale=1.0):
     return np.dstack([rgb, alpha])
 
 
-def closed_line(extents, thick):
+LIP = (190, 118, 98, 255)
+TILT = math.degrees(math.atan2(R[1] - L[1], R[0] - L[0]))
+
+
+def lip_band(size, pts, width, colour, blur, dy=0.0):
+    """A soft coloured band along a line: the lip skin next to the line."""
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(layer).line([(x, y + dy * SS) for x, y in pts], fill=colour,
+                               width=int(width * SS), joint="curve")
+    return layer.filter(ImageFilter.GaussianBlur(blur * SS))
+
+
+def smooth_curve(xs, ys, sigma):
+    good = ~np.isnan(ys)
+    ys = np.interp(xs, xs[good], ys[good])
+    return cv2.GaussianBlur(ys.reshape(1, -1).astype(np.float32), (0, 0), sigma).ravel()
+
+
+def closed_line(extents, thick, pressed=False):
     x0, x1, top, bot = extents
     left, top_box, right, bottom_box = BOX
     xs = np.arange(int(x0), int(x1) + 1)
@@ -144,8 +162,11 @@ def closed_line(extents, thick):
     ys = cv2.GaussianBlur(ys.reshape(1, -1).astype(np.float32), (0, 0), 3).ravel()
     w, h = (right - left) * SS, (bottom_box - top_box) * SS
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
     pts = [((x - left) * SS, (y + 3 - top_box) * SS) for x, y in zip(xs, ys)]
+    if pressed:
+        im.alpha_composite(lip_band(im.size, pts, 5.5, LIP, 1.4, dy=-1.8))
+        im.alpha_composite(lip_band(im.size, pts, 7.5, LIP, 1.8, dy=3.4))
+    d = ImageDraw.Draw(im)
     d.line(pts, fill=INK, width=int(thick * SS), joint="curve")
     ex, ey = pts[-1]
     d.line([(ex, ey), (ex + 3 * SS, ey - 5 * SS)], fill=INK, width=int(2.4 * SS))
@@ -180,6 +201,8 @@ def lip_cut(orig, mask, extents, frac):
     for x in range(int(x0), int(x1) + 1):
         if not np.isnan(top[x]):
             cut[x] = top[x] + frac * (bot[x] - top[x])
+    xr = np.arange(int(x0), int(x1) + 1)
+    cut[xr] = smooth_curve(xr, cut[xr], 4)
     col = np.clip(xs, 0, len(top) - 1)
     limit = cut[col]
     keep = ~np.isnan(limit) & (ys <= limit)
@@ -191,7 +214,9 @@ def lip_cut(orig, mask, extents, frac):
     d = ImageDraw.Draw(big)
     xs_line = [x for x in range(int(x0), int(x1) + 1) if not np.isnan(cut[x])]
     pts = [((x - left) * SS, (cut[x] - top_box) * SS) for x in xs_line]
-    d.line(pts, fill=INK, width=int(2.8 * SS), joint="curve")
+    big.alpha_composite(lip_band(big.size, pts, 6.0, LIP, 1.6, dy=3.4))
+    d = ImageDraw.Draw(big)
+    d.line(pts, fill=INK, width=int(3.0 * SS), joint="curve")
     big = big.resize(img.size, Image.LANCZOS)
     img.alpha_composite(big)
     return img
@@ -207,22 +232,28 @@ def round_mouth(extents, spec):
     d = ImageDraw.Draw(im)
     px, py = (cx - left) * SS, (cy - top_box) * SS
     rx, ry = spec["rx"] * SS, spec["ry"] * SS
-    ring = 3.5 * SS
+    ring = 3.8 * SS
     lip = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    ImageDraw.Draw(lip).ellipse([px - rx - ring, py - ry - ring, px + rx + ring, py + ry + ring], fill=(196, 128, 104, 255))
-    im.alpha_composite(lip.filter(ImageFilter.GaussianBlur(1.6 * SS)))
+    ld = ImageDraw.Draw(lip)
+    ld.ellipse([px - rx - ring, py - ry - ring * 0.8, px + rx + ring, py + ry + ring * 1.5], fill=LIP)
+    im.alpha_composite(lip.filter(ImageFilter.GaussianBlur(1.2 * SS)))
     d = ImageDraw.Draw(im)
+    d.arc([px - rx - ring, py - ry - ring * 0.8, px + rx + ring, py + ry + ring * 1.5], 20, 160,
+          fill=(150, 80, 66, 255), width=int(1.6 * SS))
     d.ellipse([px - rx, py - ry, px + rx, py + ry], fill=MOUTH_DARK, outline=INK, width=int(2.4 * SS))
     if spec["teeth"]:
         d.pieslice([px - rx * 0.8, py - ry, px + rx * 0.8, py + ry * 0.2], 180, 360, fill=TEETH)
         d.ellipse([px - rx * 0.5, py + ry * 0.2, px + rx * 0.5, py + ry * 0.85], fill=TONGUE)
         d.ellipse([px - rx, py - ry, px + rx, py + ry], outline=INK, width=int(2.4 * SS))
+    d.arc([px - rx - ring * 0.6, py - ry - ring * 0.6, px + rx + ring * 0.6, py + ry + ring * 1.1], 35, 70,
+          fill=(236, 176, 150, 255), width=int(1.4 * SS))
+    im = im.rotate(-TILT, center=(px, py), resample=Image.BICUBIC)
     return im.resize((right - left, bottom_box - top_box), Image.LANCZOS)
 
 
 def make_sprite(name, orig, mask, extents):
     if name in ("A", "X"):
-        img = closed_line(extents, 3.6 if name == "A" else 3.0)
+        img = closed_line(extents, 3.6, True) if name == "A" else closed_line(extents, 2.6)
     elif name in LIP_CUT:
         img = lip_cut(orig, mask, extents, LIP_CUT[name])
     elif name in ROUND:
