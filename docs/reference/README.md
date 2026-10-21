@@ -15,6 +15,7 @@ it. Nothing here is a spec unless a file says so.
 | [pc-control-options.md](pc-control-options.md) | How an AI agent could work on the user's own PC (local Cursor, self-hosted worker, MCP, computer use). From Cursor docs, not yet tried. |
 | [sunny-banks-ep06-plan.md](sunny-banks-ep06-plan.md) | Plan to use Sunny Banks EP06 as the real project: caravan park in Blender, depth options, characters, stages and questions. |
 | [sunny-banks-bible.md](sunny-banks-bible.md) | What we know about Sunny Banks (cast, locations, EP list, pipeline), what can be pulled from the deck app, and conflicts between sources. |
+| [setup-my-machine-worker.md](setup-my-machine-worker.md) | Step-by-step: make the user's PC a My Machine so the cloud assistant can run Blender there. From Cursor docs, not yet tried. |
 
 ## Rules for keeping these useful
 
