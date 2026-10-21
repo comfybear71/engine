@@ -1,0 +1,64 @@
+{
+ "plate": "office-storefront.jpg",
+ "cast": {
+  "shazza": [
+   -1.0,
+   -2.0
+  ],
+  "dazza": [
+   0.5,
+   -1.6
+  ],
+  "nan": [
+   2.3,
+   -1.4
+  ]
+ },
+ "lines": [
+  {
+   "who": "shazza",
+   "audio": "01_shazza.wav",
+   "cues": "01_shazza_cues.json"
+  },
+  {
+   "who": "shazza",
+   "audio": "02_shazza.wav",
+   "cues": "02_shazza_cues.json"
+  },
+  {
+   "who": "dazza",
+   "audio": "03_dazza.wav",
+   "cues": "03_dazza_cues.json"
+  },
+  {
+   "who": "dazza",
+   "audio": "04_dazza.wav",
+   "cues": "04_dazza_cues.json"
+  },
+  {
+   "who": "shazza",
+   "audio": "05_shazza.wav",
+   "cues": "05_shazza_cues.json"
+  },
+  {
+   "who": "dazza",
+   "audio": "06_dazza.wav",
+   "cues": "06_dazza_cues.json"
+  },
+  {
+   "who": "dazza",
+   "audio": "07_dazza.wav",
+   "cues": "07_dazza_cues.json"
+  },
+  {
+   "who": "nan",
+   "audio": "08_nan.wav",
+   "cues": "08_nan_cues.json"
+  },
+  {
+   "who": "nan",
+   "audio": "09_nan.wav",
+   "cues": "09_nan_cues.json"
+  }
+ ]
+}

@@ -1,4 +1,4 @@
-# Two characters talking (Dazza, then Nan)
+# Characters talking (Dazza, Nan, Shazza)
 
 **Question:** can more than one character talk in the same shot?
 **Short answer:** yes, in this first version they take turns (one speaks, the
@@ -50,3 +50,37 @@ Rhubarb on each wav with the line text as `--dialogFile`, and pass `--lines`.
 - The old "one character per speaking shot" rule in the deck came from LTX
   limits (one person on screen, lip-sync swapping characters). The user has
   confirmed it does not apply here.
+
+## Shazza's mouths and EP01 Act I Scene 1
+
+Shazza faces left, three-quarter view, with closed red lips. Like Dazza's, her
+mouths are made from her own picture (`tools/blender/make_shazza_mouths.py`):
+her lips are split along the line between them, the upper lip stays, the lower
+lip drops by different amounts (less toward the corners, so the gap is
+lens-shaped), and a dark mouth with teeth and tongue is painted in the gap. The
+lips are cut to her outline so they never stick out past her face.
+
+![Shazza's nine mouths](images/shazza-mouth-set.jpg)
+
+`tools/blender/assets/sunnybanks/ep01_scene1/` holds the first real script
+scene: EP01 Act I Scene 1 (the demountable site office), the nine speaking
+lines of Shazza, Dazza and Nan, made with the user's own ElevenLabs voices
+(`lines.txt` has the text; each line has a wav, its text and Rhubarb cues).
+`lines.json` sets the location picture (`office-storefront.jpg`) and where
+the three stand. Run:
+
+```
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b -P tools\blender\dialogue_scene.py -- --lines tools\blender\assets\sunnybanks\ep01_scene1\lines.json --out renders\ep01s1 --width 640 --height 360 --samples 8
+```
+
+About 35 seconds of video, so about 840 frames: allow roughly 10 minutes at
+640x360 and about 20 at 960x540. Use `--still N` (frame number) to check one
+frame in seconds. Frame times: Shazza starts at 0.5 s, Dazza at 8.9 s, Shazza
+again at 15.0 s, Dazza at 22.5 s, Nan at 26.1 s.
+
+Not from the script (left out for now): the stage directions (arms crossed,
+cigarette, Nan knitting in a lawn chair), the closing Shazza line after the
+Hans cut, and Hans. The script says "alone nearest camera" for every
+speaking shot (the old LTX single-person rule, which the user has said does not
+apply here), so this version uses one wide shot of all three and a close-up
+on whoever talks.

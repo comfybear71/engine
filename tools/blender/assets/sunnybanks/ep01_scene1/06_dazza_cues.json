@@ -1,0 +1,68 @@
+{
+ "metadata": {
+  "soundFile": "06_dazza.wav",
+  "duration": 1.3
+ },
+ "mouthCues": [
+  {
+   "start": 0.0,
+   "end": 0.03,
+   "value": "X"
+  },
+  {
+   "start": 0.03,
+   "end": 0.09,
+   "value": "B"
+  },
+  {
+   "start": 0.09,
+   "end": 0.15,
+   "value": "C"
+  },
+  {
+   "start": 0.15,
+   "end": 0.29,
+   "value": "E"
+  },
+  {
+   "start": 0.29,
+   "end": 0.43,
+   "value": "B"
+  },
+  {
+   "start": 0.43,
+   "end": 0.5,
+   "value": "C"
+  },
+  {
+   "start": 0.5,
+   "end": 0.64,
+   "value": "B"
+  },
+  {
+   "start": 0.64,
+   "end": 0.72,
+   "value": "A"
+  },
+  {
+   "start": 0.72,
+   "end": 0.94,
+   "value": "F"
+  },
+  {
+   "start": 0.94,
+   "end": 1.01,
+   "value": "C"
+  },
+  {
+   "start": 1.01,
+   "end": 1.22,
+   "value": "D"
+  },
+  {
+   "start": 1.22,
+   "end": 1.3,
+   "value": "X"
+  }
+ ]
+}
