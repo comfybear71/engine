@@ -132,8 +132,7 @@ the nine locked locations. Several need new location plates.
 - **Bubbles**: a purple cosmic sludge creature, Unit 4s' pet. Glows, mimics
   shapes, eats cables.
 - **Gazza**: appears in EP02 shots 16, 18, 29, 35 (and "Foam Monster" with
-  Shazza). Not in the bible. Possibly a typo for Shazza or Dazza, or a new
-  character. Ask.
+  Shazza). Not in the bible. The user says it is a typo; see conflict 7.
 - Bush turkeys, caravan park residents (unnamed), the foam monster costume.
 - Places not yet locked: Main Deck, Unit 4 Porch Steps, Scrub Line Edge, Bush
   Line (night), Inside Unit 4 caravan, Park garbage bins, Dan's golf cart,
@@ -190,7 +189,9 @@ drive the mouths one at a time). Which one to pursue is the user's call.
 5. **Dazza's clothes.** EP01 script: flannelette shirt, stubbies. Bible and
    sheet: faded-blue singlet, torn brown shorts. (Art wins.)
 6. **Nuggets.** See "Settled by the user" and the Nuggets note above.
-7. **Gazza** in EP02: who is he?
+7. **Gazza** in EP02: the user says it must be a typo (2026-10-21). Which
+   character each Gazza line belongs to is still to be checked: shot 16 lists
+   "Dazza, Shazza, Gazza" together, so it cannot simply be either of them.
 
 Settled: Hans is a one-episode guest.
 
