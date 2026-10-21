@@ -154,21 +154,79 @@ def closed_line(extents, thick):
     return im.resize((right - left, bottom_box - top_box), Image.LANCZOS)
 
 
-# shape: (how much of the grin's height, how narrow)
+# D and H are the squashed grin (approved by the user). The shapes between
+# closed and wide open keep his full-size upper teeth and hide the lower part
+# behind a rising lower lip instead, so the teeth stay the right size.
 SQUASH = {
-    "B": (0.30, 1.0),
-    "C": (0.62, 1.0),
     "D": (1.00, 1.0),
-    "E": (0.78, 0.62),
-    "F": (0.60, 0.42),
-    "G": (0.22, 0.95),
     "H": (0.70, 0.9),
 }
+LIP_CUT = {
+    "B": 0.34,
+    "C": 0.58,
+    "G": 0.26,
+}
+ROUND = {
+    "E": dict(rx=19, ry=12, teeth=True),
+    "F": dict(rx=12, ry=9, teeth=False),
+}
+
+
+def lip_cut(orig, mask, extents, frac):
+    x0, x1, top, bot = extents
+    left, top_box, right, bottom_box = BOX
+    ys, xs = np.mgrid[top_box:bottom_box, left:right]
+    cut = np.full(len(top), np.nan)
+    for x in range(int(x0), int(x1) + 1):
+        if not np.isnan(top[x]):
+            cut[x] = top[x] + frac * (bot[x] - top[x])
+    col = np.clip(xs, 0, len(top) - 1)
+    limit = cut[col]
+    keep = ~np.isnan(limit) & (ys <= limit)
+    alpha = np.where(keep, mask[top_box:bottom_box, left:right], 0).astype(np.uint8)
+    alpha = cv2.GaussianBlur(alpha, (0, 0), 0.7)
+    rgb = orig[top_box:bottom_box, left:right, :3]
+    img = Image.fromarray(np.dstack([rgb, alpha]), "RGBA")
+    big = Image.new("RGBA", (img.width * SS, img.height * SS), (0, 0, 0, 0))
+    d = ImageDraw.Draw(big)
+    xs_line = [x for x in range(int(x0), int(x1) + 1) if not np.isnan(cut[x])]
+    pts = [((x - left) * SS, (cut[x] - top_box) * SS) for x in xs_line]
+    d.line(pts, fill=INK, width=int(2.8 * SS), joint="curve")
+    big = big.resize(img.size, Image.LANCZOS)
+    img.alpha_composite(big)
+    return img
+
+
+def round_mouth(extents, spec):
+    x0, x1, top, bot = extents
+    left, top_box, right, bottom_box = BOX
+    cx = (x0 + x1) / 2 + 6
+    cy = np.nanmean(top[int(cx) - 10:int(cx) + 10]) + spec["ry"] * 0.9
+    w, h = (right - left) * SS, (bottom_box - top_box) * SS
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    px, py = (cx - left) * SS, (cy - top_box) * SS
+    rx, ry = spec["rx"] * SS, spec["ry"] * SS
+    ring = 3.5 * SS
+    lip = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    ImageDraw.Draw(lip).ellipse([px - rx - ring, py - ry - ring, px + rx + ring, py + ry + ring], fill=(196, 128, 104, 255))
+    im.alpha_composite(lip.filter(ImageFilter.GaussianBlur(1.6 * SS)))
+    d = ImageDraw.Draw(im)
+    d.ellipse([px - rx, py - ry, px + rx, py + ry], fill=MOUTH_DARK, outline=INK, width=int(2.4 * SS))
+    if spec["teeth"]:
+        d.pieslice([px - rx * 0.8, py - ry, px + rx * 0.8, py + ry * 0.2], 180, 360, fill=TEETH)
+        d.ellipse([px - rx * 0.5, py + ry * 0.2, px + rx * 0.5, py + ry * 0.85], fill=TONGUE)
+        d.ellipse([px - rx, py - ry, px + rx, py + ry], outline=INK, width=int(2.4 * SS))
+    return im.resize((right - left, bottom_box - top_box), Image.LANCZOS)
 
 
 def make_sprite(name, orig, mask, extents):
     if name in ("A", "X"):
         img = closed_line(extents, 3.6 if name == "A" else 3.0)
+    elif name in LIP_CUT:
+        img = lip_cut(orig, mask, extents, LIP_CUT[name])
+    elif name in ROUND:
+        img = round_mouth(extents, ROUND[name])
     else:
         k, xs = SQUASH[name]
         img = Image.fromarray(squashed(orig, mask, extents, k, xs), "RGBA")
