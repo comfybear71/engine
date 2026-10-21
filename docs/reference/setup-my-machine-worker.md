@@ -10,7 +10,7 @@ checked 2026-10-21. **Not yet tried by us.** If a step fails, run
 ## Before you start
 
 - Windows 10 or 11, signed in to Cursor in your browser (same account as here).
-- The engine repo already on the PC (yours is `C:\Users\\Stuie\\engine`) with
+- The engine repo already on the PC (yours is `C:\Users\Stuie\engine`) with
   git working and a `master` that is up to date (`git pull`).
 - Blender 5.2 installed (you have this).
 - Optional: `ffmpeg` (to make .mp4 files) and Rhubarb (for new lip sync).
@@ -38,7 +38,7 @@ checked 2026-10-21. **Not yet tried by us.** If a step fails, run
 3. Go to the engine folder and start the worker:
 
    ```
-   cd C:\Users\\Stuie\\engine
+   cd C:\Users\Stuie\engine
    agent worker start --name "stuie-pc"
    ```
 
