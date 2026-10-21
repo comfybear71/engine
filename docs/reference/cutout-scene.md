@@ -24,6 +24,11 @@ Result: Dazza grows and slides across, Nan passes behind the flamingo, and the
 caravan hardly moves. That is real depth, from flat pictures. Three characters
 are in one shot.
 
+## Fixes after the first look (2026-10-21)
+
+- Dazza's legs were cut off at the bottom as the camera came close. The camera now ends further back and lower, so his feet stay in frame.
+- Nan, Nuggets and Dazza had solid patches left between their legs from the colour key. Large enclosed gaps are now removed; Nan's gap was cleaned by hand.
+
 ## What is wrong or unproven
 
 - Everyone faces forward and stays stiff. They only "breathe". They do not

@@ -183,8 +183,8 @@ def build(args):
     bpy.context.collection.objects.link(cam)
     scene.camera = cam
     cam.rotation_euler = (math.radians(90), 0, 0)
-    key(cam, 1, location=(1.0, -8.0, 1.15))
-    key(cam, args.frames, location=(-0.35, -4.6, 1.2))
+    key(cam, 1, location=(1.0, -8.5, 1.15))
+    key(cam, args.frames, location=(-0.35, -5.4, 1.0))
     smooth(cam)
 
     for k, (c, h) in enumerate(chars):
