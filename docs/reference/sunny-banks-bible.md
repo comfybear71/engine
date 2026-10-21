@@ -70,6 +70,22 @@ EP06 summary there: the annual baking competition. Nan enters hard-tack
 scones. Dazza sneaks an alien ingredient into the batter and the judges get
 temporary anti-gravity. (Good fit for depth, floating and several characters.)
 
+## Who is who (user, 2026-10-21; roles from the bible)
+
+- **Shazza** runs the park and counts the money. She is **Nuggets's mum** and
+  **Nan's daughter**.
+- **Nan** is Shazza's mum, Nuggets's gran, and the park's oldest resident. She
+  gets the last line of every episode.
+- **Nuggets** is Shazza's son. Reluctant offsider, the only one who can
+  understand the Unit 4s.
+- **Dazza** is **not family**. He is everyone's friend and works at the park as
+  the handyman and ideas man. (The EP01 script wrongly makes him Nuggets's
+  dad, and the bible does not say so.)
+- **Ranger Bazza** is the ranger who polices the area. He makes up rules and
+  ignores real crimes. The bible says "Ranger Bazza is the correct name" and
+  that "Ranger Dan" was only in early EP01 drafts.
+- **The Unit 4s** are two aliens who live in Unit 4 and share one voice.
+
 ## Settled by the user (2026-10-21)
 
 - **Hans was a special guest** in EP01 only. Everyone listed above him in the
@@ -175,9 +191,8 @@ drive the mouths one at a time). Which one to pursue is the user's call.
 
 ## Conflicts still open
 
-1. **Ranger name.** The user's EP01, EP02 and outline scripts say **Ranger
-   Dan**. The bible, the deck and the new model sheet say **Ranger Bazza**.
-   Needs one answer; the scripts and the sheet cannot both be right.
+1. **Ranger name.** Settled by the bible: **Ranger Bazza**. The EP01, EP02
+   and outline scripts still say "Ranger Dan", so they need find-and-replace.
 2. **EP06 name.** Plan log and the user's outline: "The Great Outback
    Bake-Off". Bible roadmap: "The Inspection". The user's outline is the
    newest, so Bake-Off is the working choice.
