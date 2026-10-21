@@ -70,7 +70,14 @@ EP06 summary there: the annual baking competition. Nan enters hard-tack
 scones. Dazza sneaks an alien ingredient into the batter and the judges get
 temporary anti-gravity. (Good fit for depth, floating and several characters.)
 
-## Why "several characters talking in one shot" is hard today
+## Why "several characters talking in one shot" was hard (old LTX limit only)
+
+**Settled by the user (2026-10-21):** the "one character per speaking shot"
+rule was only a limit of the old LTX video route. LTX could handle one person
+on screen at a time and its lip-sync would swap characters and get buggy. It
+is not a rule of the show. With Blender cut-outs each character has their own
+mouth sheet, so several people can be in one shot and any of them can talk.
+Do not carry the old rule into new work.
 
 From the deck code comments (they cite the old Skidmarks repo's research):
 

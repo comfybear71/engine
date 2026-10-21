@@ -44,5 +44,6 @@ Rhubarb on each wav with the line text as `--dialogFile`, and pass `--lines`.
 - Nan's drawn mouths are simpler than Dazza's (his are his own teeth). Her chin
   does not drop when she opens up.
 - The placeholder voice is not Nan.
-- The Sunny Banks bible says one character per speaking shot; this is a
-  two-shot with a push-in, so check it against that rule.
+- The old "one character per speaking shot" rule in the deck came from LTX
+  limits (one person on screen, lip-sync swapping characters). The user has
+  confirmed it does not apply here.

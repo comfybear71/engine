@@ -48,7 +48,7 @@ and [blender-capabilities.md](blender-capabilities.md). Change it as we learn.
 3. **Look:** "go with free for now", which the assistant reads as the glow look
    (no Grok credits). Later the user wants "more of a realistic cartoon".
 4. **What the user wants to change:** multiple characters interacting in the same
-   shot. Today it is one character at a time because of how LTX lip sync works.
+   shot. Today (in the old LTX route) it is one character at a time because of how LTX lip sync works. The user has said this limit does not apply to the Blender route.
 5. **Length:** episodes are 8 to 10 minutes. A small proof-of-concept scene is
    fine.
 
