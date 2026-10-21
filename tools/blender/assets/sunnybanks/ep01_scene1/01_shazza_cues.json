@@ -1,0 +1,158 @@
+{
+ "metadata": {
+  "soundFile": "01_shazza.wav",
+  "duration": 4.55
+ },
+ "mouthCues": [
+  {
+   "start": 0.0,
+   "end": 0.31,
+   "value": "X"
+  },
+  {
+   "start": 0.31,
+   "end": 0.38,
+   "value": "F"
+  },
+  {
+   "start": 0.38,
+   "end": 0.52,
+   "value": "C"
+  },
+  {
+   "start": 0.52,
+   "end": 0.73,
+   "value": "F"
+  },
+  {
+   "start": 0.73,
+   "end": 0.8,
+   "value": "B"
+  },
+  {
+   "start": 0.8,
+   "end": 1.01,
+   "value": "C"
+  },
+  {
+   "start": 1.01,
+   "end": 1.15,
+   "value": "H"
+  },
+  {
+   "start": 1.15,
+   "end": 1.22,
+   "value": "C"
+  },
+  {
+   "start": 1.22,
+   "end": 1.36,
+   "value": "B"
+  },
+  {
+   "start": 1.36,
+   "end": 1.5,
+   "value": "C"
+  },
+  {
+   "start": 1.5,
+   "end": 1.57,
+   "value": "B"
+  },
+  {
+   "start": 1.57,
+   "end": 1.64,
+   "value": "C"
+  },
+  {
+   "start": 1.64,
+   "end": 1.72,
+   "value": "A"
+  },
+  {
+   "start": 1.72,
+   "end": 1.88,
+   "value": "C"
+  },
+  {
+   "start": 1.88,
+   "end": 2.16,
+   "value": "B"
+  },
+  {
+   "start": 2.16,
+   "end": 2.23,
+   "value": "E"
+  },
+  {
+   "start": 2.23,
+   "end": 2.3,
+   "value": "G"
+  },
+  {
+   "start": 2.3,
+   "end": 2.44,
+   "value": "D"
+  },
+  {
+   "start": 2.44,
+   "end": 2.98,
+   "value": "B"
+  },
+  {
+   "start": 2.98,
+   "end": 3.02,
+   "value": "G"
+  },
+  {
+   "start": 3.02,
+   "end": 3.34,
+   "value": "B"
+  },
+  {
+   "start": 3.34,
+   "end": 3.41,
+   "value": "A"
+  },
+  {
+   "start": 3.41,
+   "end": 3.48,
+   "value": "B"
+  },
+  {
+   "start": 3.48,
+   "end": 3.55,
+   "value": "E"
+  },
+  {
+   "start": 3.55,
+   "end": 3.9,
+   "value": "B"
+  },
+  {
+   "start": 3.9,
+   "end": 3.98,
+   "value": "A"
+  },
+  {
+   "start": 3.98,
+   "end": 4.08,
+   "value": "B"
+  },
+  {
+   "start": 4.08,
+   "end": 4.15,
+   "value": "C"
+  },
+  {
+   "start": 4.15,
+   "end": 4.36,
+   "value": "B"
+  },
+  {
+   "start": 4.36,
+   "end": 4.55,
+   "value": "X"
+  }
+ ]
+}

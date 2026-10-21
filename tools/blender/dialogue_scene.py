@@ -1,7 +1,7 @@
-"""Two characters talking in one shot: Dazza, then Nan.
+"""Characters talking in one scene: Dazza, Nan and Shazza take turns.
 
-Each speaker has their own mouth sheet (made by make_dazza_mouths.py and
-make_nan_mouths.py) and their own Rhubarb cues file. The camera pushes in on
+Each speaker has their own mouth sheet (made by make_dazza_mouths.py,
+make_nan_mouths.py and make_shazza_mouths.py) and their own Rhubarb cues file. The camera pushes in on
 whoever is speaking. The audio of all lines is mixed into one track with
 ffmpeg, each line starting at its own time.
 
@@ -16,8 +16,13 @@ lines file:
 a list like
     [{"who": "dazza", "audio": "a.wav", "cues": "a_cues.json", "start": 0.3},
      {"who": "nan",   "audio": "b.wav", "cues": "b_cues.json"}]
-Paths are relative to the lines file. "start" is optional: a line without it
-starts 0.4 s after the previous one ends. Speakers: dazza, nan.
+or an object that also sets the location picture and where everyone stands:
+    {"plate": "office-storefront.jpg",
+     "cast": {"shazza": [-1.0, -2.0], "dazza": [0.5, -1.6], "nan": [2.3, -1.4]},
+     "lines": [ ...the list above... ]}
+Paths are relative to the lines file (the plate is looked for in assets/sunnybanks
+too). "start" is optional: a line without it starts 0.4 s after the previous
+one ends. Speakers: dazza, nan, shazza. Example: assets/sunnybanks/ep01_scene1/.
 Options: --lines, --out, --width, --height, --samples, --still N.
 Writes frames, dialogue.mp4 (needs ffmpeg) and dialogue_sheet.png.
 """
@@ -44,15 +49,26 @@ TAIL = 0.8
 MOUTHS = {
     "dazza": ("dazza-nomouth.png", "dazza-mouths.png", "dazza-mouths.json"),
     "nan": ("nan-nomouth.png", "nan-mouths.png", "nan-mouths.json"),
+    "shazza": ("shazza-nomouth.png", "shazza-mouths.png", "shazza-mouths.json"),
 }
 
-# Where the camera goes for each speaker (x, y, z); the wide shot is first and last.
-WIDE = (0.2, -7.2, 1.25)
-CLOSE = {
-    "dazza": (-0.8, -4.2, 1.35),
-    "nan": (0.95, -0.9, 1.2),
-}
+# The wide shot is first and last. The close shot for each speaker is worked
+# out from where they stand and how tall they are (see close_camera).
 PUSH = 0.25
+
+
+def wide_camera():
+    xs = [x for _n, _f, _h, x, _y in cs.CAST]
+    return (sum(xs) / len(xs), -7.2, 1.25)
+
+
+def close_camera(who):
+    """Camera spot for a close shot of a speaker: in front of them, a bit
+    toward the middle of the group, further back for taller characters."""
+    people = [(n, h, x, y) for n, _f, h, x, y in cs.CAST]
+    cx = sum(x for _n, _h, x, _y in people) / len(people)
+    _n, h, x, y = next(p for p in people if p[0] == who)
+    return (0.7 * x + 0.3 * cx, y - (1.5 * h + 0.4), 0.7 * h)
 
 
 def parse_args():
@@ -67,15 +83,20 @@ def parse_args():
     args = p.parse_args(argv)
     args.out = os.path.abspath(args.out)
     os.makedirs(args.out, exist_ok=True)
-    args.plate = os.path.join(cs.ASSETS, "park-site-4.jpg")
     return args
 
 
-def load_lines(path):
-    """Return a list of dicts: who, audio (absolute), cues (list), start, end."""
+def load_scene(path):
+    """Return (plate path, cast override, lines). Each line is a dict: who,
+    audio (absolute), cues (list), start, end."""
+    plate, cast = "park-site-4.jpg", None
     if path:
         base = os.path.dirname(os.path.abspath(path))
         raw = json.load(open(path))
+        if isinstance(raw, dict):
+            plate = raw.get("plate", plate)
+            cast = raw.get("cast")
+            raw = raw["lines"]
     else:
         base = cs.ASSETS
         raw = [
@@ -90,7 +111,10 @@ def load_lines(path):
         lines.append({"who": item["who"], "audio": os.path.join(base, item["audio"]),
                       "cues": cues, "start": start, "end": end})
         cursor = end + GAP
-    return lines
+    plate_path = plate if os.path.isabs(plate) else os.path.join(cs.ASSETS, plate)
+    if not os.path.exists(plate_path):
+        plate_path = os.path.join(base, plate)
+    return plate_path, cast, lines
 
 
 def shape_at(lines, who, t):
@@ -151,19 +175,26 @@ def add_mouth(who, frames, lines):
 
 def key_camera(lines, frames):
     """Wide at the start, then a close shot on each speaker for their line
-    (a small push-in while they talk), then back out to wide."""
+    (a small push-in while they talk), then back out to wide. Lines that
+    follow each other from the same speaker share one close shot."""
     cam = bpy.data.objects["cam"]
     cam.animation_data_clear()
-    cs.key(cam, 1, location=WIDE)
-    last = 1
+    cs.key(cam, 1, location=wide_camera())
+    segments = []
     for line in lines:
-        f0 = max(last + 1, int(line["start"] * FPS) + 1)
-        f1 = max(f0 + 1, int(line["end"] * FPS) + 1)
-        x, y, z = CLOSE[line["who"]]
+        if segments and segments[-1]["who"] == line["who"]:
+            segments[-1]["end"] = line["end"]
+        else:
+            segments.append({"who": line["who"], "start": line["start"], "end": line["end"]})
+    last = 1
+    for seg in segments:
+        f0 = max(last + 1, int(seg["start"] * FPS) + 1)
+        f1 = max(f0 + 1, int(seg["end"] * FPS) + 1)
+        x, y, z = close_camera(seg["who"])
         cs.key(cam, f0, location=(x, y, z))
         cs.key(cam, f1, location=(x * 0.9, y + PUSH, z))
         last = f1
-    cs.key(cam, max(frames, last + 1), location=WIDE)
+    cs.key(cam, max(frames, last + 1), location=wide_camera())
     cs.smooth(cam)
 
 
@@ -183,7 +214,10 @@ def mix_audio(lines, path):
 
 def main():
     args = parse_args()
-    lines = load_lines(args.lines)
+    plate, cast, lines = load_scene(args.lines)
+    args.plate = plate
+    if cast:
+        cs.CAST[:] = [(n, f, h, *cast.get(n, (x, y))) for n, f, h, x, y in cs.CAST]
     duration = max(line["end"] for line in lines) + TAIL
     frames = int(math.ceil(duration * FPS))
     cs_args = argparse.Namespace(**vars(args), frames=frames)
