@@ -56,6 +56,22 @@ checked 2026-10-21. **Not yet tried by us.** If a step fails, run
    something small first, for example: "Run `blender --version` and tell me
    what you see."
 
+## If `agent` is the wrong program
+
+Found 2026-10-21 on the user's PC: typing `agent` started **Grok's** command-line
+tool (its help says "Usage: grok"), not Cursor's, so `agent login` signed in to
+the wrong thing and `agent worker start` failed with "unrecognized subcommand".
+Two programs share the name `agent`. Fix:
+
+1. See which programs answer to the name:
+   `Get-Command agent -All | Format-List Source`
+2. Try Cursor's other name for the same tool: `cursor-agent --version`
+3. If that works, use `cursor-agent` in place of `agent` in steps 2 to 4 (the
+   sign-in must be repeated with `cursor-agent login`).
+4. If `cursor-agent` is not found, open a new PowerShell window (the install
+   changes the PATH), then look for the program with
+   `dir $env:LOCALAPPDATA\cursor-agent` and run it by its full path.
+
 ## Good to know
 
 - **No approval prompts.** The assistant can run any command on the PC without
