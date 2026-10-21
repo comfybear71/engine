@@ -1,0 +1,23 @@
+{
+  "metadata": {
+    "soundFile": "dazza_tap.wav",
+    "duration": 2.92
+  },
+  "mouthCues": [
+    { "start": 0.00, "end": 0.29, "value": "X" },
+    { "start": 0.29, "end": 0.59, "value": "B" },
+    { "start": 0.59, "end": 0.66, "value": "C" },
+    { "start": 0.66, "end": 0.80, "value": "B" },
+    { "start": 0.80, "end": 1.20, "value": "X" },
+    { "start": 1.20, "end": 1.24, "value": "B" },
+    { "start": 1.24, "end": 1.49, "value": "C" },
+    { "start": 1.49, "end": 1.63, "value": "G" },
+    { "start": 1.63, "end": 1.91, "value": "B" },
+    { "start": 1.91, "end": 1.98, "value": "G" },
+    { "start": 1.98, "end": 2.19, "value": "F" },
+    { "start": 2.19, "end": 2.26, "value": "B" },
+    { "start": 2.26, "end": 2.40, "value": "C" },
+    { "start": 2.40, "end": 2.51, "value": "A" },
+    { "start": 2.51, "end": 2.92, "value": "X" }
+  ]
+}

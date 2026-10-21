@@ -8,8 +8,10 @@ ffmpeg, each line starting at its own time.
 Run:
     blender -b -P tools/blender/dialogue_scene.py -- --out renders/dialogue
 
-The default lines are placeholders: Dazza's real line and a pitched-up copy of
-it for Nan (nan_placeholder.wav). To use real lines, pass a lines file:
+The default lines are two short test lines made with the user's own ElevenLabs
+voices for Dazza and Nan (dazza_tap.wav, nan_tap.wav, with the text beside
+them in .txt files). They are not from a script. To use other lines, pass a
+lines file:
     --lines my_lines.json
 a list like
     [{"who": "dazza", "audio": "a.wav", "cues": "a_cues.json", "start": 0.3},
@@ -77,8 +79,8 @@ def load_lines(path):
     else:
         base = cs.ASSETS
         raw = [
-            {"who": "dazza", "audio": "dazza_pants.wav", "cues": "dazza_pants_cues.json", "start": LEAD_IN},
-            {"who": "nan", "audio": "nan_placeholder.wav", "cues": "nan_placeholder_cues.json"},
+            {"who": "dazza", "audio": "dazza_tap.wav", "cues": "dazza_tap_cues.json", "start": LEAD_IN},
+            {"who": "nan", "audio": "nan_tap.wav", "cues": "nan_tap_cues.json"},
         ]
     lines, cursor = [], LEAD_IN
     for item in raw:
