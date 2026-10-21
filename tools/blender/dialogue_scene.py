@@ -47,8 +47,8 @@ MOUTHS = {
 # Where the camera goes for each speaker (x, y, z); the wide shot is first and last.
 WIDE = (0.2, -7.2, 1.25)
 CLOSE = {
-    "dazza": (-0.8, -4.6, 1.35),
-    "nan": (0.85, -3.6, 1.15),
+    "dazza": (-0.8, -4.2, 1.35),
+    "nan": (0.95, -0.9, 1.2),
 }
 PUSH = 0.25
 
