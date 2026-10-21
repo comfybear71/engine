@@ -98,6 +98,30 @@ Two programs share the name `agent`. Fix:
 1. "Run `tools/blender/dazza.py` and `tools/blender/talk_scene.py` with your
    Blender and show me the pictures." (Checks Blender and paths.)
 2. Re-run `capability_lab.py`, `showcase.py` and `dolly_zoom.py` on the PC
-   and look at the real results (none of these have been run on your PC yet).
+   and look at the real results (still to do).
 3. Then try a free lip-sync add-on, or the Blender MCP helper, with the
    assistant able to see the real output.
+
+## Verified on Stuie's PC (2026-10-21)
+
+The worker is tried and working. Tool locations (none are on PATH, so always
+use the full path):
+
+| Tool | Path | Version |
+| --- | --- | --- |
+| Blender | `C:\Program Files\Blender Foundation\Blender 5.2\blender.exe` | 5.2.2 LTS |
+| Rhubarb | `C:\Users\Stuie\tools\Rhubarb-Lip-Sync-1.14.0-Windows\rhubarb.exe` | 1.14.0 |
+| ffmpeg | on PATH | 8.1.2 |
+
+Results (Blender runs on the CPU; the "CUEW initialization failed" line in
+the log is harmless):
+
+- `talk_scene.py` at 640x360, 8 samples: 69 frames in about 50 s, mp4 with
+  audio joined by the script's own ffmpeg step.
+- Rhubarb on `dazza_pants.wav` (2.6 s): about 2 s, 16 cues using A, B, C, E,
+  F, G, X. Fed back into `talk_scene.py` with `--cues`, about 50 s again.
+- Output of both runs is in `pc-test/`.
+
+The PC's own checkout has the user's local changes in it. Worker tasks
+should make a new branch, stage only the files they mean to, and never
+discard anything.
