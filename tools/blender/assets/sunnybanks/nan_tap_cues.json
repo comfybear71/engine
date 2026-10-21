@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "soundFile": "nan_tap.wav",
+    "duration": 2.78
+  },
+  "mouthCues": [
+    { "start": 0.00, "end": 0.06, "value": "X" },
+    { "start": 0.06, "end": 0.16, "value": "F" },
+    { "start": 0.16, "end": 0.30, "value": "G" },
+    { "start": 0.30, "end": 0.51, "value": "B" },
+    { "start": 0.51, "end": 0.72, "value": "C" },
+    { "start": 0.72, "end": 0.93, "value": "B" },
+    { "start": 0.93, "end": 1.14, "value": "C" },
+    { "start": 1.14, "end": 1.21, "value": "B" },
+    { "start": 1.21, "end": 1.35, "value": "C" },
+    { "start": 1.35, "end": 1.49, "value": "X" },
+    { "start": 1.49, "end": 1.64, "value": "B" },
+    { "start": 1.64, "end": 1.78, "value": "F" },
+    { "start": 1.78, "end": 1.99, "value": "E" },
+    { "start": 1.99, "end": 2.06, "value": "B" },
+    { "start": 2.06, "end": 2.14, "value": "A" },
+    { "start": 2.14, "end": 2.35, "value": "B" },
+    { "start": 2.35, "end": 2.43, "value": "A" },
+    { "start": 2.43, "end": 2.54, "value": "E" },
+    { "start": 2.54, "end": 2.68, "value": "B" },
+    { "start": 2.68, "end": 2.78, "value": "X" }
+  ]
+}
